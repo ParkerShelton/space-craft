@@ -28,6 +28,11 @@ var _seed := 0
 var surface_noise := FastNoiseLite.new()
 var ore_noise := FastNoiseLite.new()
 
+# --- atmosphere (for lighting/sky; set via configure) ---
+var has_atmosphere := false
+var atmo_color := Color(0.45, 0.68, 1.0)
+var atmo_height := 90.0  # how far above the surface the sky fades to space
+
 # --- flora (derived from seed in configure) ---
 const TREE_CELL := 7          # avg spacing grid for tree placement
 var tree_density := 0.0       # 0 = desert (no trees), up to ~0.6 = dense forest
@@ -71,6 +76,9 @@ func configure(cfg: Dictionary) -> void:
 	pal_rock = cfg.get("rock", pal_rock)
 	pal_ore = cfg.get("ore", pal_ore)
 	pal_core = cfg.get("core", pal_core)
+	has_atmosphere = cfg.get("atmosphere", false)
+	atmo_color = cfg.get("atmo_color", atmo_color)
+	atmo_height = cfg.get("atmo_height", atmo_height)
 
 	surface_noise.seed = _seed
 	# Several rolling hills across the surface, regardless of planet size.
@@ -132,7 +140,8 @@ func _derive_flora(density: float) -> void:
 func _add_distant_sphere() -> void:
 	var vis := MeshInstance3D.new()
 	var sm := SphereMesh.new()
-	var r := radius * 0.90
+	# keep it just below the LOWEST terrain so it never pokes through valleys
+	var r := maxf(radius - terrain_amp - 2.0, radius * 0.5)
 	sm.radius = r
 	sm.height = r * 2.0
 	sm.radial_segments = 24

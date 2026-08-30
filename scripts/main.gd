@@ -4,7 +4,14 @@ extends Node3D
 ## home world, and wires the player to the world manager. Everything is created in
 ## code so the scene file can stay trivial and robust.
 
-const HOME_RADIUS := 220.0
+const HOME_RADIUS := 500.0
+const SPACE_AMBIENT := Color(0.50, 0.55, 0.70)
+
+var _world: WorldManager
+var _env: Environment
+var _sky_mat: ShaderMaterial
+var _sun: DirectionalLight3D
+var _atmo := 0.0
 
 func _ready() -> void:
 	_setup_environment()
@@ -12,39 +19,44 @@ func _ready() -> void:
 	var world := WorldManager.new()
 	world.name = "World"
 	add_child(world)
+	_world = world
 
-	# --- planets: each has a distinct size, gravity feel, and palette ----------
-	# Verdis: strong gravity home world -> you walk here.
+	# --- planets: each has a distinct size, gravity, palette, and atmosphere ----
+	# Verdis: large green home world with an Earth-like sky.
 	world.add_planet({
 		"name": "Verdis", "position": Vector3.ZERO,
-		"radius": HOME_RADIUS, "amp": 14.0, "gravity": 12.0, "seed": 1337,
+		"radius": HOME_RADIUS, "amp": 28.0, "gravity": 13.0, "seed": 1337,
 		"top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK,
 		"ore": Blocks.IRON_ORE, "core": Blocks.CORE,
-		"tree_density": 0.4,  # lush forest
+		"tree_density": 0.4,
+		"atmosphere": true, "atmo_color": Color(0.45, 0.68, 1.0), "atmo_height": 130.0,
 	})
-	# Frost: medium gravity ice world -- sparse hardy trees.
+	# Frost: big ice world, pale cold sky, sparse hardy trees.
 	world.add_planet({
-		"name": "Frost", "position": Vector3(900, 120, 300),
-		"radius": 120.0, "amp": 10.0, "gravity": 6.0, "seed": 4242,
+		"name": "Frost", "position": Vector3(1800, 300, 700),
+		"radius": 340.0, "amp": 20.0, "gravity": 8.0, "seed": 4242,
 		"top": Blocks.SNOW, "sub": Blocks.ICE, "rock": Blocks.ROCK,
 		"ore": Blocks.CRYSTAL, "core": Blocks.ICE,
 		"tree_density": 0.12,
+		"atmosphere": true, "atmo_color": Color(0.62, 0.76, 0.95), "atmo_height": 110.0,
 	})
-	# Shard: small low-gravity crystal world -- barren, no trees.
+	# Shard: smaller crystal world, thin air -> no atmosphere, barren.
 	world.add_planet({
-		"name": "Shard", "position": Vector3(-750, -200, 600),
-		"radius": 70.0, "amp": 16.0, "gravity": 1.8, "seed": 9001,
+		"name": "Shard", "position": Vector3(-1500, -400, 1200),
+		"radius": 180.0, "amp": 12.0, "gravity": 4.0, "seed": 9001,
 		"top": Blocks.CRYSTAL, "sub": Blocks.ROCK, "rock": Blocks.ROCK,
 		"ore": Blocks.IRON_ORE, "core": Blocks.CRYSTAL,
 		"tree_density": 0.0,
+		"atmosphere": false,
 	})
-	# Ochre: desert world -- dunes, no trees.
+	# Ochre: large desert world, dusty orange sky.
 	world.add_planet({
-		"name": "Ochre", "position": Vector3(500, -700, -650),
-		"radius": 100.0, "amp": 8.0, "gravity": 9.0, "seed": 2024,
+		"name": "Ochre", "position": Vector3(900, -1600, -1300),
+		"radius": 400.0, "amp": 22.0, "gravity": 10.0, "seed": 2024,
 		"top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK,
 		"ore": Blocks.IRON_ORE, "core": Blocks.CORE,
 		"tree_density": 0.0,
+		"atmosphere": true, "atmo_color": Color(0.85, 0.6, 0.4), "atmo_height": 115.0,
 	})
 
 	# --- player: drop in just above the home surface --------------------------
@@ -73,20 +85,54 @@ func _setup_environment() -> void:
 	sky.sky_material = sky_mat
 	env.background_mode = Environment.BG_SKY
 	env.sky = sky
-	# Black sky => sky ambient would be ~0, so use a fixed dim fill instead.
-	# Keep it low so the sun + baked per-face shading give real contrast.
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.ambient_light_color = Color(0.50, 0.55, 0.70)
+	env.ambient_light_color = SPACE_AMBIENT
 	env.ambient_light_energy = 0.27
 	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 
 	we.environment = env
 	add_child(we)
+	_env = env
+	_sky_mat = sky_mat
 
-	# a sun
+	# a sun (single global light -- provides real directional shading everywhere)
 	var sun := DirectionalLight3D.new()
 	sun.rotation = Vector3(deg_to_rad(-45), deg_to_rad(30), 0)
-	sun.light_energy = 1.35
+	sun.light_energy = 1.2
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 120.0  # keep shadow map focused near the player
+	sun.directional_shadow_max_distance = 160.0  # keep shadow map focused near the player
 	add_child(sun)
+	_sun = sun
+
+
+# Blend the sky/ambient between deep space and a lit atmosphere based on how deep
+# in an atmospheric planet the player is. No per-planet sun math -- just a mood
+# that fades in as you descend and out as you climb toward space.
+func _process(delta: float) -> void:
+	if _world == null or _world.player == null or _sky_mat == null:
+		return
+	var ppos: Vector3 = _world.player.global_position
+	var p := _world.nearest_planet(ppos)
+	var target := 0.0
+	var acol := Color(0.45, 0.68, 1.0)
+	var up := Vector3.UP
+	if p != null and p.has_atmosphere:
+		var alt := ppos.distance_to(p.global_position) - p.radius
+		target = clampf(1.0 - alt / p.atmo_height, 0.0, 1.0)
+		acol = p.atmo_color
+		var g := _world.gravity_at(ppos)
+		if g.length() > 0.01:
+			up = -g.normalized()
+	_atmo = lerpf(_atmo, target, clampf(delta * 2.0, 0.0, 1.0))
+
+	var hor := acol.lerp(Color(1, 1, 1), 0.55)
+	_sky_mat.set_shader_parameter("atmo", _atmo)
+	_sky_mat.set_shader_parameter("atmo_up", up)
+	_sky_mat.set_shader_parameter("sky_color", Vector3(acol.r, acol.g, acol.b))
+	_sky_mat.set_shader_parameter("horizon_color", Vector3(hor.r, hor.g, hor.b))
+	_env.ambient_light_energy = lerpf(0.27, 0.6, _atmo)
+	_env.ambient_light_color = SPACE_AMBIENT.lerp(acol, _atmo * 0.8)
+	_sun.light_energy = lerpf(1.2, 1.5, _atmo)
+	_env.fog_enabled = _atmo > 0.03
+	_env.fog_light_color = acol
+	_env.fog_density = _atmo * 0.0012
