@@ -26,9 +26,14 @@ const REACH := 6.0                # block interaction distance
 
 var world: WorldManager           # set by main.gd
 var grounded := false
-var selected_block := Blocks.ROCK
-var _pal_idx := 0
-var inventory := {}               # block id -> count collected by mining
+
+# --- inventory (slots; you can only place what you have) ---
+const SLOTS := 32
+const HOTBAR_SLOTS := 8
+const STACK_MAX := 99
+var inv: Array = []               # each slot: {"id": int, "count": int}
+var active_slot := 0              # which slot we place from
+var inv_open := false
 # mining (hold left-click to break; harder blocks take longer)
 var _mine_key := ""               # identifies the block currently being mined
 var _mine_time := 0.0             # seconds spent mining the current block
@@ -47,9 +52,6 @@ var _home_parent: Node            # where the player lives when not parented to 
 const ARTIFICIAL_G := 9.0         # interior gravity toward the ship floor
 const TETHER_LEN := 18.0          # max EVA tether distance
 
-const HOTBAR := [Blocks.ROCK, Blocks.DIRT, Blocks.GRASS, Blocks.ICE,
-	Blocks.CRYSTAL, Blocks.METAL, Blocks.COCKPIT, Blocks.THRUSTER]
-
 var _camera: Camera3D
 var _ray: RayCast3D
 var _pitch := 0.0
@@ -62,7 +64,9 @@ var _hotbar_label: Label
 var _mode_label: Label
 var _ship_label: Label
 var _target_label: Label
-var _inv_label: Label
+var _inv_panel: Control            # full inventory overlay (toggled with E)
+var _hotbar_cells: Array = []      # always-visible hotbar slot views
+var _grid_cells: Array = []        # full-inventory slot buttons
 var _markers: Array[Label] = []   # one navigation marker per planet
 
 
@@ -93,13 +97,69 @@ func _ready() -> void:
 	floor_constant_speed = true
 	_home_parent = get_parent()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_init_inventory()
 	_build_ui()
+	_refresh_slots()
+
+
+# --- inventory ---------------------------------------------------------------
+
+func _init_inventory() -> void:
+	inv.clear()
+	for i in SLOTS:
+		inv.append({"id": Blocks.AIR, "count": 0})
+	# starting kit so you can build a ship and terraform right away
+	_add_item(Blocks.COCKPIT, 2)
+	_add_item(Blocks.THRUSTER, 8)
+	_add_item(Blocks.METAL, 64)
+	_add_item(Blocks.GRASS, 64)
+	_add_item(Blocks.DIRT, 64)
+	_add_item(Blocks.ROCK, 64)
+	_add_item(Blocks.WOOD, 32)
+	_add_item(Blocks.LEAF_0, 32)
+
+
+# Add n of a block; fills existing stacks first, then empty slots. Returns leftover.
+func _add_item(id: int, n: int) -> int:
+	if id == Blocks.AIR or n <= 0:
+		return n
+	for s in inv:
+		if s["id"] == id and s["count"] < STACK_MAX:
+			var add: int = mini(n, STACK_MAX - s["count"])
+			s["count"] += add
+			n -= add
+			if n <= 0:
+				return 0
+	for s in inv:
+		if s["count"] == 0:
+			s["id"] = id
+			var add: int = mini(n, STACK_MAX)
+			s["count"] = add
+			n -= add
+			if n <= 0:
+				return 0
+	return n  # inventory full; leftover dropped
+
+
+func _selected_id() -> int:
+	return inv[active_slot]["id"] if inv[active_slot]["count"] > 0 else Blocks.AIR
+
+
+func _consume_active() -> void:
+	var s = inv[active_slot]
+	if s["count"] > 0:
+		s["count"] -= 1
+		if s["count"] == 0:
+			s["id"] = Blocks.AIR
+	_refresh_slots()
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_look += event.relative
 	elif event is InputEventMouseButton and event.pressed:
+		if inv_open:
+			return  # inventory open: clicks go to the UI
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 			return
@@ -108,12 +168,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			_edit_block(false)  # placing is instant; breaking is hold-to-mine
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			_cycle_block(-1)
+			_cycle_slot(-1)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			_cycle_block(1)
+			_cycle_slot(1)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+			if inv_open:
+				_toggle_inventory()
+			else:
+				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		elif event.keycode == KEY_E:
+			_toggle_inventory()
 		elif event.keycode == KEY_F:
 			_toggle_pilot()
 		elif event.keycode == KEY_T:
@@ -124,11 +189,21 @@ func _unhandled_input(event: InputEvent) -> void:
 			if aboard == null and not eva:
 				_start_ship()
 		elif event.keycode >= KEY_1 and event.keycode <= KEY_8:
-			var idx: int = event.keycode - KEY_1
-			if idx < HOTBAR.size():
-				selected_block = HOTBAR[idx]
-				_pal_idx = Blocks.PLACEABLE.find(selected_block)
-				_update_ui()
+			active_slot = event.keycode - KEY_1
+			_refresh_slots()
+
+
+func _cycle_slot(dir: int) -> void:
+	active_slot = (active_slot + dir + HOTBAR_SLOTS) % HOTBAR_SLOTS
+	_refresh_slots()
+
+
+func _toggle_inventory() -> void:
+	inv_open = not inv_open
+	if _inv_panel != null:
+		_inv_panel.visible = inv_open
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if inv_open else Input.MOUSE_MODE_CAPTURED
+	_refresh_slots()
 
 
 func _physics_process(delta: float) -> void:
@@ -222,6 +297,7 @@ func _exit_pilot() -> void:
 	if not is_instance_valid(ship):
 		return
 	ship.flying = false
+	ship.hide_landing_reticle()
 
 	var g := world.gravity_at(ship.global_position) if world else Vector3.DOWN
 	if g.length() < FLIGHT_THRESHOLD:
@@ -535,39 +611,33 @@ func _move_input() -> Vector2:
 	return Vector2(x, y)
 
 
-# --- block editing ------------------------------------------------------------
+# --- block placing (right-click) ----------------------------------------------
+# Breaking is handled by hold-to-mine in _process_mining.
 
-func _edit_block(break_it: bool) -> void:
+func _edit_block(_break_it: bool) -> void:
+	var place_id := _selected_id()
+	if place_id == Blocks.AIR:
+		return  # nothing selected / none left in this slot
 	_ray.force_raycast_update()
 	if not _ray.is_colliding():
 		return
 	var collider := _ray.get_collider()
 	var point := _ray.get_collision_point()
 	var normal := _ray.get_collision_normal()
-	# Nudge into the solid (break) or into the empty neighbor (place).
-	var probe := point - normal * 0.5 if break_it else point + normal * 0.5
+	var probe := point + normal * 0.5  # into the empty neighbor cell
 
 	if collider is Chunk:
 		var planet: Planet = (collider as Chunk).planet
 		var v := planet.world_to_voxel(probe)
-		if break_it:
-			planet.set_block(v, Blocks.AIR)
-		elif planet.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
-			planet.set_block(v, selected_block)
+		if planet.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
+			planet.set_block(v, place_id)
+			_consume_active()
 	elif collider is Ship:
 		var ship := collider as Ship
 		var v := ship.world_to_voxel(probe)
-		if break_it:
-			ship.set_block(v, Blocks.AIR)
-		elif ship.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
-			ship.set_block(v, selected_block)
-
-
-func _cycle_block(dir: int) -> void:
-	var n := Blocks.PLACEABLE.size()
-	_pal_idx = (_pal_idx + dir + n) % n
-	selected_block = Blocks.PLACEABLE[_pal_idx]
-	_update_ui()
+		if ship.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
+			ship.set_block(v, place_id)
+			_consume_active()
 
 
 # Hold left-click to break the targeted block; harder blocks take longer. Broken
@@ -627,18 +697,10 @@ func _process_mining(delta: float) -> void:
 			planet.set_block(v, Blocks.AIR)
 		elif ship != null:
 			ship.set_block(v, Blocks.AIR)
-		inventory[id] = int(inventory.get(id, 0)) + 1
+		_add_item(id, 1)
+		_refresh_slots()
 		_mine_key = ""
 		_mine_time = 0.0
-
-
-func _inventory_text() -> String:
-	if inventory.is_empty():
-		return ""
-	var lines: Array = ["-- Inventory --"]
-	for id in inventory:
-		lines.append("%s x%d" % [Blocks.name_of(id), inventory[id]])
-	return "\n".join(lines)
 
 
 ## Start a new ship where the player is looking, oriented to their current frame.
@@ -759,21 +821,99 @@ func _build_ui() -> void:
 	_target_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	layer.add_child(_target_label)
 
-	# inventory panel, top-right
-	_inv_label = Label.new()
-	_inv_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_inv_label.position = Vector2(-220, 16)
-	_inv_label.modulate = Color(0.85, 0.95, 0.7)
-	layer.add_child(_inv_label)
+	_build_inventory_ui(layer)
 
 	var help := Label.new()
 	help.position = Vector2(16, 108)
 	help.text = "WASD move  |  Mouse look  |  Space up  |  Shift down  |  R-click place  |  Hold L-click mine\n" \
-		+ "1-8 block  |  Scroll = all blocks  |  G ship  |  F cockpit  |  T EVA  |  Q/E roll  |  Esc mouse\n" \
+		+ "1-8 slot  |  Scroll = slot  |  E inventory  |  G ship  |  F cockpit  |  T EVA  |  Q/E roll  |  Esc\n" \
 		+ "Build Cockpit + Thruster + hull, F to fly, hold Space to lift off. Aboard in space: F/T"
 	help.modulate = Color(1, 1, 1, 0.55)
 	layer.add_child(help)
 	_update_ui()
+
+
+# Build the always-visible hotbar strip and the toggleable full-inventory grid.
+func _build_inventory_ui(layer: CanvasLayer) -> void:
+	# hotbar strip, bottom-center
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 4)
+	hb.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	hb.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	hb.position = Vector2(-8 * 32, -76)
+	layer.add_child(hb)
+	for i in HOTBAR_SLOTS:
+		_hotbar_cells.append(_make_slot(hb, i, false))
+
+	# full inventory overlay (E)
+	_inv_panel = Panel.new()
+	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_inv_panel.custom_minimum_size = Vector2(8 * 60 + 24, 4 * 60 + 48)
+	_inv_panel.size = _inv_panel.custom_minimum_size
+	_inv_panel.position = -_inv_panel.size * 0.5
+	_inv_panel.visible = false
+	layer.add_child(_inv_panel)
+	var title := Label.new()
+	title.text = "Inventory"
+	title.position = Vector2(14, 8)
+	_inv_panel.add_child(title)
+	var grid := GridContainer.new()
+	grid.columns = HOTBAR_SLOTS
+	grid.add_theme_constant_override("h_separation", 4)
+	grid.add_theme_constant_override("v_separation", 4)
+	grid.position = Vector2(12, 36)
+	_inv_panel.add_child(grid)
+	for i in SLOTS:
+		_grid_cells.append(_make_slot(grid, i, true))
+
+
+# One slot cell: colored square + count. `clickable` grid cells select the slot.
+func _make_slot(parent: Node, index: int, clickable: bool) -> Dictionary:
+	var root: Control
+	if clickable:
+		var b := Button.new()
+		b.pressed.connect(func():
+			active_slot = index
+			_refresh_slots())
+		root = b
+	else:
+		root = Panel.new()
+	root.custom_minimum_size = Vector2(56, 56)
+	parent.add_child(root)
+	var swatch := ColorRect.new()
+	swatch.set_anchors_preset(Control.PRESET_FULL_RECT)
+	swatch.offset_left = 6; swatch.offset_top = 6
+	swatch.offset_right = -6; swatch.offset_bottom = -6
+	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(swatch)
+	var count := Label.new()
+	count.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	count.offset_left = -30; count.offset_top = -22
+	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(count)
+	return {"root": root, "swatch": swatch, "count": count}
+
+
+func _refresh_slots() -> void:
+	active_slot = clampi(active_slot, 0, SLOTS - 1)
+	for i in _hotbar_cells.size():
+		_paint_slot(_hotbar_cells[i], i)
+	for i in _grid_cells.size():
+		_paint_slot(_grid_cells[i], i)
+
+
+func _paint_slot(cell: Dictionary, index: int) -> void:
+	var s = inv[index]
+	var swatch: ColorRect = cell["swatch"]
+	var count: Label = cell["count"]
+	if s["count"] > 0:
+		swatch.color = Blocks.color_of(s["id"])
+		count.text = str(s["count"])
+	else:
+		swatch.color = Color(0.15, 0.15, 0.18, 0.6)
+		count.text = ""
+	# highlight the active slot
+	cell["root"].modulate = Color(1.4, 1.4, 0.7) if index == active_slot else Color(1, 1, 1)
 
 
 func _update_ui() -> void:
@@ -782,8 +922,6 @@ func _update_ui() -> void:
 	_update_markers()
 
 	# targeted block + mining progress bar (hidden while piloting)
-	if _inv_label != null:
-		_inv_label.text = _inventory_text()
 	if _target_label != null:
 		if piloting != null:
 			_target_label.text = ""
@@ -796,7 +934,7 @@ func _update_ui() -> void:
 
 	if eva:
 		_hotbar_label.text = "EVA  (T to climb back in  |  aim + click to repair)"
-		_mode_label.text = "On tether  |  6-axis thrust  |  block: %s" % Blocks.name_of(selected_block)
+		_mode_label.text = "On tether  |  6-axis thrust  |  holding: %s" % Blocks.name_of(_selected_id())
 		_ship_label.text = ""
 		return
 
@@ -829,7 +967,8 @@ func _update_ui() -> void:
 			_ship_label.text = "Full 6-axis maneuvering"
 		return
 
-	_hotbar_label.text = "Block: %s" % Blocks.name_of(selected_block)
+	var held := _selected_id()
+	_hotbar_label.text = "Holding: %s" % (Blocks.name_of(held) if held != Blocks.AIR else "(empty slot)")
 	var p := world.nearest_planet(global_position) if world else null
 	var pname := p.planet_name if p else "Deep Space"
 	_mode_label.text = "%s  |  %s" % ["GROUNDED" if grounded else "FLOATING (6-axis)", pname]

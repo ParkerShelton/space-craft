@@ -20,9 +20,18 @@ const YAW_SENS := 0.0022
 const PITCH_SENS := 0.0022
 const ROLL_SPEED := 1.6
 const GRAVITY_FLIGHT := 3.0    # above this gravity => in a planet's pull
-const ASSIST_ALT := 180.0      # within this altitude of a surface => landing assist
+const ASSIST_ALT := 280.0      # within this altitude of a surface => landing assist
 const LEVEL_SPEED := 2.5       # how fast the ship auto-levels toward belly-down
 const CAM_LOOK_SENS := 0.005
+# landing feel: the ship HOVERS (gravity cancelled) and you fly it gently over the
+# terrain, camera-relative, then descend to touch down. Speeds are capped so you
+# can never slam in.
+const LAND_SPEED := 24.0       # horizontal move speed while landing
+const LAND_VSPEED := 16.0      # climb/descend speed while landing
+const LAND_ACCEL := 3.5        # how quickly velocity eases to the target
+const LAND_MAX := 45.0         # hard speed cap on entering assist (kills a fast dive)
+
+var _reticle: MeshInstance3D   # ring projected on the ground showing the landing spot
 
 var _mi: MeshInstance3D
 var _col_shapes: Array[CollisionShape3D] = []
@@ -160,8 +169,14 @@ func fly(delta: float, world: WorldManager, input: Dictionary) -> void:
 		_fly_free(delta, input, g)
 
 
+func hide_landing_reticle() -> void:
+	if _reticle != null:
+		_reticle.visible = false
+
+
 # Full 6-DOF: mouse steer + roll, thrust on all axes. Used in space.
 func _fly_free(delta: float, input: Dictionary, g: Vector3) -> void:
+	hide_landing_reticle()
 	# camera rides directly behind the ship again
 	if _cam_pivot != null:
 		_cam_pivot.rotation = _cam_pivot.rotation.lerp(Vector3.ZERO, clampf(delta * 6.0, 0.0, 1.0))
@@ -187,45 +202,85 @@ func _fly_free(delta: float, input: Dictionary, g: Vector3) -> void:
 		velocity = velocity.slide(col.get_normal())
 
 
-# Launch/landing assist: auto-level belly-down toward the planet, no manual
-# rotation. Space/Shift climb & descend; WASD nudges horizontally to line up a
-# landing. Settles to rest on touchdown.
+# Landing assist: the ship auto-levels and HOVERS (gravity cancelled). You fly it
+# gently over the terrain relative to where the camera looks, then hold Shift to
+# ease down and touch off. Speeds are capped so you can never slam in, and a ring
+# shows the spot on the ground directly below.
 func _fly_assisted(delta: float, input: Dictionary, g: Vector3) -> void:
-	# Level to the nearest cardinal axis (not raw radial gravity) so the ship sits
-	# flat on the axis-aligned voxel terrain and matches how the player stands.
 	var up_target := -_snap_to_axis(g)
 	_level_to(up_target, delta)
 
-	# Mouse free-looks the camera around the ship (to check the landing site) WITHOUT
-	# rotating the ship itself.
+	# Free-look the camera around the ship WITHOUT turning the ship.
 	if _cam_pivot != null:
 		var look: Vector2 = input["look"]
 		_cam_yaw -= look.x * CAM_LOOK_SENS
 		_cam_pitch = clampf(_cam_pitch - look.y * CAM_LOOK_SENS, -1.4, 0.5)
 		_cam_pivot.rotation = Vector3(_cam_pitch, _cam_yaw, 0.0)
 
-	var b := global_transform.basis
-	var up := b.y
-	var fwd := -b.z
-	var right := b.x
-	var ta := thrust_accel()
-	var move: Vector2 = input["move"]
-	var ascend: float = input["ascend"]
-	var thrust := fwd * move.y * ta + right * move.x * ta + up * ascend * ta
+	var up := global_transform.basis.y
+	velocity = velocity.limit_length(LAND_MAX)  # tame a fast dive on arrival
 
-	velocity += (g + thrust) * delta
-	velocity = velocity.lerp(Vector3.ZERO, clampf(SHIP_DRAG * delta, 0.0, 1.0))
+	# Move relative to where the camera looks, flattened onto the ground plane.
+	var camb := _chase_cam.global_transform.basis if _chase_cam != null else global_transform.basis
+	var camf := -camb.z
+	var camr := camb.x
+	camf = camf - up * camf.dot(up)
+	camr = camr - up * camr.dot(up)
+	if camf.length() > 0.01: camf = camf.normalized()
+	if camr.length() > 0.01: camr = camr.normalized()
+	var move: Vector2 = input["move"]
+	var wish := camf * move.y + camr * move.x
+	if wish.length() > 1.0:
+		wish = wish.normalized()
+
+	var target_h := wish * LAND_SPEED
+	var target_v := float(input["ascend"]) * LAND_VSPEED  # Space up, Shift down; hover at 0
+
+	var v_up := velocity.dot(up)
+	var v_h := velocity - up * v_up
+	v_h = v_h.lerp(target_h, clampf(LAND_ACCEL * delta, 0.0, 1.0))
+	v_up = lerpf(v_up, target_v, clampf(LAND_ACCEL * delta, 0.0, 1.0))
+	velocity = v_h + up * v_up
 
 	var col := move_and_collide(velocity * delta)
 	landed = false
 	if col != null:
 		velocity = velocity.slide(col.get_normal())
-		if col.get_normal().dot(up) > 0.4:  # touched down on the ground
+		if col.get_normal().dot(up) > 0.4:
 			landed = true
-
-	# When sitting on the ground with no input, settle to a dead stop (no drift/jitter).
-	if landed and ascend <= 0.0 and move.length() < 0.01:
+	if landed and target_v <= 0.0 and move.length() < 0.01:
 		velocity = velocity.lerp(Vector3.ZERO, clampf(10.0 * delta, 0.0, 1.0))
+
+	_update_reticle(up)
+
+
+# Project a ring onto the ground directly below the ship (the landing spot).
+func _update_reticle(up: Vector3) -> void:
+	if _reticle == null:
+		_reticle = MeshInstance3D.new()
+		var t := TorusMesh.new()
+		t.inner_radius = 1.6
+		t.outer_radius = 2.2
+		_reticle.mesh = t
+		var m := StandardMaterial3D.new()
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.albedo_color = Color(0.4, 1.0, 0.55)
+		_reticle.material_override = m
+		get_parent().add_child(_reticle)
+	var space := get_world_3d().direct_space_state
+	var q := PhysicsRayQueryParameters3D.create(global_position, global_position - up * (ASSIST_ALT * 2.0))
+	q.exclude = [get_rid()]
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		_reticle.visible = false
+		return
+	var pos: Vector3 = hit["position"] + up * 0.15
+	var xb := up.cross(Vector3(1, 0, 0))
+	if xb.length() < 0.01:
+		xb = up.cross(Vector3(0, 0, 1))
+	xb = xb.normalized()
+	_reticle.global_transform = Transform3D(Basis(xb, up, xb.cross(up)), pos)
+	_reticle.visible = true
 
 
 # Nearest of the six cardinal directions to `v`, as a unit vector.
