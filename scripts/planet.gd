@@ -28,6 +28,8 @@ var _seed := 0
 var surface_noise := FastNoiseLite.new()
 var ore_noise := FastNoiseLite.new()
 
+var shape_cube := false  # true => cube-shaped planet (Chebyshev distance)
+
 # --- atmosphere (for lighting/sky; set via configure) ---
 var has_atmosphere := false
 var atmo_color := Color(0.45, 0.68, 1.0)
@@ -81,6 +83,7 @@ func configure(cfg: Dictionary) -> void:
 	has_atmosphere = cfg.get("atmosphere", false)
 	atmo_color = cfg.get("atmo_color", atmo_color)
 	atmo_height = cfg.get("atmo_height", atmo_height)
+	shape_cube = cfg.get("cube", true)  # cube-planet-test branch: cubes by default
 
 	surface_noise.seed = _seed
 	# Several rolling hills across the surface, regardless of planet size.
@@ -141,14 +144,19 @@ func _derive_flora(density: float) -> void:
 # real voxel surface covers it once you arrive.
 func _add_distant_sphere() -> void:
 	var vis := MeshInstance3D.new()
-	var sm := SphereMesh.new()
 	# keep it just below the LOWEST terrain so it never pokes through valleys
 	var r := maxf(radius - terrain_amp - 2.0, radius * 0.5)
-	sm.radius = r
-	sm.height = r * 2.0
-	sm.radial_segments = 48
-	sm.rings = 24
-	vis.mesh = sm
+	if shape_cube:
+		var bm := BoxMesh.new()
+		bm.size = Vector3(r * 2.0, r * 2.0, r * 2.0)
+		vis.mesh = bm
+	else:
+		var sm := SphereMesh.new()
+		sm.radius = r
+		sm.height = r * 2.0
+		sm.radial_segments = 48
+		sm.rings = 24
+		vis.mesh = sm
 	var mat := StandardMaterial3D.new()
 	var c := Blocks.color_of(pal_top)
 	mat.albedo_color = Color(c.r * 0.7, c.g * 0.7, c.b * 0.7)  # match the shaded voxel tone
@@ -164,14 +172,31 @@ func _surf(dir: Vector3) -> float:
 	return radius + surface_noise.get_noise_3d(dir.x * radius, dir.y * radius, dir.z * radius) * terrain_amp
 
 
+# Distance-from-center metric that defines the planet's shape: Euclidean = sphere,
+# Chebyshev (max axis) = cube.
+func _norm(p: Vector3) -> float:
+	if shape_cube:
+		return maxf(maxf(absf(p.x), absf(p.y)), absf(p.z))
+	return p.length()
+
+
+# World-space point on the surface in unit direction `dir` (for rooting trees).
+func _surface_point(dir: Vector3) -> Vector3:
+	var s := _surf(dir)
+	if shape_cube:
+		var m := maxf(maxf(absf(dir.x), absf(dir.y)), absf(dir.z))
+		return dir * (s / maxf(m, 0.0001))
+	return dir * s
+
+
 ## Pure terrain function: what block id would be here with no player edits.
 func generation_sample(gx: int, gy: int, gz: int) -> int:
 	var p := Vector3(gx, gy, gz)
-	var d := p.length()
+	var d := _norm(p)
 	if d > radius + terrain_amp + tree_reach + 2.0:
 		return Blocks.AIR
-	var inv := 1.0 / maxf(d, 0.0001)
-	var dir := p * inv
+	var l2 := p.length()
+	var dir := p / maxf(l2, 0.0001)
 	var surf := _surf(dir)
 
 	if d > surf:
@@ -226,9 +251,9 @@ func _hash01(c: Vector3i, salt: int) -> float:
 
 # Is voxel p (air, near the surface) part of a tree? Trees are scattered on a grid
 # over the surface; we check the cells around p's surface projection.
-func _tree_at(p: Vector3, dir: Vector3, surf: float) -> int:
+func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 	var c := float(TREE_CELL)
-	var sp := dir * surf  # surface point beneath p
+	var sp := _surface_point(dir)  # surface point beneath p (cube- or sphere-aware)
 	var scell := Vector3i(floori(sp.x / c), floori(sp.y / c), floori(sp.z / c))
 	for dx in range(-1, 2):
 		for dy in range(-1, 2):
@@ -237,7 +262,7 @@ func _tree_at(p: Vector3, dir: Vector3, surf: float) -> int:
 				if _hash01(cc, 0) >= tree_density:
 					continue
 				var cdir := (Vector3(cc) * c + Vector3(c * 0.5, c * 0.5, c * 0.5)).normalized()
-				var base := cdir * _surf(cdir)
+				var base := _surface_point(cdir)
 				# one tree per cell: only if its base actually sits in this cell
 				if Vector3i(floori(base.x / c), floori(base.y / c), floori(base.z / c)) != cc:
 					continue
@@ -428,7 +453,7 @@ func _chunk_possibly_solid(cc: Vector3i) -> bool:
 		clampf(0.0, lo.x, hi.x),
 		clampf(0.0, lo.y, hi.y),
 		clampf(0.0, lo.z, hi.z))
-	return nearest.length() <= radius + terrain_amp + tree_reach + 1.0
+	return _norm(nearest) <= radius + terrain_amp + tree_reach + 1.0
 
 
 # --- editing ------------------------------------------------------------------
