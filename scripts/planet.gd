@@ -144,8 +144,8 @@ func _add_distant_sphere() -> void:
 	var r := maxf(radius - terrain_amp - 2.0, radius * 0.5)
 	sm.radius = r
 	sm.height = r * 2.0
-	sm.radial_segments = 24
-	sm.rings = 12
+	sm.radial_segments = 48
+	sm.rings = 24
 	vis.mesh = sm
 	var mat := StandardMaterial3D.new()
 	var c := Blocks.color_of(pal_top)

@@ -4,7 +4,7 @@ extends Node3D
 ## home world, and wires the player to the world manager. Everything is created in
 ## code so the scene file can stay trivial and robust.
 
-const HOME_RADIUS := 500.0
+const HOME_RADIUS := 1500.0
 const SPACE_AMBIENT := Color(0.50, 0.55, 0.70)
 
 var _world: WorldManager
@@ -21,42 +21,43 @@ func _ready() -> void:
 	add_child(world)
 	_world = world
 
-	# --- planets: each has a distinct size, gravity, palette, and atmosphere ----
-	# Verdis: large green home world with an Earth-like sky.
+	# --- planets: mostly massive (explore for ages before circling one), plus a
+	# small one mixed in. Spaced far apart; float precision is still fine here.
+	# Verdis: massive green home world with an Earth-like sky.
 	world.add_planet({
 		"name": "Verdis", "position": Vector3.ZERO,
-		"radius": HOME_RADIUS, "amp": 28.0, "gravity": 13.0, "seed": 1337,
+		"radius": HOME_RADIUS, "amp": 55.0, "gravity": 14.0, "seed": 1337,
 		"top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK,
 		"ore": Blocks.IRON_ORE, "core": Blocks.CORE,
 		"tree_density": 0.4,
-		"atmosphere": true, "atmo_color": Color(0.45, 0.68, 1.0), "atmo_height": 130.0,
+		"atmosphere": true, "atmo_color": Color(0.45, 0.68, 1.0), "atmo_height": 420.0,
 	})
-	# Frost: big ice world, pale cold sky, sparse hardy trees.
+	# Frost: enormous ice world, pale cold sky, sparse hardy trees.
 	world.add_planet({
-		"name": "Frost", "position": Vector3(1800, 300, 700),
-		"radius": 340.0, "amp": 20.0, "gravity": 8.0, "seed": 4242,
+		"name": "Frost", "position": Vector3(6000, 900, 2200),
+		"radius": 1800.0, "amp": 70.0, "gravity": 12.0, "seed": 4242,
 		"top": Blocks.SNOW, "sub": Blocks.ICE, "rock": Blocks.ROCK,
 		"ore": Blocks.CRYSTAL, "core": Blocks.ICE,
-		"tree_density": 0.12,
-		"atmosphere": true, "atmo_color": Color(0.62, 0.76, 0.95), "atmo_height": 110.0,
+		"tree_density": 0.1,
+		"atmosphere": true, "atmo_color": Color(0.62, 0.76, 0.95), "atmo_height": 480.0,
 	})
-	# Shard: smaller crystal world, thin air -> no atmosphere, barren.
+	# Shard: small crystal moon, thin air -> no atmosphere, barren.
 	world.add_planet({
-		"name": "Shard", "position": Vector3(-1500, -400, 1200),
-		"radius": 180.0, "amp": 12.0, "gravity": 4.0, "seed": 9001,
+		"name": "Shard", "position": Vector3(3200, 4600, -3600),
+		"radius": 260.0, "amp": 16.0, "gravity": 5.0, "seed": 9001,
 		"top": Blocks.CRYSTAL, "sub": Blocks.ROCK, "rock": Blocks.ROCK,
 		"ore": Blocks.IRON_ORE, "core": Blocks.CRYSTAL,
 		"tree_density": 0.0,
 		"atmosphere": false,
 	})
-	# Ochre: large desert world, dusty orange sky.
+	# Ochre: massive desert world, dusty orange sky.
 	world.add_planet({
-		"name": "Ochre", "position": Vector3(900, -1600, -1300),
-		"radius": 400.0, "amp": 22.0, "gravity": 10.0, "seed": 2024,
+		"name": "Ochre", "position": Vector3(-4800, -1500, 5200),
+		"radius": 1300.0, "amp": 55.0, "gravity": 11.0, "seed": 2024,
 		"top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK,
 		"ore": Blocks.IRON_ORE, "core": Blocks.CORE,
 		"tree_density": 0.0,
-		"atmosphere": true, "atmo_color": Color(0.85, 0.6, 0.4), "atmo_height": 115.0,
+		"atmosphere": true, "atmo_color": Color(0.85, 0.6, 0.4), "atmo_height": 380.0,
 	})
 
 	# --- player: drop in just above the home surface --------------------------
@@ -118,7 +119,8 @@ func _process(delta: float) -> void:
 	var up := Vector3.UP
 	if p != null and p.has_atmosphere:
 		var alt := ppos.distance_to(p.global_position) - p.radius
-		target = clampf(1.0 - alt / p.atmo_height, 0.0, 1.0)
+		# smoothstep over the whole atmo band so it eases in/out (no hard edge)
+		target = smoothstep(0.0, 1.0, clampf(1.0 - alt / p.atmo_height, 0.0, 1.0))
 		acol = p.atmo_color
 		var g := _world.gravity_at(ppos)
 		if g.length() > 0.01:

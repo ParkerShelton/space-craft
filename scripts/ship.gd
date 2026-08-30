@@ -123,7 +123,7 @@ func thrust_accel() -> float:
 func enable_chase_camera() -> void:
 	if _chase_cam == null:
 		_chase_cam = Camera3D.new()
-		_chase_cam.far = 4000.0
+		_chase_cam.far = 14000.0
 		_chase_cam.rotation.x = deg_to_rad(-12)
 		add_child(_chase_cam)
 	var c := center_local()

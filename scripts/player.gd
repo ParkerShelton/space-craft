@@ -77,7 +77,7 @@ func _ready() -> void:
 
 	_camera = Camera3D.new()
 	_camera.position = Vector3(0, 0.7, 0)  # eye height above body center
-	_camera.far = 2000.0
+	_camera.far = 14000.0
 	add_child(_camera)
 
 	_ray = RayCast3D.new()
