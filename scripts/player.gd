@@ -1,0 +1,741 @@
+class_name Player
+extends CharacterBody3D
+
+## Hybrid controller.
+##
+## GROUND mode (gravity strong): the body smoothly stands up so its "up" points
+## away from the planet center; you walk on the tangent plane, jump, and can hold
+## jump to jetpack. Climb high enough that gravity fades and you...
+## FLOAT mode (gravity weak / deep space): full 6-axis flight, no forced
+## orientation -- WASD moves along your view, jump/crouch thrust up/down.
+##
+## The switch is purely a function of local gravity magnitude, so weak planets let
+## you float even near the surface and strong ones "capture" you into walking.
+
+const WALK_SPEED := 7.0
+const JUMP_SPEED := 8.0
+const JETPACK_ACCEL := 9.0        # gentle thrust
+const JETPACK_MAX_SPEED := 8.0    # cap so it can't launch you off
+const FLY_SPEED := 16.0
+const FLY_ACCEL := 6.0
+const FLY_DAMP := 3.0
+const MOUSE_SENS := 0.0025
+const ALIGN_SPEED := 2.5          # how fast we stand upright when captured (lower = smoother)
+const FLIGHT_THRESHOLD := 3.0     # gravity (m/s^2) below which we float
+const REACH := 6.0                # block interaction distance
+
+var world: WorldManager           # set by main.gd
+var grounded := false
+var selected_block := Blocks.ROCK
+var _pal_idx := 0
+var piloting: Ship = null         # non-null while flying a ship
+var aboard: Ship = null           # non-null while walking inside a ship in space
+var eva := false                  # floating outside on a tether
+var _eva_ship: Ship = null        # ship we're tethered to
+var _eva_anchor_local := Vector3.ZERO  # tether attach point in ship-local space
+var _tether: MeshInstance3D
+var _iv_y := 0.0                  # interior vertical velocity (ship-local)
+var _interior_floor := false
+var _body_shape: CollisionShape3D
+var _home_parent: Node            # where the player lives when not parented to a ship
+const ARTIFICIAL_G := 9.0         # interior gravity toward the ship floor
+const TETHER_LEN := 18.0          # max EVA tether distance
+
+const HOTBAR := [Blocks.ROCK, Blocks.DIRT, Blocks.GRASS, Blocks.ICE,
+	Blocks.CRYSTAL, Blocks.METAL, Blocks.COCKPIT, Blocks.THRUSTER]
+
+var _camera: Camera3D
+var _ray: RayCast3D
+var _pitch := 0.0
+var _look := Vector2.ZERO          # accumulated mouse delta, consumed in physics
+
+# UI
+var _ui_layer: CanvasLayer
+var _crosshair: Label
+var _hotbar_label: Label
+var _mode_label: Label
+var _ship_label: Label
+var _markers: Array[Label] = []   # one navigation marker per planet
+
+
+func _ready() -> void:
+	# collision capsule
+	_body_shape = CollisionShape3D.new()
+	var cap := CapsuleShape3D.new()
+	cap.radius = 0.4
+	cap.height = 1.8
+	_body_shape.shape = cap
+	add_child(_body_shape)
+
+	_camera = Camera3D.new()
+	_camera.position = Vector3(0, 0.7, 0)  # eye height above body center
+	_camera.far = 2000.0
+	add_child(_camera)
+
+	_ray = RayCast3D.new()
+	_ray.target_position = Vector3(0, 0, -REACH)
+	_ray.collide_with_bodies = true
+	_camera.add_child(_ray)
+
+	# With axis-snapped gravity the ground is always flat, so keep the character
+	# glued to it and don't let it slide.
+	floor_max_angle = deg_to_rad(50)
+	floor_stop_on_slope = true
+	floor_snap_length = 0.5
+	floor_constant_speed = true
+	_home_parent = get_parent()
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_build_ui()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
+		_look += event.relative
+	elif event is InputEventMouseButton and event.pressed:
+		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			return
+		if piloting:
+			return  # no building while flying
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			_edit_block(true)
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			_edit_block(false)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
+			_cycle_block(-1)
+		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
+			_cycle_block(1)
+	elif event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_ESCAPE:
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		elif event.keycode == KEY_F:
+			_toggle_pilot()
+		elif event.keycode == KEY_T:
+			_toggle_eva()
+		elif piloting:
+			return  # while flying, only F/Esc/mouse-look do anything
+		elif event.keycode == KEY_G:
+			if aboard == null and not eva:
+				_start_ship()
+		elif event.keycode >= KEY_1 and event.keycode <= KEY_8:
+			var idx: int = event.keycode - KEY_1
+			if idx < HOTBAR.size():
+				selected_block = HOTBAR[idx]
+				_pal_idx = Blocks.PLACEABLE.find(selected_block)
+				_update_ui()
+
+
+func _physics_process(delta: float) -> void:
+	if eva:
+		_eva_physics(delta)
+		_update_ui()
+		return
+	if piloting != null:
+		_pilot_physics(delta)
+		_update_ui()
+		return
+	if aboard != null:
+		if not is_instance_valid(aboard):
+			aboard = null
+		else:
+			# Walk the interior in the ship's local frame (decoupled from how the
+			# ship moves through space -- rock solid at any speed/orientation).
+			grounded = true
+			_walk_interior(delta, aboard)
+			_update_ui()
+			return
+	var g := world.gravity_at(global_position) if world else Vector3(0, -9.8, 0)
+	grounded = g.length() > FLIGHT_THRESHOLD
+	if grounded:
+		_walk(delta, -_snap_to_axis(g), g.length())
+	else:
+		_process_float(delta)
+	_update_ui()
+
+
+# --- piloting -----------------------------------------------------------------
+
+func _pilot_physics(delta: float) -> void:
+	if not is_instance_valid(piloting):
+		_exit_pilot()
+		return
+	var ascend := 0.0
+	if Input.is_physical_key_pressed(KEY_SPACE): ascend += 1.0
+	if Input.is_physical_key_pressed(KEY_SHIFT): ascend -= 1.0
+	var roll := 0.0
+	if Input.is_physical_key_pressed(KEY_Q): roll += 1.0
+	if Input.is_physical_key_pressed(KEY_E): roll -= 1.0
+	piloting.fly(delta, world, {
+		"move": _move_input(),
+		"ascend": ascend,
+		"roll": roll,
+		"look": _look,
+	})
+	_look = Vector2.ZERO
+	# ride along so we exit next to the ship and HUD/gravity queries stay local
+	global_position = piloting.global_position
+
+
+func _toggle_pilot() -> void:
+	if piloting != null:
+		_exit_pilot()
+		return
+	if world == null:
+		return
+	var ship := aboard if aboard != null else world.nearest_ship(global_position)
+	if ship == null:
+		return
+	var cockpit_world := ship.to_global(ship.cockpit_local() + Vector3(0.5, 0.5, 0.5))
+	if global_position.distance_to(cockpit_world) > 4.0:
+		return
+	if not ship.get_status()["can_fly"]:
+		return
+	_enter_pilot(ship)
+
+
+func _enter_pilot(ship: Ship) -> void:
+	if aboard != null:
+		_unboard()
+	piloting = ship
+	ship.flying = true
+	ship.velocity = Vector3.ZERO
+	velocity = Vector3.ZERO
+	_body_shape.disabled = true
+	ship.enable_chase_camera()
+
+
+func _exit_pilot() -> void:
+	var ship := piloting
+	piloting = null
+	_body_shape.disabled = false
+	_camera.make_current()
+	velocity = Vector3.ZERO
+	if not is_instance_valid(ship):
+		return
+	ship.flying = false
+
+	var g := world.gravity_at(ship.global_position) if world else Vector3.DOWN
+	if g.length() < FLIGHT_THRESHOLD:
+		# In space: keep the ship's momentum (it coasts) and board it to walk around.
+		_board(ship)
+	else:
+		# On/near a planet: park the ship and stand on it; planet gravity holds you.
+		ship.velocity = Vector3.ZERO
+		global_position = ship.global_position + ship.global_transform.basis * (ship.center_local() + Vector3(0, 2.0, 0))
+		if g.length() > 0.01:
+			look_at(global_position - global_transform.basis.z, -g.normalized())
+
+
+# --- walking inside a ship (aboard) -------------------------------------------
+
+func _board(ship: Ship) -> void:
+	aboard = ship
+	reparent(ship, true)          # child of the ship: local position rides along automatically
+	rotation = Vector3.ZERO       # align to ship axes: up = ship up, facing ship forward
+	var stand := _find_interior_stand(ship, ship.cockpit_local())
+	position = Vector3(stand) + Vector3(0.5, 1.0, 0.5)  # inside the ship, on the floor
+	_pitch = 0.0
+	_iv_y = 0.0
+	velocity = Vector3.ZERO
+	_body_shape.disabled = true   # interior movement is manual, not physics-swept
+
+
+func _unboard() -> void:
+	if aboard != null and get_parent() == aboard:
+		reparent(_home_parent, true)
+	aboard = null
+	_body_shape.disabled = false
+	velocity = Vector3.ZERO
+
+
+# --- EVA (float outside on a tether) ------------------------------------------
+
+func _toggle_eva() -> void:
+	if eva:
+		var ship := _eva_ship
+		_end_eva()
+		if is_instance_valid(ship):
+			_board(ship)  # climb back inside
+	elif aboard != null:
+		_begin_eva()
+
+
+func _begin_eva() -> void:
+	var ship := aboard
+	_eva_ship = ship
+	_eva_anchor_local = ship.cockpit_local() + Vector3(0.5, 0.5, 0.5)  # tether roots at the cockpit
+	aboard = null
+	reparent(_home_parent, true)
+	eva = true
+	_body_shape.disabled = false
+	# emerge just above the ship, out in open space
+	global_position = ship.to_global(_eva_anchor_local + Vector3(0, 3.0, 0))
+	velocity = Vector3.ZERO
+	_ensure_tether()
+
+
+func _end_eva() -> void:
+	eva = false
+	_eva_ship = null
+	if _tether != null:
+		_tether.visible = false
+
+
+func _eva_physics(delta: float) -> void:
+	if not is_instance_valid(_eva_ship):
+		_end_eva()
+		return
+	_process_float(delta)  # full 6-axis flight, same as deep-space player movement
+	# tether constraint: can't drift past TETHER_LEN from the (moving) anchor
+	var anchor := _eva_ship.to_global(_eva_anchor_local)
+	var vec := global_position - anchor
+	var d := vec.length()
+	if d > TETHER_LEN:
+		var dir := vec / d
+		global_position = anchor + dir * TETHER_LEN
+		var outward := velocity.dot(dir)
+		if outward > 0.0:
+			velocity -= dir * outward
+	_update_tether(anchor)
+
+
+func _ensure_tether() -> void:
+	if _tether == null:
+		_tether = MeshInstance3D.new()
+		_tether.mesh = ImmediateMesh.new()
+		var mat := StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color(1.0, 0.85, 0.3)
+		_tether.material_override = mat
+		_home_parent.add_child(_tether)
+	_tether.visible = true
+
+
+func _update_tether(anchor: Vector3) -> void:
+	var m := _tether.mesh as ImmediateMesh
+	m.clear_surfaces()
+	m.surface_begin(Mesh.PRIMITIVE_LINES)
+	m.surface_add_vertex(anchor)
+	m.surface_add_vertex(global_position)
+	m.surface_end()
+
+
+# Find a standable interior cell near the cockpit: an air cell with headroom and a
+# solid floor directly below. Falls back to just above the cockpit (flat builds).
+func _find_interior_stand(ship: Ship, cockpit: Vector3) -> Vector3i:
+	var cc := Vector3i(roundi(cockpit.x), roundi(cockpit.y), roundi(cockpit.z))
+	var best := cc + Vector3i(0, 1, 0)  # fallback: on top of the cockpit
+	var best_d := 1.0e9
+	for dx in range(-3, 4):
+		for dy in range(-1, 3):
+			for dz in range(-3, 4):
+				var c := cc + Vector3i(dx, dy, dz)
+				if _is_standable(ship, c):
+					var d := Vector2(dx, dz).length() + absf(dy) * 0.5
+					if d < best_d:
+						best_d = d
+						best = c
+	return best
+
+
+func _is_standable(ship: Ship, c: Vector3i) -> bool:
+	return (not ship.blocks.has(c)) \
+		and (not ship.blocks.has(c + Vector3i(0, 1, 0))) \
+		and ship.blocks.has(c + Vector3i(0, -1, 0))
+
+
+## Manual voxel character controller in the ship's local frame.
+func _walk_interior(delta: float, ship: Ship) -> void:
+	rotation.y -= _look.x * MOUSE_SENS       # yaw around the ship's up
+	_pitch = clampf(_pitch - _look.y * MOUSE_SENS, -1.45, 1.45)
+	_camera.rotation.x = _pitch
+	_look = Vector2.ZERO
+
+	var input := _move_input()
+	var yaw := rotation.y
+	var fwd := Vector3(-sin(yaw), 0.0, -cos(yaw))
+	var right := Vector3(cos(yaw), 0.0, -sin(yaw))
+	var wish := right * input.x + fwd * input.y
+	if wish.length() > 0.001:
+		wish = wish.normalized()
+	var disp := wish * WALK_SPEED * delta
+
+	if _interior_floor and Input.is_physical_key_pressed(KEY_SPACE):
+		_iv_y = JUMP_SPEED
+	_iv_y -= ARTIFICIAL_G * delta
+
+	var pos := position
+	# horizontal, per-axis so you slide along walls
+	var tx := pos
+	tx.x += disp.x
+	if not _interior_blocked(ship, tx):
+		pos.x = tx.x
+	var tz := pos
+	tz.z += disp.z
+	if not _interior_blocked(ship, tz):
+		pos.z = tz.z
+	# vertical + floor
+	pos.y += _iv_y * delta
+	var ft := _interior_floor_top(ship, pos)
+	_interior_floor = false
+	if pos.y - 0.9 <= ft:
+		pos.y = ft + 0.9
+		if _iv_y < 0.0:
+			_iv_y = 0.0
+		_interior_floor = true
+	position = pos
+
+	# safety: if you walked off an open edge and fell away, snap back to the cockpit
+	if position.y < -60.0:
+		position = ship.cockpit_local() + Vector3(0.5, 2.0, 0.5)
+		_iv_y = 0.0
+
+
+# Highest solid block top at or below the player's feet (ship-local Y).
+func _interior_floor_top(ship: Ship, pos: Vector3) -> float:
+	var cx := floori(pos.x)
+	var cz := floori(pos.z)
+	var start := floori(pos.y - 0.9 + 0.02)
+	for y in range(start, start - 128, -1):
+		if ship.blocks.has(Vector3i(cx, y, cz)):
+			return float(y + 1)
+	return -1.0e9
+
+
+# Is a wall block occupying the player's body column at this local position?
+func _interior_blocked(ship: Ship, pos: Vector3) -> bool:
+	var cx := floori(pos.x)
+	var cz := floori(pos.z)
+	var feet := pos.y - 0.9
+	for h in [0.25, 1.0, 1.6]:
+		if ship.blocks.has(Vector3i(cx, floori(feet + h), cz)):
+			return true
+	return false
+
+
+# --- GROUND -------------------------------------------------------------------
+
+## Walk on a surface whose local "up" is given, under gravity magnitude `gmag`.
+## Used both for planets (up = -snapped gravity) and for standing inside a ship
+## in space (up = ship's up, gmag = artificial gravity).
+func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -> void:
+	# Smoothly rotate the body so its local +Y aligns with `up` (stand upright).
+	var body_up := global_transform.basis.y
+	var dot := clampf(body_up.dot(up), -1.0, 1.0)
+	if dot < -0.9999:
+		# nearly upside-down: nudge with a perpendicular axis to avoid a degenerate quat
+		global_transform.basis = Basis(global_transform.basis.x, PI) * global_transform.basis
+	elif dot < 0.9999:
+		var full := Quaternion(body_up, up)
+		var step := Quaternion.IDENTITY.slerp(full, clampf(delta * ALIGN_SPEED, 0.0, 1.0))
+		global_transform.basis = Basis(step) * global_transform.basis
+	global_transform.basis = global_transform.basis.orthonormalized()
+
+	# Yaw around local up; pitch the camera.
+	if _look.x != 0.0:
+		rotate(up, -_look.x * MOUSE_SENS)
+	_pitch = clampf(_pitch - _look.y * MOUSE_SENS, -1.45, 1.45)
+	_camera.rotation.x = _pitch
+	_look = Vector2.ZERO
+
+	# Movement on the tangent plane.
+	var input := _move_input()
+	var fwd := -global_transform.basis.z
+	var right := global_transform.basis.x
+	var wish := right * input.x + fwd * input.y
+	wish = wish - up * wish.dot(up)
+	if wish.length() > 0.001:
+		wish = wish.normalized()
+
+	# Split velocity into tangent (horizontal) and along-up (vertical) parts.
+	var v_up := velocity.dot(up)
+	var horiz := wish * WALK_SPEED
+
+	v_up += -gmag * delta  # gravity pulls along -up (the snapped down axis)
+
+	if is_on_floor():
+		if v_up < 0.0:
+			v_up = 0.0
+		if Input.is_physical_key_pressed(KEY_SPACE):
+			v_up = JUMP_SPEED
+	elif allow_jetpack:
+		# jetpack: hold jump to thrust up, crouch to thrust down (hybrid flight)
+		if Input.is_physical_key_pressed(KEY_SPACE):
+			v_up = minf(v_up + JETPACK_ACCEL * delta, JETPACK_MAX_SPEED)
+		if Input.is_physical_key_pressed(KEY_SHIFT):
+			v_up = maxf(v_up - JETPACK_ACCEL * delta, -JETPACK_MAX_SPEED)
+
+	velocity = horiz + up * v_up
+	up_direction = up
+	move_and_slide()
+
+
+# --- FLOAT --------------------------------------------------------------------
+
+func _process_float(delta: float) -> void:
+	# Free look: yaw around body up, pitch the camera. No forced orientation.
+	if _look.x != 0.0:
+		rotate(global_transform.basis.y, -_look.x * MOUSE_SENS)
+	_pitch = clampf(_pitch - _look.y * MOUSE_SENS, -1.45, 1.45)
+	_camera.rotation.x = _pitch
+	_look = Vector2.ZERO
+
+	var input := _move_input()
+	var cam := _camera.global_transform.basis
+	var fwd := -cam.z
+	var right := cam.x
+	var up := cam.y
+	var vertical := 0.0
+	if Input.is_physical_key_pressed(KEY_SPACE):
+		vertical += 1.0
+	if Input.is_physical_key_pressed(KEY_SHIFT):
+		vertical -= 1.0
+
+	var wish := (fwd * input.y + right * input.x + up * vertical)
+	if wish.length() > 1.0:
+		wish = wish.normalized()
+
+	if wish.length() > 0.01:
+		velocity = velocity.lerp(wish * FLY_SPEED, clampf(delta * FLY_ACCEL, 0.0, 1.0))
+	else:
+		velocity = velocity.lerp(Vector3.ZERO, clampf(delta * FLY_DAMP, 0.0, 1.0))
+
+	up_direction = up
+	move_and_slide()
+
+
+## Nearest of the six cardinal directions to `v`, as a unit vector.
+func _snap_to_axis(v: Vector3) -> Vector3:
+	var ax := absf(v.x)
+	var ay := absf(v.y)
+	var az := absf(v.z)
+	if ax >= ay and ax >= az:
+		return Vector3(signf(v.x), 0, 0)
+	elif ay >= az:
+		return Vector3(0, signf(v.y), 0)
+	return Vector3(0, 0, signf(v.z))
+
+
+func _move_input() -> Vector2:
+	var x := 0.0
+	var y := 0.0
+	if Input.is_physical_key_pressed(KEY_W): y += 1.0
+	if Input.is_physical_key_pressed(KEY_S): y -= 1.0
+	if Input.is_physical_key_pressed(KEY_D): x += 1.0
+	if Input.is_physical_key_pressed(KEY_A): x -= 1.0
+	return Vector2(x, y)
+
+
+# --- block editing ------------------------------------------------------------
+
+func _edit_block(break_it: bool) -> void:
+	_ray.force_raycast_update()
+	if not _ray.is_colliding():
+		return
+	var collider := _ray.get_collider()
+	var point := _ray.get_collision_point()
+	var normal := _ray.get_collision_normal()
+	# Nudge into the solid (break) or into the empty neighbor (place).
+	var probe := point - normal * 0.5 if break_it else point + normal * 0.5
+
+	if collider is Chunk:
+		var planet: Planet = (collider as Chunk).planet
+		var v := planet.world_to_voxel(probe)
+		if break_it:
+			planet.set_block(v, Blocks.AIR)
+		elif planet.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
+			planet.set_block(v, selected_block)
+	elif collider is Ship:
+		var ship := collider as Ship
+		var v := ship.world_to_voxel(probe)
+		if break_it:
+			ship.set_block(v, Blocks.AIR)
+		elif ship.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
+			ship.set_block(v, selected_block)
+
+
+func _cycle_block(dir: int) -> void:
+	var n := Blocks.PLACEABLE.size()
+	_pal_idx = (_pal_idx + dir + n) % n
+	selected_block = Blocks.PLACEABLE[_pal_idx]
+	_update_ui()
+
+
+## Start a new ship where the player is looking, oriented to their current frame.
+func _start_ship() -> void:
+	if world == null:
+		return
+	_ray.force_raycast_update()
+	var up := -world.gravity_at(global_position).normalized()
+	if up.length() < 0.1:
+		up = global_transform.basis.y
+	var fwd := -_camera.global_transform.basis.z
+	var pos: Vector3
+	if _ray.is_colliding():
+		pos = _ray.get_collision_point() + _ray.get_collision_normal() * 0.5
+	else:
+		pos = global_position + fwd * 4.0
+	world.spawn_ship(pos, up, fwd)
+
+
+# --- UI -----------------------------------------------------------------------
+
+# --- planet navigation markers ------------------------------------------------
+
+func _update_markers() -> void:
+	if world == null or _ui_layer == null:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	while _markers.size() < world.planets.size():
+		var l := Label.new()
+		l.add_theme_font_size_override("font_size", 14)
+		l.modulate = Color(0.55, 0.9, 1.0)
+		_ui_layer.add_child(l)
+		_markers.append(l)
+
+	var vp := get_viewport().get_visible_rect().size
+	var center := vp * 0.5
+	var margin := 52.0
+	var inv := cam.global_transform.affine_inverse()
+	for i in world.planets.size():
+		var planet: Planet = world.planets[i]
+		var lbl: Label = _markers[i]
+		var wp := planet.global_position
+		var dist := wp.distance_to(cam.global_position)
+		if dist < planet.radius * 1.25:
+			lbl.visible = false  # you're basically there; no need for a marker
+			continue
+		var localp := inv * wp                # planet in camera space (-Z is forward)
+		var pos: Vector2
+		var offscreen := true
+		if localp.z < 0.0:
+			pos = cam.unproject_position(wp)
+			offscreen = pos.x < margin or pos.x > vp.x - margin or pos.y < margin or pos.y > vp.y - margin
+		if offscreen:
+			var d2 := Vector2(localp.x, -localp.y)
+			if localp.z > 0.0:
+				d2 = -d2                       # behind us: flip to point the right way
+			if d2.length() < 0.001:
+				d2 = Vector2(0, 1)
+			pos = _clamp_to_edge(center, d2.normalized(), vp, margin)
+			lbl.text = ">> %s  %s" % [planet.planet_name, _fmt_dist(dist)]
+		else:
+			lbl.text = "%s  %s" % [planet.planet_name, _fmt_dist(dist)]
+		lbl.position = pos
+		lbl.visible = true
+
+
+func _clamp_to_edge(center: Vector2, dir: Vector2, vp: Vector2, margin: float) -> Vector2:
+	var t := INF
+	if dir.x > 0.0:
+		t = minf(t, (vp.x - margin - center.x) / dir.x)
+	elif dir.x < 0.0:
+		t = minf(t, (margin - center.x) / dir.x)
+	if dir.y > 0.0:
+		t = minf(t, (vp.y - margin - center.y) / dir.y)
+	elif dir.y < 0.0:
+		t = minf(t, (margin - center.y) / dir.y)
+	return center + dir * t
+
+
+func _fmt_dist(d: float) -> String:
+	if d >= 1000.0:
+		return "%.1f km" % (d / 1000.0)
+	return "%d m" % int(d)
+
+
+func _build_ui() -> void:
+	var layer := CanvasLayer.new()
+	add_child(layer)
+	_ui_layer = layer
+
+	_crosshair = Label.new()
+	_crosshair.text = "+"
+	_crosshair.add_theme_font_size_override("font_size", 24)
+	_crosshair.set_anchors_preset(Control.PRESET_CENTER)
+	_crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_crosshair.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	layer.add_child(_crosshair)
+
+	_hotbar_label = Label.new()
+	_hotbar_label.position = Vector2(16, 16)
+	layer.add_child(_hotbar_label)
+
+	_mode_label = Label.new()
+	_mode_label.position = Vector2(16, 44)
+	layer.add_child(_mode_label)
+
+	_ship_label = Label.new()
+	_ship_label.position = Vector2(16, 72)
+	layer.add_child(_ship_label)
+
+	var help := Label.new()
+	help.position = Vector2(16, 108)
+	help.text = "WASD move  |  Mouse look  |  Space up  |  Shift down  |  L/R-click build\n" \
+		+ "1-8 block  |  Scroll = all blocks  |  G ship  |  F cockpit  |  T EVA  |  Q/E roll  |  Esc mouse\n" \
+		+ "Build Cockpit + Thruster + hull, F to fly, hold Space to lift off. Aboard in space: F/T"
+	help.modulate = Color(1, 1, 1, 0.55)
+	layer.add_child(help)
+	_update_ui()
+
+
+func _update_ui() -> void:
+	if _hotbar_label == null:
+		return
+	_update_markers()
+
+	if eva:
+		_hotbar_label.text = "EVA  (T to climb back in  |  aim + click to repair)"
+		_mode_label.text = "On tether  |  6-axis thrust  |  block: %s" % Blocks.name_of(selected_block)
+		_ship_label.text = ""
+		return
+
+	if aboard != null and is_instance_valid(aboard):
+		var spd := aboard.velocity.length()
+		_hotbar_label.text = "ABOARD SHIP  (walk around -- F cockpit to pilot, T to EVA)"
+		_mode_label.text = "Interior gravity  |  %s" % ("cruising %.0f m/s" % spd if spd > 0.5 else "holding station")
+		_ship_label.text = ""
+		return
+
+	if piloting != null and is_instance_valid(piloting):
+		var g := world.gravity_at(piloting.global_position) if world else Vector3.ZERO
+		var pl := world.nearest_planet(piloting.global_position) if world else null
+		var alt := 0.0
+		if pl != null:
+			alt = piloting.global_position.distance_to(pl.global_position) - pl.radius
+		var up := -g.normalized() if g.length() > 0.01 else Vector3.UP
+		var vspeed := piloting.velocity.dot(up)  # +up / -down
+		_hotbar_label.text = "PILOTING  (F to exit)"
+		if piloting.in_gravity:
+			_mode_label.text = "LAUNCH/LAND ASSIST  |  Alt %.0f m  |  V-speed %+.1f m/s" % [alt, vspeed]
+			if piloting.landed:
+				_ship_label.text = "LANDED  (hold Space to lift off)"
+			elif alt < 20.0 and absf(vspeed) < 6.0:
+				_ship_label.text = "CLEAR TO LAND -- ease down with Shift"
+			else:
+				_ship_label.text = "Climb (Space) to break orbit and unlock maneuvering"
+		else:
+			_mode_label.text = "FREE FLIGHT  |  Speed %.0f m/s  |  Alt %.0f m" % [piloting.velocity.length(), alt]
+			_ship_label.text = "Full 6-axis maneuvering"
+		return
+
+	_hotbar_label.text = "Block: %s" % Blocks.name_of(selected_block)
+	var p := world.nearest_planet(global_position) if world else null
+	var pname := p.planet_name if p else "Deep Space"
+	_mode_label.text = "%s  |  %s" % ["GROUNDED" if grounded else "FLOATING (6-axis)", pname]
+
+	var ship := world.nearest_ship(global_position) if world else null
+	if ship != null and ship.global_position.distance_to(global_position) < 40.0:
+		var st := ship.get_status()
+		var near: bool = ship.global_position.distance_to(global_position) < 6.0
+		var prompt := ""
+		if st["can_fly"] and near:
+			prompt = "  [F to pilot]"
+		elif near and not st["can_fly"]:
+			prompt = "  [needs cockpit + thruster + 4 blocks to fly]"
+		_ship_label.text = "Ship: %d blocks  Cockpit %s  Thrusters %d%s" % [
+			st["count"], "OK" if st["cockpit"] else "--", st["thrusters"], prompt]
+	else:
+		_ship_label.text = ""
