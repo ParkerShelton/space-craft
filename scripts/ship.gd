@@ -63,6 +63,10 @@ func world_to_voxel(world_pos: Vector3) -> Vector3i:
 	return Vector3i(floori(l.x), floori(l.y), floori(l.z))
 
 
+func get_id(v: Vector3i) -> int:
+	return blocks.get(v, Blocks.AIR)
+
+
 ## Local position (block coords) of the cockpit block, or the center if none.
 func cockpit_local() -> Vector3:
 	for v in blocks:

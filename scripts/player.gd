@@ -28,6 +28,12 @@ var world: WorldManager           # set by main.gd
 var grounded := false
 var selected_block := Blocks.ROCK
 var _pal_idx := 0
+var inventory := {}               # block id -> count collected by mining
+# mining (hold left-click to break; harder blocks take longer)
+var _mine_key := ""               # identifies the block currently being mined
+var _mine_time := 0.0             # seconds spent mining the current block
+var _mine_total := 1.0            # hardness of the current block
+var _look_name := ""              # name/use of the block under the crosshair (HUD)
 var piloting: Ship = null         # non-null while flying a ship
 var aboard: Ship = null           # non-null while walking inside a ship in space
 var eva := false                  # floating outside on a tether
@@ -55,6 +61,8 @@ var _crosshair: Label
 var _hotbar_label: Label
 var _mode_label: Label
 var _ship_label: Label
+var _target_label: Label
+var _inv_label: Label
 var _markers: Array[Label] = []   # one navigation marker per planet
 
 
@@ -97,10 +105,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if piloting:
 			return  # no building while flying
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			_edit_block(true)
-		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			_edit_block(false)
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			_edit_block(false)  # placing is instant; breaking is hold-to-mine
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			_cycle_block(-1)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
@@ -128,6 +134,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(delta: float) -> void:
 	if eva:
 		_eva_physics(delta)
+		_process_mining(delta)
 		_update_ui()
 		return
 	if piloting != null:
@@ -142,6 +149,7 @@ func _physics_process(delta: float) -> void:
 			# ship moves through space -- rock solid at any speed/orientation).
 			grounded = true
 			_walk_interior(delta, aboard)
+			_process_mining(delta)
 			_update_ui()
 			return
 	var g := world.gravity_at(global_position) if world else Vector3(0, -9.8, 0)
@@ -150,6 +158,7 @@ func _physics_process(delta: float) -> void:
 		_walk(delta, -_snap_to_axis(g), g.length())
 	else:
 		_process_float(delta)
+	_process_mining(delta)
 	_update_ui()
 
 
@@ -561,6 +570,77 @@ func _cycle_block(dir: int) -> void:
 	_update_ui()
 
 
+# Hold left-click to break the targeted block; harder blocks take longer. Broken
+# blocks are added to the inventory. Also sets `_look_name` for the HUD.
+func _process_mining(delta: float) -> void:
+	_look_name = ""
+	_ray.force_raycast_update()
+	if not _ray.is_colliding():
+		_mine_key = ""
+		_mine_time = 0.0
+		return
+	var collider := _ray.get_collider()
+	var point := _ray.get_collision_point()
+	var normal := _ray.get_collision_normal()
+	var probe := point - normal * 0.5
+
+	var id := Blocks.AIR
+	var key := ""
+	var planet: Planet = null
+	var ship: Ship = null
+	var v := Vector3i.ZERO
+	if collider is Chunk:
+		planet = (collider as Chunk).planet
+		v = planet.world_to_voxel(probe)
+		id = planet.get_id(v)
+		key = "p%d:%d,%d,%d" % [planet.get_instance_id(), v.x, v.y, v.z]
+	elif collider is Ship:
+		ship = collider as Ship
+		v = ship.world_to_voxel(probe)
+		id = ship.get_id(v)
+		key = "s%d:%d,%d,%d" % [ship.get_instance_id(), v.x, v.y, v.z]
+	else:
+		_mine_key = ""
+		_mine_time = 0.0
+		return
+
+	if id == Blocks.AIR:
+		_mine_key = ""
+		_mine_time = 0.0
+		return
+
+	var use := Blocks.use_of(id)
+	_look_name = Blocks.name_of(id) + ("  (" + use + ")" if use != "" else "")
+
+	var holding := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	if not holding:
+		_mine_key = ""
+		_mine_time = 0.0
+		return
+	if key != _mine_key:
+		_mine_key = key
+		_mine_time = 0.0
+		_mine_total = Blocks.hardness(id)
+	_mine_time += delta
+	if _mine_time >= _mine_total:
+		if planet != null:
+			planet.set_block(v, Blocks.AIR)
+		elif ship != null:
+			ship.set_block(v, Blocks.AIR)
+		inventory[id] = int(inventory.get(id, 0)) + 1
+		_mine_key = ""
+		_mine_time = 0.0
+
+
+func _inventory_text() -> String:
+	if inventory.is_empty():
+		return ""
+	var lines: Array = ["-- Inventory --"]
+	for id in inventory:
+		lines.append("%s x%d" % [Blocks.name_of(id), inventory[id]])
+	return "\n".join(lines)
+
+
 ## Start a new ship where the player is looking, oriented to their current frame.
 func _start_ship() -> void:
 	if world == null:
@@ -671,9 +751,24 @@ func _build_ui() -> void:
 	_ship_label.position = Vector2(16, 72)
 	layer.add_child(_ship_label)
 
+	# what you're aiming at + mining progress, just under the crosshair
+	_target_label = Label.new()
+	_target_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_target_label.position = Vector2(0, 360)
+	_target_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_target_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	layer.add_child(_target_label)
+
+	# inventory panel, top-right
+	_inv_label = Label.new()
+	_inv_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_inv_label.position = Vector2(-220, 16)
+	_inv_label.modulate = Color(0.85, 0.95, 0.7)
+	layer.add_child(_inv_label)
+
 	var help := Label.new()
 	help.position = Vector2(16, 108)
-	help.text = "WASD move  |  Mouse look  |  Space up  |  Shift down  |  L/R-click build\n" \
+	help.text = "WASD move  |  Mouse look  |  Space up  |  Shift down  |  R-click place  |  Hold L-click mine\n" \
 		+ "1-8 block  |  Scroll = all blocks  |  G ship  |  F cockpit  |  T EVA  |  Q/E roll  |  Esc mouse\n" \
 		+ "Build Cockpit + Thruster + hull, F to fly, hold Space to lift off. Aboard in space: F/T"
 	help.modulate = Color(1, 1, 1, 0.55)
@@ -685,6 +780,19 @@ func _update_ui() -> void:
 	if _hotbar_label == null:
 		return
 	_update_markers()
+
+	# targeted block + mining progress bar (hidden while piloting)
+	if _inv_label != null:
+		_inv_label.text = _inventory_text()
+	if _target_label != null:
+		if piloting != null:
+			_target_label.text = ""
+		else:
+			var t := _look_name
+			if _mine_key != "" and _mine_total > 0.0:
+				var filled := int(clampf(_mine_time / _mine_total, 0.0, 1.0) * 10.0)
+				t += "  [" + "#".repeat(filled) + "-".repeat(10 - filled) + "]"
+			_target_label.text = t
 
 	if eva:
 		_hotbar_label.text = "EVA  (T to climb back in  |  aim + click to repair)"

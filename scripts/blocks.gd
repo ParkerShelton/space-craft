@@ -42,10 +42,20 @@ const LEAF_11 := 27  # mint
 const LEAF_IDS := [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
 const WOOD_IDS := [13, 14, 15]
 
+# --- ores (IRON_ORE=6 already exists) ---
+const COPPER_ORE := 28
+const GOLD_ORE := 29
+const TITANIUM_ORE := 30
+const SILICON_ORE := 31
+const URANIUM_ORE := 32
+
+const ORE_IDS := [IRON_ORE, COPPER_ORE, GOLD_ORE, TITANIUM_ORE, SILICON_ORE, URANIUM_ORE]
+
 # Everything the player can place (scroll-wheel cycles this list).
-const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, IRON_ORE, METAL,
+const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	WOOD, WOOD_PALE, WOOD_DARK,
 	16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
+	IRON_ORE, COPPER_ORE, GOLD_ORE, TITANIUM_ORE, SILICON_ORE, URANIUM_ORE,
 	COCKPIT, THRUSTER]
 
 const NAMES := {
@@ -77,6 +87,33 @@ const NAMES := {
 	LEAF_9: "Azure Leaves",
 	LEAF_10: "Pink Leaves",
 	LEAF_11: "Mint Leaves",
+	COPPER_ORE: "Copper Ore",
+	GOLD_ORE: "Gold Ore",
+	TITANIUM_ORE: "Titanium Ore",
+	SILICON_ORE: "Silicon Ore",
+	URANIUM_ORE: "Uranium Ore",
+}
+
+# What each ore is (eventually) used for -- shown when you aim at it.
+const USES := {
+	IRON_ORE: "Hulls & tools",
+	COPPER_ORE: "Wiring & thrusters",
+	GOLD_ORE: "Electronics & trade",
+	TITANIUM_ORE: "Advanced hull",
+	SILICON_ORE: "Glass & circuits",
+	URANIUM_ORE: "Reactor fuel",
+}
+
+# Seconds of continuous mining to break each block. Default 0.5 if unlisted.
+const HARDNESS := {
+	GRASS: 0.35, DIRT: 0.35, REGOLITH: 0.3, SNOW: 0.25,
+	LEAF_0: 0.2, LEAF_1: 0.2, LEAF_2: 0.2, LEAF_3: 0.2, LEAF_4: 0.2, LEAF_5: 0.2,
+	LEAF_6: 0.2, LEAF_7: 0.2, LEAF_8: 0.2, LEAF_9: 0.2, LEAF_10: 0.2, LEAF_11: 0.2,
+	WOOD: 0.6, WOOD_PALE: 0.6, WOOD_DARK: 0.6,
+	ICE: 0.7, ROCK: 0.9, CRYSTAL: 1.2, CORE: 1.6,
+	IRON_ORE: 1.3, COPPER_ORE: 1.3, GOLD_ORE: 1.6,
+	TITANIUM_ORE: 1.9, SILICON_ORE: 1.2, URANIUM_ORE: 2.1,
+	METAL: 0.25, COCKPIT: 0.25, THRUSTER: 0.25,  # ship parts break fast
 }
 
 const COLORS := {
@@ -107,10 +144,24 @@ const COLORS := {
 	LEAF_9: Color(0.32, 0.46, 0.78),
 	LEAF_10: Color(0.85, 0.50, 0.72),
 	LEAF_11: Color(0.60, 0.88, 0.68),
+	COPPER_ORE: Color(0.72, 0.45, 0.30),
+	GOLD_ORE: Color(0.85, 0.72, 0.25),
+	TITANIUM_ORE: Color(0.72, 0.74, 0.80),
+	SILICON_ORE: Color(0.52, 0.58, 0.64),
+	URANIUM_ORE: Color(0.40, 0.78, 0.35),
 }
 
 static func is_solid(id: int) -> bool:
 	return id != AIR
+
+static func hardness(id: int) -> float:
+	return HARDNESS.get(id, 0.5)
+
+static func use_of(id: int) -> String:
+	return USES.get(id, "")
+
+static func is_ore(id: int) -> bool:
+	return id in ORE_IDS
 
 static func color_of(id: int) -> Color:
 	return COLORS.get(id, Color.MAGENTA)

@@ -40,6 +40,11 @@ var canopy_min := 2.0
 var canopy_max := 4.0
 var tree_reach := 0.0         # how far above the surface trees can extend
 
+# --- ores (derived from seed) ---
+var ore_threshold := 1.0      # ore_noise above this => an ore vein (lower = richer)
+var ores: Array = []          # [{id, w (weight), mind (min depth in blocks)}...]
+var _ore_wsum := 0.0
+
 # player edits grouped by chunk: Vector3i(chunk) -> { Vector3i(voxel) -> id }
 var _edits_by_chunk := {}
 # currently loaded chunk nodes: Vector3i(chunk coord) -> Chunk
@@ -78,7 +83,26 @@ func configure(cfg: Dictionary) -> void:
 	ore_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 
 	_derive_flora(cfg.get("tree_density", 0.0))
+	_derive_ores()
 	_add_distant_sphere()
+
+
+# Each planet gets a random ore mix + abundance from its seed: which ores it holds,
+# how common they are, and how deep. So planets are rich in different things.
+func _derive_ores() -> void:
+	var orng := RandomNumberGenerator.new()
+	orng.seed = _seed + 999
+	var richness := orng.randf_range(0.04, 0.11)  # fraction of rock that is ore
+	ore_threshold = 0.72 - richness * 3.2          # lower threshold => more ore
+	var pool: Array = Blocks.ORE_IDS.duplicate()
+	var n := orng.randi_range(2, 4)
+	for i in n:
+		var id: int = pool.pop_at(orng.randi() % pool.size())
+		var deep := orng.randf() < 0.4
+		var mind := maxf(radius * 0.25, 8.0) if deep else 4.0
+		var w := orng.randf_range(0.3, 1.0)
+		ores.append({"id": id, "w": w, "mind": mind})
+		_ore_wsum += w
 
 
 # Give each planet a distinct forest: color palette, wood tone, canopy shape and
@@ -147,13 +171,34 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 	var depth := surf - d
 	if d < radius * 0.22:
 		return pal_core
-	if ore_noise.get_noise_3d(gx, gy, gz) > 0.62 and depth > 3.0:
-		return pal_ore
 	if depth < 1.0:
 		return pal_top
 	if depth < 4.0:
 		return pal_sub
+	# rock layer: sometimes an ore vein
+	if not ores.is_empty() and ore_noise.get_noise_3d(gx, gy, gz) > ore_threshold:
+		var o := _pick_ore(gx, gy, gz, depth)
+		if o != Blocks.AIR:
+			return o
 	return pal_rock
+
+
+# Choose which ore is here, weighted by the planet's mix and respecting each ore's
+# minimum depth. Deterministic via a position hash.
+func _pick_ore(gx: int, gy: int, gz: int, depth: float) -> int:
+	var wsum := 0.0
+	for o in ores:
+		if depth >= o["mind"]:
+			wsum += o["w"]
+	if wsum <= 0.0:
+		return Blocks.AIR
+	var r := _hash01(Vector3i(gx, gy, gz), 11) * wsum
+	for o in ores:
+		if depth >= o["mind"]:
+			r -= o["w"]
+			if r <= 0.0:
+				return o["id"]
+	return Blocks.AIR
 
 
 # Deterministic 0..1 hash of a cell coordinate (+ salt) using the planet seed.
