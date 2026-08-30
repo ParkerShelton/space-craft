@@ -50,6 +50,8 @@ var ore_threshold := 1.0      # ore_noise above this => an ore vein (lower = ric
 var ores: Array = []          # [{id, w (weight), mind (min depth in blocks)}...]
 var _ore_wsum := 0.0
 
+var lod_sphere: MeshInstance3D  # low-res far-away representation (hidden when close)
+
 # player edits grouped by chunk: Vector3i(chunk) -> { Vector3i(voxel) -> id }
 var _edits_by_chunk := {}
 # currently loaded chunk nodes: Vector3i(chunk coord) -> Chunk
@@ -153,6 +155,7 @@ func _add_distant_sphere() -> void:
 	mat.roughness = 1.0
 	vis.material_override = mat
 	add_child(vis)
+	lod_sphere = vis
 
 
 # --- terrain sampling ---------------------------------------------------------

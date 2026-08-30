@@ -4,7 +4,7 @@ extends Node3D
 ## Owns every planet, decides which one you're closest to, streams that planet's
 ## chunks around you, and answers gravity queries for the player controller.
 
-const RENDER_DISTANCE := 4        # chunk radius streamed around the player
+const RENDER_DISTANCE := 5        # chunk radius streamed around the player
 const LOADS_PER_FRAME := 4        # chunks meshed per frame (spreads out hitches)
 const STREAM_MARGIN := 48.0       # extra reach (voxels) beyond a planet's surface
 

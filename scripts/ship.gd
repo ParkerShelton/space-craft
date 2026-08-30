@@ -19,12 +19,17 @@ const SHIP_DRAG := 0.6        # velocity damping (arcade feel + control)
 const YAW_SENS := 0.0022
 const PITCH_SENS := 0.0022
 const ROLL_SPEED := 1.6
-const GRAVITY_FLIGHT := 3.0    # above this gravity => launch/landing assist mode
+const GRAVITY_FLIGHT := 3.0    # above this gravity => in a planet's pull
+const ASSIST_ALT := 180.0      # within this altitude of a surface => landing assist
 const LEVEL_SPEED := 2.5       # how fast the ship auto-levels toward belly-down
+const CAM_LOOK_SENS := 0.005
 
 var _mi: MeshInstance3D
 var _col_shapes: Array[CollisionShape3D] = []
 var _chase_cam: Camera3D
+var _cam_pivot: Node3D          # lets the camera free-look while landing without turning the ship
+var _cam_yaw := 0.0
+var _cam_pitch := 0.0
 
 const FACES := [
 	{"n": Vector3i(1, 0, 0),  "d": 0, "s": 1,  "c": [Vector3(1,0,0), Vector3(1,1,0), Vector3(1,1,1), Vector3(1,0,1)]},
@@ -121,13 +126,18 @@ func thrust_accel() -> float:
 # --- piloting -----------------------------------------------------------------
 
 func enable_chase_camera() -> void:
-	if _chase_cam == null:
+	if _cam_pivot == null:
+		_cam_pivot = Node3D.new()
+		add_child(_cam_pivot)
 		_chase_cam = Camera3D.new()
 		_chase_cam.far = 14000.0
 		_chase_cam.rotation.x = deg_to_rad(-12)
-		add_child(_chase_cam)
-	var c := center_local()
-	_chase_cam.position = c + Vector3(0, 4, 13)
+		_cam_pivot.add_child(_chase_cam)
+	_cam_pivot.position = center_local()
+	_cam_pivot.rotation = Vector3.ZERO
+	_cam_yaw = 0.0
+	_cam_pitch = 0.0
+	_chase_cam.position = Vector3(0, 4, 13)
 	_chase_cam.make_current()
 
 
@@ -136,7 +146,13 @@ func enable_chase_camera() -> void:
 ## positioning, no manual rotation); out in space it's full 6-axis flight.
 func fly(delta: float, world: WorldManager, input: Dictionary) -> void:
 	var g := world.gravity_at(global_position)
-	in_gravity = g.length() > GRAVITY_FLIGHT
+	# Assist only when actually near a surface (coming in to land / lifting off) --
+	# not way out in the gravity well.
+	var alt := 1.0e9
+	var p := world.nearest_planet(global_position)
+	if p != null:
+		alt = global_position.distance_to(p.global_position) - p.radius
+	in_gravity = alt < ASSIST_ALT and g.length() > 1.0
 	if in_gravity:
 		_fly_assisted(delta, input, g)
 	else:
@@ -146,6 +162,12 @@ func fly(delta: float, world: WorldManager, input: Dictionary) -> void:
 
 # Full 6-DOF: mouse steer + roll, thrust on all axes. Used in space.
 func _fly_free(delta: float, input: Dictionary, g: Vector3) -> void:
+	# camera rides directly behind the ship again
+	if _cam_pivot != null:
+		_cam_pivot.rotation = _cam_pivot.rotation.lerp(Vector3.ZERO, clampf(delta * 6.0, 0.0, 1.0))
+	_cam_yaw = 0.0
+	_cam_pitch = 0.0
+
 	var look: Vector2 = input["look"]
 	if look.x != 0.0:
 		rotate_object_local(Vector3.UP, -look.x * YAW_SENS)
@@ -173,6 +195,14 @@ func _fly_assisted(delta: float, input: Dictionary, g: Vector3) -> void:
 	# flat on the axis-aligned voxel terrain and matches how the player stands.
 	var up_target := -_snap_to_axis(g)
 	_level_to(up_target, delta)
+
+	# Mouse free-looks the camera around the ship (to check the landing site) WITHOUT
+	# rotating the ship itself.
+	if _cam_pivot != null:
+		var look: Vector2 = input["look"]
+		_cam_yaw -= look.x * CAM_LOOK_SENS
+		_cam_pitch = clampf(_cam_pitch - look.y * CAM_LOOK_SENS, -1.4, 0.5)
+		_cam_pivot.rotation = Vector3(_cam_pitch, _cam_yaw, 0.0)
 
 	var b := global_transform.basis
 	var up := b.y

@@ -30,7 +30,7 @@ func _ready() -> void:
 		"top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK,
 		"ore": Blocks.IRON_ORE, "core": Blocks.CORE,
 		"tree_density": 0.4,
-		"atmosphere": true, "atmo_color": Color(0.45, 0.68, 1.0), "atmo_height": 420.0,
+		"atmosphere": true, "atmo_color": Color(0.45, 0.68, 1.0), "atmo_height": 750.0,
 	})
 	# Frost: enormous ice world, pale cold sky, sparse hardy trees.
 	world.add_planet({
@@ -39,7 +39,7 @@ func _ready() -> void:
 		"top": Blocks.SNOW, "sub": Blocks.ICE, "rock": Blocks.ROCK,
 		"ore": Blocks.CRYSTAL, "core": Blocks.ICE,
 		"tree_density": 0.1,
-		"atmosphere": true, "atmo_color": Color(0.62, 0.76, 0.95), "atmo_height": 480.0,
+		"atmosphere": true, "atmo_color": Color(0.62, 0.76, 0.95), "atmo_height": 900.0,
 	})
 	# Shard: small crystal moon, thin air -> no atmosphere, barren.
 	world.add_planet({
@@ -57,7 +57,7 @@ func _ready() -> void:
 		"top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK,
 		"ore": Blocks.IRON_ORE, "core": Blocks.CORE,
 		"tree_density": 0.0,
-		"atmosphere": true, "atmo_color": Color(0.85, 0.6, 0.4), "atmo_height": 380.0,
+		"atmosphere": true, "atmo_color": Color(0.85, 0.6, 0.4), "atmo_height": 650.0,
 	})
 
 	# --- player: drop in just above the home surface --------------------------
@@ -135,6 +135,14 @@ func _process(delta: float) -> void:
 	_env.ambient_light_energy = lerpf(0.27, 0.6, _atmo)
 	_env.ambient_light_color = SPACE_AMBIENT.lerp(acol, _atmo * 0.8)
 	_sun.light_energy = lerpf(1.2, 1.5, _atmo)
-	_env.fog_enabled = _atmo > 0.03
+	# fog hides the render-distance edge (and the far LOD sphere) behind haze
+	_env.fog_enabled = _atmo > 0.02
 	_env.fog_light_color = acol
-	_env.fog_density = _atmo * 0.0012
+	_env.fog_sky_affect = 0.0            # keep the sky itself clear
+	_env.fog_density = _atmo * 0.008
+
+	# Hide each planet's low-res LOD sphere when you're close to it (on/near the
+	# surface) so you never see it through gaps or at the horizon; show it far away.
+	for pl in _world.planets:
+		if pl.lod_sphere != null:
+			pl.lod_sphere.visible = ppos.distance_to(pl.global_position) > pl.radius + 260.0
