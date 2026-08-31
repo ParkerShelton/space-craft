@@ -56,8 +56,11 @@ func _ready() -> void:
 
 	# --- planets: procedurally generated. The world seed is saved so the same
 	# planets regenerate on reload; a brand-new world gets a fresh random seed.
+	# A save without a world seed is from an older, incompatible format -- ignore
+	# it (start fresh) rather than dropping the old ship/player onto a new world.
 	var wseed := world.saved_world_seed()
-	if wseed < 0:
+	var save_compatible := wseed >= 0
+	if not save_compatible:
 		var r := RandomNumberGenerator.new()
 		r.randomize()
 		wseed = int(r.randi() & 0x7fffffff)
@@ -73,9 +76,10 @@ func _ready() -> void:
 	add_child(player)
 	world.player = player
 
-	# If a save exists, load it now (this moves the player, restores inventory,
-	# planet edits and ships). Otherwise we keep the fresh spawn point above.
-	if world.has_save():
+	# Restore a compatible save (moves the player, restores inventory, planet edits,
+	# ships & stations). Incompatible/older saves are ignored and get overwritten
+	# on the next save.
+	if save_compatible:
 		world.load_game()
 
 	# Don't let the OS close the window until we've flushed a save.
