@@ -556,3 +556,59 @@ func set_block(v: Vector3i, id: int) -> void:
 func _rebuild_if_loaded(cc: Vector3i) -> void:
 	if loaded_chunks.has(cc):
 		loaded_chunks[cc].apply_mesh_data(Chunk.build_mesh_data(self, cc, _edits_snapshot(cc)))
+
+
+const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+	Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+const MAX_FLOW := 1500  # cap so breaching a deep basin can't flood the whole world at once
+
+## Called after a block is broken at `v`: if water is adjacent, let it flow in and
+## fill the connected opened space up to the water level. Batches all edits and
+## rebuilds each affected chunk once.
+func flow_water(v: Vector3i) -> void:
+	if water_style != WATER_LIQUID:
+		return
+	var touches_water := false
+	for n in _NEIGH6:
+		if get_id(v + n) == Blocks.WATER:
+			touches_water = true
+			break
+	if not touches_water:
+		return
+
+	var fill: Array[Vector3i] = []
+	var visited := {}
+	var frontier: Array[Vector3i] = [v]
+	while not frontier.is_empty() and fill.size() < MAX_FLOW:
+		var c: Vector3i = frontier.pop_front()
+		if visited.has(c):
+			continue
+		visited[c] = true
+		if get_id(c) != Blocks.AIR:
+			continue
+		if _norm(Vector3(c) + Vector3(0.5, 0.5, 0.5)) > water_level:
+			continue  # water can't rise above its level
+		fill.append(c)
+		for n in _NEIGH6:
+			var nc: Vector3i = c + n
+			if not visited.has(nc):
+				frontier.append(nc)
+
+	if fill.is_empty():
+		return
+	var dirty := {}
+	for c in fill:
+		var cc := chunk_of(c)
+		if not _edits_by_chunk.has(cc):
+			_edits_by_chunk[cc] = {}
+		_edits_by_chunk[cc][c] = Blocks.WATER
+		dirty[cc] = true
+		var local := c - cc * CS
+		if local.x == 0: dirty[cc + Vector3i(-1, 0, 0)] = true
+		if local.x == CS - 1: dirty[cc + Vector3i(1, 0, 0)] = true
+		if local.y == 0: dirty[cc + Vector3i(0, -1, 0)] = true
+		if local.y == CS - 1: dirty[cc + Vector3i(0, 1, 0)] = true
+		if local.z == 0: dirty[cc + Vector3i(0, 0, -1)] = true
+		if local.z == CS - 1: dirty[cc + Vector3i(0, 0, 1)] = true
+	for cc in dirty:
+		_rebuild_if_loaded(cc)

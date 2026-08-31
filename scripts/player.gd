@@ -228,11 +228,15 @@ func _physics_process(delta: float) -> void:
 			_update_ui()
 			return
 	var g := world.gravity_at(global_position) if world else Vector3(0, -9.8, 0)
-	grounded = g.length() > FLIGHT_THRESHOLD
-	if grounded:
-		_walk(delta, -_snap_to_axis(g), g.length())
+	var up := -g.normalized() if g.length() > 0.01 else Vector3.UP
+	if _in_water(global_position + up * 0.5) or _in_water(global_position - up * 0.8):
+		_swim(delta, up)
 	else:
-		_process_float(delta)
+		grounded = g.length() > FLIGHT_THRESHOLD
+		if grounded:
+			_walk(delta, -_snap_to_axis(g), g.length())
+		else:
+			_process_float(delta)
 	_process_mining(delta)
 	_update_ui()
 
@@ -503,8 +507,8 @@ func _interior_blocked(ship: Ship, pos: Vector3) -> bool:
 ## Walk on a surface whose local "up" is given, under gravity magnitude `gmag`.
 ## Used both for planets (up = -snapped gravity) and for standing inside a ship
 ## in space (up = ship's up, gmag = artificial gravity).
-func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -> void:
-	# Smoothly rotate the body so its local +Y aligns with `up` (stand upright).
+# Smoothly rotate the body so its local +Y aligns with `up` (stand upright).
+func _align_up(up: Vector3, delta: float) -> void:
 	var body_up := global_transform.basis.y
 	var dot := clampf(body_up.dot(up), -1.0, 1.0)
 	if dot < -0.9999:
@@ -515,6 +519,10 @@ func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -
 		var step := Quaternion.IDENTITY.slerp(full, clampf(delta * ALIGN_SPEED, 0.0, 1.0))
 		global_transform.basis = Basis(step) * global_transform.basis
 	global_transform.basis = global_transform.basis.orthonormalized()
+
+
+func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -> void:
+	_align_up(up, delta)
 
 	# Yaw around local up; pitch the camera.
 	if _look.x != 0.0:
@@ -551,6 +559,51 @@ func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -
 			v_up = maxf(v_up - JETPACK_ACCEL * delta, -JETPACK_MAX_SPEED)
 
 	velocity = horiz + up * v_up
+	up_direction = up
+	move_and_slide()
+
+
+# --- SWIMMING -----------------------------------------------------------------
+
+const SWIM_SPEED := 6.0        # horizontal / dive-climb speed in water
+const SWIM_ACCEL := 4.0        # how quickly velocity eases (water is draggy)
+const SWIM_BUOY := 2.2         # gentle rise toward the surface when not diving
+
+func _in_water(wp: Vector3) -> bool:
+	if world == null:
+		return false
+	var p := world.nearest_planet(wp)
+	if p == null or p.water_style != p.WATER_LIQUID:
+		return false
+	return p.get_id(p.world_to_voxel(wp)) == Blocks.WATER
+
+
+# Buoyant, draggy movement: swim relative to the camera, hold Space to rise / Shift
+# to dive, and float gently up to the surface when you let go.
+func _swim(delta: float, up: Vector3) -> void:
+	grounded = false
+	_align_up(up, delta)
+	if _look.x != 0.0:
+		rotate(up, -_look.x * MOUSE_SENS)
+	_pitch = clampf(_pitch - _look.y * MOUSE_SENS, -1.45, 1.45)
+	_camera.rotation.x = _pitch
+	_look = Vector2.ZERO
+
+	var cam := _camera.global_transform.basis
+	var input := _move_input()
+	var wish := (-cam.z) * input.y + cam.x * input.x  # swim toward where you look
+	var desired := Vector3.ZERO
+	if wish.length() > 0.01:
+		desired = wish.normalized() * SWIM_SPEED
+	var vy := 0.0
+	if Input.is_physical_key_pressed(KEY_SPACE): vy += 1.0
+	if Input.is_physical_key_pressed(KEY_SHIFT): vy -= 1.0
+	if vy != 0.0:
+		desired += up * vy * SWIM_SPEED
+	elif _in_water(global_position + up * 0.5):
+		desired += up * SWIM_BUOY  # submerged & idle: bob up to the surface
+
+	velocity = velocity.lerp(desired, clampf(delta * SWIM_ACCEL, 0.0, 1.0))
 	up_direction = up
 	move_and_slide()
 
@@ -695,6 +748,7 @@ func _process_mining(delta: float) -> void:
 	if _mine_time >= _mine_total:
 		if planet != null:
 			planet.set_block(v, Blocks.AIR)
+			planet.flow_water(v)  # let adjacent water pour into the gap
 		elif ship != null:
 			ship.set_block(v, Blocks.AIR)
 		_add_item(id, 1)
