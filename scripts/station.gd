@@ -15,6 +15,14 @@ var kind: int = Blocks.SMELTER
 var world: WorldManager
 var storage: Array = []           # slots: {id, count, props, src, mat}
 
+# --- timed jobs (refining/crafting isn't instant) ---
+const REFINE_TIME_PER := 0.4      # seconds per unit of ore
+const CRAFT_TIME_PER := 0.4       # seconds per unit of material consumed
+var _job := ""                    # "" / "refine" / "craft"
+var _job_t := 0.0
+var _job_total := 0.0
+var _job_craft := {}
+
 var _mi: MeshInstance3D
 var _col: CollisionShape3D
 
@@ -118,3 +126,101 @@ func refine_all() -> int:
 				s["id"] = refined
 				done += 1
 	return done
+
+
+# --- timed jobs ---------------------------------------------------------------
+
+func busy() -> bool:
+	return _job != ""
+
+
+func job_progress() -> float:
+	return clampf(_job_t / _job_total, 0.0, 1.0) if _job_total > 0.0 else 0.0
+
+
+func job_text() -> String:
+	if _job == "":
+		return ""
+	var pct := int(job_progress() * 100.0)
+	return ("Refining… %d%%" % pct) if _job == "refine" else ("Crafting… %d%%" % pct)
+
+
+# Start smelting all loaded ore. Returns unit count (>0), 0 if no ore, -1 if busy.
+func start_refine() -> int:
+	if _job != "":
+		return -1
+	var n := 0
+	for s in storage:
+		if s["count"] > 0 and Blocks.is_ore(s["id"]):
+			n += s["count"]
+	if n == 0:
+		return 0
+	_job = "refine"
+	_job_t = 0.0
+	_job_total = maxf(0.4, n * REFINE_TIME_PER)
+	return n
+
+
+# Start a craft. Returns 1 (started), 0 (not enough material), -1 (busy).
+func start_craft(craft: Dictionary) -> int:
+	if _job != "":
+		return -1
+	var cost := int(craft["cost"])
+	var ok := false
+	for s in storage:
+		if s["count"] >= cost and Blocks.is_refined(s["id"]):
+			ok = true
+			break
+	if not ok:
+		return 0
+	_job = "craft"
+	_job_craft = craft
+	_job_t = 0.0
+	_job_total = maxf(0.4, cost * CRAFT_TIME_PER)
+	return 1
+
+
+func _process(delta: float) -> void:
+	if _job == "":
+		return
+	_job_t += delta
+	if _job_t < _job_total:
+		return
+	if _job == "refine":
+		refine_all()
+	elif _job == "craft":
+		_do_craft(_job_craft)
+	_job = ""
+	_job_t = 0.0
+	_job_total = 0.0
+	_job_craft = {}
+
+
+# Consume the primary refined material and output the crafted item (into storage),
+# carrying the material's identity + derived gear stats.
+func _do_craft(craft: Dictionary) -> void:
+	var m = null
+	for s in storage:
+		if s["count"] > 0 and Blocks.is_refined(s["id"]):
+			m = s
+			break
+	if m == null:
+		return
+	var cost := int(craft["cost"])
+	if m["count"] < cost:
+		return
+	m["count"] -= cost
+	if m["count"] <= 0:
+		m["id"] = Blocks.AIR
+	var out := int(craft["out"])
+	var mname: String = m["mat"].get("name", "")
+	var cmat := {"name": mname, "color": m["mat"].get("color", Color(0.8, 0.8, 0.8)),
+		"tier": m["mat"].get("tier", 0)}
+	match out:
+		Blocks.DRILL:
+			cmat["power"] = Blocks.drill_power(m["props"])
+		Blocks.O2_TANK:
+			cmat["o2"] = Blocks.o2_capacity(m["props"])
+		Blocks.SUIT:
+			cmat["resist"] = Blocks.suit_resist(m["props"])
+	store_add(out, int(craft.get("n", 1)), m["props"], m.get("src", ""), cmat)

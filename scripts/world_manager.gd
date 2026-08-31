@@ -234,7 +234,9 @@ func spawn_station(kind: int, pos: Vector3, up: Vector3, fwd: Vector3) -> Statio
 		f = _any_perp(y)
 	var z := -f
 	var x := y.cross(z)
-	st.global_transform = Transform3D(Basis(x, y, z), pos.round())
+	# `pos` is the exact voxel-cell corner in world space; don't round (planets sit
+	# at non-integer positions, so rounding would offset the station from the grid)
+	st.global_transform = Transform3D(Basis(x, y, z), pos)
 	_stations.append(st)
 	return st
 

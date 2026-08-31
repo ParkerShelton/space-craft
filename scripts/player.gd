@@ -107,6 +107,7 @@ var _refine_btn: Button            # Smelter action
 var _craft_row: Control            # holds per-station craft buttons
 var _craft_buttons: Array = []     # current station's craft buttons
 var _preview_label: Label          # live craft-stat preview (Fabricator/Shipworks)
+var _job_label: Label              # "Refining… 60%" / "Crafting… 30%" while a job runs
 var _build_buttons: Array = []     # hand-assemble-station buttons in the inventory panel
 var _markers: Array[Label] = []   # one navigation marker per planet
 
@@ -343,6 +344,11 @@ func _physics_process(delta: float) -> void:
 		if _toast_time <= 0.0 and _toast_label != null:
 			_toast_label.visible = false
 	_process_survival(delta)
+	if _station_open != null:
+		if is_instance_valid(_station_open):
+			_refresh_station_ui()  # live-update job progress + finished output
+		else:
+			_close_station()
 	if eva:
 		_eva_physics(delta)
 		_process_mining(delta)
@@ -1050,6 +1056,9 @@ func _process_mining(delta: float) -> void:
 	_look_name = ""
 	var tgt := _raycast_voxel()
 	_update_outline(tgt)
+	if tgt.get("kind", "") == "station":
+		_process_station_mining(delta, tgt["obj"])
+		return
 	if tgt.is_empty() or not tgt.get("hit", false):
 		_mine_key = ""
 		_mine_time = 0.0
@@ -1108,6 +1117,43 @@ func _process_mining(delta: float) -> void:
 		_refresh_slots()
 		_mine_key = ""
 		_mine_time = 0.0
+
+
+# Hold left-click on a placed station/chest to pick it up (and its contents).
+func _process_station_mining(delta: float, st: Station) -> void:
+	if not is_instance_valid(st):
+		_mine_key = ""
+		_mine_time = 0.0
+		return
+	_look_name = st.title() + "  (hold to pick up)"
+	var holding := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	if not holding:
+		_mine_key = ""
+		_mine_time = 0.0
+		return
+	var key := "st%d" % st.get_instance_id()
+	if key != _mine_key:
+		_mine_key = key
+		_mine_time = 0.0
+		_mine_total = 0.6
+	_mine_time += delta
+	if _mine_time >= _mine_total:
+		_pick_up_station(st)
+		_mine_key = ""
+		_mine_time = 0.0
+
+
+func _pick_up_station(st: Station) -> void:
+	_add_item(st.kind, 1)
+	# return whatever was inside to your inventory
+	for s in st.storage:
+		if s["count"] > 0:
+			_add_item(s["id"], s["count"], s.get("props", {}), s.get("src", ""), s.get("mat", {}))
+	if world != null:
+		world._stations.erase(st)
+	st.queue_free()
+	_refresh_slots()
+	_toast("Picked up " + Blocks.name_of(st.kind))
 
 
 ## Start a new ship where the player is looking, oriented to their current frame.
@@ -1734,6 +1780,13 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	_preview_label.modulate = Color(0.82, 0.92, 1.0)
 	_station_panel.add_child(_preview_label)
 
+	_job_label = Label.new()
+	_job_label.position = Vector2(14, 210)
+	_job_label.add_theme_font_size_override("font_size", 16)
+	_job_label.modulate = Color(1.0, 0.9, 0.5)
+	_job_label.visible = false
+	_station_panel.add_child(_job_label)
+
 	# --- right column: machine storage (top) + your inventory (bottom) -------
 	_station_store_label = Label.new()
 	_station_store_label.modulate = Color(1, 1, 1, 0.7)
@@ -1793,10 +1846,16 @@ func _open_station(st: Station) -> void:
 		_craft_row.add_child(b)
 		_craft_buttons.append(b)
 		by += 34.0
-	_preview_label.visible = not crafts.is_empty()
 	var has_left: bool = is_smelter or not crafts.is_empty()
 	_left_header.visible = has_left
 	_left_header.text = "Actions" if is_smelter else "Blueprints"
+
+	# preview + job label sit just below the action/blueprint buttons (same spot;
+	# only one shows at a time -- preview when idle, progress when working)
+	var left_bottom: int = 62 + (crafts.size() * 34 if not crafts.is_empty() else 34)
+	_preview_label.position = Vector2(14, left_bottom + 8)
+	_preview_label.visible = not crafts.is_empty()
+	_job_label.position = Vector2(14, left_bottom + 8)
 
 	# build the storage grid (a chest opens its whole connected group) and reflow
 	var ext := _build_storage_cells(st)   # (cols, rows) in cells
@@ -1805,7 +1864,8 @@ func _open_station(st: Station) -> void:
 	_pinv_grid.position = Vector2(_rx, store_bottom + 28)
 	var store_w: int = maxi(ext.x, _STORE_COLS) * 60
 	var w: int = _rx + store_w + 12
-	var h: int = maxi(store_bottom + 28 + 4 * 60 + 16, 250)
+	var h: int = maxi(store_bottom + 28 + 4 * 60 + 16, left_bottom + 8 + 76)
+	h = maxi(h, 250)
 	_station_panel.custom_minimum_size = Vector2(w, h)
 	_station_panel.size = Vector2(w, h)
 	var vp := get_viewport().get_visible_rect().size
@@ -2008,15 +2068,27 @@ func _refresh_station_ui() -> void:
 		_paint_cell(_pinv_cells[i], inv[i], false)
 	if Blocks.STATION_CRAFTS.has(_station_open.kind):
 		_preview_label.text = _craft_preview_text(_station_open.kind)
+	# show job progress while working; hide the idle preview during a job
+	var busy: bool = _station_open.busy()
+	_job_label.visible = busy
+	_job_label.text = _station_open.job_text()
+	if busy:
+		_preview_label.visible = false
+	elif Blocks.STATION_CRAFTS.has(_station_open.kind):
+		_preview_label.visible = true
 
 
 func _on_refine() -> void:
 	if _station_open == null:
 		return
-	var n := _station_open.refine_all()
-	_toast("Refined %d material%s" % [n, "" if n == 1 else "s"] if n > 0 else "Add raw ore to refine")
+	var r := _station_open.start_refine()
+	if r == -1:
+		_toast("Busy…")
+	elif r == 0:
+		_toast("Add raw ore to refine")
+	else:
+		_toast("Refining %d…" % r)
 	_refresh_station_ui()
-	_refresh_slots()
 
 
 # The refined material a station will build from (first refined slot loaded).
@@ -2045,37 +2117,16 @@ func _craft_preview_text(kind: int) -> String:
 
 
 func _on_station_craft(craft: Dictionary) -> void:
-	var m := _station_primary_material()
-	if m.is_empty():
-		_toast("Load a refined material")
+	if _station_open == null:
 		return
-	var cost: int = craft["cost"]
-	if m["count"] < cost:
-		_toast("Need %d refined material" % cost)
-		return
-	var out: int = craft["out"]
-	var n: int = craft.get("n", 1)
-	var mname: String = m["mat"].get("name", "")
-	m["count"] -= cost
-	if m["count"] <= 0:
-		m["id"] = Blocks.AIR
-	# the crafted item carries the material's identity + props (thrust/mass/etc.
-	# are derived from these); the drill also stores its computed power
-	var cmat := {"name": mname, "color": m["mat"].get("color", Color(0.75, 0.76, 0.8)),
-		"tier": m["mat"].get("tier", 0)}
-	if out == Blocks.DRILL:
-		cmat["power"] = Blocks.drill_power(m["props"])
-	elif out == Blocks.O2_TANK:
-		cmat["o2"] = Blocks.o2_capacity(m["props"])
-	elif out == Blocks.SUIT:
-		cmat["resist"] = Blocks.suit_resist(m["props"])
-	var left := _station_open.store_add(out, n, m["props"], m.get("src", ""), cmat)
-	if left > 0:
-		_toast("No room in the machine")
+	var r := _station_open.start_craft(craft)
+	if r == -1:
+		_toast("Busy…")
+	elif r == 0:
+		_toast("Need %d refined material" % int(craft["cost"]))
 	else:
-		_toast("Crafted %s %s" % [mname, Blocks.name_of(out)])
+		_toast("Crafting %s…" % Blocks.name_of(int(craft["out"])))
 	_refresh_station_ui()
-	_refresh_slots()
 
 
 func _update_ui() -> void:
