@@ -604,11 +604,12 @@ var _water_active := {}        # cells to (re)evaluate next tick
 var _flow_accum := 0.0
 
 
-# Called after a block is broken at `v`: wake the water around it so it can flow in.
-func flow_water(v: Vector3i) -> void:
-	if water_style != WATER_LIQUID:
-		return
-	_wake(v)
+# Called after a block is broken at `v`. Flowing water is currently DISABLED --
+# generated rivers/lakes/oceans stay put as static full cells. The cellular-automaton
+# machinery below (_wake/_sim_water/etc.) is left dormant; re-enable by restoring the
+# _wake(v) call here.
+func flow_water(_v: Vector3i) -> void:
+	return
 
 
 func _wake(c: Vector3i) -> void:
