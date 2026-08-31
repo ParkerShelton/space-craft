@@ -31,6 +31,7 @@ func _ready() -> void:
 		"ore": Blocks.IRON_ORE, "core": Blocks.CORE,
 		"tree_density": 0.4,
 		"atmosphere": true, "atmo_color": Color(0.45, 0.68, 1.0), "atmo_height": 750.0,
+		"water_style": "liquid", "water_amount": 0.24,  # lakes & rivers, lots of land
 	})
 	# Frost: enormous ice world, pale cold sky, sparse hardy trees.
 	world.add_planet({
@@ -40,6 +41,7 @@ func _ready() -> void:
 		"ore": Blocks.CRYSTAL, "core": Blocks.ICE,
 		"tree_density": 0.1,
 		"atmosphere": true, "atmo_color": Color(0.62, 0.76, 0.95), "atmo_height": 900.0,
+		"water_style": "ice", "water_amount": 0.42,  # frozen seas, peaks poke out
 	})
 	# Shard: small crystal moon, thin air -> no atmosphere, barren.
 	world.add_planet({
@@ -49,6 +51,7 @@ func _ready() -> void:
 		"ore": Blocks.IRON_ORE, "core": Blocks.CRYSTAL,
 		"tree_density": 0.0,
 		"atmosphere": false,
+		"water_style": "liquid", "water_amount": 0.85,  # ocean moon -- almost all water
 	})
 	# Ochre: massive desert world, dusty orange sky.
 	world.add_planet({
@@ -58,19 +61,20 @@ func _ready() -> void:
 		"ore": Blocks.IRON_ORE, "core": Blocks.CORE,
 		"tree_density": 0.0,
 		"atmosphere": true, "atmo_color": Color(0.85, 0.6, 0.4), "atmo_height": 650.0,
+		"water_style": "none",  # bone-dry desert
 	})
 
-	# --- player: drop in just above the home surface --------------------------
+	# --- player: drop in just above dry land on the home world ----------------
+	var home: Planet = world.planets[0]
 	var player := Player.new()
 	player.name = "Player"
 	player.world = world
-	player.position = Vector3(0, HOME_RADIUS + 8.0, 0)
+	player.position = home.find_spawn_point(Vector3.UP)
 	add_child(player)
 	world.player = player
 
 	# Build a small stack of chunks under the spawn point synchronously so the
 	# player lands on solid ground instead of falling while workers catch up.
-	var home: Planet = world.planets[0]
 	var pcc := home.chunk_of(home.world_to_voxel(player.global_position))
 	for dy in range(1, -4, -1):
 		home.build_chunk_sync(pcc + Vector3i(0, dy, 0))

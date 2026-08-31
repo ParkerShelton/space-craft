@@ -48,6 +48,7 @@ const GOLD_ORE := 29
 const TITANIUM_ORE := 30
 const SILICON_ORE := 31
 const URANIUM_ORE := 32
+const WATER := 33  # liquid: transparent, non-collidable (rendered as a second surface)
 
 const ORE_IDS := [IRON_ORE, COPPER_ORE, GOLD_ORE, TITANIUM_ORE, SILICON_ORE, URANIUM_ORE]
 
@@ -92,6 +93,7 @@ const NAMES := {
 	TITANIUM_ORE: "Titanium Ore",
 	SILICON_ORE: "Silicon Ore",
 	URANIUM_ORE: "Uranium Ore",
+	WATER: "Water",
 }
 
 # What each ore is (eventually) used for -- shown when you aim at it.
@@ -149,6 +151,7 @@ const COLORS := {
 	TITANIUM_ORE: Color(0.72, 0.74, 0.80),
 	SILICON_ORE: Color(0.52, 0.58, 0.64),
 	URANIUM_ORE: Color(0.40, 0.78, 0.35),
+	WATER: Color(0.20, 0.45, 0.85, 0.55),
 }
 
 static func is_solid(id: int) -> bool:

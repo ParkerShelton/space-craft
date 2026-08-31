@@ -17,6 +17,8 @@ var _collision: CollisionShape3D
 static var _material: StandardMaterial3D
 
 
+static var _water_material: StandardMaterial3D
+
 static func _get_material() -> StandardMaterial3D:
 	if _material == null:
 		_material = StandardMaterial3D.new()
@@ -25,6 +27,17 @@ static func _get_material() -> StandardMaterial3D:
 		_material.roughness = 0.85
 		_material.metallic = 0.0
 	return _material
+
+
+static func _get_water_material() -> StandardMaterial3D:
+	if _water_material == null:
+		_water_material = StandardMaterial3D.new()
+		_water_material.vertex_color_use_as_albedo = true  # water color carries alpha 0.55
+		_water_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_water_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_water_material.roughness = 0.12
+		_water_material.metallic = 0.1
+	return _water_material
 
 
 func _ensure_children() -> void:
@@ -45,24 +58,40 @@ func _ready() -> void:
 func apply_mesh_data(data: Dictionary) -> void:
 	_ensure_children()
 	var verts: PackedVector3Array = data["verts"]
-	if verts.is_empty():
+	var wverts: PackedVector3Array = data["wverts"]
+	if verts.is_empty() and wverts.is_empty():
 		_mesh_instance.mesh = null
 		_collision.shape = null
 		return
-	var arr := []
-	arr.resize(Mesh.ARRAY_MAX)
-	arr[Mesh.ARRAY_VERTEX] = verts
-	arr[Mesh.ARRAY_NORMAL] = data["normals"]
-	arr[Mesh.ARRAY_COLOR] = data["colors"]
-	var m := ArrayMesh.new()
-	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-	_mesh_instance.mesh = m
-	_mesh_instance.material_override = _get_material()
 
-	var shape := ConcavePolygonShape3D.new()
-	shape.backface_collision = true
-	shape.set_faces(verts)
-	_collision.shape = shape
+	var m := ArrayMesh.new()
+	if not verts.is_empty():
+		var arr := []
+		arr.resize(Mesh.ARRAY_MAX)
+		arr[Mesh.ARRAY_VERTEX] = verts
+		arr[Mesh.ARRAY_NORMAL] = data["normals"]
+		arr[Mesh.ARRAY_COLOR] = data["colors"]
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		m.surface_set_material(m.get_surface_count() - 1, _get_material())
+	if not wverts.is_empty():
+		var warr := []
+		warr.resize(Mesh.ARRAY_MAX)
+		warr[Mesh.ARRAY_VERTEX] = wverts
+		warr[Mesh.ARRAY_NORMAL] = data["wnormals"]
+		warr[Mesh.ARRAY_COLOR] = data["wcolors"]
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, warr)
+		m.surface_set_material(m.get_surface_count() - 1, _get_water_material())
+	_mesh_instance.mesh = m
+	_mesh_instance.material_override = null
+
+	# collision uses only the opaque geometry -- you pass through water
+	if verts.is_empty():
+		_collision.shape = null
+	else:
+		var shape := ConcavePolygonShape3D.new()
+		shape.backface_collision = true
+		shape.set_faces(verts)
+		_collision.shape = shape
 
 
 # --- background thread: pure greedy mesher ------------------------------------
@@ -92,25 +121,33 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary) -> D
 					any_solid = true
 				i += 1
 
+	# opaque geometry (surface 0, collidable) and water geometry (surface 1, see-through)
 	var verts := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var colors := PackedColorArray()
+	var wverts := PackedVector3Array()
+	var wnormals := PackedVector3Array()
+	var wcolors := PackedColorArray()
 	if not any_solid:
-		return {"verts": verts, "normals": normals, "colors": colors}
+		return {"verts": verts, "normals": normals, "colors": colors,
+			"wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
 	var strides := [1, CS, CS * CS]
 	for d in 3:
 		var u := (d + 1) % 3
 		var v := (d + 2) % 3
 		for dir in [1, -1]:
-			_greedy_pass(planet, snap, d, u, v, dir, base, ids, strides, verts, normals, colors)
+			_greedy_pass(planet, snap, d, u, v, dir, base, ids, strides,
+				verts, normals, colors, wverts, wnormals, wcolors)
 
-	return {"verts": verts, "normals": normals, "colors": colors}
+	return {"verts": verts, "normals": normals, "colors": colors,
+		"wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
 
 static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: int, dir: int,
 		base: Vector3i, ids: PackedInt32Array, strides: Array,
-		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray) -> void:
+		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
+		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray) -> void:
 	var sd: int = strides[d]
 	var su: int = strides[u]
 	var sv: int = strides[v]
@@ -130,22 +167,31 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				var val := 0
 				if oid != Blocks.AIR:
 					var na := a + dir
-					var neighbor_solid: bool
+					var nid: int
 					if na >= 0 and na < CS:
-						neighbor_solid = ids[na * sd + k * su + row] != Blocks.AIR
+						nid = ids[na * sd + k * su + row]
 					else:
-						neighbor_solid = _id_at(planet, snap, _global_coord(base, d, u, v, na, k, j)) != Blocks.AIR
-					if not neighbor_solid:
+						nid = _id_at(planet, snap, _global_coord(base, d, u, v, na, k, j))
+					# Water is see-through: draw a face if the neighbor is air; opaque
+					# blocks also draw against water (so the seabed shows under it).
+					var draw: bool
+					if oid == Blocks.WATER:
+						draw = nid == Blocks.AIR
+					else:
+						draw = nid == Blocks.AIR or nid == Blocks.WATER
+					if draw:
 						val = oid
 				mask[k + j * CS] = val
 
 		var w_coord := a + (1 if dir > 0 else 0)
-		_emit_mask(mask, d, u, v, dir, w_coord, normal, verts, normals, colors)
+		_emit_mask(mask, d, u, v, dir, w_coord, normal,
+			verts, normals, colors, wverts, wnormals, wcolors)
 
 
 static func _emit_mask(mask: PackedInt32Array, d: int, u: int, v: int, dir: int, w_coord: int,
-		normal: Vector3, verts: PackedVector3Array, normals: PackedVector3Array,
-		colors: PackedColorArray) -> void:
+		normal: Vector3,
+		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
+		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray) -> void:
 	for j in CS:
 		var k := 0
 		while k < CS:
@@ -173,15 +219,21 @@ static func _emit_mask(mask: PackedInt32Array, d: int, u: int, v: int, dir: int,
 			# different orientation read distinctly even under flat ambient light.
 			var s := _face_shade(d, dir)
 			var base := Blocks.color_of(val)
-			var col := Color(base.r * s, base.g * s, base.b * s, 1.0)
+			var col := Color(base.r * s, base.g * s, base.b * s, base.a)  # keep alpha (water)
 			var p00 := _corner(d, u, v, w_coord, k, j)
 			var p10 := _corner(d, u, v, w_coord, k + wdt, j)
 			var p11 := _corner(d, u, v, w_coord, k + wdt, j + hgt)
 			var p01 := _corner(d, u, v, w_coord, k, j + hgt)
-			if dir > 0:
-				_quad(p00, p10, p11, p01, normal, col, verts, normals, colors)
+			if val == Blocks.WATER:
+				if dir > 0:
+					_quad(p00, p10, p11, p01, normal, col, wverts, wnormals, wcolors)
+				else:
+					_quad(p00, p01, p11, p10, normal, col, wverts, wnormals, wcolors)
 			else:
-				_quad(p00, p01, p11, p10, normal, col, verts, normals, colors)
+				if dir > 0:
+					_quad(p00, p10, p11, p01, normal, col, verts, normals, colors)
+				else:
+					_quad(p00, p01, p11, p10, normal, col, verts, normals, colors)
 			k += wdt
 
 

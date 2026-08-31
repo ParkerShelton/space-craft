@@ -52,6 +52,13 @@ var ore_threshold := 1.0      # ore_noise above this => an ore vein (lower = ric
 var ores: Array = []          # [{id, w (weight), mind (min depth in blocks)}...]
 var _ore_wsum := 0.0
 
+# --- water (derived from seed unless overridden) ---
+const WATER_NONE := 0
+const WATER_LIQUID := 1
+const WATER_ICE := 2
+var water_style := WATER_NONE
+var water_level := 0.0         # everything above the terrain and below this is water/ice
+
 var lod_sphere: MeshInstance3D  # low-res far-away representation (hidden when close)
 
 # player edits grouped by chunk: Vector3i(chunk) -> { Vector3i(voxel) -> id }
@@ -97,7 +104,37 @@ func configure(cfg: Dictionary) -> void:
 
 	_derive_flora(cfg.get("tree_density", 0.0))
 	_derive_ores()
+	_derive_water(cfg)
 	_add_distant_sphere()
+
+
+# Randomly give the planet water from its seed (unless the config overrides it):
+# rivers/lakes/oceans (liquid), a frozen surface (ice), an ocean world (no land),
+# or bone dry. `water_amount` 0..1 sets how high the water sits vs the terrain.
+func _derive_water(cfg: Dictionary) -> void:
+	var wr := RandomNumberGenerator.new()
+	wr.seed = _seed + 321
+	var style: String = cfg.get("water_style", "")
+	match style:
+		"none": water_style = WATER_NONE
+		"liquid": water_style = WATER_LIQUID
+		"ice": water_style = WATER_ICE
+		_:
+			var roll := wr.randf()
+			water_style = WATER_NONE if roll < 0.28 else (WATER_ICE if roll < 0.5 else WATER_LIQUID)
+	if water_style == WATER_NONE:
+		return
+	var amt: float = cfg.get("water_amount", wr.randf())
+	water_level = radius + lerpf(-terrain_amp * 0.8, terrain_amp * 1.6, amt)
+
+
+func _water_block() -> int:
+	return Blocks.WATER if water_style == WATER_LIQUID else Blocks.ICE
+
+
+# How far from center anything (terrain, trees, or water) can possibly exist.
+func _max_reach() -> float:
+	return maxf(radius + terrain_amp + tree_reach, water_level)
 
 
 # Each planet gets a random ore mix + abundance from its seed: which ores it holds,
@@ -202,6 +239,20 @@ func altitude(world_pos: Vector3) -> float:
 	return _norm(to_local(world_pos)) - radius
 
 
+# A world point above dry land near `prefer` (so the player doesn't spawn underwater).
+func find_spawn_point(prefer: Vector3) -> Vector3:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _seed + 4040
+	prefer = prefer.normalized()
+	var dir := prefer
+	for attempt in 80:
+		if attempt > 0:
+			dir = (prefer + Vector3(rng.randf() * 2 - 1, rng.randf() * 2 - 1, rng.randf() * 2 - 1) * 0.6).normalized()
+		if water_style == WATER_NONE or _surf(dir) > water_level + 3.0:
+			break
+	return to_global(_surface_point(dir) + dir * 8.0)
+
+
 # World-space point on the surface in unit direction `dir` (for rooting trees).
 func _surface_point(dir: Vector3) -> Vector3:
 	var s := _surf(dir)
@@ -215,14 +266,17 @@ func _surface_point(dir: Vector3) -> Vector3:
 func generation_sample(gx: int, gy: int, gz: int) -> int:
 	var p := Vector3(gx, gy, gz)
 	var d := _norm(p)
-	if d > radius + terrain_amp + tree_reach + 2.0:
+	if d > _max_reach() + 2.0:
 		return Blocks.AIR
 	var l2 := p.length()
 	var dir := p / maxf(l2, 0.0001)
 	var surf := _surf(dir)
 
 	if d > surf:
-		# air above the surface -- maybe part of a tree
+		# above the terrain: water first (fills anything up to the water level),
+		# otherwise maybe a tree, otherwise air
+		if water_style != WATER_NONE and d <= water_level:
+			return _water_block()
 		if tree_density > 0.0 and d <= surf + tree_reach:
 			return _tree_at(p, dir, surf)
 		return Blocks.AIR
@@ -477,7 +531,7 @@ func _chunk_possibly_solid(cc: Vector3i) -> bool:
 		clampf(0.0, lo.x, hi.x),
 		clampf(0.0, lo.y, hi.y),
 		clampf(0.0, lo.z, hi.z))
-	return _norm(nearest) <= radius + terrain_amp + tree_reach + 1.0
+	return _norm(nearest) <= _max_reach() + 1.0
 
 
 # --- editing ------------------------------------------------------------------
