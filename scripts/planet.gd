@@ -389,6 +389,9 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 				# one tree per cell: only if its base actually sits in this cell
 				if Vector3i(floori(base.x / c), floori(base.y / c), floori(base.z / c)) != cc:
 					continue
+				# no trees standing in water -- skip if the base is at/below sea level
+				if water_style != WATER_NONE and _norm(base) <= water_level:
+					continue
 				# On a cube, trees grow straight out of the flat face (axis-aligned),
 				# not toward the center -- otherwise they lean on diagonal faces.
 				var up := _axis_of(cdir) if shape_cube else cdir
