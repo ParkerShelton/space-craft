@@ -1058,7 +1058,7 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	# full inventory overlay (E)
 	_inv_panel = Panel.new()
 	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_inv_panel.custom_minimum_size = Vector2(8 * 60 + 24, 4 * 60 + 120)
+	_inv_panel.custom_minimum_size = Vector2(8 * 60 + 24, 36 + 4 * 60 + 8 + Blocks.HAND_RECIPES.size() * 34 + 12)
 	_inv_panel.size = _inv_panel.custom_minimum_size
 	_inv_panel.position = -_inv_panel.size * 0.5
 	_inv_panel.visible = false
@@ -1075,16 +1075,16 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	_inv_panel.add_child(grid)
 	for i in SLOTS:
 		_grid_cells.append(_make_slot(grid, i, "select"))
-	# hand-assemble stations (material cost gates progression: the Fabricator needs
-	# refined material, so you can't skip the Smelter)
+	# hand recipes (material cost gates progression: anything needing refined
+	# material can't be made until you've built a Smelter and smelted ore)
 	var by := 36 + 4 * 60 + 8
-	for kind in Blocks.BUILD_RECIPES:
+	for idx in Blocks.HAND_RECIPES.size():
 		var b := Button.new()
 		b.position = Vector2(12, by)
 		b.custom_minimum_size = Vector2(8 * 60, 30)
-		b.pressed.connect(_build_station.bind(kind))
+		b.pressed.connect(_do_recipe.bind(idx))
 		_inv_panel.add_child(b)
-		_build_buttons.append({"btn": b, "kind": kind})
+		_build_buttons.append({"btn": b, "idx": idx})
 		by += 34
 
 
@@ -1229,31 +1229,35 @@ func _recipe_consume(reqs: Array) -> void:
 			_remove_item(int(r["id"]), int(r["n"]))
 
 
-func _recipe_text(kind: int) -> String:
+func _recipe_text(recipe: Dictionary) -> String:
 	var parts := []
-	for r in Blocks.BUILD_RECIPES[kind]:
+	for r in recipe["reqs"]:
 		if r.has("refined"):
-			parts.append("%d refined" % int(r["n"]))
+			parts.append("%d Refined Material" % int(r["n"]))
 		else:
 			parts.append("%d %s" % [int(r["n"]), Blocks.name_of(int(r["id"]))])
-	return "Build %s  (%s)" % [Blocks.name_of(kind), ",  ".join(parts)]
+	var out: int = recipe["out"]
+	var n: int = recipe.get("n", 1)
+	var verb := "Build" if Blocks.is_station(out) else "Craft"
+	var out_txt := Blocks.name_of(out) if n == 1 else ("%d %s" % [n, Blocks.name_of(out)])
+	return "%s %s  (%s)" % [verb, out_txt, ",  ".join(parts)]
 
 
 func _refresh_build_buttons() -> void:
 	for e in _build_buttons:
-		var kind: int = e["kind"]
-		e["btn"].text = _recipe_text(kind)
-		e["btn"].disabled = not _recipe_afford(Blocks.BUILD_RECIPES[kind])
+		var recipe: Dictionary = Blocks.HAND_RECIPES[e["idx"]]
+		e["btn"].text = _recipe_text(recipe)
+		e["btn"].disabled = not _recipe_afford(recipe["reqs"])
 
 
-func _build_station(kind: int) -> void:
-	var reqs: Array = Blocks.BUILD_RECIPES[kind]
-	if not _recipe_afford(reqs):
+func _do_recipe(idx: int) -> void:
+	var recipe: Dictionary = Blocks.HAND_RECIPES[idx]
+	if not _recipe_afford(recipe["reqs"]):
 		_toast("Missing materials")
 		return
-	_recipe_consume(reqs)
-	_add_item(kind, 1)
-	_toast("Built " + Blocks.name_of(kind))
+	_recipe_consume(recipe["reqs"])
+	_add_item(int(recipe["out"]), int(recipe.get("n", 1)))
+	_toast("Crafted " + Blocks.name_of(int(recipe["out"])))
 	_refresh_slots()
 
 

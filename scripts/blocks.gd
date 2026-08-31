@@ -99,13 +99,15 @@ const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy", "r": "Reac
 const DRILL := 51            # mining tool; its power (from its material) sets mine speed & max tier
 const TOOL_IDS := [DRILL]
 
-# Station build recipes (assembled by hand, but the material cost gates progression).
-# Each requirement is {id, n} for a specific item, or {refined:true, n} for any
-# refined material -- so the Fabricator can't be built until you've smelted ore.
-const BUILD_RECIPES := {
-	SMELTER: [{"id": ROCK, "n": 15}],
-	FABRICATOR: [{"id": METAL, "n": 20}, {"refined": true, "n": 6}],
-}
+# Hand recipes: things you can assemble from carried materials with no station
+# (the bootstrap chain). Each: {out, n, reqs}. A requirement is {id, n} for a
+# specific item, or {refined:true, n} for any refined material -- so anything that
+# needs refined material can't be made until you've built a Smelter and smelted ore.
+const HAND_RECIPES := [
+	{"out": SMELTER, "n": 1, "reqs": [{"id": ROCK, "n": 15}]},
+	{"out": METAL, "n": 4, "reqs": [{"refined": true, "n": 1}]},        # cast ingots into hull plates
+	{"out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
+]
 const DRILL_COST := 5        # refined material consumed to fabricate one drill
 
 # Everything the player can place (scroll-wheel cycles this list). Ores are now raw

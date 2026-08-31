@@ -14,9 +14,10 @@ var _sun: DirectionalLight3D
 var _atmo := 0.0
 
 func _notification(what: int) -> void:
-	# Autosave when the window is closed (X button, Alt+F4, etc.).
+	# Autosave when the window is closed (X button, Alt+F4, etc.). Never in a
+	# headless run -- that would let test/CI runs clobber the real save.
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
-		if _world != null:
+		if _world != null and DisplayServer.get_name() != "headless":
 			_world.save_game()
 		get_tree().quit()
 
