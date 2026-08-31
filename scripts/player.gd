@@ -26,6 +26,16 @@ const REACH := 6.0                # block interaction distance
 const BARE_MINE_MULT := 2.5       # bare-hand mining is slow; a drill divides this
 var mine_power := 1.0             # >1 once you craft a drill (Phase 2)
 
+# --- survival ---
+const MAX_HEALTH := 100.0
+const MAX_OXYGEN := 100.0
+const O2_DRAIN := 4.0             # oxygen/sec with no air (space / airless / underwater)
+const O2_REFILL := 30.0           # oxygen/sec while breathing (in atmosphere or a ship)
+const SUFFOCATE_DMG := 7.0        # health/sec once oxygen hits zero
+const HEALTH_REGEN := 3.0         # health/sec while safe and oxygenated
+var health := MAX_HEALTH
+var oxygen := MAX_OXYGEN
+
 var world: WorldManager           # set by main.gd
 var grounded := false
 
@@ -71,6 +81,8 @@ var _ship_label: Label
 var _target_label: Label
 var _toast_label: Label            # transient "Saved"/"Loaded" confirmation
 var _toast_time := 0.0
+var _hp_fill: ColorRect            # health bar fill
+var _o2_fill: ColorRect            # oxygen bar fill
 var _inv_panel: Control            # full inventory overlay (toggled with E)
 var _hotbar_cells: Array = []      # always-visible hotbar slot views
 var _grid_cells: Array = []        # full-inventory slot buttons
@@ -326,6 +338,7 @@ func _physics_process(delta: float) -> void:
 		_toast_time -= delta
 		if _toast_time <= 0.0 and _toast_label != null:
 			_toast_label.visible = false
+	_process_survival(delta)
 	if eva:
 		_eva_physics(delta)
 		_process_mining(delta)
@@ -684,6 +697,53 @@ func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -
 	velocity = horiz + up * v_up
 	up_direction = up
 	move_and_slide()
+
+
+# --- SURVIVAL -----------------------------------------------------------------
+
+# You breathe inside a ship (cockpit or interior) or within an atmospheric planet's
+# air. Space, airless worlds, high altitude and being underwater all cut off your air.
+func _has_air() -> bool:
+	if aboard != null or piloting != null:
+		return true  # life support inside the ship
+	var up := global_transform.basis.y
+	if _in_water(global_position + up * 0.7):
+		return false  # head underwater
+	if world == null:
+		return false
+	var p := world.nearest_planet(global_position)
+	return p != null and p.has_atmosphere and p.altitude(global_position) < p.atmo_height
+
+
+func _process_survival(delta: float) -> void:
+	if _has_air():
+		oxygen = minf(oxygen + O2_REFILL * delta, MAX_OXYGEN)
+		if health < MAX_HEALTH:
+			health = minf(health + HEALTH_REGEN * delta, MAX_HEALTH)
+	else:
+		oxygen = maxf(oxygen - O2_DRAIN * delta, 0.0)
+		if oxygen <= 0.0:
+			health = maxf(health - SUFFOCATE_DMG * delta, 0.0)
+			if health <= 0.0:
+				_respawn()
+	_update_survival_ui()
+
+
+func _respawn() -> void:
+	if eva:
+		_end_eva()
+	if piloting != null:
+		_exit_pilot()
+	if aboard != null:
+		_unboard()
+	if _home_parent != null and get_parent() != _home_parent:
+		reparent(_home_parent, true)
+	health = MAX_HEALTH
+	oxygen = MAX_OXYGEN
+	velocity = Vector3.ZERO
+	if world != null and not world.planets.is_empty():
+		global_position = world.planets[0].find_spawn_point(Vector3.UP)
+	_toast("You blacked out — respawned at home")
 
 
 # --- SWIMMING -----------------------------------------------------------------
@@ -1128,7 +1188,40 @@ func _build_ui() -> void:
 	_toast_label.visible = false
 	layer.add_child(_toast_label)
 
+	# survival bars (top-left, below the status labels)
+	_hp_fill = _make_bar(layer, 104, Color(0.85, 0.25, 0.25), "HP")
+	_o2_fill = _make_bar(layer, 126, Color(0.30, 0.62, 0.95), "O2")
+
 	_update_ui()
+	_update_survival_ui()
+
+
+func _make_bar(layer: CanvasLayer, y: int, color: Color, label: String) -> ColorRect:
+	var bg := ColorRect.new()
+	bg.position = Vector2(16, y)
+	bg.size = Vector2(180, 16)
+	bg.color = Color(0, 0, 0, 0.5)
+	layer.add_child(bg)
+	var fill := ColorRect.new()
+	fill.position = Vector2(2, 2)
+	fill.size = Vector2(176, 12)
+	fill.color = color
+	bg.add_child(fill)
+	var lbl := Label.new()
+	lbl.position = Vector2(202, y - 3)
+	lbl.text = label
+	lbl.add_theme_font_size_override("font_size", 13)
+	lbl.modulate = Color(1, 1, 1, 0.8)
+	layer.add_child(lbl)
+	return fill
+
+
+func _update_survival_ui() -> void:
+	if _hp_fill != null:
+		_hp_fill.size.x = 176.0 * clampf(health / MAX_HEALTH, 0.0, 1.0)
+		_hp_fill.color = Color(0.85, 0.25, 0.25) if health > MAX_HEALTH * 0.3 else Color(1.0, 0.35, 0.2)
+	if _o2_fill != null:
+		_o2_fill.size.x = 176.0 * clampf(oxygen / MAX_OXYGEN, 0.0, 1.0)
 
 
 func _toast(msg: String) -> void:
