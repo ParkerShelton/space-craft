@@ -74,6 +74,7 @@ const APPLY_PER_FRAME := 6   # results turned into meshes per frame (main-thread
 var _inflight := {}          # cc -> WorkerThreadPool task id
 var _ready_data := {}        # cc -> mesh data dict (filled by workers)
 var _ready_mutex := Mutex.new()
+var _dirty := {}             # loaded chunks needing an (async) re-mesh
 
 
 func configure(cfg: Dictionary) -> void:
@@ -469,6 +470,20 @@ func process_load_queue(_budget: int) -> int:
 		var snap := _edits_snapshot(cc)
 		var tid := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, snap, _wlev_snapshot(snap)))
 		_inflight[cc] = tid
+
+	# 3) re-mesh dirty (edited / flowed) chunks on worker threads too, so edits and
+	# flowing water never block the main thread
+	for cc in _dirty.keys():
+		if _inflight.size() >= MAX_INFLIGHT:
+			break
+		if _inflight.has(cc):
+			continue  # already meshing; it stays dirty and re-dispatches next frame
+		_dirty.erase(cc)
+		if not loaded_chunks.has(cc):
+			continue
+		var s := _edits_snapshot(cc)
+		var t := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, s, _wlev_snapshot(s)))
+		_inflight[cc] = t
 	return applied
 
 
@@ -563,11 +578,11 @@ func set_block(v: Vector3i, id: int) -> void:
 	if local.z == CS - 1: _rebuild_if_loaded(cc + Vector3i(0, 0, 1))
 
 
-# Rebuild synchronously (edits are single, occasional, and need instant feedback).
+# Queue a loaded chunk to be re-meshed on a worker thread (never blocks the main
+# thread). Applied a frame or two later via process_load_queue.
 func _rebuild_if_loaded(cc: Vector3i) -> void:
 	if loaded_chunks.has(cc):
-		var snap := _edits_snapshot(cc)
-		loaded_chunks[cc].apply_mesh_data(Chunk.build_mesh_data(self, cc, snap, _wlev_snapshot(snap)))
+		_dirty[cc] = true
 
 
 const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
@@ -582,7 +597,7 @@ const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
 # (so it renders/collides/streams like any block); `_wlev` holds the levels.
 const W_FULL := 8
 const FLOW_DT := 0.10          # simulation tick interval (seconds)
-const FLOW_BUDGET := 1200      # cells evaluated per tick
+const FLOW_BUDGET := 256       # cells evaluated per tick (keeps ticks cheap)
 const MAX_WATER := 24000       # safety cap on total dynamic water cells
 var _wlev := {}                # Vector3i -> level 1..W_FULL
 var _water_active := {}        # cells to (re)evaluate next tick
@@ -679,9 +694,7 @@ func _sim_water() -> void:
 			_set_water(c, t, dirty)
 			_wake(c)
 	for cc in dirty:
-		_rebuild_if_loaded(cc)
-	if not _water_active.is_empty():
-		_flow_accum = FLOW_DT  # keep ticking while water is still settling
+		_rebuild_if_loaded(cc)  # queues an async re-mesh; won't block the main thread
 
 
 func _set_water(c: Vector3i, level: int, dirty: Dictionary) -> void:
