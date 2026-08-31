@@ -51,11 +51,12 @@ const SILICON_ORE := 31
 const URANIUM_ORE := 32
 const WATER := 33  # liquid: transparent, non-collidable (rendered as a second surface)
 
-# --- crafting stations (placed in the world, not voxel blocks) ---
+# --- placed machines/containers (not voxel blocks) ---
 const SMELTER := 34
 const FABRICATOR := 35
 const SHIPWORKS := 36
-const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS]
+const CHEST := 52     # pure storage (bigger than a machine)
+const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST]
 
 # --- procedural ore slots ---------------------------------------------------
 # Each planet invents its own ores (unique name + color) and assigns each to a
@@ -106,8 +107,11 @@ const TOOL_IDS := [DRILL]
 # Only the bare essentials are hand-assembled (so you can never get stuck): a
 # Smelter to refine, Metal Hull to build with, and the Fabricator crafting hub.
 # Everything else is made at a station.
+# A requirement is {id,n} (specific item), {refined:true,n} (any refined material),
+# or {any:[ids],n} (any of a set, e.g. any wood).
 const HAND_RECIPES := [
 	{"out": SMELTER, "n": 1, "reqs": [{"id": ROCK, "n": 15}]},
+	{"out": CHEST, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
 	{"out": METAL, "n": 4, "reqs": [{"refined": true, "n": 1}]},        # cast ingots into hull plates
 	{"out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 ]
@@ -169,6 +173,7 @@ const NAMES := {
 	SMELTER: "Smelter",
 	FABRICATOR: "Fabricator",
 	SHIPWORKS: "Shipworks",
+	CHEST: "Wooden Chest",
 	ORE_0: "Ore", ORE_1: "Ore", ORE_2: "Ore", ORE_3: "Ore",
 	REFINED_0: "Refined Material", REFINED_1: "Refined Material",
 	REFINED_2: "Refined Material", REFINED_3: "Refined Material",
@@ -234,6 +239,7 @@ const COLORS := {
 	SMELTER: Color(0.34, 0.30, 0.32),
 	FABRICATOR: Color(0.30, 0.40, 0.46),
 	SHIPWORKS: Color(0.40, 0.42, 0.30),
+	CHEST: Color(0.45, 0.31, 0.17),
 	# generic fallbacks; real ore colors are planet-defined and travel with the item
 	ORE_0: Color(0.7, 0.6, 0.4), ORE_1: Color(0.6, 0.7, 0.5),
 	ORE_2: Color(0.5, 0.6, 0.7), ORE_3: Color(0.7, 0.5, 0.7),

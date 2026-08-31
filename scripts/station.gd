@@ -7,24 +7,43 @@ extends StaticBody3D
 ## items between it and their inventory. Phase 1 implements the Smelter (refine raw
 ## ore into an identified refined material).
 
-const STORAGE_SLOTS := 8
+const STORAGE_SLOTS := 8      # machines
+const CHEST_SLOTS := 24       # chests hold more
+const MAX_SLOTS := 24         # UI builds this many cells
 
 var kind: int = Blocks.SMELTER
 var world: WorldManager
-var storage: Array = []           # slots: {id, count, props, src}
+var storage: Array = []           # slots: {id, count, props, src, mat}
 
 var _mi: MeshInstance3D
 var _col: CollisionShape3D
 
 
+static func capacity_of(k: int) -> int:
+	return CHEST_SLOTS if k == Blocks.CHEST else STORAGE_SLOTS
+
+
+func capacity() -> int:
+	return capacity_of(kind)
+
+
 func _init() -> void:
-	for i in STORAGE_SLOTS:
+	_ensure_storage()
+
+
+# (Re)size storage to this station's capacity, preserving existing slots.
+func _ensure_storage() -> void:
+	var cap := capacity()
+	while storage.size() < cap:
 		storage.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}})
+	if storage.size() > cap:
+		storage.resize(cap)
 
 
 func configure(k: int, w: WorldManager) -> void:
 	kind = k
 	world = w
+	_ensure_storage()
 	_build_visual()
 
 
@@ -51,11 +70,15 @@ func _build_visual() -> void:
 	var mat := StandardMaterial3D.new()
 	var c := Blocks.color_of(kind)
 	mat.albedo_color = c
-	mat.roughness = 0.5
-	mat.metallic = 0.4
-	mat.emission_enabled = true
-	mat.emission = c.lerp(Color(1, 0.7, 0.3), 0.5)
-	mat.emission_energy_multiplier = 0.35
+	if kind == Blocks.CHEST:  # a chest is a crate, not a glowing machine
+		mat.roughness = 0.8
+		mat.metallic = 0.0
+	else:
+		mat.roughness = 0.5
+		mat.metallic = 0.4
+		mat.emission_enabled = true
+		mat.emission = c.lerp(Color(1, 0.7, 0.3), 0.5)
+		mat.emission_energy_multiplier = 0.35
 	_mi.material_override = mat
 	var shape := BoxShape3D.new()
 	shape.size = Vector3.ONE

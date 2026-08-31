@@ -79,8 +79,11 @@ var _grid_cells: Array = []        # full-inventory slot buttons
 var _station_open: Station = null  # non-null while a station panel is open
 var _station_panel: Panel
 var _station_title: Label
-var _station_cells: Array = []     # station internal-storage slot views
+var _station_cells: Array = []     # station internal-storage slot views (up to MAX_SLOTS)
 var _pinv_cells: Array = []        # player-inventory slot views inside the station panel
+var _pinv_label: Label             # "Your inventory" header (repositioned per station size)
+var _pinv_grid: GridContainer      # the inventory grid inside the station panel
+var _rx := 0                       # right-column x
 var _station_store_label: Label    # "<station> contents" header above its storage
 var _left_header: Label            # "Blueprints" / "Actions" header on the left column
 var _refine_btn: Button            # Smelter action
@@ -1136,16 +1139,21 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	for i in HOTBAR_SLOTS:
 		_hotbar_cells.append(_make_slot(hb, i, "none"))
 
-	# full inventory overlay (E)
+	# full inventory overlay (E): inventory grid on the left, a scrollable "Craft"
+	# list on the right (scrolls instead of growing as recipes are added)
+	var grid_w := HOTBAR_SLOTS * 60
+	var grid_h := 4 * 60
+	var craft_x := 12 + grid_w + 16
+	var craft_w := 220
 	_inv_panel = Panel.new()
 	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_inv_panel.custom_minimum_size = Vector2(8 * 60 + 24, 36 + 4 * 60 + 8 + Blocks.HAND_RECIPES.size() * 34 + 12)
+	_inv_panel.custom_minimum_size = Vector2(craft_x + craft_w + 12, 36 + grid_h + 16)
 	_inv_panel.size = _inv_panel.custom_minimum_size
 	_inv_panel.position = -_inv_panel.size * 0.5
 	_inv_panel.visible = false
 	layer.add_child(_inv_panel)
 	var title := Label.new()
-	title.text = "Inventory"
+	title.text = "Inventory  (drag to rearrange)"
 	title.position = Vector2(14, 8)
 	_inv_panel.add_child(title)
 	var grid := GridContainer.new()
@@ -1156,17 +1164,30 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	_inv_panel.add_child(grid)
 	for i in SLOTS:
 		_grid_cells.append(_make_slot(grid, i, "select"))
-	# hand recipes (material cost gates progression: anything needing refined
-	# material can't be made until you've built a Smelter and smelted ore)
-	var by := 36 + 4 * 60 + 8
+
+	# --- crafting column: a scrolling list of hand recipes ---
+	var chead := Label.new()
+	chead.text = "Craft"
+	chead.modulate = Color(1, 1, 1, 0.7)
+	chead.position = Vector2(craft_x, 8)
+	_inv_panel.add_child(chead)
+	var scroll := ScrollContainer.new()
+	scroll.position = Vector2(craft_x, 36)
+	scroll.custom_minimum_size = Vector2(craft_w, grid_h)
+	scroll.size = Vector2(craft_w, grid_h)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_inv_panel.add_child(scroll)
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	vbox.custom_minimum_size = Vector2(craft_w - 16, 0)
+	scroll.add_child(vbox)
 	for idx in Blocks.HAND_RECIPES.size():
 		var b := Button.new()
-		b.position = Vector2(12, by)
-		b.custom_minimum_size = Vector2(8 * 60, 30)
+		b.custom_minimum_size = Vector2(craft_w - 18, 44)
+		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		b.pressed.connect(_do_recipe.bind(idx))
-		_inv_panel.add_child(b)
+		vbox.add_child(b)
 		_build_buttons.append({"btn": b, "idx": idx})
-		by += 34
 
 
 # One slot cell: colored square + count. `mode`: "none" = display only,
@@ -1269,13 +1290,13 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 	var to := _slot_ref(tc, ti)
 	if from.is_empty() or to.is_empty() or int(from["count"]) <= 0:
 		return
-	# dropping INTO a station's storage must match what it accepts
+	# dropping INTO a machine's storage must match what it accepts (chests take all)
 	if tc == "stor" and fc != "stor" and _station_open != null:
 		if _station_open.kind == Blocks.SMELTER and not Blocks.is_ore(from["id"]):
 			_toast("Smelter takes raw ore")
 			return
-		if _station_open.kind != Blocks.SMELTER and not Blocks.is_refined(from["id"]):
-			_toast("%s takes refined material" % _station_open.title())
+		if _station_open.kind == Blocks.FABRICATOR and not Blocks.is_refined(from["id"]):
+			_toast("Fabricator takes refined material")
 			return
 	if to["count"] > 0 and to["id"] == from["id"] and to.get("src", "") == from.get("src", ""):
 		var cap: int = STACK_MAX if tc == "inv" else 100000
@@ -1392,10 +1413,33 @@ func _remove_refined(n: int) -> int:
 	return n
 
 
+func _count_any(ids: Array) -> int:
+	var total := 0
+	for s in inv:
+		if s["id"] in ids:
+			total += s["count"]
+	return total
+
+
+func _remove_any(ids: Array, n: int) -> void:
+	for s in inv:
+		if s["id"] in ids and s["count"] > 0:
+			var take: int = mini(n, s["count"])
+			s["count"] -= take
+			n -= take
+			if s["count"] == 0:
+				s["id"] = Blocks.AIR
+			if n <= 0:
+				break
+
+
 func _recipe_afford(reqs: Array) -> bool:
 	for r in reqs:
 		if r.has("refined"):
 			if _count_refined() < int(r["n"]):
+				return false
+		elif r.has("any"):
+			if _count_any(r["any"]) < int(r["n"]):
 				return false
 		elif _count_item(int(r["id"])) < int(r["n"]):
 			return false
@@ -1406,6 +1450,8 @@ func _recipe_consume(reqs: Array) -> void:
 	for r in reqs:
 		if r.has("refined"):
 			_remove_refined(int(r["n"]))
+		elif r.has("any"):
+			_remove_any(r["any"], int(r["n"]))
 		else:
 			_remove_item(int(r["id"]), int(r["n"]))
 
@@ -1415,6 +1461,8 @@ func _recipe_text(recipe: Dictionary) -> String:
 	for r in recipe["reqs"]:
 		if r.has("refined"):
 			parts.append("%d Refined Material" % int(r["n"]))
+		elif r.has("any"):
+			parts.append("%d %s" % [int(r["n"]), r.get("label", "items")])
 		else:
 			parts.append("%d %s" % [int(r["n"]), Blocks.name_of(int(r["id"]))])
 	var out: int = recipe["out"]
@@ -1445,10 +1493,11 @@ func _do_recipe(idx: int) -> void:
 # --- crafting stations --------------------------------------------------------
 
 const _LEFT_W := 168   # left column (blueprints/actions) width
+const _STORE_COLS := 8 # storage cells per row
 func _build_station_ui(layer: CanvasLayer) -> void:
-	var cols := Station.STORAGE_SLOTS
-	var rx := 12 + _LEFT_W + 12         # right column x
-	var grid_w := cols * 60
+	_rx = 12 + _LEFT_W + 12            # right column x
+	var rx := _rx
+	var grid_w := _STORE_COLS * 60
 	_station_panel = Panel.new()
 	_station_panel.set_anchors_preset(Control.PRESET_CENTER)
 	_station_panel.custom_minimum_size = Vector2(rx + grid_w + 12, 124 + 4 * 60 + 16)
@@ -1493,28 +1542,28 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	_station_panel.add_child(_station_store_label)
 
 	var sgrid := GridContainer.new()
-	sgrid.columns = cols
+	sgrid.columns = _STORE_COLS
 	sgrid.add_theme_constant_override("h_separation", 4)
 	sgrid.add_theme_constant_override("v_separation", 4)
 	sgrid.position = Vector2(rx, 60)
 	_station_panel.add_child(sgrid)
-	for i in cols:
+	for i in Station.MAX_SLOTS:  # build the max; show only this station's capacity
 		_station_cells.append(_make_slot(sgrid, i, "from_station"))
 
-	var ilabel := Label.new()
-	ilabel.text = "Your inventory  (drag to move)"
-	ilabel.modulate = Color(1, 1, 1, 0.7)
-	ilabel.position = Vector2(rx + 2, 122)
-	_station_panel.add_child(ilabel)
+	_pinv_label = Label.new()
+	_pinv_label.text = "Your inventory  (drag to move)"
+	_pinv_label.modulate = Color(1, 1, 1, 0.7)
+	_pinv_label.position = Vector2(rx + 2, 122)
+	_station_panel.add_child(_pinv_label)
 
-	var pgrid := GridContainer.new()
-	pgrid.columns = HOTBAR_SLOTS
-	pgrid.add_theme_constant_override("h_separation", 4)
-	pgrid.add_theme_constant_override("v_separation", 4)
-	pgrid.position = Vector2(rx, 146)
-	_station_panel.add_child(pgrid)
+	_pinv_grid = GridContainer.new()
+	_pinv_grid.columns = HOTBAR_SLOTS
+	_pinv_grid.add_theme_constant_override("h_separation", 4)
+	_pinv_grid.add_theme_constant_override("v_separation", 4)
+	_pinv_grid.position = Vector2(rx, 146)
+	_station_panel.add_child(_pinv_grid)
 	for i in SLOTS:
-		_pinv_cells.append(_make_slot(pgrid, i, "to_station"))
+		_pinv_cells.append(_make_slot(_pinv_grid, i, "to_station"))
 
 
 func _looked_at_station() -> Station:
@@ -1533,7 +1582,6 @@ func _open_station(st: Station) -> void:
 	_station_store_label.text = "%s contents  (drag to move)" % st.title()
 	var is_smelter: bool = st.kind == Blocks.SMELTER
 	_refine_btn.visible = is_smelter
-	_left_header.text = "Actions" if is_smelter else "Blueprints"
 
 	# rebuild this station's craft buttons as a vertical list in the left column
 	for b in _craft_buttons:
@@ -1551,6 +1599,22 @@ func _open_station(st: Station) -> void:
 		_craft_buttons.append(b)
 		by += 34.0
 	_preview_label.visible = not crafts.is_empty()
+	var has_left: bool = is_smelter or not crafts.is_empty()
+	_left_header.visible = has_left
+	_left_header.text = "Actions" if is_smelter else "Blueprints"
+
+	# show only this station's storage cells; reflow the inventory + panel to fit
+	var cap: int = st.capacity()
+	for i in _station_cells.size():
+		_station_cells[i]["root"].visible = i < cap
+	var srows: int = ceili(float(cap) / float(_STORE_COLS))
+	var store_bottom: int = 60 + srows * 60
+	_pinv_label.position = Vector2(_rx + 2, store_bottom + 4)
+	_pinv_grid.position = Vector2(_rx, store_bottom + 28)
+	var h: int = maxi(store_bottom + 28 + 4 * 60 + 16, 250)
+	_station_panel.custom_minimum_size.y = h
+	_station_panel.size.y = h
+	_station_panel.position = -_station_panel.size * 0.5
 
 	_station_panel.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -1568,7 +1632,8 @@ func _refresh_station_ui() -> void:
 	if _station_open == null:
 		return
 	for i in _station_cells.size():
-		_paint_cell(_station_cells[i], _station_open.storage[i], false)
+		if i < _station_open.storage.size():
+			_paint_cell(_station_cells[i], _station_open.storage[i], false)
 	for i in _pinv_cells.size():
 		_paint_cell(_pinv_cells[i], inv[i], false)
 	if Blocks.STATION_CRAFTS.has(_station_open.kind):
