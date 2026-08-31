@@ -450,8 +450,9 @@ func _exit_pilot() -> void:
 	ship.hide_landing_reticle()
 
 	var g := world.gravity_at(ship.global_position) if world else Vector3.DOWN
-	if g.length() < FLIGHT_THRESHOLD:
-		# In space: keep the ship's momentum (it coasts) and board it to walk around.
+	if g.length() < FLIGHT_THRESHOLD or ship.is_habitable():
+		# In space, or any habitable ship: step out INTO the cabin (its sealed,
+		# life-supported interior) rather than onto the hull -- so being inside is safe.
 		_board(ship)
 	else:
 		# On/near a planet: park the ship and stand on it; planet gravity holds you.
@@ -713,13 +714,18 @@ func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -
 
 # You breathe inside a ship (cockpit or interior) or within an atmospheric planet's
 # air. Space, airless worlds, high altitude and being underwater all cut off your air.
-# True when you're inside a ship that is actually life-supporting (sealed cabin +
-# a Life Support block). An open or unpowered ship does NOT shelter you.
+# True when you're kept alive by a ship: driving a habitable one, OR physically
+# standing inside any habitable ship's sealed, life-supported interior. An open or
+# unpowered ship does NOT shelter you.
 func _in_safe_ship() -> bool:
-	if aboard != null and is_instance_valid(aboard):
-		return aboard.is_habitable()
 	if piloting != null and is_instance_valid(piloting):
-		return piloting.is_habitable()
+		return piloting.is_habitable()  # in the cockpit, driving
+	if aboard != null and is_instance_valid(aboard) and aboard.is_inside_pressurized(global_position):
+		return true
+	if world != null:
+		var s := world.nearest_ship(global_position)
+		if s != null and s.is_inside_pressurized(global_position):
+			return true
 	return false
 
 
@@ -998,7 +1004,10 @@ func _edit_block(_break_it: bool) -> void:
 		_place_station(place_id)
 		return
 	if not Blocks.is_placeable_block(place_id):
-		_toast("Can't place that — use a station")
+		if Blocks.is_gear(place_id):
+			_toast("%s is worn gear — it works automatically while carried" % Blocks.name_of(place_id))
+		else:
+			_toast("Can't place that")
 		return
 	var tgt := _raycast_voxel()
 	if tgt.is_empty() or not tgt.get("hit", false):

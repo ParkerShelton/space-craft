@@ -11,6 +11,7 @@ var blocks := {}       # Vector3i(local voxel) -> block id
 var block_meta := {}   # Vector3i -> {h,d,e,r} material stats for crafted blocks (Shipworks)
 var _habitable := false  # sealed interior + a Life Support block => safe to breathe inside
 var _sealed := false      # cached: interior has an enclosed air pocket
+var _sealed_cells := {}   # the enclosed interior air cells (local voxel -> true)
 var flying := false
 var world: WorldManager  # set on spawn; used for gravity while coasting
 var in_gravity := false  # true while in launch/landing-assist mode (HUD)
@@ -145,6 +146,20 @@ func is_habitable() -> bool:
 	return _habitable
 
 
+## Is a world point physically inside this habitable ship's sealed interior? This
+## is what makes standing inside the cabin safe (not merely being in the cockpit).
+func is_inside_pressurized(world_pos: Vector3) -> bool:
+	if not _habitable or _sealed_cells.is_empty():
+		return false
+	var lp := to_local(world_pos)
+	var base := Vector3i(floori(lp.x), floori(lp.y), floori(lp.z))
+	# check the cell at the point plus one below/above (feet/body/head in ship frame)
+	for dy in [0, -1, 1]:
+		if _sealed_cells.has(base + Vector3i(0, dy, 0)):
+			return true
+	return false
+
+
 func _recompute_habitable() -> void:
 	_sealed = _is_sealed()
 	_habitable = _sealed and _has_life_support()
@@ -160,6 +175,7 @@ func _has_life_support() -> bool:
 # Sealed if some air cell inside the ship's bounding box can't be reached by air
 # flooding in from outside -- i.e. there's an enclosed (airtight) pocket.
 func _is_sealed() -> bool:
+	_sealed_cells = {}
 	if blocks.size() < 6:
 		return false
 	var mn := Vector3i(1 << 30, 1 << 30, 1 << 30)
@@ -183,14 +199,14 @@ func _is_sealed() -> bool:
 		exterior[p] = true
 		for n in neigh:
 			stack.append(p + n)
-	# any interior air cell the exterior flood didn't reach => sealed pocket
+	# collect every interior air cell the exterior flood didn't reach (sealed pocket)
 	for x in range(mn.x, mx.x + 1):
 		for y in range(mn.y, mx.y + 1):
 			for z in range(mn.z, mx.z + 1):
 				var c := Vector3i(x, y, z)
 				if not blocks.has(c) and not exterior.has(c):
-					return true
-	return false
+					_sealed_cells[c] = true
+	return not _sealed_cells.is_empty()
 
 
 ## Available thrust acceleration (m/s^2) = total thrust / total mass. A thruster's
