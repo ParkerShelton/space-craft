@@ -68,7 +68,7 @@ func nearest_planet(world_pos: Vector3) -> Planet:
 	var best: Planet = null
 	var best_d := INF
 	for p in planets:
-		var surface_dist: float = (p.global_position - world_pos).length() - p.radius
+		var surface_dist: float = p.altitude(world_pos)  # shape-aware (cube/sphere)
 		if surface_dist < best_d:
 			best_d = surface_dist
 			best = p
@@ -83,6 +83,6 @@ func _physics_process(_delta: float) -> void:
 	for p in planets:
 		if p == active:
 			var reach := p.radius + p.terrain_amp + STREAM_MARGIN
-			if (p.global_position - here).length() <= reach + RENDER_DISTANCE * Blocks.CHUNK_SIZE:
+			if p.center_distance(here) <= reach + RENDER_DISTANCE * Blocks.CHUNK_SIZE:
 				p.stream(p.world_to_voxel(here), RENDER_DISTANCE)
 				p.process_load_queue(LOADS_PER_FRAME)

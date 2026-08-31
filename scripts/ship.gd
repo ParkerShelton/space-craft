@@ -160,7 +160,7 @@ func fly(delta: float, world: WorldManager, input: Dictionary) -> void:
 	var alt := 1.0e9
 	var p := world.nearest_planet(global_position)
 	if p != null:
-		alt = global_position.distance_to(p.global_position) - p.radius
+		alt = p.altitude(global_position)  # shape-aware (cube/sphere)
 	in_gravity = alt < ASSIST_ALT and g.length() > 1.0
 	if in_gravity:
 		_fly_assisted(delta, input, g)

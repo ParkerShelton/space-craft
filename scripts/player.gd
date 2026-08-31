@@ -950,7 +950,7 @@ func _update_ui() -> void:
 		var pl := world.nearest_planet(piloting.global_position) if world else null
 		var alt := 0.0
 		if pl != null:
-			alt = piloting.global_position.distance_to(pl.global_position) - pl.radius
+			alt = pl.altitude(piloting.global_position)
 		var up := -g.normalized() if g.length() > 0.01 else Vector3.UP
 		var vspeed := piloting.velocity.dot(up)  # +up / -down
 		_hotbar_label.text = "PILOTING  (F to exit)"

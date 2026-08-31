@@ -180,6 +180,16 @@ func _norm(p: Vector3) -> float:
 	return p.length()
 
 
+# Shape-aware distance from a world point to this planet's center / surface. Use
+# these everywhere instead of raw Euclidean distance so cube planets stream and
+# report altitude correctly out to their edges and corners.
+func center_distance(world_pos: Vector3) -> float:
+	return _norm(to_local(world_pos))
+
+func altitude(world_pos: Vector3) -> float:
+	return _norm(to_local(world_pos)) - radius
+
+
 # World-space point on the surface in unit direction `dir` (for rooting trees).
 func _surface_point(dir: Vector3) -> Vector3:
 	var s := _surf(dir)

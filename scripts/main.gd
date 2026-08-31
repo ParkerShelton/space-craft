@@ -118,7 +118,7 @@ func _process(delta: float) -> void:
 	var acol := Color(0.45, 0.68, 1.0)
 	var up := Vector3.UP
 	if p != null and p.has_atmosphere:
-		var alt := ppos.distance_to(p.global_position) - p.radius
+		var alt := p.altitude(ppos)  # shape-aware (cube/sphere)
 		# smoothstep over the whole atmo band so it eases in/out (no hard edge)
 		target = smoothstep(0.0, 1.0, clampf(1.0 - alt / p.atmo_height, 0.0, 1.0))
 		acol = p.atmo_color
@@ -145,4 +145,4 @@ func _process(delta: float) -> void:
 	# surface) so you never see it through gaps or at the horizon; show it far away.
 	for pl in _world.planets:
 		if pl.lod_sphere != null:
-			pl.lod_sphere.visible = ppos.distance_to(pl.global_position) > pl.radius + 260.0
+			pl.lod_sphere.visible = pl.altitude(ppos) > 260.0
