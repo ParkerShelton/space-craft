@@ -80,7 +80,10 @@ var _station_panel: Panel
 var _station_title: Label
 var _station_cells: Array = []     # station internal-storage slot views
 var _pinv_cells: Array = []        # player-inventory slot views inside the station panel
-var _refine_btn: Button
+var _refine_btn: Button            # Smelter action
+var _craft_btn: Button             # Fabricator action (Craft Drill)
+var _preview_label: Label          # Fabricator: live drill-stat preview
+var _build_buttons: Array = []     # hand-assemble-station buttons in the inventory panel
 var _markers: Array[Label] = []   # one navigation marker per planet
 
 
@@ -1015,7 +1018,7 @@ func _build_ui() -> void:
 	help.position = Vector2(16, 108)
 	help.text = "WASD move  |  Mouse look  |  Space up  |  Shift down  |  R-click place  |  Hold L-click mine\n" \
 		+ "1-8 slot  |  Scroll = slot  |  E inventory (or open station you're facing)  |  G ship  |  F cockpit  |  T EVA  |  Esc\n" \
-		+ "F5 save  |  F9 load  |  Craft a Smelter (E), place it, then refine mined ore to reveal its material stats"
+		+ "F5 save  |  F9 load  |  Build Smelter->refine ore->build Fabricator->craft a Drill to mine higher-tier ores"
 	help.modulate = Color(1, 1, 1, 0.55)
 	layer.add_child(help)
 
@@ -1055,7 +1058,7 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	# full inventory overlay (E)
 	_inv_panel = Panel.new()
 	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_inv_panel.custom_minimum_size = Vector2(8 * 60 + 24, 4 * 60 + 84)
+	_inv_panel.custom_minimum_size = Vector2(8 * 60 + 24, 4 * 60 + 120)
 	_inv_panel.size = _inv_panel.custom_minimum_size
 	_inv_panel.position = -_inv_panel.size * 0.5
 	_inv_panel.visible = false
@@ -1072,12 +1075,17 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	_inv_panel.add_child(grid)
 	for i in SLOTS:
 		_grid_cells.append(_make_slot(grid, i, "select"))
-	# bootstrap hand-craft (the only station you can make with no station)
-	var craft := Button.new()
-	craft.text = "Craft Smelter (15 Rock)"
-	craft.position = Vector2(12, 36 + 4 * 60 + 8)
-	craft.pressed.connect(_craft_smelter)
-	_inv_panel.add_child(craft)
+	# hand-assemble stations (material cost gates progression: the Fabricator needs
+	# refined material, so you can't skip the Smelter)
+	var by := 36 + 4 * 60 + 8
+	for kind in Blocks.BUILD_RECIPES:
+		var b := Button.new()
+		b.position = Vector2(12, by)
+		b.custom_minimum_size = Vector2(8 * 60, 30)
+		b.pressed.connect(_build_station.bind(kind))
+		_inv_panel.add_child(b)
+		_build_buttons.append({"btn": b, "kind": kind})
+		by += 34
 
 
 # One slot cell: colored square + count. `mode` sets the click behavior:
@@ -1124,6 +1132,18 @@ func _refresh_slots() -> void:
 		_paint_cell(_hotbar_cells[i], inv[i], i == active_slot)
 	for i in _grid_cells.size():
 		_paint_cell(_grid_cells[i], inv[i], i == active_slot)
+	_update_mine_power()
+	_refresh_build_buttons()
+
+
+# Your effective mining power is the best drill you carry (bare hands = 1.0). This
+# sets mining speed and which ore tiers you can break.
+func _update_mine_power() -> void:
+	var best := 1.0
+	for s in inv:
+		if s["id"] == Blocks.DRILL and s["count"] > 0:
+			best = maxf(best, float(s.get("mat", {}).get("power", 1.0)))
+	mine_power = best
 
 
 # Paint any slot cell from a slot dict. `highlight` toggles the active-slot glow.
@@ -1150,6 +1170,10 @@ func _item_tooltip(slot: Dictionary) -> String:
 	var mname: String = mat.get("name", Blocks.name_of(id))
 	var src: String = slot.get("src", "")
 	var suffix := ("  ·  " + src) if src != "" else ""
+	if Blocks.is_gear(id):
+		var power := float(mat.get("power", 1.0))
+		return "%s Drill%s\nMining power %.1f — breaks up to Tier %d" % [
+			mname, suffix, power, Blocks.max_tier_for_power(power)]
 	if Blocks.is_ore(id):
 		return "%s Ore%s\nUnidentified — refine to reveal its tier & stats" % [mname, suffix]
 	if Blocks.is_refined(id):
@@ -1164,14 +1188,72 @@ func _item_tooltip(slot: Dictionary) -> String:
 	return Blocks.name_of(id) + ("\n" + use if use != "" else "")
 
 
-func _craft_smelter() -> void:
-	var cost: int = Blocks.HAND_CRAFT[Blocks.SMELTER][Blocks.ROCK]
-	if _count_item(Blocks.ROCK) < cost:
-		_toast("Need %d Rock" % cost)
+# --- station build recipes (hand-assembled from carried materials) ------------
+
+func _count_refined() -> int:
+	var total := 0
+	for s in inv:
+		if Blocks.is_refined(s["id"]):
+			total += s["count"]
+	return total
+
+
+func _remove_refined(n: int) -> int:
+	for s in inv:
+		if Blocks.is_refined(s["id"]) and s["count"] > 0:
+			var take: int = mini(n, s["count"])
+			s["count"] -= take
+			n -= take
+			if s["count"] == 0:
+				s["id"] = Blocks.AIR
+			if n <= 0:
+				break
+	return n
+
+
+func _recipe_afford(reqs: Array) -> bool:
+	for r in reqs:
+		if r.has("refined"):
+			if _count_refined() < int(r["n"]):
+				return false
+		elif _count_item(int(r["id"])) < int(r["n"]):
+			return false
+	return true
+
+
+func _recipe_consume(reqs: Array) -> void:
+	for r in reqs:
+		if r.has("refined"):
+			_remove_refined(int(r["n"]))
+		else:
+			_remove_item(int(r["id"]), int(r["n"]))
+
+
+func _recipe_text(kind: int) -> String:
+	var parts := []
+	for r in Blocks.BUILD_RECIPES[kind]:
+		if r.has("refined"):
+			parts.append("%d refined" % int(r["n"]))
+		else:
+			parts.append("%d %s" % [int(r["n"]), Blocks.name_of(int(r["id"]))])
+	return "Build %s  (%s)" % [Blocks.name_of(kind), ",  ".join(parts)]
+
+
+func _refresh_build_buttons() -> void:
+	for e in _build_buttons:
+		var kind: int = e["kind"]
+		e["btn"].text = _recipe_text(kind)
+		e["btn"].disabled = not _recipe_afford(Blocks.BUILD_RECIPES[kind])
+
+
+func _build_station(kind: int) -> void:
+	var reqs: Array = Blocks.BUILD_RECIPES[kind]
+	if not _recipe_afford(reqs):
+		_toast("Missing materials")
 		return
-	_remove_item(Blocks.ROCK, cost)
-	_add_item(Blocks.SMELTER, 1)
-	_toast("Crafted Smelter")
+	_recipe_consume(reqs)
+	_add_item(kind, 1)
+	_toast("Built " + Blocks.name_of(kind))
 	_refresh_slots()
 
 
@@ -1213,6 +1295,18 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	_refine_btn.pressed.connect(_on_refine)
 	_station_panel.add_child(_refine_btn)
 
+	_craft_btn = Button.new()
+	_craft_btn.text = "Craft Drill"
+	_craft_btn.position = Vector2(12, 124)
+	_craft_btn.custom_minimum_size = Vector2(120, 32)
+	_craft_btn.pressed.connect(_on_fab_craft)
+	_station_panel.add_child(_craft_btn)
+
+	_preview_label = Label.new()
+	_preview_label.position = Vector2(144, 122)
+	_preview_label.modulate = Color(0.82, 0.92, 1.0)
+	_station_panel.add_child(_preview_label)
+
 	var ilabel := Label.new()
 	ilabel.text = "Your inventory  (click to add)"
 	ilabel.modulate = Color(1, 1, 1, 0.7)
@@ -1242,7 +1336,9 @@ func _open_station(st: Station) -> void:
 	if inv_open:
 		_toggle_inventory()
 	_station_title.text = st.title()
-	_refine_btn.visible = (st.kind == Blocks.SMELTER)  # only the smelter refines (Phase 1)
+	_refine_btn.visible = (st.kind == Blocks.SMELTER)
+	_craft_btn.visible = (st.kind == Blocks.FABRICATOR)
+	_preview_label.visible = (st.kind == Blocks.FABRICATOR)
 	_station_panel.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_refresh_station_ui()
@@ -1262,6 +1358,8 @@ func _refresh_station_ui() -> void:
 		_paint_cell(_station_cells[i], _station_open.storage[i], false)
 	for i in _pinv_cells.size():
 		_paint_cell(_pinv_cells[i], inv[i], false)
+	if _station_open.kind == Blocks.FABRICATOR:
+		_preview_label.text = _fab_preview_text()
 
 
 func _move_inv_to_station(index: int) -> void:
@@ -1272,6 +1370,9 @@ func _move_inv_to_station(index: int) -> void:
 		return
 	if _station_open.kind == Blocks.SMELTER and not Blocks.is_ore(s["id"]):
 		_toast("Smelter takes raw ore")
+		return
+	if _station_open.kind == Blocks.FABRICATOR and not Blocks.is_refined(s["id"]):
+		_toast("Fabricator takes refined material")
 		return
 	var left: int = _station_open.store_add(s["id"], s["count"], s.get("props", {}), s.get("src", ""), s.get("mat", {}))
 	if left == s["count"]:
@@ -1307,6 +1408,51 @@ func _on_refine() -> void:
 	var n := _station_open.refine_all()
 	_toast("Refined %d material%s" % [n, "" if n == 1 else "s"] if n > 0 else "Add raw ore to refine")
 	_refresh_station_ui()
+	_refresh_slots()
+
+
+# The refined material a Fabricator will build from (first refined slot loaded).
+func _fab_primary_material() -> Dictionary:
+	if _station_open == null:
+		return {}
+	for s in _station_open.storage:
+		if s["count"] > 0 and Blocks.is_refined(s["id"]):
+			return s
+	return {}
+
+
+func _fab_preview_text() -> String:
+	var m := _fab_primary_material()
+	if m.is_empty():
+		return "Load a refined material →\nthe drill's power comes from it"
+	var power := Blocks.drill_power(m["props"])
+	var maxt := Blocks.max_tier_for_power(power)
+	return "Drill preview:  power %.1f\nmines up to Tier %d (%s)\ncost: %d %s" % [
+		power, maxt, Blocks.TIER_NAMES[maxt], Blocks.DRILL_COST, m["mat"].get("name", "material")]
+
+
+func _on_fab_craft() -> void:
+	var m := _fab_primary_material()
+	if m.is_empty():
+		_toast("Load a refined material")
+		return
+	if m["count"] < Blocks.DRILL_COST:
+		_toast("Need %d refined material" % Blocks.DRILL_COST)
+		return
+	var power := Blocks.drill_power(m["props"])
+	var mname: String = m["mat"].get("name", "")
+	m["count"] -= Blocks.DRILL_COST
+	if m["count"] <= 0:
+		m["id"] = Blocks.AIR
+	var dmat := {"name": mname, "color": m["mat"].get("color", Color(0.75, 0.76, 0.8)),
+		"tier": m["mat"].get("tier", 0), "power": power}
+	var left := _station_open.store_add(Blocks.DRILL, 1, m["props"], m.get("src", ""), dmat)
+	if left > 0:
+		_toast("No room for the drill")
+	else:
+		_toast("Crafted %s Drill (power %.1f)" % [mname, power])
+	_refresh_station_ui()
+	_refresh_slots()
 
 
 func _update_ui() -> void:
@@ -1361,7 +1507,9 @@ func _update_ui() -> void:
 		return
 
 	var held := _selected_id()
-	_hotbar_label.text = "Holding: %s" % (Blocks.name_of(held) if held != Blocks.AIR else "(empty slot)")
+	var tool_txt := "Drill (power %.1f, T%d)" % [mine_power, Blocks.max_tier_for_power(mine_power)] if mine_power > 1.0 else "bare hands"
+	_hotbar_label.text = "Holding: %s   |   Mining: %s" % [
+		(Blocks.name_of(held) if held != Blocks.AIR else "(empty slot)"), tool_txt]
 	var p := world.nearest_planet(global_position) if world else null
 	var pname := p.planet_name if p else "Deep Space"
 	_mode_label.text = "%s  |  %s" % ["GROUNDED" if grounded else "FLOATING (6-axis)", pname]

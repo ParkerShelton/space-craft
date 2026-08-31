@@ -95,10 +95,18 @@ const ORE_NAME_SUF := ["ite", "ium", "ex", "ora", "yte", "ine", "ar", "onite", "
 const PROP_KEYS := ["h", "d", "e", "r"]
 const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy", "r": "Reactivity"}
 
-# Hand-craftable recipes that need NO station (bootstrap only). cost = {id: count}.
-const HAND_CRAFT := {
-	SMELTER: {ROCK: 15},
+# --- crafted gear (inventory-only tools produced at stations) ---
+const DRILL := 51            # mining tool; its power (from its material) sets mine speed & max tier
+const TOOL_IDS := [DRILL]
+
+# Station build recipes (assembled by hand, but the material cost gates progression).
+# Each requirement is {id, n} for a specific item, or {refined:true, n} for any
+# refined material -- so the Fabricator can't be built until you've smelted ore.
+const BUILD_RECIPES := {
+	SMELTER: [{"id": ROCK, "n": 15}],
+	FABRICATOR: [{"id": METAL, "n": 20}, {"refined": true, "n": 6}],
 }
+const DRILL_COST := 5        # refined material consumed to fabricate one drill
 
 # Everything the player can place (scroll-wheel cycles this list). Ores are now raw
 # materials for crafting, not placeable blocks.
@@ -148,6 +156,7 @@ const NAMES := {
 	ORE_0: "Ore", ORE_1: "Ore", ORE_2: "Ore", ORE_3: "Ore",
 	REFINED_0: "Refined Material", REFINED_1: "Refined Material",
 	REFINED_2: "Refined Material", REFINED_3: "Refined Material",
+	DRILL: "Drill",
 }
 
 # What each ore is (eventually) used for -- shown when you aim at it.
@@ -214,6 +223,7 @@ const COLORS := {
 	ORE_2: Color(0.5, 0.6, 0.7), ORE_3: Color(0.7, 0.5, 0.7),
 	REFINED_0: Color(0.8, 0.72, 0.55), REFINED_1: Color(0.72, 0.8, 0.62),
 	REFINED_2: Color(0.62, 0.72, 0.82), REFINED_3: Color(0.82, 0.62, 0.82),
+	DRILL: Color(0.75, 0.76, 0.80),
 }
 
 static func is_solid(id: int) -> bool:
@@ -236,6 +246,22 @@ static func is_material(id: int) -> bool:
 
 static func is_station(id: int) -> bool:
 	return id in STATION_IDS
+
+static func is_gear(id: int) -> bool:
+	return id in TOOL_IDS
+
+# A drill's mining power from the material it's built from: harder + more energetic
+# materials drill faster and reach higher ore tiers. Bare hands are 1.0.
+static func drill_power(props: Dictionary) -> float:
+	return 1.5 + float(props.get("h", 0)) / 100.0 + float(props.get("e", 0)) / 100.0 * 0.8
+
+# Highest ore tier a given mining power can break (via TIER_MIN_POWER).
+static func max_tier_for_power(power: float) -> int:
+	var t := 0
+	for i in TIER_MIN_POWER.size():
+		if power >= TIER_MIN_POWER[i]:
+			t = i
+	return t
 
 static func is_placeable_block(id: int) -> bool:
 	return id in PLACEABLE

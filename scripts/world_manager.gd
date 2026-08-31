@@ -14,11 +14,23 @@ var _ships: Array[Ship] = []
 var _stations: Array[Station] = []
 
 const SAVE_PATH := "user://spacecraft_save.dat"
+const SAVE_BAK := "user://spacecraft_save.bak"
 const SAVE_VERSION := 1
 
 
 func has_save() -> bool:
-	return FileAccess.file_exists(SAVE_PATH)
+	return FileAccess.file_exists(SAVE_PATH) or FileAccess.file_exists(SAVE_BAK)
+
+
+func _read_save(path: String):
+	if not FileAccess.file_exists(path):
+		return null
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null:
+		return null
+	var d = f.get_var()
+	f.close()
+	return d
 
 
 ## Write the whole mutable world to disk. Terrain, ores, flora and water are all
@@ -60,6 +72,16 @@ func save_game() -> bool:
 			entry["xform"] = st.global_transform
 		data["stations"].append(entry)
 
+	# Keep the previous save as a backup before overwriting, so a bad/interrupted
+	# write can never lose the last good world.
+	if FileAccess.file_exists(SAVE_PATH):
+		var prev := FileAccess.get_file_as_bytes(SAVE_PATH)
+		if prev.size() > 0:
+			var b := FileAccess.open(SAVE_BAK, FileAccess.WRITE)
+			if b != null:
+				b.store_buffer(prev)
+				b.close()
+
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
 		push_warning("save_game: could not open " + SAVE_PATH)
@@ -74,11 +96,10 @@ func save_game() -> bool:
 func load_game() -> bool:
 	if not has_save():
 		return false
-	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
-	if f == null:
-		return false
-	var data = f.get_var()
-	f.close()
+	# prefer the primary save; fall back to the backup if it's missing or corrupt
+	var data = _read_save(SAVE_PATH)
+	if typeof(data) != TYPE_DICTIONARY:
+		data = _read_save(SAVE_BAK)
 	if typeof(data) != TYPE_DICTIONARY:
 		return false
 
