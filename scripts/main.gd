@@ -4,8 +4,32 @@ extends Node3D
 ## home world, and wires the player to the world manager. Everything is created in
 ## code so the scene file can stay trivial and robust.
 
-const HOME_RADIUS := 1500.0
 const SPACE_AMBIENT := Color(0.50, 0.55, 0.70)
+
+# Planet archetypes randomly assigned to generated planets (index 0 = home/verdant).
+const _ARCHETYPES := [
+	{"top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.45, 0.68, 1.0), "water": "liquid", "wmin": 0.15, "wmax": 0.4,
+		"tmin": 0.3, "tmax": 0.55, "moon": false},
+	{"top": Blocks.SNOW, "sub": Blocks.ICE, "rock": Blocks.ROCK, "core": Blocks.ICE,
+		"atmo": true, "atmo_color": Color(0.62, 0.76, 0.95), "water": "ice", "wmin": 0.3, "wmax": 0.6,
+		"tmin": 0.05, "tmax": 0.2, "moon": false},
+	{"top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.85, 0.6, 0.4), "water": "none", "wmin": 0.0, "wmax": 0.0,
+		"tmin": 0.0, "tmax": 0.0, "moon": false},
+	{"top": Blocks.CRYSTAL, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CRYSTAL,
+		"atmo": false, "atmo_color": Color(0.4, 0.85, 0.9), "water": "liquid", "wmin": 0.6, "wmax": 0.95,
+		"tmin": 0.0, "tmax": 0.0, "moon": true},
+	{"top": Blocks.ROCK, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": false, "atmo_color": Color(0.6, 0.6, 0.65), "water": "none", "wmin": 0.0, "wmax": 0.0,
+		"tmin": 0.0, "tmax": 0.0, "moon": true},
+	{"top": Blocks.ROCK, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.9, 0.5, 0.35), "water": "none", "wmin": 0.0, "wmax": 0.0,
+		"tmin": 0.0, "tmax": 0.0, "moon": false},
+]
+const _NAME_PRE := ["Ver", "Kro", "Zel", "Nyx", "Tor", "Aur", "Hel", "Ori", "Vex",
+	"Mar", "Cae", "Lun", "Sol", "Ith", "Ryl", "Dun", "Pyr", "Oss", "Tal", "Ael"]
+const _NAME_SUF := ["dis", "nis", "ara", "ex", "os", "une", "ia", "or", "eth", "yn", "us", "a"]
 
 var _world: WorldManager
 var _env: Environment
@@ -30,48 +54,15 @@ func _ready() -> void:
 	add_child(world)
 	_world = world
 
-	# --- planets: mostly massive (explore for ages before circling one), plus a
-	# small one mixed in. Spaced far apart; float precision is still fine here.
-	# Verdis: massive green home world with an Earth-like sky.
-	world.add_planet({
-		"name": "Verdis", "position": Vector3.ZERO,
-		"radius": HOME_RADIUS, "amp": 55.0, "gravity": 14.0, "seed": 1337,
-		"top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK,
-		"ore": Blocks.IRON_ORE, "core": Blocks.CORE,
-		"tree_density": 0.4,
-		"atmosphere": true, "atmo_color": Color(0.45, 0.68, 1.0), "atmo_height": 750.0,
-		"water_style": "liquid", "water_amount": 0.24,  # lakes & rivers, lots of land
-	})
-	# Frost: enormous ice world, pale cold sky, sparse hardy trees.
-	world.add_planet({
-		"name": "Frost", "position": Vector3(6000, 900, 2200),
-		"radius": 1800.0, "amp": 70.0, "gravity": 12.0, "seed": 4242,
-		"top": Blocks.SNOW, "sub": Blocks.ICE, "rock": Blocks.ROCK,
-		"ore": Blocks.CRYSTAL, "core": Blocks.ICE,
-		"tree_density": 0.1,
-		"atmosphere": true, "atmo_color": Color(0.62, 0.76, 0.95), "atmo_height": 900.0,
-		"water_style": "ice", "water_amount": 0.42,  # frozen seas, peaks poke out
-	})
-	# Shard: small crystal moon, thin air -> no atmosphere, barren.
-	world.add_planet({
-		"name": "Shard", "position": Vector3(3200, 4600, -3600),
-		"radius": 260.0, "amp": 16.0, "gravity": 5.0, "seed": 9001,
-		"top": Blocks.CRYSTAL, "sub": Blocks.ROCK, "rock": Blocks.ROCK,
-		"ore": Blocks.IRON_ORE, "core": Blocks.CRYSTAL,
-		"tree_density": 0.0,
-		"atmosphere": false,
-		"water_style": "liquid", "water_amount": 0.85,  # ocean moon -- almost all water
-	})
-	# Ochre: massive desert world, dusty orange sky.
-	world.add_planet({
-		"name": "Ochre", "position": Vector3(-4800, -1500, 5200),
-		"radius": 1300.0, "amp": 55.0, "gravity": 11.0, "seed": 2024,
-		"top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK,
-		"ore": Blocks.IRON_ORE, "core": Blocks.CORE,
-		"tree_density": 0.0,
-		"atmosphere": true, "atmo_color": Color(0.85, 0.6, 0.4), "atmo_height": 650.0,
-		"water_style": "none",  # bone-dry desert
-	})
+	# --- planets: procedurally generated. The world seed is saved so the same
+	# planets regenerate on reload; a brand-new world gets a fresh random seed.
+	var wseed := world.saved_world_seed()
+	if wseed < 0:
+		var r := RandomNumberGenerator.new()
+		r.randomize()
+		wseed = int(r.randi() & 0x7fffffff)
+	world.world_seed = wseed
+	_generate_planets(world, wseed)
 
 	# --- player: drop in just above dry land on the home world ----------------
 	var home: Planet = world.planets[0]
@@ -100,6 +91,73 @@ func _ready() -> void:
 		var pcc := ground.chunk_of(ground.world_to_voxel(player.global_position))
 		for dy in range(1, -4, -1):
 			ground.build_chunk_sync(pcc + Vector3i(0, dy, 0))
+
+
+# Deterministically create a set of planets from a master seed. Planet 0 is the
+# habitable home world (verdant); the rest are random archetypes spread out in space.
+func _generate_planets(world: WorldManager, master_seed: int) -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = master_seed
+	var count := rng.randi_range(4, 6)
+	var positions := []
+	var used_names := {}
+	for i in count:
+		var cfg := _make_planet_cfg(rng, i, master_seed, positions)
+		# guarantee unique names (saves key planet edits by name)
+		var nm: String = cfg["name"]
+		if used_names.has(nm):
+			nm = "%s %d" % [nm, i + 1]
+		used_names[nm] = true
+		cfg["name"] = nm
+		positions.append(cfg["position"])
+		world.add_planet(cfg)
+
+
+func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, used: Array) -> Dictionary:
+	var a: Dictionary = _ARCHETYPES[0] if index == 0 else _ARCHETYPES[rng.randi_range(0, _ARCHETYPES.size() - 1)]
+	# home is always a big habitable world; others may be moons
+	var is_moon: bool = (index != 0) and bool(a["moon"]) and rng.randf() < 0.7
+	var radius := rng.randf_range(240.0, 420.0) if is_moon else rng.randf_range(1100.0, 1900.0)
+	var amp := rng.randf_range(12.0, 26.0) if is_moon else rng.randf_range(45.0, 75.0)
+	var gravity := rng.randf_range(4.0, 7.0) if is_moon else rng.randf_range(10.0, 15.0)
+
+	# position: home at origin, others spread on random directions/distances, kept
+	# a few thousand units apart (float precision stays fine within ~10k)
+	var pos := Vector3.ZERO
+	if index != 0:
+		for _attempt in 12:
+			var dir := Vector3(rng.randf() * 2.0 - 1.0, rng.randf() * 2.0 - 1.0, rng.randf() * 2.0 - 1.0)
+			if dir.length() < 0.01:
+				dir = Vector3.RIGHT
+			pos = dir.normalized() * rng.randf_range(5000.0, 9500.0)
+			var ok := true
+			for u in used:
+				if pos.distance_to(u) < 4000.0:
+					ok = false
+					break
+			if ok:
+				break
+
+	var water: String = a["water"]
+	var water_amount := 0.0
+	if water != "none":
+		water_amount = rng.randf_range(float(a["wmin"]), float(a["wmax"]))
+	var trees := rng.randf_range(float(a["tmin"]), float(a["tmax"]))
+
+	return {
+		"name": _planet_name(rng), "position": pos,
+		"radius": radius, "amp": amp, "gravity": gravity, "seed": master_seed + index * 7919,
+		"top": a["top"], "sub": a["sub"], "rock": a["rock"], "core": a["core"],
+		"ore": Blocks.IRON_ORE,  # legacy field; ores are procedural per planet
+		"tree_density": trees,
+		"atmosphere": bool(a["atmo"]), "atmo_color": a["atmo_color"],
+		"atmo_height": rng.randf_range(600.0, 950.0),
+		"water_style": water, "water_amount": water_amount,
+	}
+
+
+func _planet_name(rng: RandomNumberGenerator) -> String:
+	return _NAME_PRE[rng.randi_range(0, _NAME_PRE.size() - 1)] + _NAME_SUF[rng.randi_range(0, _NAME_SUF.size() - 1)]
 
 
 func _setup_environment() -> void:

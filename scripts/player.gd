@@ -908,12 +908,18 @@ func _place_station(id: int) -> void:
 		var corner: Vector3 = obj.to_global(Vector3(pv))
 		if corner.distance_to(global_position) < 1.1:
 			return  # don't place inside yourself
+		if id == Blocks.CHEST and _chest_cluster_size_at(world, Vector3i(corner.round())) > MAX_CHEST_GROUP:
+			_toast("Chest cluster is full (max %d)" % MAX_CHEST_GROUP)
+			return
 		var g := world.gravity_at(corner)
 		var up := (-g).normalized() if g.length() > 0.01 else Vector3.UP
 		world.spawn_station(id, corner, up, -global_transform.basis.z)
 		_consume_active()
 		_toast(Blocks.name_of(id) + " placed")
 	elif tgt["kind"] == "ship":
+		if id == Blocks.CHEST and _chest_cluster_size_at(obj, pv) > MAX_CHEST_GROUP:
+			_toast("Chest cluster is full (max %d)" % MAX_CHEST_GROUP)
+			return
 		world.spawn_station_on_ship(id, obj, pv)
 		_consume_active()
 		_toast(Blocks.name_of(id) + " mounted on ship")
@@ -1687,14 +1693,23 @@ func _make_stor_cell(index: int, cx: int, cy: int) -> Dictionary:
 	return {"root": root, "swatch": swatch, "count": count}
 
 
-# All chests connected (face-adjacent, same frame) to `chest`.
-func _chest_group(chest: Station) -> Array:
-	var parent := chest.get_parent()
-	var posmap := {}
+const MAX_CHEST_GROUP := 4   # chests won't combine into a cluster bigger than this
+const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+	Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+
+
+func _chest_posmap(parent: Node) -> Dictionary:
+	var m := {}
 	if world != null:
 		for s in world._stations:
 			if is_instance_valid(s) and s.kind == Blocks.CHEST and s.get_parent() == parent:
-				posmap[Vector3i(s.position.round())] = s
+				m[Vector3i(s.position.round())] = s
+	return m
+
+
+# All chests connected (face-adjacent, same frame) to `chest`.
+func _chest_group(chest: Station) -> Array:
+	var posmap := _chest_posmap(chest.get_parent())
 	var seen := {}
 	var stack := [Vector3i(chest.position.round())]
 	var group := []
@@ -1706,11 +1721,34 @@ func _chest_group(chest: Station) -> Array:
 		if not posmap.has(p):
 			continue
 		group.append(posmap[p])
-		for n in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
-				Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+		for n in _NEIGH6:
 			if not seen.has(p + n):
 				stack.append(p + n)
 	return group
+
+
+# Size of the chest cluster that would form if a chest were placed at `cell` in
+# `parent`'s frame (existing connected chests + the new one).
+func _chest_cluster_size_at(parent: Node, cell: Vector3i) -> int:
+	var posmap := _chest_posmap(parent)
+	var seen := {}
+	var stack := []
+	for n in _NEIGH6:
+		if posmap.has(cell + n):
+			stack.append(cell + n)
+	var count := 0
+	while not stack.is_empty():
+		var p: Vector3i = stack.pop_back()
+		if seen.has(p):
+			continue
+		seen[p] = true
+		if not posmap.has(p):
+			continue
+		count += 1
+		for n in _NEIGH6:
+			if not seen.has(p + n):
+				stack.append(p + n)
+	return count + 1
 
 
 # The chest's local up axis (snapped) -- stacking along it grows the grid taller;

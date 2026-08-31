@@ -17,6 +17,19 @@ const SAVE_PATH := "user://spacecraft_save.dat"
 const SAVE_BAK := "user://spacecraft_save.bak"
 const SAVE_VERSION := 1
 
+var world_seed := 0   # master seed the planets were generated from (persisted)
+
+
+## Read just the saved world seed (so planets can be regenerated identically before
+## the rest of the save is applied). Returns -1 if there is no save.
+func saved_world_seed() -> int:
+	var d = _read_save(SAVE_PATH)
+	if typeof(d) != TYPE_DICTIONARY:
+		d = _read_save(SAVE_BAK)
+	if typeof(d) == TYPE_DICTIONARY:
+		return int(d.get("world_seed", -1))
+	return -1
+
 
 func has_save() -> bool:
 	return FileAccess.file_exists(SAVE_PATH) or FileAccess.file_exists(SAVE_BAK)
@@ -39,6 +52,7 @@ func _read_save(path: String):
 func save_game() -> bool:
 	var data := {
 		"version": SAVE_VERSION,
+		"world_seed": world_seed,
 		"player": {},
 		"planets": {},   # planet name -> edits_by_chunk
 		"ships": [],
