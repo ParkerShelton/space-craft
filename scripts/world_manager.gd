@@ -114,6 +114,7 @@ func load_game() -> bool:
 			ship.add_child(station)
 			station.configure(skind, self)
 			station.transform = std.get("local", Transform3D.IDENTITY)
+			ship.add_collision_exception_with(station)
 		else:
 			add_child(station)
 			station.configure(skind, self)
@@ -208,6 +209,9 @@ func spawn_station_on_ship(kind: int, ship: Ship, local_v: Vector3i) -> Station:
 	ship.add_child(st)
 	st.configure(kind, self)
 	st.transform = Transform3D(Basis.IDENTITY, Vector3(local_v))
+	# The station is a static body inside the ship's own volume; without this the
+	# ship's move_and_collide would collide with it and the ship couldn't fly.
+	ship.add_collision_exception_with(st)
 	_stations.append(st)
 	return st
 
