@@ -107,8 +107,19 @@ const HAND_RECIPES := [
 	{"out": SMELTER, "n": 1, "reqs": [{"id": ROCK, "n": 15}]},
 	{"out": METAL, "n": 4, "reqs": [{"refined": true, "n": 1}]},        # cast ingots into hull plates
 	{"out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
+	{"out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 30}, {"refined": true, "n": 10}]},
 ]
 const DRILL_COST := 5        # refined material consumed to fabricate one drill
+
+# What each station can build from a loaded refined material. Each craft consumes
+# `cost` refined material and outputs `n` of `out`, carrying the material's stats.
+const STATION_CRAFTS := {
+	FABRICATOR: [{"label": "Craft Drill", "out": DRILL, "n": 1, "cost": DRILL_COST}],
+	SHIPWORKS: [
+		{"label": "Craft Thruster", "out": THRUSTER, "n": 1, "cost": 4},
+		{"label": "Craft Hull Plate", "out": METAL, "n": 4, "cost": 2},
+	],
+}
 
 # Everything the player can place (scroll-wheel cycles this list). Ores are now raw
 # materials for crafting, not placeable blocks.

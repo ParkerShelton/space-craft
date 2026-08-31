@@ -58,6 +58,7 @@ const TETHER_LEN := 18.0          # max EVA tether distance
 
 var _camera: Camera3D
 var _ray: RayCast3D
+var _outline: MeshInstance3D       # wireframe box around the block under the crosshair
 var _pitch := 0.0
 var _look := Vector2.ZERO          # accumulated mouse delta, consumed in physics
 
@@ -82,8 +83,9 @@ var _station_cells: Array = []     # station internal-storage slot views
 var _pinv_cells: Array = []        # player-inventory slot views inside the station panel
 var _station_store_label: Label    # "<station> contents" header above its storage
 var _refine_btn: Button            # Smelter action
-var _craft_btn: Button             # Fabricator action (Craft Drill)
-var _preview_label: Label          # Fabricator: live drill-stat preview
+var _craft_row: Control            # holds per-station craft buttons
+var _craft_buttons: Array = []     # current station's craft buttons
+var _preview_label: Label          # live craft-stat preview (Fabricator/Shipworks)
 var _build_buttons: Array = []     # hand-assemble-station buttons in the inventory panel
 var _markers: Array[Label] = []   # one navigation marker per planet
 
@@ -115,9 +117,45 @@ func _ready() -> void:
 	floor_constant_speed = true
 	_home_parent = get_parent()
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+	# wireframe outline that hugs the block under the crosshair
+	_outline = MeshInstance3D.new()
+	_outline.mesh = _make_outline_mesh()
+	var om := StandardMaterial3D.new()
+	om.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	om.albedo_color = Color(0, 0, 0, 0.9)
+	om.no_depth_test = false
+	_outline.material_override = om
+	_outline.visible = false
+	if world != null:
+		world.add_child(_outline)
+	else:
+		get_parent().add_child(_outline)
+
 	_init_inventory()
 	_build_ui()
 	_refresh_slots()
+
+
+# 12-edge wireframe unit cube (slightly inflated) used as the targeting outline.
+func _make_outline_mesh() -> ArrayMesh:
+	var lo := -0.002
+	var hi := 1.002
+	var c := [
+		Vector3(lo, lo, lo), Vector3(hi, lo, lo), Vector3(hi, hi, lo), Vector3(lo, hi, lo),
+		Vector3(lo, lo, hi), Vector3(hi, lo, hi), Vector3(hi, hi, hi), Vector3(lo, hi, hi)]
+	var edges := [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4],
+		[0, 4], [1, 5], [2, 6], [3, 7]]
+	var verts := PackedVector3Array()
+	for e in edges:
+		verts.append(c[e[0]])
+		verts.append(c[e[1]])
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_LINES, arr)
+	return mesh
 
 
 # --- inventory ---------------------------------------------------------------
@@ -286,6 +324,8 @@ func _physics_process(delta: float) -> void:
 		_update_ui()
 		return
 	if piloting != null:
+		if _outline != null:
+			_outline.visible = false
 		_pilot_physics(delta)
 		_update_ui()
 		return
@@ -737,6 +777,87 @@ func _move_input() -> Vector2:
 	return Vector2(x, y)
 
 
+# --- voxel targeting ----------------------------------------------------------
+# The physics ray tells us WHICH object we're aiming at + a surface point; a short
+# DDA march through that object's voxel grid then finds the exact block (and the
+# empty cell in front for placing). This is far more accurate than deriving the
+# cell from the collision normal (which is unreliable with double-sided collision).
+
+func _raycast_voxel() -> Dictionary:
+	_ray.force_raycast_update()
+	if not _ray.is_colliding():
+		return {}
+	var collider := _ray.get_collider()
+	var hit := _ray.get_collision_point()
+	var origin := _camera.global_position
+	var dir := hit - origin
+	if dir.length() < 0.0001:
+		dir = -_camera.global_transform.basis.z
+	dir = dir.normalized()
+	if collider is Chunk:
+		return _dda((collider as Chunk).planet, origin, dir, hit, "planet")
+	if collider is Ship:
+		return _dda(collider, origin, dir, hit, "ship")
+	if collider is Station:
+		return {"kind": "station", "obj": collider, "hit": false}
+	return {}
+
+
+func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: String) -> Dictionary:
+	# march in the object's local voxel space (planets are axis-aligned; ships rotate)
+	var ld: Vector3 = (obj.global_transform.basis.inverse() * dir_w).normalized()
+	var start: Vector3 = obj.to_local(hit_w) - ld * 0.06  # step just outside the surface
+	var v := Vector3i(floori(start.x), floori(start.y), floori(start.z))
+	var step := Vector3i(1 if ld.x >= 0.0 else -1, 1 if ld.y >= 0.0 else -1, 1 if ld.z >= 0.0 else -1)
+	var tmax := Vector3(_tmax(start.x, ld.x), _tmax(start.y, ld.y), _tmax(start.z, ld.z))
+	var tdelta := Vector3(_tdelta(ld.x), _tdelta(ld.y), _tdelta(ld.z))
+	var normal := Vector3i.ZERO
+	var prev := v
+	for i in 14:
+		var id: int = obj.get_id(v)
+		if id != Blocks.AIR and id != Blocks.WATER:
+			return {"hit": true, "kind": kind, "obj": obj, "voxel": v, "place": prev, "normal": normal, "id": id}
+		prev = v
+		if tmax.x <= tmax.y and tmax.x <= tmax.z:
+			v.x += step.x
+			tmax.x += tdelta.x
+			normal = Vector3i(-step.x, 0, 0)
+		elif tmax.y <= tmax.z:
+			v.y += step.y
+			tmax.y += tdelta.y
+			normal = Vector3i(0, -step.y, 0)
+		else:
+			v.z += step.z
+			tmax.z += tdelta.z
+			normal = Vector3i(0, 0, -step.z)
+	return {}
+
+
+func _tmax(s: float, d: float) -> float:
+	if absf(d) < 1e-9:
+		return INF
+	var cell := floorf(s)
+	return (cell + 1.0 - s) / d if d > 0.0 else (s - cell) / -d
+
+
+func _tdelta(d: float) -> float:
+	return INF if absf(d) < 1e-9 else absf(1.0 / d)
+
+
+func _update_outline(tgt: Dictionary) -> void:
+	if _outline == null:
+		return
+	var show: bool = not tgt.is_empty() and tgt.get("hit", false) \
+		and not inv_open and _station_open == null and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	if not show:
+		_outline.visible = false
+		return
+	var obj = tgt["obj"]
+	var v: Vector3i = tgt["voxel"]
+	_outline.global_transform = Transform3D(obj.global_transform.basis, obj.to_global(Vector3(v)))
+	_outline.visible = true
+
+
 # --- block placing (right-click) ----------------------------------------------
 # Breaking is handled by hold-to-mine in _process_mining.
 
@@ -750,25 +871,19 @@ func _edit_block(_break_it: bool) -> void:
 	if not Blocks.is_placeable_block(place_id):
 		_toast("Can't place that — use a station")
 		return
-	_ray.force_raycast_update()
-	if not _ray.is_colliding():
+	var tgt := _raycast_voxel()
+	if tgt.is_empty() or not tgt.get("hit", false):
 		return
-	var collider := _ray.get_collider()
-	var point := _ray.get_collision_point()
-	var normal := _ray.get_collision_normal()
-	var probe := point + normal * 0.5  # into the empty neighbor cell
-
-	if collider is Chunk:
-		var planet: Planet = (collider as Chunk).planet
-		var v := planet.world_to_voxel(probe)
-		if planet.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
-			planet.set_block(v, place_id)
+	var obj = tgt["obj"]
+	var pv: Vector3i = tgt["place"]
+	if tgt["kind"] == "planet":
+		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
+			obj.set_block(pv, place_id)
 			_consume_active()
-	elif collider is Ship:
-		var ship := collider as Ship
-		var v := ship.world_to_voxel(probe)
-		if ship.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
-			ship.set_block(v, place_id)
+	elif tgt["kind"] == "ship":
+		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
+			# crafted ship blocks carry their material stats onto the ship
+			obj.set_block(pv, place_id, inv[active_slot].get("props", {}))
 			_consume_active()
 
 
@@ -778,29 +893,22 @@ func _edit_block(_break_it: bool) -> void:
 func _place_station(id: int) -> void:
 	if world == null:
 		return
-	_ray.force_raycast_update()
-	if not _ray.is_colliding():
+	var tgt := _raycast_voxel()
+	if tgt.is_empty() or not tgt.get("hit", false):
 		return
-	var collider := _ray.get_collider()
-	var point := _ray.get_collision_point()
-	var normal := _ray.get_collision_normal()
-	if collider is Chunk:
-		var planet: Planet = (collider as Chunk).planet
-		var v := planet.world_to_voxel(point + normal * 0.5)  # the empty neighbor cell
-		var corner := planet.to_global(Vector3(v))
+	var obj = tgt["obj"]
+	var pv: Vector3i = tgt["place"]
+	if tgt["kind"] == "planet":
+		var corner: Vector3 = obj.to_global(Vector3(pv))
 		if corner.distance_to(global_position) < 1.1:
 			return  # don't place inside yourself
 		var g := world.gravity_at(corner)
-		var up := (-g).normalized() if g.length() > 0.01 else normal
+		var up := (-g).normalized() if g.length() > 0.01 else Vector3.UP
 		world.spawn_station(id, corner, up, -global_transform.basis.z)
 		_consume_active()
 		_toast(Blocks.name_of(id) + " placed")
-	elif collider is Ship:
-		var ship := collider as Ship
-		var lv := ship.world_to_voxel(point + normal * 0.5)
-		if ship.get_id(lv) != Blocks.AIR:
-			return  # cell already occupied by a ship block
-		world.spawn_station_on_ship(id, ship, lv)
+	elif tgt["kind"] == "ship":
+		world.spawn_station_on_ship(id, obj, pv)
 		_consume_active()
 		_toast(Blocks.name_of(id) + " mounted on ship")
 	else:
@@ -811,40 +919,20 @@ func _place_station(id: int) -> void:
 # blocks are added to the inventory. Also sets `_look_name` for the HUD.
 func _process_mining(delta: float) -> void:
 	_look_name = ""
-	_ray.force_raycast_update()
-	if not _ray.is_colliding():
-		_mine_key = ""
-		_mine_time = 0.0
-		return
-	var collider := _ray.get_collider()
-	var point := _ray.get_collision_point()
-	var normal := _ray.get_collision_normal()
-	var probe := point - normal * 0.5
-
-	var id := Blocks.AIR
-	var key := ""
-	var planet: Planet = null
-	var ship: Ship = null
-	var v := Vector3i.ZERO
-	if collider is Chunk:
-		planet = (collider as Chunk).planet
-		v = planet.world_to_voxel(probe)
-		id = planet.get_id(v)
-		key = "p%d:%d,%d,%d" % [planet.get_instance_id(), v.x, v.y, v.z]
-	elif collider is Ship:
-		ship = collider as Ship
-		v = ship.world_to_voxel(probe)
-		id = ship.get_id(v)
-		key = "s%d:%d,%d,%d" % [ship.get_instance_id(), v.x, v.y, v.z]
-	else:
+	var tgt := _raycast_voxel()
+	_update_outline(tgt)
+	if tgt.is_empty() or not tgt.get("hit", false):
 		_mine_key = ""
 		_mine_time = 0.0
 		return
 
-	if id == Blocks.AIR:
-		_mine_key = ""
-		_mine_time = 0.0
-		return
+	var kind: String = tgt["kind"]
+	var obj = tgt["obj"]
+	var v: Vector3i = tgt["voxel"]
+	var id: int = tgt["id"]
+	var planet: Planet = obj if kind == "planet" else null
+	var ship: Ship = obj if kind == "ship" else null
+	var key := "%s%d:%d,%d,%d" % [kind, obj.get_instance_id(), v.x, v.y, v.z]
 
 	# Ore is a procedural, unidentified material until refined; everything else
 	# shows its name + use.
@@ -1183,6 +1271,13 @@ func _item_tooltip(slot: Dictionary) -> String:
 		for k in Blocks.PROP_KEYS:
 			lines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(props.get(k, 0))])
 		return "\n".join(lines)
+	# crafted ship part (thruster/hull) carrying a material's stats
+	var cprops: Dictionary = slot.get("props", {})
+	if not cprops.is_empty() and mat.has("name"):
+		var clines := ["%s %s%s" % [mname, Blocks.name_of(id), suffix]]
+		for k in Blocks.PROP_KEYS:
+			clines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(cprops.get(k, 0))])
+		return "\n".join(clines)
 	# ordinary block / item
 	var use := Blocks.use_of(id)
 	return Blocks.name_of(id) + ("\n" + use if use != "" else "")
@@ -1267,7 +1362,7 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	var cols := Station.STORAGE_SLOTS
 	_station_panel = Panel.new()
 	_station_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_station_panel.custom_minimum_size = Vector2(cols * 60 + 24, 188 + 4 * 60 + 16)
+	_station_panel.custom_minimum_size = Vector2(cols * 60 + 24, 206 + 4 * 60 + 16)
 	_station_panel.size = _station_panel.custom_minimum_size
 	_station_panel.position = -_station_panel.size * 0.5
 	_station_panel.visible = false
@@ -1294,34 +1389,32 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 
 	_refine_btn = Button.new()
 	_refine_btn.text = "Refine"
-	_refine_btn.position = Vector2(12, 124)
-	_refine_btn.custom_minimum_size = Vector2(120, 32)
+	_refine_btn.position = Vector2(12, 120)
+	_refine_btn.custom_minimum_size = Vector2(120, 30)
 	_refine_btn.pressed.connect(_on_refine)
 	_station_panel.add_child(_refine_btn)
 
-	_craft_btn = Button.new()
-	_craft_btn.text = "Craft Drill"
-	_craft_btn.position = Vector2(12, 124)
-	_craft_btn.custom_minimum_size = Vector2(120, 32)
-	_craft_btn.pressed.connect(_on_fab_craft)
-	_station_panel.add_child(_craft_btn)
+	# per-station craft buttons are (re)built when the station opens
+	_craft_row = Control.new()
+	_craft_row.position = Vector2(12, 118)
+	_station_panel.add_child(_craft_row)
 
 	_preview_label = Label.new()
-	_preview_label.position = Vector2(144, 122)
+	_preview_label.position = Vector2(12, 154)
 	_preview_label.modulate = Color(0.82, 0.92, 1.0)
 	_station_panel.add_child(_preview_label)
 
 	var ilabel := Label.new()
 	ilabel.text = "Your inventory  (click to add)"
 	ilabel.modulate = Color(1, 1, 1, 0.7)
-	ilabel.position = Vector2(14, 164)
+	ilabel.position = Vector2(14, 182)
 	_station_panel.add_child(ilabel)
 
 	var pgrid := GridContainer.new()
 	pgrid.columns = HOTBAR_SLOTS
 	pgrid.add_theme_constant_override("h_separation", 4)
 	pgrid.add_theme_constant_override("v_separation", 4)
-	pgrid.position = Vector2(12, 188)
+	pgrid.position = Vector2(12, 206)
 	_station_panel.add_child(pgrid)
 	for i in SLOTS:
 		_pinv_cells.append(_make_slot(pgrid, i, "to_station"))
@@ -1342,8 +1435,24 @@ func _open_station(st: Station) -> void:
 	_station_title.text = st.title()
 	_station_store_label.text = "%s contents  (click to take)" % st.title()
 	_refine_btn.visible = (st.kind == Blocks.SMELTER)
-	_craft_btn.visible = (st.kind == Blocks.FABRICATOR)
-	_preview_label.visible = (st.kind == Blocks.FABRICATOR)
+
+	# rebuild this station's craft buttons
+	for b in _craft_buttons:
+		b.queue_free()
+	_craft_buttons.clear()
+	var crafts: Array = Blocks.STATION_CRAFTS.get(st.kind, [])
+	var bx := 0.0
+	for craft in crafts:
+		var b := Button.new()
+		b.text = craft["label"]
+		b.position = Vector2(bx, 0)
+		b.custom_minimum_size = Vector2(150, 30)
+		b.pressed.connect(_on_station_craft.bind(craft))
+		_craft_row.add_child(b)
+		_craft_buttons.append(b)
+		bx += 158.0
+	_preview_label.visible = not crafts.is_empty()
+
 	_station_panel.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_refresh_station_ui()
@@ -1363,8 +1472,8 @@ func _refresh_station_ui() -> void:
 		_paint_cell(_station_cells[i], _station_open.storage[i], false)
 	for i in _pinv_cells.size():
 		_paint_cell(_pinv_cells[i], inv[i], false)
-	if _station_open.kind == Blocks.FABRICATOR:
-		_preview_label.text = _fab_preview_text()
+	if Blocks.STATION_CRAFTS.has(_station_open.kind):
+		_preview_label.text = _craft_preview_text(_station_open.kind)
 
 
 func _move_inv_to_station(index: int) -> void:
@@ -1376,8 +1485,8 @@ func _move_inv_to_station(index: int) -> void:
 	if _station_open.kind == Blocks.SMELTER and not Blocks.is_ore(s["id"]):
 		_toast("Smelter takes raw ore")
 		return
-	if _station_open.kind == Blocks.FABRICATOR and not Blocks.is_refined(s["id"]):
-		_toast("Fabricator takes refined material")
+	if _station_open.kind != Blocks.SMELTER and not Blocks.is_refined(s["id"]):
+		_toast("%s takes refined material" % _station_open.title())
 		return
 	var left: int = _station_open.store_add(s["id"], s["count"], s.get("props", {}), s.get("src", ""), s.get("mat", {}))
 	if left == s["count"]:
@@ -1416,8 +1525,8 @@ func _on_refine() -> void:
 	_refresh_slots()
 
 
-# The refined material a Fabricator will build from (first refined slot loaded).
-func _fab_primary_material() -> Dictionary:
+# The refined material a station will build from (first refined slot loaded).
+func _station_primary_material() -> Dictionary:
 	if _station_open == null:
 		return {}
 	for s in _station_open.storage:
@@ -1426,36 +1535,47 @@ func _fab_primary_material() -> Dictionary:
 	return {}
 
 
-func _fab_preview_text() -> String:
-	var m := _fab_primary_material()
+func _craft_preview_text(kind: int) -> String:
+	var m := _station_primary_material()
 	if m.is_empty():
-		return "Load a refined material →\nthe drill's power comes from it"
-	var power := Blocks.drill_power(m["props"])
-	var maxt := Blocks.max_tier_for_power(power)
-	return "Drill preview:  power %.1f\nmines up to Tier %d (%s)\ncost: %d %s" % [
-		power, maxt, Blocks.TIER_NAMES[maxt], Blocks.DRILL_COST, m["mat"].get("name", "material")]
+		return "Load a refined material to build from →"
+	var p: Dictionary = m["props"]
+	var s := "%s   H%d D%d E%d R%d" % [m["mat"].get("name", "material"),
+		int(p.get("h", 0)), int(p.get("d", 0)), int(p.get("e", 0)), int(p.get("r", 0))]
+	if kind == Blocks.FABRICATOR:
+		var power := Blocks.drill_power(p)
+		s += "\nDrill: power %.1f — up to Tier %d" % [power, Blocks.max_tier_for_power(power)]
+	elif kind == Blocks.SHIPWORKS:
+		s += "\nThruster thrust ↑ with Energy   |   Hull mass ↑ with Density"
+	return s
 
 
-func _on_fab_craft() -> void:
-	var m := _fab_primary_material()
+func _on_station_craft(craft: Dictionary) -> void:
+	var m := _station_primary_material()
 	if m.is_empty():
 		_toast("Load a refined material")
 		return
-	if m["count"] < Blocks.DRILL_COST:
-		_toast("Need %d refined material" % Blocks.DRILL_COST)
+	var cost: int = craft["cost"]
+	if m["count"] < cost:
+		_toast("Need %d refined material" % cost)
 		return
-	var power := Blocks.drill_power(m["props"])
+	var out: int = craft["out"]
+	var n: int = craft.get("n", 1)
 	var mname: String = m["mat"].get("name", "")
-	m["count"] -= Blocks.DRILL_COST
+	m["count"] -= cost
 	if m["count"] <= 0:
 		m["id"] = Blocks.AIR
-	var dmat := {"name": mname, "color": m["mat"].get("color", Color(0.75, 0.76, 0.8)),
-		"tier": m["mat"].get("tier", 0), "power": power}
-	var left := _station_open.store_add(Blocks.DRILL, 1, m["props"], m.get("src", ""), dmat)
+	# the crafted item carries the material's identity + props (thrust/mass/etc.
+	# are derived from these); the drill also stores its computed power
+	var cmat := {"name": mname, "color": m["mat"].get("color", Color(0.75, 0.76, 0.8)),
+		"tier": m["mat"].get("tier", 0)}
+	if out == Blocks.DRILL:
+		cmat["power"] = Blocks.drill_power(m["props"])
+	var left := _station_open.store_add(out, n, m["props"], m.get("src", ""), cmat)
 	if left > 0:
-		_toast("No room for the drill")
+		_toast("No room in the machine")
 	else:
-		_toast("Crafted %s Drill (power %.1f)" % [mname, power])
+		_toast("Crafted %s %s" % [mname, Blocks.name_of(out)])
 	_refresh_station_ui()
 	_refresh_slots()
 

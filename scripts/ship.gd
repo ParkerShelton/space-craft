@@ -7,14 +7,17 @@ extends CharacterBody3D
 ## fights the planet's radial gravity, so you must out-thrust the world to lift off
 ## and then coast free once gravity fades in space.
 
-var blocks := {}  # Vector3i(local voxel) -> block id
+var blocks := {}       # Vector3i(local voxel) -> block id
+var block_meta := {}   # Vector3i -> {h,d,e,r} material stats for crafted blocks (Shipworks)
 var flying := false
 var world: WorldManager  # set on spawn; used for gravity while coasting
 var in_gravity := false  # true while in launch/landing-assist mode (HUD)
 var landed := false      # resting on the ground (HUD)
 
 # --- flight tuning ---
-const THRUST_PER := 300.0     # thrust accel per thruster, divided by block count
+const THRUST_UNIT := 350.0    # base thrust per thruster; scaled by its material's Energy
+const HULL_MASS_BASE := 0.6   # every block has some mass...
+const HULL_MASS_DENSITY := 0.8  # ...plus more for denser material (heavier -> less agile)
 const SHIP_DRAG := 0.6        # velocity damping (arcade feel + control)
 const YAW_SENS := 0.0022
 const PITCH_SENS := 0.0022
@@ -98,11 +101,16 @@ func center_local() -> Vector3:
 	return sum / blocks.size()
 
 
-func set_block(v: Vector3i, id: int) -> void:
+func set_block(v: Vector3i, id: int, meta: Dictionary = {}) -> void:
 	if id == Blocks.AIR:
 		blocks.erase(v)
+		block_meta.erase(v)
 	else:
 		blocks[v] = id
+		if meta != null and not meta.is_empty():
+			block_meta[v] = meta   # crafted block carries its material stats
+		else:
+			block_meta.erase(v)
 	if blocks.is_empty():
 		queue_free()
 		return
@@ -124,12 +132,24 @@ func get_status() -> Dictionary:
 	}
 
 
-## Available thrust acceleration (m/s^2). Must beat local gravity to lift off.
+## Available thrust acceleration (m/s^2) = total thrust / total mass. A thruster's
+## thrust scales with its material's Energy; every block's mass scales with its
+## material's Density. So a light hull with high-energy thrusters is far more
+## agile -- crafted (Shipworks) parts carry their material; default parts use
+## mid-range stats, so old ships fly as before.
 func thrust_accel() -> float:
-	var st := get_status()
-	if st["count"] == 0:
+	var total_thrust := 0.0
+	var total_mass := 0.0
+	for v in blocks:
+		var meta: Dictionary = block_meta.get(v, {})
+		var density := float(meta.get("d", 40))
+		total_mass += HULL_MASS_BASE + density / 100.0 * HULL_MASS_DENSITY
+		if blocks[v] == Blocks.THRUSTER:
+			var energy := float(meta.get("e", 50))
+			total_thrust += THRUST_UNIT * (0.4 + energy / 100.0)
+	if total_mass <= 0.0:
 		return 0.0
-	return THRUST_PER * float(st["thrusters"]) / float(st["count"])
+	return total_thrust / total_mass
 
 
 # --- piloting -----------------------------------------------------------------

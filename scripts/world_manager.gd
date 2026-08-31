@@ -59,7 +59,7 @@ func save_game() -> bool:
 	for s in _ships:
 		if is_instance_valid(s) and not s.blocks.is_empty():
 			ship_index[s] = data["ships"].size()
-			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform})
+			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform, "meta": s.block_meta})
 	for st in _stations:
 		if not is_instance_valid(st):
 			continue
@@ -118,6 +118,7 @@ func load_game() -> bool:
 		ship.world = self
 		add_child(ship)
 		ship.blocks = sd.get("blocks", {})
+		ship.block_meta = sd.get("meta", {})
 		ship.global_transform = sd.get("xform", Transform3D.IDENTITY)
 		ship.rebuild()
 		_ships.append(ship)
