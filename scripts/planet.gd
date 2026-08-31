@@ -180,6 +180,18 @@ func _norm(p: Vector3) -> float:
 	return p.length()
 
 
+# Nearest outward cardinal axis to `v` (which cube face a direction belongs to).
+func _axis_of(v: Vector3) -> Vector3:
+	var ax := absf(v.x)
+	var ay := absf(v.y)
+	var az := absf(v.z)
+	if ax >= ay and ax >= az:
+		return Vector3(signf(v.x), 0, 0)
+	elif ay >= az:
+		return Vector3(0, signf(v.y), 0)
+	return Vector3(0, 0, signf(v.z))
+
+
 # Shape-aware distance from a world point to this planet's center / surface. Use
 # these everywhere instead of raw Euclidean distance so cube planets stream and
 # report altitude correctly out to their edges and corners.
@@ -276,7 +288,9 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 				# one tree per cell: only if its base actually sits in this cell
 				if Vector3i(floori(base.x / c), floori(base.y / c), floori(base.z / c)) != cc:
 					continue
-				var up := cdir
+				# On a cube, trees grow straight out of the flat face (axis-aligned),
+				# not toward the center -- otherwise they lean on diagonal faces.
+				var up := _axis_of(cdir) if shape_cube else cdir
 				var th := trunk_min + int(_hash01(cc, 1) * float(trunk_max - trunk_min + 1))
 				var cr := canopy_min + _hash01(cc, 2) * (canopy_max - canopy_min)
 				var rel := p - base
