@@ -1499,10 +1499,8 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	var rx := _rx
 	var grid_w := _STORE_COLS * 60
 	_station_panel = Panel.new()
-	_station_panel.set_anchors_preset(Control.PRESET_CENTER)
 	_station_panel.custom_minimum_size = Vector2(rx + grid_w + 12, 124 + 4 * 60 + 16)
 	_station_panel.size = _station_panel.custom_minimum_size
-	_station_panel.position = -_station_panel.size * 0.5
 	_station_panel.visible = false
 	layer.add_child(_station_panel)
 
@@ -1611,10 +1609,12 @@ func _open_station(st: Station) -> void:
 	var store_bottom: int = 60 + srows * 60
 	_pinv_label.position = Vector2(_rx + 2, store_bottom + 4)
 	_pinv_grid.position = Vector2(_rx, store_bottom + 28)
+	var w: int = _rx + _STORE_COLS * 60 + 12
 	var h: int = maxi(store_bottom + 28 + 4 * 60 + 16, 250)
-	_station_panel.custom_minimum_size.y = h
-	_station_panel.size.y = h
-	_station_panel.position = -_station_panel.size * 0.5
+	_station_panel.custom_minimum_size = Vector2(w, h)
+	_station_panel.size = Vector2(w, h)
+	var vp := get_viewport().get_visible_rect().size
+	_station_panel.position = ((vp - Vector2(w, h)) * 0.5).round()
 
 	_station_panel.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
