@@ -35,6 +35,8 @@ const SUFFOCATE_DMG := 7.0        # health/sec once oxygen hits zero
 const HEALTH_REGEN := 3.0         # health/sec while safe and oxygenated
 var health := MAX_HEALTH
 var oxygen := MAX_OXYGEN
+var _o2_bonus := 0.0          # extra oxygen capacity from the best O2 Tank carried
+var _hazard_resist := 0.0     # 0..0.9 hazard-damage reduction from the best Suit carried
 
 var world: WorldManager           # set by main.gd
 var grounded := false
@@ -739,7 +741,7 @@ func _hazard_dps() -> float:
 		return 0.0
 	if p.altitude(global_position) > HAZARD_RANGE:
 		return 0.0
-	return p.hazard_dps
+	return p.hazard_dps * (1.0 - _hazard_resist)  # an insulated suit reduces this
 
 
 func _current_hazard() -> String:
@@ -766,7 +768,7 @@ func _process_survival(delta: float) -> void:
 	var air := _has_air()
 	var hz := _hazard_dps()
 	if air:
-		oxygen = minf(oxygen + O2_REFILL * delta, MAX_OXYGEN)
+		oxygen = minf(oxygen + O2_REFILL * delta, _max_oxygen())
 	else:
 		oxygen = maxf(oxygen - O2_DRAIN * delta, 0.0)
 	if oxygen <= 0.0:
@@ -1277,15 +1279,16 @@ func _update_survival_ui() -> void:
 		_hp_fill.size.x = 176.0 * clampf(health / MAX_HEALTH, 0.0, 1.0)
 		_hp_fill.color = Color(0.85, 0.25, 0.25) if health > MAX_HEALTH * 0.3 else Color(1.0, 0.35, 0.2)
 	if _o2_fill != null:
-		_o2_fill.size.x = 176.0 * clampf(oxygen / MAX_OXYGEN, 0.0, 1.0)
+		_o2_fill.size.x = 176.0 * clampf(oxygen / _max_oxygen(), 0.0, 1.0)
 	if _hazard_label != null:
 		var hz := _current_hazard()
+		var suit := "  (suit -%d%%)" % int(_hazard_resist * 100.0) if _hazard_resist > 0.0 else ""
 		if hz == "cold":
-			_hazard_label.text = "FREEZING — reach shelter"
+			_hazard_label.text = "FREEZING — reach shelter" + suit
 			_hazard_label.modulate = Color(0.6, 0.85, 1.0)
 			_hazard_label.visible = true
 		elif hz == "heat":
-			_hazard_label.text = "OVERHEATING — reach shelter"
+			_hazard_label.text = "OVERHEATING — reach shelter" + suit
 			_hazard_label.modulate = Color(1.0, 0.6, 0.35)
 			_hazard_label.visible = true
 		else:
@@ -1512,10 +1515,26 @@ func _refresh_slots() -> void:
 # sets mining speed and which ore tiers you can break.
 func _update_mine_power() -> void:
 	var best := 1.0
+	var o2b := 0.0
+	var resist := 0.0
 	for s in inv:
-		if s["id"] == Blocks.DRILL and s["count"] > 0:
-			best = maxf(best, float(s.get("mat", {}).get("power", 1.0)))
+		if s["count"] <= 0:
+			continue
+		var mat: Dictionary = s.get("mat", {})
+		match s["id"]:
+			Blocks.DRILL:
+				best = maxf(best, float(mat.get("power", 1.0)))
+			Blocks.O2_TANK:
+				o2b = maxf(o2b, float(mat.get("o2", 0.0)))
+			Blocks.SUIT:
+				resist = maxf(resist, float(mat.get("resist", 0.0)))
 	mine_power = best
+	_o2_bonus = o2b
+	_hazard_resist = clampf(resist, 0.0, 0.9)
+
+
+func _max_oxygen() -> float:
+	return MAX_OXYGEN + _o2_bonus
 
 
 # Paint any slot cell from a slot dict. `highlight` toggles the active-slot glow.
@@ -1542,10 +1561,15 @@ func _item_tooltip(slot: Dictionary) -> String:
 	var mname: String = mat.get("name", Blocks.name_of(id))
 	var src: String = slot.get("src", "")
 	var suffix := ("  ·  " + src) if src != "" else ""
-	if Blocks.is_gear(id):
+	if id == Blocks.DRILL:
 		var power := float(mat.get("power", 1.0))
 		return "%s Drill%s\nMining power %.1f — breaks up to Tier %d" % [
 			mname, suffix, power, Blocks.max_tier_for_power(power)]
+	if id == Blocks.O2_TANK:
+		return "%s O2 Tank%s\n+%d max oxygen" % [mname, suffix, int(mat.get("o2", 0.0))]
+	if id == Blocks.SUIT:
+		return "%s Insulated Suit%s\nHazard resist %d%%" % [
+			mname, suffix, int(round(float(mat.get("resist", 0.0)) * 100.0))]
 	if Blocks.is_ore(id):
 		return "%s Ore%s\nUnidentified — refine to reveal its tier & stats" % [mname, suffix]
 	if Blocks.is_refined(id):
@@ -2041,6 +2065,10 @@ func _on_station_craft(craft: Dictionary) -> void:
 		"tier": m["mat"].get("tier", 0)}
 	if out == Blocks.DRILL:
 		cmat["power"] = Blocks.drill_power(m["props"])
+	elif out == Blocks.O2_TANK:
+		cmat["o2"] = Blocks.o2_capacity(m["props"])
+	elif out == Blocks.SUIT:
+		cmat["resist"] = Blocks.suit_resist(m["props"])
 	var left := _station_open.store_add(out, n, m["props"], m.get("src", ""), cmat)
 	if left > 0:
 		_toast("No room in the machine")

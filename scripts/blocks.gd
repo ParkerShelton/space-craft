@@ -98,7 +98,9 @@ const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy", "r": "Reac
 
 # --- crafted gear (inventory-only tools produced at stations) ---
 const DRILL := 51            # mining tool; its power (from its material) sets mine speed & max tier
-const TOOL_IDS := [DRILL]
+const O2_TANK := 55          # worn gear: raises max oxygen (capacity from Reactivity)
+const SUIT := 56             # worn gear: reduces hazard damage (insulation from Density)
+const TOOL_IDS := [DRILL, O2_TANK, SUIT]
 
 const LIFE_SUPPORT := 53     # ship block: with a sealed interior it makes the ship habitable
 const GLASS := 54            # transparent, solid hull -- windows that still seal a cabin
@@ -130,6 +132,8 @@ const STATION_CRAFTS := {
 		{"label": "Hull Plate x4", "out": METAL, "n": 4, "cost": 2},
 		{"label": "Glass x4", "out": GLASS, "n": 4, "cost": 2},
 		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "cost": 6},
+		{"label": "O2 Tank", "out": O2_TANK, "n": 1, "cost": 5},
+		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 5},
 	],
 }
 
@@ -185,6 +189,8 @@ const NAMES := {
 	REFINED_0: "Refined Material", REFINED_1: "Refined Material",
 	REFINED_2: "Refined Material", REFINED_3: "Refined Material",
 	DRILL: "Drill",
+	O2_TANK: "O2 Tank",
+	SUIT: "Insulated Suit",
 }
 
 # What each ore is (eventually) used for -- shown when you aim at it.
@@ -255,6 +261,8 @@ const COLORS := {
 	REFINED_0: Color(0.8, 0.72, 0.55), REFINED_1: Color(0.72, 0.8, 0.62),
 	REFINED_2: Color(0.62, 0.72, 0.82), REFINED_3: Color(0.82, 0.62, 0.82),
 	DRILL: Color(0.75, 0.76, 0.80),
+	O2_TANK: Color(0.45, 0.7, 0.9),
+	SUIT: Color(0.8, 0.7, 0.4),
 }
 
 static func is_solid(id: int) -> bool:
@@ -285,6 +293,14 @@ static func is_gear(id: int) -> bool:
 # materials drill faster and reach higher ore tiers. Bare hands are 1.0.
 static func drill_power(props: Dictionary) -> float:
 	return 1.5 + float(props.get("h", 0)) / 100.0 + float(props.get("e", 0)) / 100.0 * 0.8
+
+# O2 Tank extra oxygen capacity from its material's Reactivity (gas storage).
+static func o2_capacity(props: Dictionary) -> float:
+	return 50.0 + float(props.get("r", 0)) / 100.0 * 150.0
+
+# Insulated Suit hazard-damage reduction (0..0.9) from its material's Density.
+static func suit_resist(props: Dictionary) -> float:
+	return 0.30 + float(props.get("d", 0)) / 100.0 * 0.60
 
 # Highest ore tier a given mining power can break (via TIER_MIN_POWER).
 static func max_tier_for_power(power: float) -> int:
