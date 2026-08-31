@@ -286,7 +286,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			else:
 				_toast("No save found")
 		elif event.keycode == KEY_E:
-			if _station_open != null:
+			if piloting != null:
+				pass  # E rolls the ship while piloting -- not the inventory
+			elif _station_open != null:
 				_close_station()
 			else:
 				_toggle_inventory()
@@ -349,7 +351,9 @@ func _physics_process(delta: float) -> void:
 	var g := world.gravity_at(global_position) if world else Vector3(0, -9.8, 0)
 	var up := -g.normalized() if g.length() > 0.01 else Vector3.UP
 	if _in_water(global_position + up * 0.5) or _in_water(global_position - up * 0.8):
-		_swim(delta, up)
+		# align to the snapped axis (like walking) so you stay upright vs gravity
+		var sup := -_snap_to_axis(g) if g.length() > 0.01 else Vector3.UP
+		_swim(delta, sup)
 	else:
 		grounded = g.length() > FLIGHT_THRESHOLD
 		if grounded:
