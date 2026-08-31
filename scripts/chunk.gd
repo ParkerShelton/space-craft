@@ -106,7 +106,7 @@ static func _id_at(planet: Planet, snap: Dictionary, v: Vector3i) -> int:
 	return planet.generation_sample(v.x, v.y, v.z)
 
 
-static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary) -> Dictionary:
+static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsnap: Dictionary = {}) -> Dictionary:
 	var base := cc * CS
 	var ids := PackedInt32Array()
 	ids.resize(CS * CS * CS)
@@ -132,6 +132,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary) -> D
 		return {"verts": verts, "normals": normals, "colors": colors,
 			"wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
+	# opaque terrain via greedy meshing (water is skipped here, handled below)
 	var strides := [1, CS, CS * CS]
 	for d in 3:
 		var u := (d + 1) % 3
@@ -140,8 +141,59 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary) -> D
 			_greedy_pass(planet, snap, d, u, v, dir, base, ids, strides,
 				verts, normals, colors, wverts, wnormals, wcolors)
 
+	# water: one box per cell, its height set by the water level (shallow water
+	# renders lower). Fill is along the cell's outward axis (radial-snapped).
+	var wfull := float(Planet.W_FULL)
+	var idx := 0
+	for z in CS:
+		for y in CS:
+			for x in CS:
+				if ids[idx] == Blocks.WATER:
+					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
+					var level: int = wsnap.get(gv, int(wfull))
+					var h := clampf(float(level) / wfull, 0.12, 1.0)
+					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
+					var lo := Vector3(x, y, z)
+					var hi := Vector3(x + 1, y + 1, z + 1)
+					if up.x > 0.5: hi.x = lo.x + h
+					elif up.x < -0.5: lo.x = hi.x - h
+					elif up.y > 0.5: hi.y = lo.y + h
+					elif up.y < -0.5: lo.y = hi.y - h
+					elif up.z > 0.5: hi.z = lo.z + h
+					elif up.z < -0.5: lo.z = hi.z - h
+					_emit_water_cell(lo, hi, gv, planet, snap, wverts, wnormals, wcolors)
+				idx += 1
+
 	return {"verts": verts, "normals": normals, "colors": colors,
 		"wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
+
+
+const _WFACE := [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0),
+	Vector3i(0,-1,0), Vector3i(0,0,1), Vector3i(0,0,-1)]
+
+static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Planet,
+		snap: Dictionary, wverts: PackedVector3Array, wnormals: PackedVector3Array,
+		wcolors: PackedColorArray) -> void:
+	var base := Blocks.color_of(Blocks.WATER)
+	for fi in 6:
+		var n: Vector3i = _WFACE[fi]
+		if _id_at(planet, snap, gv + n) != Blocks.AIR:
+			continue  # only the faces exposed to air are drawn
+		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
+		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
+		var nrm := Vector3(n)
+		var q := _box_face(lo, hi, fi)
+		_quad(q[0], q[1], q[2], q[3], nrm, col, wverts, wnormals, wcolors)
+
+
+static func _box_face(lo: Vector3, hi: Vector3, fi: int) -> Array:
+	match fi:
+		0: return [Vector3(hi.x, lo.y, lo.z), Vector3(hi.x, hi.y, lo.z), Vector3(hi.x, hi.y, hi.z), Vector3(hi.x, lo.y, hi.z)]  # +X
+		1: return [Vector3(lo.x, lo.y, lo.z), Vector3(lo.x, lo.y, hi.z), Vector3(lo.x, hi.y, hi.z), Vector3(lo.x, hi.y, lo.z)]  # -X
+		2: return [Vector3(lo.x, hi.y, lo.z), Vector3(lo.x, hi.y, hi.z), Vector3(hi.x, hi.y, hi.z), Vector3(hi.x, hi.y, lo.z)]  # +Y
+		3: return [Vector3(lo.x, lo.y, lo.z), Vector3(hi.x, lo.y, lo.z), Vector3(hi.x, lo.y, hi.z), Vector3(lo.x, lo.y, hi.z)]  # -Y
+		4: return [Vector3(lo.x, lo.y, hi.z), Vector3(hi.x, lo.y, hi.z), Vector3(hi.x, hi.y, hi.z), Vector3(lo.x, hi.y, hi.z)]  # +Z
+		_: return [Vector3(lo.x, lo.y, lo.z), Vector3(lo.x, hi.y, lo.z), Vector3(hi.x, hi.y, lo.z), Vector3(hi.x, lo.y, lo.z)]  # -Z
 
 
 static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: int, dir: int,
@@ -165,21 +217,17 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				var lin := a * sd + k * su + row
 				var oid := ids[lin]
 				var val := 0
-				if oid != Blocks.AIR:
+				# opaque blocks only; WATER is meshed separately as partial-height boxes
+				if oid != Blocks.AIR and oid != Blocks.WATER:
 					var na := a + dir
 					var nid: int
 					if na >= 0 and na < CS:
 						nid = ids[na * sd + k * su + row]
 					else:
 						nid = _id_at(planet, snap, _global_coord(base, d, u, v, na, k, j))
-					# Water is see-through: draw a face if the neighbor is air; opaque
-					# blocks also draw against water (so the seabed shows under it).
-					var draw: bool
-					if oid == Blocks.WATER:
-						draw = nid == Blocks.AIR
-					else:
-						draw = nid == Blocks.AIR or nid == Blocks.WATER
-					if draw:
+					# draw a face if the neighbor is air or water (so the seabed shows
+					# under transparent water)
+					if nid == Blocks.AIR or nid == Blocks.WATER:
 						val = oid
 				mask[k + j * CS] = val
 

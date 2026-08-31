@@ -467,7 +467,7 @@ func process_load_queue(_budget: int) -> int:
 			continue
 		_spawn_chunk_node(cc)
 		var snap := _edits_snapshot(cc)
-		var tid := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, snap))
+		var tid := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, snap, _wlev_snapshot(snap)))
 		_inflight[cc] = tid
 	return applied
 
@@ -491,8 +491,8 @@ func _exit_tree() -> void:
 
 
 # Runs on a worker thread: pure computation, results deposited under a mutex.
-func _build_task(cc: Vector3i, snap: Dictionary) -> void:
-	var data := Chunk.build_mesh_data(self, cc, snap)
+func _build_task(cc: Vector3i, snap: Dictionary, wsnap: Dictionary) -> void:
+	var data := Chunk.build_mesh_data(self, cc, snap, wsnap)
 	_ready_mutex.lock()
 	_ready_data[cc] = data
 	_ready_mutex.unlock()
@@ -511,6 +511,16 @@ func _edits_snapshot(cc: Vector3i) -> Dictionary:
 	return snap
 
 
+# Water levels for the WATER cells in an edits snapshot (thread-safe copy so the
+# mesher can render partial-height water). Ocean cells default to full in the mesher.
+func _wlev_snapshot(snap: Dictionary) -> Dictionary:
+	var w := {}
+	for v in snap:
+		if snap[v] == Blocks.WATER:
+			w[v] = _wlev.get(v, W_FULL)
+	return w
+
+
 ## Build one chunk synchronously on the main thread (used at spawn so there's
 ## ground under the player immediately).
 func build_chunk_sync(cc: Vector3i) -> void:
@@ -519,7 +529,8 @@ func build_chunk_sync(cc: Vector3i) -> void:
 	if not _chunk_possibly_solid(cc):
 		return
 	var node := _spawn_chunk_node(cc)
-	node.apply_mesh_data(Chunk.build_mesh_data(self, cc, _edits_snapshot(cc)))
+	var snap := _edits_snapshot(cc)
+	node.apply_mesh_data(Chunk.build_mesh_data(self, cc, snap, _wlev_snapshot(snap)))
 
 
 ## Quick reject: is any part of this chunk possibly inside the solid body?
@@ -555,7 +566,8 @@ func set_block(v: Vector3i, id: int) -> void:
 # Rebuild synchronously (edits are single, occasional, and need instant feedback).
 func _rebuild_if_loaded(cc: Vector3i) -> void:
 	if loaded_chunks.has(cc):
-		loaded_chunks[cc].apply_mesh_data(Chunk.build_mesh_data(self, cc, _edits_snapshot(cc)))
+		var snap := _edits_snapshot(cc)
+		loaded_chunks[cc].apply_mesh_data(Chunk.build_mesh_data(self, cc, snap, _wlev_snapshot(snap)))
 
 
 const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
