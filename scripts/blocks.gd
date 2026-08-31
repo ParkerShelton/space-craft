@@ -52,6 +52,47 @@ const WATER := 33  # liquid: transparent, non-collidable (rendered as a second s
 
 const ORE_IDS := [IRON_ORE, COPPER_ORE, GOLD_ORE, TITANIUM_ORE, SILICON_ORE, URANIUM_ORE]
 
+# --- crafting stations (placed in the world, not voxel blocks) ---
+const SMELTER := 34
+const FABRICATOR := 35
+const SHIPWORKS := 36
+const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS]
+
+# --- refined materials (inventory-only items produced by the Smelter) ---
+const REFINED_IRON := 37
+const REFINED_COPPER := 38
+const REFINED_GOLD := 39
+const REFINED_TITANIUM := 40
+const REFINED_SILICON := 41
+const REFINED_URANIUM := 42
+const REFINED_IDS := [REFINED_IRON, REFINED_COPPER, REFINED_GOLD,
+	REFINED_TITANIUM, REFINED_SILICON, REFINED_URANIUM]
+
+# raw ore id -> refined material id
+const REFINED_OF := {
+	IRON_ORE: REFINED_IRON, COPPER_ORE: REFINED_COPPER, GOLD_ORE: REFINED_GOLD,
+	TITANIUM_ORE: REFINED_TITANIUM, SILICON_ORE: REFINED_SILICON, URANIUM_ORE: REFINED_URANIUM,
+}
+
+# Base material property profile per ore type (0..100). A planet applies a small
+# +/- variance on top (Planet.ore_props), so "Copper is always Copper" but each
+# world's copper differs a little. Keys: h=Hardness d=Density e=Energy r=Reactivity.
+const PROP_KEYS := ["h", "d", "e", "r"]
+const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy", "r": "Reactivity"}
+const ORE_PROPS := {
+	IRON_ORE:     {"h": 60, "d": 55, "e": 25, "r": 10},  # balanced hull/tool
+	COPPER_ORE:   {"h": 35, "d": 45, "e": 70, "r": 20},  # conductive: thrusters/wiring
+	GOLD_ORE:     {"h": 20, "d": 80, "e": 85, "r": 15},  # soft, dense, very conductive
+	TITANIUM_ORE: {"h": 90, "d": 40, "e": 30, "r": 10},  # hard & light: best armor
+	SILICON_ORE:  {"h": 45, "d": 30, "e": 55, "r": 25},  # circuits/glass
+	URANIUM_ORE:  {"h": 50, "d": 90, "e": 40, "r": 95},  # reactor fuel
+}
+
+# Hand-craftable recipes that need NO station (bootstrap only). cost = {id: count}.
+const HAND_CRAFT := {
+	SMELTER: {ROCK: 15},
+}
+
 # Everything the player can place (scroll-wheel cycles this list).
 const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	WOOD, WOOD_PALE, WOOD_DARK,
@@ -94,6 +135,15 @@ const NAMES := {
 	SILICON_ORE: "Silicon Ore",
 	URANIUM_ORE: "Uranium Ore",
 	WATER: "Water",
+	SMELTER: "Smelter",
+	FABRICATOR: "Fabricator",
+	SHIPWORKS: "Shipworks",
+	REFINED_IRON: "Refined Iron",
+	REFINED_COPPER: "Refined Copper",
+	REFINED_GOLD: "Refined Gold",
+	REFINED_TITANIUM: "Refined Titanium",
+	REFINED_SILICON: "Refined Silicon",
+	REFINED_URANIUM: "Refined Uranium",
 }
 
 # What each ore is (eventually) used for -- shown when you aim at it.
@@ -152,6 +202,15 @@ const COLORS := {
 	SILICON_ORE: Color(0.52, 0.58, 0.64),
 	URANIUM_ORE: Color(0.40, 0.78, 0.35),
 	WATER: Color(0.20, 0.45, 0.85, 0.55),
+	SMELTER: Color(0.34, 0.30, 0.32),
+	FABRICATOR: Color(0.30, 0.40, 0.46),
+	SHIPWORKS: Color(0.40, 0.42, 0.30),
+	REFINED_IRON: Color(0.75, 0.76, 0.78),
+	REFINED_COPPER: Color(0.88, 0.55, 0.34),
+	REFINED_GOLD: Color(1.00, 0.84, 0.35),
+	REFINED_TITANIUM: Color(0.82, 0.85, 0.90),
+	REFINED_SILICON: Color(0.70, 0.78, 0.85),
+	REFINED_URANIUM: Color(0.55, 0.95, 0.45),
 }
 
 static func is_solid(id: int) -> bool:
@@ -165,6 +224,21 @@ static func use_of(id: int) -> String:
 
 static func is_ore(id: int) -> bool:
 	return id in ORE_IDS
+
+static func is_station(id: int) -> bool:
+	return id in STATION_IDS
+
+static func is_refined(id: int) -> bool:
+	return id in REFINED_IDS
+
+static func is_placeable_block(id: int) -> bool:
+	return id in PLACEABLE
+
+static func refined_of(ore_id: int) -> int:
+	return REFINED_OF.get(ore_id, AIR)
+
+static func base_props(ore_id: int) -> Dictionary:
+	return ORE_PROPS.get(ore_id, {})
 
 static func color_of(id: int) -> Color:
 	return COLORS.get(id, Color.MAGENTA)

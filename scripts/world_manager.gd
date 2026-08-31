@@ -11,6 +11,7 @@ const STREAM_MARGIN := 48.0       # extra reach (voxels) beyond a planet's surfa
 var planets: Array[Planet] = []
 var player: Node3D
 var _ships: Array[Ship] = []
+var _stations: Array[Station] = []
 
 const SAVE_PATH := "user://spacecraft_save.dat"
 const SAVE_VERSION := 1
@@ -29,6 +30,7 @@ func save_game() -> bool:
 		"player": {},
 		"planets": {},   # planet name -> edits_by_chunk
 		"ships": [],
+		"stations": [],
 	}
 	if player != null:
 		var pl = player  # untyped: reach Player-specific members off the Node3D ref
@@ -44,6 +46,9 @@ func save_game() -> bool:
 	for s in _ships:
 		if is_instance_valid(s) and not s.blocks.is_empty():
 			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform})
+	for st in _stations:
+		if is_instance_valid(st):
+			data["stations"].append({"kind": st.kind, "xform": st.global_transform, "storage": st.storage})
 
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
@@ -85,6 +90,20 @@ func load_game() -> bool:
 		ship.global_transform = sd.get("xform", Transform3D.IDENTITY)
 		ship.rebuild()
 		_ships.append(ship)
+
+	# stations: rebuild from scratch
+	for st in _stations:
+		if is_instance_valid(st):
+			st.queue_free()
+	_stations.clear()
+	for std in data.get("stations", []):
+		var station := Station.new()
+		add_child(station)
+		station.configure(std.get("kind", Blocks.SMELTER), self)
+		station.global_transform = std.get("xform", Transform3D.IDENTITY)
+		if std.has("storage"):
+			station.storage = std["storage"]
+		_stations.append(station)
 
 	# player
 	var pd: Dictionary = data.get("player", {})
@@ -145,6 +164,38 @@ func _any_perp(axis: Vector3) -> Vector3:
 		if absf(c.dot(axis)) < 0.5:
 			return c
 	return Vector3(0, 0, -1)
+
+
+## Place a crafting station at a grid cell, oriented flat to the surface (its up
+## axis = the face you're standing on), like spawn_ship.
+func spawn_station(kind: int, pos: Vector3, up: Vector3, fwd: Vector3) -> Station:
+	var st := Station.new()
+	add_child(st)
+	st.configure(kind, self)
+	var y := _snap_axis(up)
+	if y == Vector3.ZERO:
+		y = Vector3.UP
+	var f := _snap_axis(fwd - y * fwd.dot(y))
+	if f == Vector3.ZERO or absf(f.dot(y)) > 0.5:
+		f = _any_perp(y)
+	var z := -f
+	var x := y.cross(z)
+	st.global_transform = Transform3D(Basis(x, y, z), pos.round())
+	_stations.append(st)
+	return st
+
+
+## Nearest still-alive station within `max_dist` of a world point, or null.
+func nearest_station(world_pos: Vector3, max_dist: float) -> Station:
+	_stations = _stations.filter(func(s): return is_instance_valid(s))
+	var best: Station = null
+	var best_d := max_dist * max_dist
+	for s in _stations:
+		var d: float = (s.global_position - world_pos).length_squared()
+		if d < best_d:
+			best_d = d
+			best = s
+	return best
 
 
 ## Nearest still-alive ship to a world point, or null.

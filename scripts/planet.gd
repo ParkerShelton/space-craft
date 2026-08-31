@@ -562,6 +562,21 @@ func _chunk_possibly_solid(cc: Vector3i) -> bool:
 
 # --- editing ------------------------------------------------------------------
 
+## This planet's take on an ore's material properties: the ore's base profile with
+## a small deterministic per-planet +/- variance, so "Copper is always Copper" yet
+## each world's copper reads a little differently. Values are ints 1..100.
+func ore_props(ore_id: int) -> Dictionary:
+	var base := Blocks.base_props(ore_id)
+	var out := {}
+	var i := 0
+	for k in Blocks.PROP_KEYS:
+		# 0.85..1.15 factor keyed off (planet seed, ore, property)
+		var f := 0.85 + 0.30 * _hash01(Vector3i(ore_id, i, 7), ore_id * 31 + i)
+		out[k] = clampi(int(round(float(base.get(k, 0)) * f)), 1, 100)
+		i += 1
+	return out
+
+
 ## Replace all player edits (used by the save system). Any chunks already loaded
 ## are queued for an async re-mesh so they reflect the loaded edits.
 func load_edits(e: Dictionary) -> void:

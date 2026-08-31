@@ -23,6 +23,8 @@ const MOUSE_SENS := 0.0025
 const ALIGN_SPEED := 2.5          # how fast we stand upright when captured (lower = smoother)
 const FLIGHT_THRESHOLD := 3.0     # gravity (m/s^2) below which we float
 const REACH := 6.0                # block interaction distance
+const BARE_MINE_MULT := 2.5       # bare-hand mining is slow; a drill divides this
+var mine_power := 1.0             # >1 once you craft a drill (Phase 2)
 
 var world: WorldManager           # set by main.gd
 var grounded := false
@@ -31,7 +33,9 @@ var grounded := false
 const SLOTS := 32
 const HOTBAR_SLOTS := 8
 const STACK_MAX := 99
-var inv: Array = []               # each slot: {"id": int, "count": int}
+# each slot: {"id": int, "count": int, "props": Dictionary, "src": String}
+# props/src are set for refined materials & crafted gear; plain blocks leave them empty.
+var inv: Array = []
 var active_slot := 0              # which slot we place from
 var inv_open := false
 # mining (hold left-click to break; harder blocks take longer)
@@ -69,6 +73,14 @@ var _toast_time := 0.0
 var _inv_panel: Control            # full inventory overlay (toggled with E)
 var _hotbar_cells: Array = []      # always-visible hotbar slot views
 var _grid_cells: Array = []        # full-inventory slot buttons
+
+# --- crafting stations ---
+var _station_open: Station = null  # non-null while a station panel is open
+var _station_panel: Panel
+var _station_title: Label
+var _station_cells: Array = []     # station internal-storage slot views
+var _pinv_cells: Array = []        # player-inventory slot views inside the station panel
+var _refine_btn: Button
 var _markers: Array[Label] = []   # one navigation marker per planet
 
 
@@ -109,7 +121,7 @@ func _ready() -> void:
 func _init_inventory() -> void:
 	inv.clear()
 	for i in SLOTS:
-		inv.append({"id": Blocks.AIR, "count": 0})
+		inv.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": ""})
 	# starting kit so you can build a ship and terraform right away
 	_add_item(Blocks.COCKPIT, 2)
 	_add_item(Blocks.THRUSTER, 8)
@@ -121,12 +133,13 @@ func _init_inventory() -> void:
 	_add_item(Blocks.LEAF_0, 32)
 
 
-# Add n of a block; fills existing stacks first, then empty slots. Returns leftover.
-func _add_item(id: int, n: int) -> int:
+# Add n of an item; fills matching stacks first, then empty slots. Returns leftover.
+# Items with different props/src (e.g. copper from different planets) don't stack.
+func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "") -> int:
 	if id == Blocks.AIR or n <= 0:
 		return n
 	for s in inv:
-		if s["id"] == id and s["count"] < STACK_MAX:
+		if s["id"] == id and s.get("src", "") == src and s["count"] > 0 and s["count"] < STACK_MAX:
 			var add: int = mini(n, STACK_MAX - s["count"])
 			s["count"] += add
 			n -= add
@@ -135,12 +148,35 @@ func _add_item(id: int, n: int) -> int:
 	for s in inv:
 		if s["count"] == 0:
 			s["id"] = id
+			s["props"] = props
+			s["src"] = src
 			var add: int = mini(n, STACK_MAX)
 			s["count"] = add
 			n -= add
 			if n <= 0:
 				return 0
 	return n  # inventory full; leftover dropped
+
+
+func _count_item(id: int) -> int:
+	var total := 0
+	for s in inv:
+		if s["id"] == id:
+			total += s["count"]
+	return total
+
+
+func _remove_item(id: int, n: int) -> int:
+	for s in inv:
+		if s["id"] == id and s["count"] > 0:
+			var take: int = mini(n, s["count"])
+			s["count"] -= take
+			n -= take
+			if s["count"] == 0:
+				s["id"] = Blocks.AIR
+			if n <= 0:
+				break
+	return n
 
 
 func _selected_id() -> int:
@@ -160,8 +196,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_look += event.relative
 	elif event is InputEventMouseButton and event.pressed:
-		if inv_open:
-			return  # inventory open: clicks go to the UI
+		if inv_open or _station_open != null:
+			return  # a panel is open: clicks go to the UI
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 			return
@@ -175,7 +211,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cycle_slot(1)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			if inv_open:
+			if _station_open != null:
+				_close_station()
+			elif inv_open:
 				_toggle_inventory()
 			else:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -194,7 +232,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			else:
 				_toast("No save found")
 		elif event.keycode == KEY_E:
-			_toggle_inventory()
+			if _station_open != null:
+				_close_station()
+			elif inv_open:
+				_toggle_inventory()
+			else:
+				var st := _looked_at_station()
+				if st != null and piloting == null and aboard == null and not eva:
+					_open_station(st)
+				else:
+					_toggle_inventory()
+		elif _station_open != null:
+			return  # a station panel is open: swallow other keys
 		elif event.keycode == KEY_F:
 			_toggle_pilot()
 		elif event.keycode == KEY_T:
@@ -691,6 +740,12 @@ func _edit_block(_break_it: bool) -> void:
 	var place_id := _selected_id()
 	if place_id == Blocks.AIR:
 		return  # nothing selected / none left in this slot
+	if Blocks.is_station(place_id):
+		_place_station(place_id)
+		return
+	if not Blocks.is_placeable_block(place_id):
+		_toast("Can't place that — use a station")
+		return
 	_ray.force_raycast_update()
 	if not _ray.is_colliding():
 		return
@@ -711,6 +766,32 @@ func _edit_block(_break_it: bool) -> void:
 		if ship.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
 			ship.set_block(v, place_id)
 			_consume_active()
+
+
+## Place a crafting station in the empty cell you're aiming at (planet surface only
+## for now), flat to the ground, and consume it from the active slot.
+func _place_station(id: int) -> void:
+	if world == null:
+		return
+	_ray.force_raycast_update()
+	if not _ray.is_colliding():
+		return
+	var collider := _ray.get_collider()
+	if not (collider is Chunk):
+		_toast("Place stations on the ground")
+		return
+	var planet: Planet = (collider as Chunk).planet
+	var point := _ray.get_collision_point()
+	var normal := _ray.get_collision_normal()
+	var v := planet.world_to_voxel(point + normal * 0.5)  # the empty neighbor cell
+	var corner := planet.to_global(Vector3(v))
+	if corner.distance_to(global_position) < 1.1:
+		return  # don't place inside yourself
+	var g := world.gravity_at(corner)
+	var up := (-g).normalized() if g.length() > 0.01 else normal
+	world.spawn_station(id, corner, up, -global_transform.basis.z)
+	_consume_active()
+	_toast(Blocks.name_of(id) + " placed")
 
 
 # Hold left-click to break the targeted block; harder blocks take longer. Broken
@@ -763,15 +844,20 @@ func _process_mining(delta: float) -> void:
 	if key != _mine_key:
 		_mine_key = key
 		_mine_time = 0.0
-		_mine_total = Blocks.hardness(id)
+		_mine_total = Blocks.hardness(id) * BARE_MINE_MULT / mine_power
 	_mine_time += delta
 	if _mine_time >= _mine_total:
 		if planet != null:
 			planet.set_block(v, Blocks.AIR)
 			planet.flow_water(v)  # let adjacent water pour into the gap
+			# ore carries this planet's material properties (hidden until smelted)
+			if Blocks.is_ore(id):
+				_add_item(id, 1, planet.ore_props(id), planet.planet_name)
+			else:
+				_add_item(id, 1)
 		elif ship != null:
 			ship.set_block(v, Blocks.AIR)
-		_add_item(id, 1)
+			_add_item(id, 1)
 		_refresh_slots()
 		_mine_key = ""
 		_mine_time = 0.0
@@ -896,12 +982,13 @@ func _build_ui() -> void:
 	layer.add_child(_target_label)
 
 	_build_inventory_ui(layer)
+	_build_station_ui(layer)
 
 	var help := Label.new()
 	help.position = Vector2(16, 108)
 	help.text = "WASD move  |  Mouse look  |  Space up  |  Shift down  |  R-click place  |  Hold L-click mine\n" \
-		+ "1-8 slot  |  Scroll = slot  |  E inventory  |  G ship  |  F cockpit  |  T EVA  |  Q/E roll  |  Esc\n" \
-		+ "F5 save  |  F9 load  |  Build Cockpit + Thruster + hull, F to fly, hold Space to lift off. Aboard: F/T"
+		+ "1-8 slot  |  Scroll = slot  |  E inventory (or open station you're facing)  |  G ship  |  F cockpit  |  T EVA  |  Esc\n" \
+		+ "F5 save  |  F9 load  |  Craft a Smelter (E), place it, then refine mined ore to reveal its material stats"
 	help.modulate = Color(1, 1, 1, 0.55)
 	layer.add_child(help)
 
@@ -936,12 +1023,12 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	hb.position = Vector2(-8 * 32, -76)
 	layer.add_child(hb)
 	for i in HOTBAR_SLOTS:
-		_hotbar_cells.append(_make_slot(hb, i, false))
+		_hotbar_cells.append(_make_slot(hb, i, "none"))
 
 	# full inventory overlay (E)
 	_inv_panel = Panel.new()
 	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_inv_panel.custom_minimum_size = Vector2(8 * 60 + 24, 4 * 60 + 48)
+	_inv_panel.custom_minimum_size = Vector2(8 * 60 + 24, 4 * 60 + 84)
 	_inv_panel.size = _inv_panel.custom_minimum_size
 	_inv_panel.position = -_inv_panel.size * 0.5
 	_inv_panel.visible = false
@@ -957,20 +1044,26 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	grid.position = Vector2(12, 36)
 	_inv_panel.add_child(grid)
 	for i in SLOTS:
-		_grid_cells.append(_make_slot(grid, i, true))
+		_grid_cells.append(_make_slot(grid, i, "select"))
+	# bootstrap hand-craft (the only station you can make with no station)
+	var craft := Button.new()
+	craft.text = "Craft Smelter (15 Rock)"
+	craft.position = Vector2(12, 36 + 4 * 60 + 8)
+	craft.pressed.connect(_craft_smelter)
+	_inv_panel.add_child(craft)
 
 
-# One slot cell: colored square + count. `clickable` grid cells select the slot.
-func _make_slot(parent: Node, index: int, clickable: bool) -> Dictionary:
+# One slot cell: colored square + count. `mode` sets the click behavior:
+# "none" = display only, "select" = pick active slot, "to_station"/"from_station"
+# = move the stack between inventory and the open station.
+func _make_slot(parent: Node, index: int, mode: String) -> Dictionary:
 	var root: Control
-	if clickable:
-		var b := Button.new()
-		b.pressed.connect(func():
-			active_slot = index
-			_refresh_slots())
-		root = b
-	else:
+	if mode == "none":
 		root = Panel.new()
+	else:
+		var b := Button.new()
+		b.pressed.connect(_on_slot_pressed.bind(index, mode))
+		root = b
 	root.custom_minimum_size = Vector2(56, 56)
 	parent.add_child(root)
 	var swatch := ColorRect.new()
@@ -987,26 +1080,202 @@ func _make_slot(parent: Node, index: int, clickable: bool) -> Dictionary:
 	return {"root": root, "swatch": swatch, "count": count}
 
 
+func _on_slot_pressed(index: int, mode: String) -> void:
+	match mode:
+		"select":
+			active_slot = index
+			_refresh_slots()
+		"to_station":
+			_move_inv_to_station(index)
+		"from_station":
+			_move_station_to_inv(index)
+
+
 func _refresh_slots() -> void:
 	active_slot = clampi(active_slot, 0, SLOTS - 1)
 	for i in _hotbar_cells.size():
-		_paint_slot(_hotbar_cells[i], i)
+		_paint_cell(_hotbar_cells[i], inv[i], i == active_slot)
 	for i in _grid_cells.size():
-		_paint_slot(_grid_cells[i], i)
+		_paint_cell(_grid_cells[i], inv[i], i == active_slot)
 
 
-func _paint_slot(cell: Dictionary, index: int) -> void:
-	var s = inv[index]
+# Paint any slot cell from a slot dict. `highlight` toggles the active-slot glow.
+func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 	var swatch: ColorRect = cell["swatch"]
 	var count: Label = cell["count"]
-	if s["count"] > 0:
-		swatch.color = Blocks.color_of(s["id"])
-		count.text = str(s["count"])
+	if slot["count"] > 0:
+		swatch.color = Blocks.color_of(slot["id"])
+		count.text = str(slot["count"])
+		cell["root"].tooltip_text = _item_tooltip(slot)
 	else:
 		swatch.color = Color(0.15, 0.15, 0.18, 0.6)
 		count.text = ""
-	# highlight the active slot
-	cell["root"].modulate = Color(1.4, 1.4, 0.7) if index == active_slot else Color(1, 1, 1)
+		cell["root"].tooltip_text = ""
+	cell["root"].modulate = Color(1.4, 1.4, 0.7) if highlight else Color(1, 1, 1)
+
+
+# Hover text: name (+ source planet), and property bars once identified.
+func _item_tooltip(slot: Dictionary) -> String:
+	var id: int = slot["id"]
+	var name := Blocks.name_of(id)
+	var src: String = slot.get("src", "")
+	if src != "":
+		name += "  ·  " + src
+	if Blocks.is_ore(id):
+		return name + "\nUnidentified ore — smelt to reveal properties"
+	var props: Dictionary = slot.get("props", {})
+	if props.is_empty():
+		var use := Blocks.use_of(id)
+		return name + ("\n" + use if use != "" else "")
+	var lines := [name]
+	for k in Blocks.PROP_KEYS:
+		lines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(props.get(k, 0))])
+	return "\n".join(lines)
+
+
+func _craft_smelter() -> void:
+	var cost: int = Blocks.HAND_CRAFT[Blocks.SMELTER][Blocks.ROCK]
+	if _count_item(Blocks.ROCK) < cost:
+		_toast("Need %d Rock" % cost)
+		return
+	_remove_item(Blocks.ROCK, cost)
+	_add_item(Blocks.SMELTER, 1)
+	_toast("Crafted Smelter")
+	_refresh_slots()
+
+
+# --- crafting stations --------------------------------------------------------
+
+func _build_station_ui(layer: CanvasLayer) -> void:
+	var cols := Station.STORAGE_SLOTS
+	_station_panel = Panel.new()
+	_station_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_station_panel.custom_minimum_size = Vector2(cols * 60 + 24, 188 + 4 * 60 + 16)
+	_station_panel.size = _station_panel.custom_minimum_size
+	_station_panel.position = -_station_panel.size * 0.5
+	_station_panel.visible = false
+	layer.add_child(_station_panel)
+
+	_station_title = Label.new()
+	_station_title.position = Vector2(14, 8)
+	_station_panel.add_child(_station_title)
+
+	var mlabel := Label.new()
+	mlabel.text = "Machine  (click to take)"
+	mlabel.modulate = Color(1, 1, 1, 0.7)
+	mlabel.position = Vector2(14, 32)
+	_station_panel.add_child(mlabel)
+
+	var sgrid := GridContainer.new()
+	sgrid.columns = cols
+	sgrid.add_theme_constant_override("h_separation", 4)
+	sgrid.add_theme_constant_override("v_separation", 4)
+	sgrid.position = Vector2(12, 56)
+	_station_panel.add_child(sgrid)
+	for i in cols:
+		_station_cells.append(_make_slot(sgrid, i, "from_station"))
+
+	_refine_btn = Button.new()
+	_refine_btn.text = "Refine"
+	_refine_btn.position = Vector2(12, 124)
+	_refine_btn.custom_minimum_size = Vector2(120, 32)
+	_refine_btn.pressed.connect(_on_refine)
+	_station_panel.add_child(_refine_btn)
+
+	var ilabel := Label.new()
+	ilabel.text = "Your inventory  (click to add)"
+	ilabel.modulate = Color(1, 1, 1, 0.7)
+	ilabel.position = Vector2(14, 164)
+	_station_panel.add_child(ilabel)
+
+	var pgrid := GridContainer.new()
+	pgrid.columns = HOTBAR_SLOTS
+	pgrid.add_theme_constant_override("h_separation", 4)
+	pgrid.add_theme_constant_override("v_separation", 4)
+	pgrid.position = Vector2(12, 188)
+	_station_panel.add_child(pgrid)
+	for i in SLOTS:
+		_pinv_cells.append(_make_slot(pgrid, i, "to_station"))
+
+
+func _looked_at_station() -> Station:
+	_ray.force_raycast_update()
+	if not _ray.is_colliding():
+		return null
+	var c := _ray.get_collider()
+	return c as Station if c is Station else null
+
+
+func _open_station(st: Station) -> void:
+	_station_open = st
+	if inv_open:
+		_toggle_inventory()
+	_station_title.text = st.title()
+	_refine_btn.visible = (st.kind == Blocks.SMELTER)  # only the smelter refines (Phase 1)
+	_station_panel.visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_refresh_station_ui()
+
+
+func _close_station() -> void:
+	_station_open = null
+	if _station_panel != null:
+		_station_panel.visible = false
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _refresh_station_ui() -> void:
+	if _station_open == null:
+		return
+	for i in _station_cells.size():
+		_paint_cell(_station_cells[i], _station_open.storage[i], false)
+	for i in _pinv_cells.size():
+		_paint_cell(_pinv_cells[i], inv[i], false)
+
+
+func _move_inv_to_station(index: int) -> void:
+	if _station_open == null:
+		return
+	var s = inv[index]
+	if s["count"] <= 0:
+		return
+	if _station_open.kind == Blocks.SMELTER and not Blocks.is_ore(s["id"]):
+		_toast("Smelter takes raw ore")
+		return
+	var left: int = _station_open.store_add(s["id"], s["count"], s.get("props", {}), s.get("src", ""))
+	if left == s["count"]:
+		_toast("Machine is full")
+		return
+	s["count"] = left
+	if s["count"] <= 0:
+		s["id"] = Blocks.AIR
+	_refresh_station_ui()
+	_refresh_slots()
+
+
+func _move_station_to_inv(index: int) -> void:
+	if _station_open == null:
+		return
+	var s = _station_open.storage[index]
+	if s["count"] <= 0:
+		return
+	var left: int = _add_item(s["id"], s["count"], s.get("props", {}), s.get("src", ""))
+	if left == s["count"]:
+		_toast("Inventory full")
+		return
+	s["count"] = left
+	if s["count"] <= 0:
+		s["id"] = Blocks.AIR
+	_refresh_station_ui()
+	_refresh_slots()
+
+
+func _on_refine() -> void:
+	if _station_open == null:
+		return
+	var n := _station_open.refine_all()
+	_toast("Refined %d material%s" % [n, "" if n == 1 else "s"] if n > 0 else "Add raw ore to refine")
+	_refresh_station_ui()
 
 
 func _update_ui() -> void:
