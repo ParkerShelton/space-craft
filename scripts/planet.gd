@@ -35,6 +35,10 @@ var has_atmosphere := false
 var atmo_color := Color(0.45, 0.68, 1.0)
 var atmo_height := 90.0  # how far above the surface the sky fades to space
 
+# --- environmental hazard (survival) ---
+var hazard := "none"     # "none" / "cold" / "heat"
+var hazard_dps := 0.0    # health/sec when exposed on the surface without protection
+
 # --- flora (derived from seed in configure) ---
 const TREE_CELL := 7          # avg spacing grid for tree placement
 var tree_density := 0.0       # 0 = desert (no trees), up to ~0.6 = dense forest
@@ -93,6 +97,8 @@ func configure(cfg: Dictionary) -> void:
 	has_atmosphere = cfg.get("atmosphere", false)
 	atmo_color = cfg.get("atmo_color", atmo_color)
 	atmo_height = cfg.get("atmo_height", atmo_height)
+	hazard = cfg.get("hazard", "none")
+	hazard_dps = cfg.get("hazard_dps", 0.0)
 	shape_cube = cfg.get("cube", true)  # cube-planet-test branch: cubes by default
 
 	surface_noise.seed = _seed

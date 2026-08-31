@@ -83,6 +83,7 @@ var _toast_label: Label            # transient "Saved"/"Loaded" confirmation
 var _toast_time := 0.0
 var _hp_fill: ColorRect            # health bar fill
 var _o2_fill: ColorRect            # oxygen bar fill
+var _hazard_label: Label           # "FREEZING"/"OVERHEATING" warning
 var _inv_panel: Control            # full inventory overlay (toggled with E)
 var _hotbar_cells: Array = []      # always-visible hotbar slot views
 var _grid_cells: Array = []        # full-inventory slot buttons
@@ -139,6 +140,7 @@ func _ready() -> void:
 	# wireframe outline that hugs the block under the crosshair
 	_outline = MeshInstance3D.new()
 	_outline.mesh = _make_outline_mesh()
+	_outline.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF  # don't shadow the block
 	var om := StandardMaterial3D.new()
 	om.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	om.albedo_color = Color(0, 0, 0, 0.9)
@@ -715,17 +717,45 @@ func _has_air() -> bool:
 	return p != null and p.has_atmosphere and p.altitude(global_position) < p.atmo_height
 
 
+const HAZARD_RANGE := 300.0   # exposed to a planet's hazard when within this altitude
+
+# Damage/sec from the current planet's climate when unprotected (0 if none, in
+# space, or sheltered in a ship). Phase 3 gear will reduce this.
+func _hazard_dps() -> float:
+	if aboard != null or piloting != null or world == null:
+		return 0.0
+	var p := world.nearest_planet(global_position)
+	if p == null or p.hazard_dps <= 0.0:
+		return 0.0
+	if p.altitude(global_position) > HAZARD_RANGE:
+		return 0.0
+	return p.hazard_dps
+
+
+func _current_hazard() -> String:
+	if aboard != null or piloting != null or world == null:
+		return ""
+	var p := world.nearest_planet(global_position)
+	if p == null or p.hazard_dps <= 0.0 or p.altitude(global_position) > HAZARD_RANGE:
+		return ""
+	return p.hazard
+
+
 func _process_survival(delta: float) -> void:
-	if _has_air():
+	var air := _has_air()
+	var hz := _hazard_dps()
+	if air:
 		oxygen = minf(oxygen + O2_REFILL * delta, MAX_OXYGEN)
-		if health < MAX_HEALTH:
-			health = minf(health + HEALTH_REGEN * delta, MAX_HEALTH)
 	else:
 		oxygen = maxf(oxygen - O2_DRAIN * delta, 0.0)
-		if oxygen <= 0.0:
-			health = maxf(health - SUFFOCATE_DMG * delta, 0.0)
-			if health <= 0.0:
-				_respawn()
+	if oxygen <= 0.0:
+		health = maxf(health - SUFFOCATE_DMG * delta, 0.0)
+	if hz > 0.0:
+		health = maxf(health - hz * delta, 0.0)
+	elif air and oxygen > 0.0 and health < MAX_HEALTH:
+		health = minf(health + HEALTH_REGEN * delta, MAX_HEALTH)
+	if health <= 0.0:
+		_respawn()
 	_update_survival_ui()
 
 
@@ -1191,6 +1221,11 @@ func _build_ui() -> void:
 	# survival bars (top-left, below the status labels)
 	_hp_fill = _make_bar(layer, 104, Color(0.85, 0.25, 0.25), "HP")
 	_o2_fill = _make_bar(layer, 126, Color(0.30, 0.62, 0.95), "O2")
+	_hazard_label = Label.new()
+	_hazard_label.position = Vector2(16, 148)
+	_hazard_label.add_theme_font_size_override("font_size", 15)
+	_hazard_label.visible = false
+	layer.add_child(_hazard_label)
 
 	_update_ui()
 	_update_survival_ui()
@@ -1222,6 +1257,18 @@ func _update_survival_ui() -> void:
 		_hp_fill.color = Color(0.85, 0.25, 0.25) if health > MAX_HEALTH * 0.3 else Color(1.0, 0.35, 0.2)
 	if _o2_fill != null:
 		_o2_fill.size.x = 176.0 * clampf(oxygen / MAX_OXYGEN, 0.0, 1.0)
+	if _hazard_label != null:
+		var hz := _current_hazard()
+		if hz == "cold":
+			_hazard_label.text = "FREEZING — reach shelter"
+			_hazard_label.modulate = Color(0.6, 0.85, 1.0)
+			_hazard_label.visible = true
+		elif hz == "heat":
+			_hazard_label.text = "OVERHEATING — reach shelter"
+			_hazard_label.modulate = Color(1.0, 0.6, 0.35)
+			_hazard_label.visible = true
+		else:
+			_hazard_label.visible = false
 
 
 func _toast(msg: String) -> void:
