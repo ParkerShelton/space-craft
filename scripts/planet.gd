@@ -461,7 +461,21 @@ func process_load_queue(_budget: int) -> int:
 			node.apply_mesh_data(data)
 		applied += 1
 
-	# 2) dispatch new build tasks up to the concurrency cap
+	# 2) re-mesh dirty (edited / flowed) chunks FIRST -- player edits and flowing
+	# water must update promptly, not wait behind chunk streaming
+	for cc in _dirty.keys():
+		if _inflight.size() >= MAX_INFLIGHT:
+			break
+		if _inflight.has(cc):
+			continue  # already meshing; stays dirty and re-dispatches next frame
+		_dirty.erase(cc)
+		if not loaded_chunks.has(cc):
+			continue
+		var s := _edits_snapshot(cc)
+		var t := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, s, _wlev_snapshot(s)))
+		_inflight[cc] = t
+
+	# 3) dispatch new chunk loads with whatever capacity remains
 	while _inflight.size() < MAX_INFLIGHT and not _load_queue.is_empty():
 		var cc: Vector3i = _load_queue.pop_front()
 		if loaded_chunks.has(cc):
@@ -470,20 +484,6 @@ func process_load_queue(_budget: int) -> int:
 		var snap := _edits_snapshot(cc)
 		var tid := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, snap, _wlev_snapshot(snap)))
 		_inflight[cc] = tid
-
-	# 3) re-mesh dirty (edited / flowed) chunks on worker threads too, so edits and
-	# flowing water never block the main thread
-	for cc in _dirty.keys():
-		if _inflight.size() >= MAX_INFLIGHT:
-			break
-		if _inflight.has(cc):
-			continue  # already meshing; it stays dirty and re-dispatches next frame
-		_dirty.erase(cc)
-		if not loaded_chunks.has(cc):
-			continue
-		var s := _edits_snapshot(cc)
-		var t := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, s, _wlev_snapshot(s)))
-		_inflight[cc] = t
 	return applied
 
 

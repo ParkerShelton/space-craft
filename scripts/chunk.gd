@@ -13,6 +13,7 @@ var cc: Vector3i  # chunk coordinate (in chunk units)
 
 var _mesh_instance: MeshInstance3D
 var _collision: CollisionShape3D
+var _collision_sig := 0  # hash of the opaque verts the current shape was cooked from
 
 static var _material: StandardMaterial3D
 
@@ -62,6 +63,7 @@ func apply_mesh_data(data: Dictionary) -> void:
 	if verts.is_empty() and wverts.is_empty():
 		_mesh_instance.mesh = null
 		_collision.shape = null
+		_collision_sig = 0
 		return
 
 	var m := ArrayMesh.new()
@@ -84,14 +86,20 @@ func apply_mesh_data(data: Dictionary) -> void:
 	_mesh_instance.mesh = m
 	_mesh_instance.material_override = null
 
-	# collision uses only the opaque geometry -- you pass through water
+	# Collision uses only the opaque geometry -- you pass through water. Cooking a
+	# ConcavePolygonShape3D is expensive, so skip it when the solid geometry is
+	# unchanged (e.g. a water-only remesh while a nearby lake is flowing).
 	if verts.is_empty():
 		_collision.shape = null
+		_collision_sig = 0
 	else:
-		var shape := ConcavePolygonShape3D.new()
-		shape.backface_collision = true
-		shape.set_faces(verts)
-		_collision.shape = shape
+		var sig := hash(verts)
+		if sig != _collision_sig or _collision.shape == null:
+			var shape := ConcavePolygonShape3D.new()
+			shape.backface_collision = true
+			shape.set_faces(verts)
+			_collision.shape = shape
+			_collision_sig = sig
 
 
 # --- background thread: pure greedy mesher ------------------------------------
