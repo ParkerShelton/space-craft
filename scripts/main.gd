@@ -36,38 +36,119 @@ var _env: Environment
 var _sky_mat: ShaderMaterial
 var _sun: DirectionalLight3D
 var _atmo := 0.0
+var _menu_layer: CanvasLayer
+var _menu_vb: VBoxContainer
 
 func _notification(what: int) -> void:
 	# Autosave when the window is closed (X button, Alt+F4, etc.). Never in a
 	# headless run -- that would let test/CI runs clobber the real save.
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
-		if _world != null and DisplayServer.get_name() != "headless":
+		# only autosave once a world has actually started (not from the menu), and
+		# never headless
+		if _world != null and _world.player != null and DisplayServer.get_name() != "headless":
 			_world.save_game()
 		get_tree().quit()
 
 
 func _ready() -> void:
+	get_tree().set_auto_accept_quit(false)  # route window-close through _notification
 	_setup_environment()
-
 	var world := WorldManager.new()
 	world.name = "World"
 	add_child(world)
 	_world = world
+	_build_menu()
 
-	# --- planets: procedurally generated. The world seed is saved so the same
-	# planets regenerate on reload; a brand-new world gets a fresh random seed.
-	# A save without a world seed is from an older, incompatible format -- ignore
-	# it (start fresh) rather than dropping the old ship/player onto a new world.
-	var wseed := world.saved_world_seed()
-	var save_compatible := wseed >= 0
-	if not save_compatible:
-		var r := RandomNumberGenerator.new()
-		r.randomize()
-		wseed = int(r.randi() & 0x7fffffff)
+
+# --- main menu ----------------------------------------------------------------
+
+func _build_menu() -> void:
+	_menu_layer = CanvasLayer.new()
+	_menu_layer.layer = 10
+	add_child(_menu_layer)
+	var bg := ColorRect.new()
+	bg.color = Color(0.03, 0.04, 0.08, 1.0)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_menu_layer.add_child(bg)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_menu_layer.add_child(center)
+	_menu_vb = VBoxContainer.new()
+	_menu_vb.add_theme_constant_override("separation", 14)
+	_menu_vb.alignment = BoxContainer.ALIGNMENT_CENTER
+	center.add_child(_menu_vb)
+	_menu_populate(false)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _menu_button(text: String, cb: Callable) -> void:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(280, 44)
+	b.pressed.connect(cb)
+	_menu_vb.add_child(b)
+
+
+func _menu_label(text: String, size: int, alpha := 1.0) -> void:
+	var l := Label.new()
+	l.text = text
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.add_theme_font_size_override("font_size", size)
+	l.modulate = Color(1, 1, 1, alpha)
+	_menu_vb.add_child(l)
+
+
+func _menu_populate(confirm_delete: bool) -> void:
+	for c in _menu_vb.get_children():
+		c.queue_free()
+	if confirm_delete:
+		_menu_label("Delete your current world", 26)
+		_menu_label("and start a new one?", 26)
+		_menu_label(" ", 8)
+		_menu_button("Yes, start new world", func():
+			_delete_save()
+			_start_world(false))
+		_menu_button("Cancel", func(): _menu_populate(false))
+		return
+	_menu_label("SPACECRAFT", 52)
+	_menu_label("a voxel game in space", 18, 0.55)
+	_menu_label(" ", 14)
+	var has_world: bool = _world.saved_world_seed() >= 0
+	if has_world:
+		_menu_button("Continue", func(): _start_world(true))
+	if _world.has_save():
+		_menu_button("New World", func(): _menu_populate(true))
+	else:
+		_menu_button("New World", func(): _start_world(false))
+	_menu_button("Quit", func(): get_tree().quit())
+
+
+func _delete_save() -> void:
+	DirAccess.remove_absolute(WorldManager.SAVE_PATH)
+	DirAccess.remove_absolute(WorldManager.SAVE_BAK)
+
+
+func _rand_seed() -> int:
+	var r := RandomNumberGenerator.new()
+	r.randomize()
+	return int(r.randi() & 0x7fffffff)
+
+
+# --- start the actual world (from Continue or New World) -----------------------
+
+func _start_world(load_existing: bool) -> void:
+	if _menu_layer != null:
+		_menu_layer.queue_free()
+		_menu_layer = null
+
+	var world := _world
+	var wseed := world.saved_world_seed() if load_existing else _rand_seed()
+	if wseed < 0:
+		wseed = _rand_seed()
 	world.world_seed = wseed
 	_generate_planets(world, wseed)
 
-	# --- player: drop in just above dry land on the home world ----------------
+	# player: drop in just above dry land on the home world
 	var home: Planet = world.planets[0]
 	var player := Player.new()
 	player.name = "Player"
@@ -76,18 +157,14 @@ func _ready() -> void:
 	add_child(player)
 	world.player = player
 
-	# Restore a compatible save (moves the player, restores inventory, planet edits,
-	# ships & stations). Incompatible/older saves are ignored and get overwritten
-	# on the next save.
-	if save_compatible:
+	if load_existing:
 		world.load_game()
 
 	# Don't let the OS close the window until we've flushed a save.
 	get_tree().set_auto_accept_quit(false)
 
 	# Build a small stack of chunks under the (possibly loaded) player position
-	# synchronously so the player lands on solid ground instead of falling while
-	# workers catch up.
+	# so the player lands on solid ground instead of falling while workers catch up.
 	var ground: Planet = world.nearest_planet(player.global_position)
 	if ground == null:
 		ground = home
