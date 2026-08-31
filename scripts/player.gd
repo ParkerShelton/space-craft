@@ -80,6 +80,7 @@ var _station_panel: Panel
 var _station_title: Label
 var _station_cells: Array = []     # station internal-storage slot views
 var _pinv_cells: Array = []        # player-inventory slot views inside the station panel
+var _station_store_label: Label    # "<station> contents" header above its storage
 var _refine_btn: Button            # Smelter action
 var _craft_btn: Button             # Fabricator action (Craft Drill)
 var _preview_label: Label          # Fabricator: live drill-stat preview
@@ -208,7 +209,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		if piloting:
 			return  # no building while flying
 		if event.button_index == MOUSE_BUTTON_RIGHT:
-			_edit_block(false)  # placing is instant; breaking is hold-to-mine
+			# right-click a station to open its own menu; otherwise place a block
+			var st := _looked_at_station()
+			if st != null and not eva:
+				_open_station(st)
+			else:
+				_edit_block(false)  # placing is instant; breaking is hold-to-mine
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
 			_cycle_slot(-1)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
@@ -238,14 +244,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode == KEY_E:
 			if _station_open != null:
 				_close_station()
-			elif inv_open:
-				_toggle_inventory()
 			else:
-				var st := _looked_at_station()
-				if st != null and piloting == null and aboard == null and not eva:
-					_open_station(st)
-				else:
-					_toggle_inventory()
+				_toggle_inventory()
 		elif _station_open != null:
 			return  # a station panel is open: swallow other keys
 		elif event.keycode == KEY_F:
@@ -1017,7 +1017,7 @@ func _build_ui() -> void:
 	var help := Label.new()
 	help.position = Vector2(16, 108)
 	help.text = "WASD move  |  Mouse look  |  Space up  |  Shift down  |  R-click place  |  Hold L-click mine\n" \
-		+ "1-8 slot  |  Scroll = slot  |  E inventory (or open station you're facing)  |  G ship  |  F cockpit  |  T EVA  |  Esc\n" \
+		+ "1-8 slot  |  Scroll = slot  |  E inventory  |  R-click a station to use it  |  G ship  |  F cockpit  |  T EVA  |  Esc\n" \
 		+ "F5 save  |  F9 load  |  Build Smelter->refine ore->build Fabricator->craft a Drill to mine higher-tier ores"
 	help.modulate = Color(1, 1, 1, 0.55)
 	layer.add_child(help)
@@ -1273,11 +1273,11 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	_station_title.position = Vector2(14, 8)
 	_station_panel.add_child(_station_title)
 
-	var mlabel := Label.new()
-	mlabel.text = "Machine  (click to take)"
-	mlabel.modulate = Color(1, 1, 1, 0.7)
-	mlabel.position = Vector2(14, 32)
-	_station_panel.add_child(mlabel)
+	_station_store_label = Label.new()
+	_station_store_label.text = "Contents  (click to take)"
+	_station_store_label.modulate = Color(1, 1, 1, 0.7)
+	_station_store_label.position = Vector2(14, 32)
+	_station_panel.add_child(_station_store_label)
 
 	var sgrid := GridContainer.new()
 	sgrid.columns = cols
@@ -1336,6 +1336,7 @@ func _open_station(st: Station) -> void:
 	if inv_open:
 		_toggle_inventory()
 	_station_title.text = st.title()
+	_station_store_label.text = "%s contents  (click to take)" % st.title()
 	_refine_btn.visible = (st.kind == Blocks.SMELTER)
 	_craft_btn.visible = (st.kind == Blocks.FABRICATOR)
 	_preview_label.visible = (st.kind == Blocks.FABRICATOR)
