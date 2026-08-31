@@ -104,6 +104,8 @@ const TOOL_IDS := [DRILL, O2_TANK, SUIT]
 
 const LIFE_SUPPORT := 53     # ship block: with a sealed interior it makes the ship habitable
 const GLASS := 54            # transparent, solid hull -- windows that still seal a cabin
+const DOOR := 57             # closed door: solid, seals, collides
+const DOOR_OPEN := 58        # open door: passable, does NOT seal (air escapes)
 
 # Hand recipes: things you can assemble from carried materials with no station
 # (the bootstrap chain). Each: {out, n, reqs}. A requirement is {id, n} for a
@@ -131,6 +133,7 @@ const STATION_CRAFTS := {
 		{"label": "Thruster", "out": THRUSTER, "n": 1, "cost": 4},
 		{"label": "Hull Plate x4", "out": METAL, "n": 4, "cost": 2},
 		{"label": "Glass x4", "out": GLASS, "n": 4, "cost": 2},
+		{"label": "Door", "out": DOOR, "n": 1, "cost": 2},
 		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "cost": 6},
 		{"label": "O2 Tank", "out": O2_TANK, "n": 1, "cost": 5},
 		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 5},
@@ -142,7 +145,7 @@ const STATION_CRAFTS := {
 const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	WOOD, WOOD_PALE, WOOD_DARK,
 	16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-	COCKPIT, THRUSTER, LIFE_SUPPORT, GLASS]
+	COCKPIT, THRUSTER, LIFE_SUPPORT, GLASS, DOOR]
 
 const NAMES := {
 	AIR: "Air",
@@ -185,6 +188,8 @@ const NAMES := {
 	CHEST: "Wooden Chest",
 	LIFE_SUPPORT: "Life Support",
 	GLASS: "Glass",
+	DOOR: "Door",
+	DOOR_OPEN: "Open Door",
 	ORE_0: "Ore", ORE_1: "Ore", ORE_2: "Ore", ORE_3: "Ore",
 	REFINED_0: "Refined Material", REFINED_1: "Refined Material",
 	REFINED_2: "Refined Material", REFINED_3: "Refined Material",
@@ -255,6 +260,8 @@ const COLORS := {
 	CHEST: Color(0.45, 0.31, 0.17),
 	LIFE_SUPPORT: Color(0.30, 0.78, 0.68),
 	GLASS: Color(0.62, 0.78, 0.88, 0.30),
+	DOOR: Color(0.55, 0.5, 0.4),
+	DOOR_OPEN: Color(0.55, 0.5, 0.4),
 	# generic fallbacks; real ore colors are planet-defined and travel with the item
 	ORE_0: Color(0.7, 0.6, 0.4), ORE_1: Color(0.6, 0.7, 0.5),
 	ORE_2: Color(0.5, 0.6, 0.7), ORE_3: Color(0.7, 0.5, 0.7),
@@ -288,6 +295,12 @@ static func is_station(id: int) -> bool:
 
 static func is_gear(id: int) -> bool:
 	return id in TOOL_IDS
+
+static func is_door(id: int) -> bool:
+	return id == DOOR or id == DOOR_OPEN
+
+static func door_toggle_of(id: int) -> int:
+	return DOOR_OPEN if id == DOOR else DOOR
 
 # A drill's mining power from the material it's built from: harder + more energetic
 # materials drill faster and reach higher ore tiers. Bare hands are 1.0.

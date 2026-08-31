@@ -12,6 +12,8 @@ var block_meta := {}   # Vector3i -> {h,d,e,r} material stats for crafted blocks
 var _habitable := false  # sealed interior + a Life Support block => safe to breathe inside
 var _sealed := false      # cached: interior has an enclosed air pocket
 var _sealed_cells := {}   # the enclosed interior air cells (local voxel -> true)
+var _bbox_min := Vector3i.ZERO  # cached block bounding box (local voxels)
+var _bbox_max := Vector3i.ZERO
 var flying := false
 var world: WorldManager  # set on spawn; used for gravity while coasting
 var in_gravity := false  # true while in launch/landing-assist mode (HUD)
@@ -172,41 +174,74 @@ func _has_life_support() -> bool:
 	return false
 
 
-# Sealed if some air cell inside the ship's bounding box can't be reached by air
-# flooding in from outside -- i.e. there's an enclosed (airtight) pocket.
+# A cell counts as an airtight wall only if it holds a solid block -- an OPEN door
+# is a gap that air escapes through (so it breaks the seal).
+func _seals(cell: Vector3i) -> bool:
+	return blocks.has(cell) and blocks[cell] != Blocks.DOOR_OPEN
+
+
+# Sealed if some interior cell can't be reached by air flooding in from outside --
+# i.e. there's an enclosed (airtight) pocket. Also caches the bounding box.
 func _is_sealed() -> bool:
 	_sealed_cells = {}
-	if blocks.size() < 6:
+	if blocks.is_empty():
 		return false
 	var mn := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var mx := Vector3i(-(1 << 30), -(1 << 30), -(1 << 30))
 	for v in blocks:
 		mn.x = mini(mn.x, v.x); mn.y = mini(mn.y, v.y); mn.z = mini(mn.z, v.z)
 		mx.x = maxi(mx.x, v.x); mx.y = maxi(mx.y, v.y); mx.z = maxi(mx.z, v.z)
+	_bbox_min = mn
+	_bbox_max = mx
+	if blocks.size() < 6:
+		return false
 	var lo := mn - Vector3i.ONE
 	var hi := mx + Vector3i.ONE
-	# flood exterior air from a corner outside the ship, bounded to [lo, hi]
+	# flood exterior air from a corner outside the ship, bounded to [lo, hi]; air
+	# passes through open doors, so an open door lets the outside in (unseals)
 	var exterior := {}
 	var stack := [lo]
 	var neigh := [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0),
 		Vector3i(0,-1,0), Vector3i(0,0,1), Vector3i(0,0,-1)]
 	while not stack.is_empty():
 		var p: Vector3i = stack.pop_back()
-		if exterior.has(p) or blocks.has(p):
+		if exterior.has(p) or _seals(p):
 			continue
 		if p.x < lo.x or p.y < lo.y or p.z < lo.z or p.x > hi.x or p.y > hi.y or p.z > hi.z:
 			continue
 		exterior[p] = true
 		for n in neigh:
 			stack.append(p + n)
-	# collect every interior air cell the exterior flood didn't reach (sealed pocket)
+	# collect every interior cell the exterior flood didn't reach (sealed pocket)
 	for x in range(mn.x, mx.x + 1):
 		for y in range(mn.y, mx.y + 1):
 			for z in range(mn.z, mx.z + 1):
 				var c := Vector3i(x, y, z)
-				if not blocks.has(c) and not exterior.has(c):
+				if not _seals(c) and not exterior.has(c):
 					_sealed_cells[c] = true
 	return not _sealed_cells.is_empty()
+
+
+## Is a world point inside the ship's hull footprint, in a passable (air/open-door)
+## cell? Used to auto-board you when you walk in through an open door.
+func contains(world_pos: Vector3) -> bool:
+	if blocks.is_empty():
+		return false
+	var lp := to_local(world_pos)
+	var c := Vector3i(floori(lp.x), floori(lp.y), floori(lp.z))
+	if c.x < _bbox_min.x or c.y < _bbox_min.y or c.z < _bbox_min.z:
+		return false
+	if c.x > _bbox_max.x or c.y > _bbox_max.y or c.z > _bbox_max.z:
+		return false
+	return not blocks.has(c) or blocks[c] == Blocks.DOOR_OPEN
+
+
+## Toggle a door block open/closed (by local voxel). Returns true if it was a door.
+func toggle_door(local_v: Vector3i) -> bool:
+	if not Blocks.is_door(blocks.get(local_v, Blocks.AIR)):
+		return false
+	set_block(local_v, Blocks.door_toggle_of(blocks[local_v]), block_meta.get(local_v, {}))
+	return true
 
 
 ## Available thrust acceleration (m/s^2) = total thrust / total mass. A thruster's
@@ -419,13 +454,15 @@ func rebuild() -> void:
 
 	for v in blocks:
 		var id: int = blocks[v]
-		if id == Blocks.AIR:
-			continue
+		if id == Blocks.AIR or id == Blocks.DOOR_OPEN:
+			continue  # open doorways render as an empty gap
 		var is_glass: bool = id == Blocks.GLASS
 		var base := Blocks.color_of(id)
 		var origin := Vector3(v)
 		for face in FACES:
 			var nid: int = blocks.get(v + face["n"], Blocks.AIR)
+			if nid == Blocks.DOOR_OPEN:
+				nid = Blocks.AIR  # draw the face that borders an open doorway
 			# glass draws only vs open air; opaque draws vs air OR glass (so you can
 			# see the hull through a window instead of a hole)
 			if is_glass:
@@ -494,6 +531,8 @@ func _rebuild_collision() -> void:
 			cs.queue_free()
 	_col_shapes.clear()
 	for v in blocks:
+		if blocks[v] == Blocks.DOOR_OPEN:
+			continue  # open door has no collider -- walk through it
 		var cs := CollisionShape3D.new()
 		var box := BoxShape3D.new()
 		box.size = Vector3.ONE

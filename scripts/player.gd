@@ -270,10 +270,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		if piloting:
 			return  # no building while flying
 		if event.button_index == MOUSE_BUTTON_RIGHT:
-			# right-click a station to open its own menu; otherwise place a block
+			# right-click: open a station, or open/close a door, otherwise place a block
 			var st := _looked_at_station()
 			if st != null and not eva:
 				_open_station(st)
+			elif _try_toggle_door():
+				pass
 			else:
 				_edit_block(false)  # placing is instant; breaking is hold-to-mine
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
@@ -344,6 +346,7 @@ func _physics_process(delta: float) -> void:
 		if _toast_time <= 0.0 and _toast_label != null:
 			_toast_label.visible = false
 	_process_survival(delta)
+	_check_ship_transitions()
 	if _station_open != null:
 		if is_instance_valid(_station_open):
 			_refresh_station_ui()  # live-update job progress + finished output
@@ -464,16 +467,31 @@ func _exit_pilot() -> void:
 
 # --- walking inside a ship (aboard) -------------------------------------------
 
-func _board(ship: Ship) -> void:
+func _board(ship: Ship, reposition := true) -> void:
 	aboard = ship
 	reparent(ship, true)          # child of the ship: local position rides along automatically
 	rotation = Vector3.ZERO       # align to ship axes: up = ship up, facing ship forward
-	var stand := _find_interior_stand(ship, ship.cockpit_local())
-	position = Vector3(stand) + Vector3(0.5, 1.0, 0.5)  # inside the ship, on the floor
+	if reposition:
+		var stand := _find_interior_stand(ship, ship.cockpit_local())
+		position = Vector3(stand) + Vector3(0.5, 1.0, 0.5)  # inside the ship, on the floor
 	_pitch = 0.0
 	_iv_y = 0.0
 	velocity = Vector3.ZERO
 	_body_shape.disabled = true   # interior movement is manual, not physics-swept
+
+
+# Walk in / out through an open door: board when you step inside a ship's hull,
+# unboard when you step back out. (Sealed ships block you until a door is open.)
+func _check_ship_transitions() -> void:
+	if piloting != null or eva:
+		return
+	if aboard != null:
+		if not is_instance_valid(aboard) or not aboard.contains(global_position):
+			_unboard()
+	elif world != null:
+		var s := world.nearest_ship(global_position)
+		if s != null and s.contains(global_position):
+			_board(s, false)
 
 
 func _unboard() -> void:
@@ -628,12 +646,17 @@ func _walk_interior(delta: float, ship: Ship) -> void:
 
 
 # Highest solid block top at or below the player's feet (ship-local Y).
+# A ship cell is solid unless it's empty or an open doorway.
+func _ship_solid(ship: Ship, cell: Vector3i) -> bool:
+	return ship.blocks.has(cell) and ship.blocks[cell] != Blocks.DOOR_OPEN
+
+
 func _interior_floor_top(ship: Ship, pos: Vector3) -> float:
 	var cx := floori(pos.x)
 	var cz := floori(pos.z)
 	var start := floori(pos.y - 0.9 + 0.02)
 	for y in range(start, start - 128, -1):
-		if ship.blocks.has(Vector3i(cx, y, cz)):
+		if _ship_solid(ship, Vector3i(cx, y, cz)):
 			return float(y + 1)
 	return -1.0e9
 
@@ -644,7 +667,7 @@ func _interior_blocked(ship: Ship, pos: Vector3) -> bool:
 	var cz := floori(pos.z)
 	var feet := pos.y - 0.9
 	for h in [0.25, 1.0, 1.6]:
-		if ship.blocks.has(Vector3i(cx, floori(feet + h), cz)):
+		if _ship_solid(ship, Vector3i(cx, floori(feet + h), cz)):
 			return true
 	return false
 
@@ -941,14 +964,23 @@ func _raycast_voxel() -> Dictionary:
 func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: String) -> Dictionary:
 	# march in the object's local voxel space (planets are axis-aligned; ships rotate)
 	var ld: Vector3 = (obj.global_transform.basis.inverse() * dir_w).normalized()
-	var start: Vector3 = obj.to_local(hit_w) - ld * 0.06  # step just outside the surface
+	# ships: march from the camera so open doors (which have no collider) are found;
+	# planets: start just outside the surface hit (cheaper, no doors to catch)
+	var start: Vector3
+	var steps: int
+	if kind == "ship":
+		start = obj.to_local(origin_w)
+		steps = 24
+	else:
+		start = obj.to_local(hit_w) - ld * 0.06
+		steps = 14
 	var v := Vector3i(floori(start.x), floori(start.y), floori(start.z))
 	var step := Vector3i(1 if ld.x >= 0.0 else -1, 1 if ld.y >= 0.0 else -1, 1 if ld.z >= 0.0 else -1)
 	var tmax := Vector3(_tmax(start.x, ld.x), _tmax(start.y, ld.y), _tmax(start.z, ld.z))
 	var tdelta := Vector3(_tdelta(ld.x), _tdelta(ld.y), _tdelta(ld.z))
 	var normal := Vector3i.ZERO
 	var prev := v
-	for i in 14:
+	for i in steps:
 		var id: int = obj.get_id(v)
 		if id != Blocks.AIR and id != Blocks.WATER:
 			return {"hit": true, "kind": kind, "obj": obj, "voxel": v, "place": prev, "normal": normal, "id": id}
@@ -1821,6 +1853,18 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	_station_panel.add_child(_pinv_grid)
 	for i in SLOTS:
 		_pinv_cells.append(_make_slot(_pinv_grid, i, "to_station"))
+
+
+# Right-clicking a door opens/closes it (ships only; a closed door seals, an open
+# one is a walk-through gap that vents air).
+func _try_toggle_door() -> bool:
+	var tgt := _raycast_voxel()
+	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "ship":
+		return false
+	if not Blocks.is_door(int(tgt["id"])):
+		return false
+	(tgt["obj"] as Ship).toggle_door(tgt["voxel"])
+	return true
 
 
 func _looked_at_station() -> Station:
