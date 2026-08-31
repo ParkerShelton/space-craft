@@ -394,18 +394,28 @@ func rebuild() -> void:
 		_mi = MeshInstance3D.new()
 		add_child(_mi)
 
-	var verts := PackedVector3Array()
+	var verts := PackedVector3Array()   # opaque hull (surface 0)
 	var normals := PackedVector3Array()
 	var colors := PackedColorArray()
+	var gverts := PackedVector3Array()  # glass (surface 1, transparent)
+	var gnormals := PackedVector3Array()
+	var gcolors := PackedColorArray()
 
 	for v in blocks:
 		var id: int = blocks[v]
 		if id == Blocks.AIR:
 			continue
+		var is_glass: bool = id == Blocks.GLASS
 		var base := Blocks.color_of(id)
 		var origin := Vector3(v)
 		for face in FACES:
-			if blocks.get(v + face["n"], Blocks.AIR) != Blocks.AIR:
+			var nid: int = blocks.get(v + face["n"], Blocks.AIR)
+			# glass draws only vs open air; opaque draws vs air OR glass (so you can
+			# see the hull through a window instead of a hole)
+			if is_glass:
+				if nid != Blocks.AIR:
+					continue
+			elif nid != Blocks.AIR and nid != Blocks.GLASS:
 				continue
 			# Cockpit's forward (-Z) face is a bright windshield so you can always
 			# see which way the ship points -- both while building and flying.
@@ -413,31 +423,48 @@ func rebuild() -> void:
 			if id == Blocks.COCKPIT and face["n"] == Vector3i(0, 0, -1):
 				fcol = Color(0.55, 0.95, 1.0)
 			var s: float = Chunk._face_shade(face["d"], face["s"])
-			var col := Color(fcol.r * s, fcol.g * s, fcol.b * s, 1.0)
+			var col := Color(fcol.r * s, fcol.g * s, fcol.b * s, base.a if is_glass else 1.0)
 			var nrm := Vector3(face["n"])
 			var c: Array = face["c"]
 			var p0: Vector3 = origin + c[0]
 			var p1: Vector3 = origin + c[1]
 			var p2: Vector3 = origin + c[2]
 			var p3: Vector3 = origin + c[3]
-			verts.append(p0); verts.append(p1); verts.append(p2)
-			verts.append(p0); verts.append(p2); verts.append(p3)
-			for _k in 6:
-				normals.append(nrm)
-				colors.append(col)
+			if is_glass:
+				gverts.append(p0); gverts.append(p1); gverts.append(p2)
+				gverts.append(p0); gverts.append(p2); gverts.append(p3)
+				for _k in 6:
+					gnormals.append(nrm)
+					gcolors.append(col)
+			else:
+				verts.append(p0); verts.append(p1); verts.append(p2)
+				verts.append(p0); verts.append(p2); verts.append(p3)
+				for _k in 6:
+					normals.append(nrm)
+					colors.append(col)
 
-	if verts.is_empty():
+	if verts.is_empty() and gverts.is_empty():
 		_mi.mesh = null
 	else:
-		var arr := []
-		arr.resize(Mesh.ARRAY_MAX)
-		arr[Mesh.ARRAY_VERTEX] = verts
-		arr[Mesh.ARRAY_NORMAL] = normals
-		arr[Mesh.ARRAY_COLOR] = colors
 		var m := ArrayMesh.new()
-		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+		if not verts.is_empty():
+			var arr := []
+			arr.resize(Mesh.ARRAY_MAX)
+			arr[Mesh.ARRAY_VERTEX] = verts
+			arr[Mesh.ARRAY_NORMAL] = normals
+			arr[Mesh.ARRAY_COLOR] = colors
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+			m.surface_set_material(m.get_surface_count() - 1, Chunk._get_material())
+		if not gverts.is_empty():
+			var garr := []
+			garr.resize(Mesh.ARRAY_MAX)
+			garr[Mesh.ARRAY_VERTEX] = gverts
+			garr[Mesh.ARRAY_NORMAL] = gnormals
+			garr[Mesh.ARRAY_COLOR] = gcolors
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, garr)
+			m.surface_set_material(m.get_surface_count() - 1, Chunk._get_water_material())
 		_mi.mesh = m
-		_mi.material_override = Chunk._get_material()
+		_mi.material_override = null
 
 	_rebuild_collision()
 	_recompute_habitable()
