@@ -79,7 +79,9 @@ var _grid_cells: Array = []        # full-inventory slot buttons
 var _station_open: Station = null  # non-null while a station panel is open
 var _station_panel: Panel
 var _station_title: Label
-var _station_cells: Array = []     # station internal-storage slot views (up to MAX_SLOTS)
+var _station_cells: Array = []     # storage slot views (rebuilt per open; may span a chest group)
+var _stor_container: Control       # holds the (absolutely-positioned) storage cells
+var _stor_map: Array = []          # storage cell index -> {st: Station, slot: int}
 var _pinv_cells: Array = []        # player-inventory slot views inside the station panel
 var _pinv_label: Label             # "Your inventory" header (repositioned per station size)
 var _pinv_grid: GridContainer      # the inventory grid inside the station panel
@@ -1239,8 +1241,11 @@ func _on_slot_pressed(index: int) -> void:
 func _slot_ref(cont: String, index: int) -> Dictionary:
 	if cont == "inv":
 		return inv[index]
-	if cont == "stor" and _station_open != null:
-		return _station_open.storage[index]
+	if cont == "stor" and index >= 0 and index < _stor_map.size():
+		var m: Dictionary = _stor_map[index]
+		var st: Station = m["st"]
+		if is_instance_valid(st) and int(m["slot"]) < st.storage.size():
+			return st.storage[int(m["slot"])]
 	return {}
 
 
@@ -1291,11 +1296,12 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 	if from.is_empty() or to.is_empty() or int(from["count"]) <= 0:
 		return
 	# dropping INTO a machine's storage must match what it accepts (chests take all)
-	if tc == "stor" and fc != "stor" and _station_open != null:
-		if _station_open.kind == Blocks.SMELTER and not Blocks.is_ore(from["id"]):
+	if tc == "stor" and fc != "stor" and ti < _stor_map.size():
+		var tst: Station = _stor_map[ti]["st"]
+		if tst.kind == Blocks.SMELTER and not Blocks.is_ore(from["id"]):
 			_toast("Smelter takes raw ore")
 			return
-		if _station_open.kind == Blocks.FABRICATOR and not Blocks.is_refined(from["id"]):
+		if tst.kind == Blocks.FABRICATOR and not Blocks.is_refined(from["id"]):
 			_toast("Fabricator takes refined material")
 			return
 	if to["count"] > 0 and to["id"] == from["id"] and to.get("src", "") == from.get("src", ""):
@@ -1345,7 +1351,7 @@ func _update_mine_power() -> void:
 func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 	var swatch: ColorRect = cell["swatch"]
 	var count: Label = cell["count"]
-	if slot["count"] > 0:
+	if not slot.is_empty() and slot["count"] > 0:
 		var mat: Dictionary = slot.get("mat", {})
 		swatch.color = mat["color"] if mat.has("color") else Blocks.color_of(slot["id"])
 		count.text = str(slot["count"])
@@ -1539,14 +1545,10 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	_station_store_label.position = Vector2(rx + 2, 36)
 	_station_panel.add_child(_station_store_label)
 
-	var sgrid := GridContainer.new()
-	sgrid.columns = _STORE_COLS
-	sgrid.add_theme_constant_override("h_separation", 4)
-	sgrid.add_theme_constant_override("v_separation", 4)
-	sgrid.position = Vector2(rx, 60)
-	_station_panel.add_child(sgrid)
-	for i in Station.MAX_SLOTS:  # build the max; show only this station's capacity
-		_station_cells.append(_make_slot(sgrid, i, "from_station"))
+	# storage cells are built dynamically on open (a chest group spans several blocks)
+	_stor_container = Control.new()
+	_stor_container.position = Vector2(rx, 60)
+	_station_panel.add_child(_stor_container)
 
 	_pinv_label = Label.new()
 	_pinv_label.text = "Your inventory  (drag to move)"
@@ -1601,15 +1603,13 @@ func _open_station(st: Station) -> void:
 	_left_header.visible = has_left
 	_left_header.text = "Actions" if is_smelter else "Blueprints"
 
-	# show only this station's storage cells; reflow the inventory + panel to fit
-	var cap: int = st.capacity()
-	for i in _station_cells.size():
-		_station_cells[i]["root"].visible = i < cap
-	var srows: int = ceili(float(cap) / float(_STORE_COLS))
-	var store_bottom: int = 60 + srows * 60
+	# build the storage grid (a chest opens its whole connected group) and reflow
+	var ext := _build_storage_cells(st)   # (cols, rows) in cells
+	var store_bottom: int = 60 + ext.y * 60
 	_pinv_label.position = Vector2(_rx + 2, store_bottom + 4)
 	_pinv_grid.position = Vector2(_rx, store_bottom + 28)
-	var w: int = _rx + _STORE_COLS * 60 + 12
+	var store_w: int = maxi(ext.x, _STORE_COLS) * 60
+	var w: int = _rx + store_w + 12
 	var h: int = maxi(store_bottom + 28 + 4 * 60 + 16, 250)
 	_station_panel.custom_minimum_size = Vector2(w, h)
 	_station_panel.size = Vector2(w, h)
@@ -1628,12 +1628,155 @@ func _close_station() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
+# --- storage layout (chests connect into one shared grid) ---------------------
+
+# (Re)build the storage cells for the open station, returning the grid size in
+# cells (cols, rows). A chest lays out its whole connected group; other machines
+# are a single 8-wide block.
+func _build_storage_cells(st: Station) -> Vector2i:
+	for c in _station_cells:
+		c["root"].queue_free()
+	_station_cells.clear()
+	_stor_map.clear()
+	var maxc := 0
+	var maxr := 0
+	for pl in _storage_placements(st):
+		var idx := _stor_map.size()
+		_station_cells.append(_make_stor_cell(idx, pl["cx"], pl["cy"]))
+		_stor_map.append({"st": pl["st"], "slot": pl["slot"]})
+		maxc = maxi(maxc, int(pl["cx"]) + 1)
+		maxr = maxi(maxr, int(pl["cy"]) + 1)
+	return Vector2i(maxc, maxr)
+
+
+# Where each (station, slot) sits in the combined grid: {st, slot, cx, cy}.
+func _storage_placements(st: Station) -> Array:
+	var out := []
+	if st.kind == Blocks.CHEST:
+		for blk in _chest_layout(st):
+			var cst: Station = blk["st"]
+			for slot in cst.storage.size():
+				out.append({"st": cst, "slot": slot,
+					"cx": int(blk["cb"]) * _STORE_COLS + slot % _STORE_COLS,
+					"cy": int(blk["rb"]) * 3 + slot / _STORE_COLS})
+	else:
+		for slot in st.storage.size():
+			out.append({"st": st, "slot": slot, "cx": slot % _STORE_COLS, "cy": slot / _STORE_COLS})
+	return out
+
+
+func _make_stor_cell(index: int, cx: int, cy: int) -> Dictionary:
+	var root := Panel.new()
+	root.custom_minimum_size = Vector2(56, 56)
+	root.size = Vector2(56, 56)
+	root.position = Vector2(cx * 60, cy * 60)
+	_stor_container.add_child(root)
+	var swatch := ColorRect.new()
+	swatch.position = Vector2(6, 6)
+	swatch.size = Vector2(44, 44)
+	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(swatch)
+	var count := Label.new()
+	count.position = Vector2(28, 34)
+	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(count)
+	root.set_drag_forwarding(
+		_slot_get_drag.bind("stor", index, root),
+		_slot_can_drop.bind("stor", index),
+		_slot_do_drop.bind("stor", index))
+	return {"root": root, "swatch": swatch, "count": count}
+
+
+# All chests connected (face-adjacent, same frame) to `chest`.
+func _chest_group(chest: Station) -> Array:
+	var parent := chest.get_parent()
+	var posmap := {}
+	if world != null:
+		for s in world._stations:
+			if is_instance_valid(s) and s.kind == Blocks.CHEST and s.get_parent() == parent:
+				posmap[Vector3i(s.position.round())] = s
+	var seen := {}
+	var stack := [Vector3i(chest.position.round())]
+	var group := []
+	while not stack.is_empty():
+		var p: Vector3i = stack.pop_back()
+		if seen.has(p):
+			continue
+		seen[p] = true
+		if not posmap.has(p):
+			continue
+		group.append(posmap[p])
+		for n in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+				Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+			if not seen.has(p + n):
+				stack.append(p + n)
+	return group
+
+
+# The chest's local up axis (snapped) -- stacking along it grows the grid taller;
+# spreading perpendicular to it grows the grid wider.
+func _chest_up_axis(c: Station) -> Vector3i:
+	var y := c.transform.basis.y
+	var ax := absf(y.x)
+	var ay := absf(y.y)
+	var az := absf(y.z)
+	if ax >= ay and ax >= az:
+		return Vector3i(1 if y.x >= 0.0 else -1, 0, 0)
+	if ay >= az:
+		return Vector3i(0, 1 if y.y >= 0.0 else -1, 0)
+	return Vector3i(0, 0, 1 if y.z >= 0.0 else -1)
+
+
+func _horiz_key(c: Station, up: Vector3i) -> Vector2i:
+	var p := Vector3i(c.position.round())
+	if absi(up.y) == 1:
+		return Vector2i(p.x, p.z)
+	if absi(up.x) == 1:
+		return Vector2i(p.y, p.z)
+	return Vector2i(p.x, p.y)
+
+
+func _horiz_less(a: Station, b: Station, up: Vector3i) -> bool:
+	var ka := _horiz_key(a, up)
+	var kb := _horiz_key(b, up)
+	return ka.x < kb.x if ka.x != kb.x else ka.y < kb.y
+
+
+# Assign each chest in the group a (col-block, row-block): rows = vertical levels
+# (higher chests on top), columns = ordering within a level.
+func _chest_layout(chest: Station) -> Array:
+	var group := _chest_group(chest)
+	if group.size() <= 1:
+		return [{"st": chest, "cb": 0, "rb": 0}]
+	var up := _chest_up_axis(chest)
+	var levels := {}
+	for c in group:
+		var d := Vector3i(c.position.round())
+		var v: int = d.x * up.x + d.y * up.y + d.z * up.z
+		if not levels.has(v):
+			levels[v] = []
+		levels[v].append(c)
+	var keys := levels.keys()
+	keys.sort()
+	keys.reverse()   # higher vertical level = top row
+	var out := []
+	var rb := 0
+	for k in keys:
+		var band: Array = levels[k]
+		band.sort_custom(_horiz_less.bind(up))
+		var cb := 0
+		for c in band:
+			out.append({"st": c, "cb": cb, "rb": rb})
+			cb += 1
+		rb += 1
+	return out
+
+
 func _refresh_station_ui() -> void:
 	if _station_open == null:
 		return
 	for i in _station_cells.size():
-		if i < _station_open.storage.size():
-			_paint_cell(_station_cells[i], _station_open.storage[i], false)
+		_paint_cell(_station_cells[i], _slot_ref("stor", i), false)
 	for i in _pinv_cells.size():
 		_paint_cell(_pinv_cells[i], inv[i], false)
 	if Blocks.STATION_CRAFTS.has(_station_open.kind):
