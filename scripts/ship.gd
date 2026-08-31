@@ -9,6 +9,8 @@ extends CharacterBody3D
 
 var blocks := {}       # Vector3i(local voxel) -> block id
 var block_meta := {}   # Vector3i -> {h,d,e,r} material stats for crafted blocks (Shipworks)
+var _habitable := false  # sealed interior + a Life Support block => safe to breathe inside
+var _sealed := false      # cached: interior has an enclosed air pocket
 var flying := false
 var world: WorldManager  # set on spawn; used for gravity while coasting
 var in_gravity := false  # true while in launch/landing-assist mode (HUD)
@@ -120,16 +122,75 @@ func set_block(v: Vector3i, id: int, meta: Dictionary = {}) -> void:
 func get_status() -> Dictionary:
 	var has_cockpit := false
 	var thrusters := 0
+	var life_support := false
 	for v in blocks:
 		match blocks[v]:
 			Blocks.COCKPIT: has_cockpit = true
 			Blocks.THRUSTER: thrusters += 1
+			Blocks.LIFE_SUPPORT: life_support = true
 	return {
 		"count": blocks.size(),
 		"cockpit": has_cockpit,
 		"thrusters": thrusters,
 		"can_fly": has_cockpit and thrusters >= 1 and blocks.size() >= 4,
+		"life_support": life_support,
+		"sealed": _sealed,
+		"habitable": _habitable,
 	}
+
+
+## The ship keeps you alive inside (breathing, climate) only when it has a Life
+## Support block AND a sealed interior (an enclosed air pocket).
+func is_habitable() -> bool:
+	return _habitable
+
+
+func _recompute_habitable() -> void:
+	_sealed = _is_sealed()
+	_habitable = _sealed and _has_life_support()
+
+
+func _has_life_support() -> bool:
+	for v in blocks:
+		if blocks[v] == Blocks.LIFE_SUPPORT:
+			return true
+	return false
+
+
+# Sealed if some air cell inside the ship's bounding box can't be reached by air
+# flooding in from outside -- i.e. there's an enclosed (airtight) pocket.
+func _is_sealed() -> bool:
+	if blocks.size() < 6:
+		return false
+	var mn := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var mx := Vector3i(-(1 << 30), -(1 << 30), -(1 << 30))
+	for v in blocks:
+		mn.x = mini(mn.x, v.x); mn.y = mini(mn.y, v.y); mn.z = mini(mn.z, v.z)
+		mx.x = maxi(mx.x, v.x); mx.y = maxi(mx.y, v.y); mx.z = maxi(mx.z, v.z)
+	var lo := mn - Vector3i.ONE
+	var hi := mx + Vector3i.ONE
+	# flood exterior air from a corner outside the ship, bounded to [lo, hi]
+	var exterior := {}
+	var stack := [lo]
+	var neigh := [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0),
+		Vector3i(0,-1,0), Vector3i(0,0,1), Vector3i(0,0,-1)]
+	while not stack.is_empty():
+		var p: Vector3i = stack.pop_back()
+		if exterior.has(p) or blocks.has(p):
+			continue
+		if p.x < lo.x or p.y < lo.y or p.z < lo.z or p.x > hi.x or p.y > hi.y or p.z > hi.z:
+			continue
+		exterior[p] = true
+		for n in neigh:
+			stack.append(p + n)
+	# any interior air cell the exterior flood didn't reach => sealed pocket
+	for x in range(mn.x, mx.x + 1):
+		for y in range(mn.y, mx.y + 1):
+			for z in range(mn.z, mx.z + 1):
+				var c := Vector3i(x, y, z)
+				if not blocks.has(c) and not exterior.has(c):
+					return true
+	return false
 
 
 ## Available thrust acceleration (m/s^2) = total thrust / total mass. A thruster's
@@ -379,6 +440,7 @@ func rebuild() -> void:
 		_mi.material_override = Chunk._get_material()
 
 	_rebuild_collision()
+	_recompute_habitable()
 
 
 # One box collider per block. Works both while the ship is a stationary build

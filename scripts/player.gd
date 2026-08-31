@@ -705,9 +705,19 @@ func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -
 
 # You breathe inside a ship (cockpit or interior) or within an atmospheric planet's
 # air. Space, airless worlds, high altitude and being underwater all cut off your air.
+# True when you're inside a ship that is actually life-supporting (sealed cabin +
+# a Life Support block). An open or unpowered ship does NOT shelter you.
+func _in_safe_ship() -> bool:
+	if aboard != null and is_instance_valid(aboard):
+		return aboard.is_habitable()
+	if piloting != null and is_instance_valid(piloting):
+		return piloting.is_habitable()
+	return false
+
+
 func _has_air() -> bool:
-	if aboard != null or piloting != null:
-		return true  # life support inside the ship
+	if _in_safe_ship():
+		return true  # sealed ship with life support
 	var up := global_transform.basis.y
 	if _in_water(global_position + up * 0.7):
 		return false  # head underwater
@@ -722,7 +732,7 @@ const HAZARD_RANGE := 300.0   # exposed to a planet's hazard when within this al
 # Damage/sec from the current planet's climate when unprotected (0 if none, in
 # space, or sheltered in a ship). Phase 3 gear will reduce this.
 func _hazard_dps() -> float:
-	if aboard != null or piloting != null or world == null:
+	if _in_safe_ship() or world == null:
 		return 0.0
 	var p := world.nearest_planet(global_position)
 	if p == null or p.hazard_dps <= 0.0:
@@ -733,12 +743,23 @@ func _hazard_dps() -> float:
 
 
 func _current_hazard() -> String:
-	if aboard != null or piloting != null or world == null:
+	if _in_safe_ship() or world == null:
 		return ""
 	var p := world.nearest_planet(global_position)
 	if p == null or p.hazard_dps <= 0.0 or p.altitude(global_position) > HAZARD_RANGE:
 		return ""
 	return p.hazard
+
+
+func _life_support_text(ship: Ship) -> String:
+	var st := ship.get_status()
+	if st["habitable"]:
+		return "Life support: OK"
+	if not st["life_support"]:
+		return "NO LIFE SUPPORT (craft one)"
+	if not st["sealed"]:
+		return "CABIN NOT SEALED"
+	return "Life support offline"
 
 
 func _process_survival(delta: float) -> void:
@@ -2055,7 +2076,7 @@ func _update_ui() -> void:
 		var spd := aboard.velocity.length()
 		_hotbar_label.text = "ABOARD SHIP  (walk around -- F cockpit to pilot, T to EVA)"
 		_mode_label.text = "Interior gravity  |  %s" % ("cruising %.0f m/s" % spd if spd > 0.5 else "holding station")
-		_ship_label.text = ""
+		_ship_label.text = _life_support_text(aboard)
 		return
 
 	if piloting != null and is_instance_valid(piloting):
@@ -2066,7 +2087,8 @@ func _update_ui() -> void:
 			alt = pl.altitude(piloting.global_position)
 		var up := -g.normalized() if g.length() > 0.01 else Vector3.UP
 		var vspeed := piloting.velocity.dot(up)  # +up / -down
-		_hotbar_label.text = "PILOTING  (F to exit)"
+		var ls := _life_support_text(piloting)
+		_hotbar_label.text = "PILOTING  (F to exit)   |   %s" % ls
 		if piloting.in_gravity:
 			_mode_label.text = "LAUNCH/LAND ASSIST  |  Alt %.0f m  |  V-speed %+.1f m/s" % [alt, vspeed]
 			if piloting.landed:

@@ -100,6 +100,8 @@ const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy", "r": "Reac
 const DRILL := 51            # mining tool; its power (from its material) sets mine speed & max tier
 const TOOL_IDS := [DRILL]
 
+const LIFE_SUPPORT := 53     # ship block: with a sealed interior it makes the ship habitable
+
 # Hand recipes: things you can assemble from carried materials with no station
 # (the bootstrap chain). Each: {out, n, reqs}. A requirement is {id, n} for a
 # specific item, or {refined:true, n} for any refined material -- so anything that
@@ -125,6 +127,7 @@ const STATION_CRAFTS := {
 		{"label": "Drill", "out": DRILL, "n": 1, "cost": DRILL_COST},
 		{"label": "Thruster", "out": THRUSTER, "n": 1, "cost": 4},
 		{"label": "Hull Plate x4", "out": METAL, "n": 4, "cost": 2},
+		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "cost": 6},
 	],
 }
 
@@ -133,7 +136,7 @@ const STATION_CRAFTS := {
 const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	WOOD, WOOD_PALE, WOOD_DARK,
 	16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-	COCKPIT, THRUSTER]
+	COCKPIT, THRUSTER, LIFE_SUPPORT]
 
 const NAMES := {
 	AIR: "Air",
@@ -174,6 +177,7 @@ const NAMES := {
 	FABRICATOR: "Fabricator",
 	SHIPWORKS: "Shipworks",
 	CHEST: "Wooden Chest",
+	LIFE_SUPPORT: "Life Support",
 	ORE_0: "Ore", ORE_1: "Ore", ORE_2: "Ore", ORE_3: "Ore",
 	REFINED_0: "Refined Material", REFINED_1: "Refined Material",
 	REFINED_2: "Refined Material", REFINED_3: "Refined Material",
@@ -240,6 +244,7 @@ const COLORS := {
 	FABRICATOR: Color(0.30, 0.40, 0.46),
 	SHIPWORKS: Color(0.40, 0.42, 0.30),
 	CHEST: Color(0.45, 0.31, 0.17),
+	LIFE_SUPPORT: Color(0.30, 0.78, 0.68),
 	# generic fallbacks; real ore colors are planet-defined and travel with the item
 	ORE_0: Color(0.7, 0.6, 0.4), ORE_1: Color(0.6, 0.7, 0.5),
 	ORE_2: Color(0.5, 0.6, 0.7), ORE_3: Color(0.7, 0.5, 0.7),
