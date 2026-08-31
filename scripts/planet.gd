@@ -560,55 +560,142 @@ func _rebuild_if_loaded(cc: Vector3i) -> void:
 
 const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
 	Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
-const MAX_FLOW := 1500  # cap so breaching a deep basin can't flood the whole world at once
 
-## Called after a block is broken at `v`: if water is adjacent, let it flow in and
-## fill the connected opened space up to the water level. Batches all edits and
-## rebuilds each affected chunk once.
+# --- flowing water (cellular automaton) --------------------------------------
+# Water has a level 1..W_FULL. A cell's level is recomputed from its neighbors:
+# full if water falls into it from above, otherwise one less than its highest
+# horizontal neighbor. Level 0 means it drains (turns back to air). The generated
+# ocean acts as an infinite W_FULL source. So water spreads out getting shallower,
+# and recedes when its source is cut off. Dynamic water is stored as WATER edits
+# (so it renders/collides/streams like any block); `_wlev` holds the levels.
+const W_FULL := 8
+const FLOW_DT := 0.10          # simulation tick interval (seconds)
+const FLOW_BUDGET := 1200      # cells evaluated per tick
+const MAX_WATER := 24000       # safety cap on total dynamic water cells
+var _wlev := {}                # Vector3i -> level 1..W_FULL
+var _water_active := {}        # cells to (re)evaluate next tick
+var _flow_accum := 0.0
+
+
+# Called after a block is broken at `v`: wake the water around it so it can flow in.
 func flow_water(v: Vector3i) -> void:
 	if water_style != WATER_LIQUID:
 		return
-	var touches_water := false
+	_wake(v)
+
+
+func _wake(c: Vector3i) -> void:
+	_water_active[c] = true
 	for n in _NEIGH6:
-		if get_id(v + n) == Blocks.WATER:
-			touches_water = true
-			break
-	if not touches_water:
-		return
+		_water_active[c + n] = true
 
-	var fill: Array[Vector3i] = []
-	var visited := {}
-	var frontier: Array[Vector3i] = [v]
-	while not frontier.is_empty() and fill.size() < MAX_FLOW:
-		var c: Vector3i = frontier.pop_front()
-		if visited.has(c):
-			continue
-		visited[c] = true
-		if get_id(c) != Blocks.AIR:
-			continue
-		if _norm(Vector3(c) + Vector3(0.5, 0.5, 0.5)) > water_level:
-			continue  # water can't rise above its level
-		fill.append(c)
-		for n in _NEIGH6:
-			var nc: Vector3i = c + n
-			if not visited.has(nc):
-				frontier.append(nc)
 
-	if fill.is_empty():
+func _wdown(c: Vector3i) -> Vector3i:
+	var ax := _axis_of(Vector3(c) + Vector3(0.5, 0.5, 0.5))  # outward face axis
+	return Vector3i(int(-ax.x), int(-ax.y), int(-ax.z))       # toward center = down
+
+
+func _is_solid_block(c: Vector3i) -> bool:
+	var id := get_id(c)
+	return id != Blocks.AIR and id != Blocks.WATER
+
+
+# Undug, generated ocean = an infinite full source.
+func _ocean_source(c: Vector3i) -> bool:
+	var d = _edits_by_chunk.get(chunk_of(c))
+	if d != null and d.has(c):
+		return false
+	if _wlev.has(c):
+		return false
+	return generation_sample(c.x, c.y, c.z) == Blocks.WATER
+
+
+func _wlevel(c: Vector3i) -> int:
+	if _ocean_source(c):
+		return W_FULL
+	return _wlev.get(c, 0)
+
+
+func _water_target(c: Vector3i) -> int:
+	var down := _wdown(c)
+	var above := c - down
+	if not _is_solid_block(above) and _wlevel(above) > 0:
+		return W_FULL  # water falling straight down fills the cell
+	var best := 0
+	for n in _NEIGH6:
+		if n == down or n == -down:
+			continue  # horizontal neighbors only spread sideways
+		best = maxi(best, _wlevel(c + n) - 1)
+	return best
+
+
+func _process(delta: float) -> void:
+	if water_style != WATER_LIQUID or _water_active.is_empty():
 		return
+	_flow_accum += delta
+	if _flow_accum < FLOW_DT:
+		return
+	_flow_accum = 0.0
+	_sim_water()
+
+
+func _sim_water() -> void:
+	var todo: Array = _water_active.keys()
+	_water_active = {}
 	var dirty := {}
-	for c in fill:
-		var cc := chunk_of(c)
-		if not _edits_by_chunk.has(cc):
-			_edits_by_chunk[cc] = {}
-		_edits_by_chunk[cc][c] = Blocks.WATER
-		dirty[cc] = true
-		var local := c - cc * CS
-		if local.x == 0: dirty[cc + Vector3i(-1, 0, 0)] = true
-		if local.x == CS - 1: dirty[cc + Vector3i(1, 0, 0)] = true
-		if local.y == 0: dirty[cc + Vector3i(0, -1, 0)] = true
-		if local.y == CS - 1: dirty[cc + Vector3i(0, 1, 0)] = true
-		if local.z == 0: dirty[cc + Vector3i(0, 0, -1)] = true
-		if local.z == CS - 1: dirty[cc + Vector3i(0, 0, 1)] = true
+	var count := 0
+	for c in todo:
+		if count >= FLOW_BUDGET:
+			_water_active[c] = true  # defer to next tick
+			continue
+		count += 1
+		if _ocean_source(c):
+			for n in _NEIGH6:
+				_water_active[c + n] = true  # ocean keeps feeding its neighbors
+			continue
+		if _is_solid_block(c):
+			if _wlev.has(c):
+				_clear_water(c, dirty)
+			continue
+		var cur: int = _wlev.get(c, 0)
+		var t := _water_target(c)
+		if t <= 0:
+			if cur > 0:
+				_clear_water(c, dirty)
+				_wake(c)
+		elif t != cur and (_wlev.size() < MAX_WATER or _wlev.has(c)):
+			_set_water(c, t, dirty)
+			_wake(c)
 	for cc in dirty:
 		_rebuild_if_loaded(cc)
+	if not _water_active.is_empty():
+		_flow_accum = FLOW_DT  # keep ticking while water is still settling
+
+
+func _set_water(c: Vector3i, level: int, dirty: Dictionary) -> void:
+	_wlev[c] = level
+	var cc := chunk_of(c)
+	if not _edits_by_chunk.has(cc):
+		_edits_by_chunk[cc] = {}
+	_edits_by_chunk[cc][c] = Blocks.WATER
+	_mark_borders(c, dirty)
+
+
+func _clear_water(c: Vector3i, dirty: Dictionary) -> void:
+	_wlev.erase(c)
+	var d = _edits_by_chunk.get(chunk_of(c))
+	if d != null:
+		d.erase(c)  # revert to generation (air on land, ocean below sea level)
+	_mark_borders(c, dirty)
+
+
+func _mark_borders(c: Vector3i, dirty: Dictionary) -> void:
+	var cc := chunk_of(c)
+	dirty[cc] = true
+	var local := c - cc * CS
+	if local.x == 0: dirty[cc + Vector3i(-1, 0, 0)] = true
+	if local.x == CS - 1: dirty[cc + Vector3i(1, 0, 0)] = true
+	if local.y == 0: dirty[cc + Vector3i(0, -1, 0)] = true
+	if local.y == CS - 1: dirty[cc + Vector3i(0, 1, 0)] = true
+	if local.z == 0: dirty[cc + Vector3i(0, 0, -1)] = true
+	if local.z == CS - 1: dirty[cc + Vector3i(0, 0, 1)] = true
