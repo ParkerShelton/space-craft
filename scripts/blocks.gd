@@ -103,21 +103,24 @@ const TOOL_IDS := [DRILL]
 # (the bootstrap chain). Each: {out, n, reqs}. A requirement is {id, n} for a
 # specific item, or {refined:true, n} for any refined material -- so anything that
 # needs refined material can't be made until you've built a Smelter and smelted ore.
+# Only the bare essentials are hand-assembled (so you can never get stuck): a
+# Smelter to refine, Metal Hull to build with, and the Fabricator crafting hub.
+# Everything else is made at a station.
 const HAND_RECIPES := [
 	{"out": SMELTER, "n": 1, "reqs": [{"id": ROCK, "n": 15}]},
 	{"out": METAL, "n": 4, "reqs": [{"refined": true, "n": 1}]},        # cast ingots into hull plates
 	{"out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
-	{"out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 30}, {"refined": true, "n": 10}]},
 ]
 const DRILL_COST := 5        # refined material consumed to fabricate one drill
 
 # What each station can build from a loaded refined material. Each craft consumes
 # `cost` refined material and outputs `n` of `out`, carrying the material's stats.
+# The Fabricator is the crafting hub: gear + ship parts.
 const STATION_CRAFTS := {
-	FABRICATOR: [{"label": "Craft Drill", "out": DRILL, "n": 1, "cost": DRILL_COST}],
-	SHIPWORKS: [
-		{"label": "Craft Thruster", "out": THRUSTER, "n": 1, "cost": 4},
-		{"label": "Craft Hull Plate", "out": METAL, "n": 4, "cost": 2},
+	FABRICATOR: [
+		{"label": "Drill", "out": DRILL, "n": 1, "cost": DRILL_COST},
+		{"label": "Thruster", "out": THRUSTER, "n": 1, "cost": 4},
+		{"label": "Hull Plate x4", "out": METAL, "n": 4, "cost": 2},
 	],
 }
 

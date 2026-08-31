@@ -82,6 +82,7 @@ var _station_title: Label
 var _station_cells: Array = []     # station internal-storage slot views
 var _pinv_cells: Array = []        # player-inventory slot views inside the station panel
 var _station_store_label: Label    # "<station> contents" header above its storage
+var _left_header: Label            # "Blueprints" / "Actions" header on the left column
 var _refine_btn: Button            # Smelter action
 var _craft_row: Control            # holds per-station craft buttons
 var _craft_buttons: Array = []     # current station's craft buttons
@@ -1102,14 +1103,6 @@ func _build_ui() -> void:
 	_build_inventory_ui(layer)
 	_build_station_ui(layer)
 
-	var help := Label.new()
-	help.position = Vector2(16, 108)
-	help.text = "WASD move  |  Mouse look  |  Space up  |  Shift down  |  R-click place  |  Hold L-click mine\n" \
-		+ "1-8 slot  |  Scroll = slot  |  E inventory  |  R-click a station to use it  |  G ship  |  F cockpit  |  T EVA  |  Esc\n" \
-		+ "F5 save  |  F9 load  |  Build Smelter->refine ore->build Fabricator->craft a Drill to mine higher-tier ores"
-	help.modulate = Color(1, 1, 1, 0.55)
-	layer.add_child(help)
-
 	# transient save/load confirmation, top-center
 	_toast_label = Label.new()
 	_toast_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
@@ -1176,17 +1169,17 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 		by += 34
 
 
-# One slot cell: colored square + count. `mode` sets the click behavior:
-# "none" = display only, "select" = pick active slot, "to_station"/"from_station"
-# = move the stack between inventory and the open station.
+# One slot cell: colored square + count. `mode`: "none" = display only,
+# "select" = click picks the active slot, "inv"/"stor" = drag source & drop target
+# (inventory slot / station-storage slot). Items are moved by dragging.
 func _make_slot(parent: Node, index: int, mode: String) -> Dictionary:
 	var root: Control
-	if mode == "none":
-		root = Panel.new()
-	else:
+	if mode == "select":
 		var b := Button.new()
-		b.pressed.connect(_on_slot_pressed.bind(index, mode))
+		b.pressed.connect(_on_slot_pressed.bind(index))
 		root = b
+	else:
+		root = Panel.new()
 	root.custom_minimum_size = Vector2(56, 56)
 	parent.add_child(root)
 	var swatch := ColorRect.new()
@@ -1200,18 +1193,111 @@ func _make_slot(parent: Node, index: int, mode: String) -> Dictionary:
 	count.offset_left = -30; count.offset_top = -22
 	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(count)
+	# drag & drop: "select"/"to_station" cells map to inventory slots, "from_station"
+	# to the open station's storage
+	var dcont := ""
+	if mode == "select" or mode == "to_station":
+		dcont = "inv"
+	elif mode == "from_station":
+		dcont = "stor"
+	if dcont != "":
+		root.set_drag_forwarding(
+			_slot_get_drag.bind(dcont, index, root),
+			_slot_can_drop.bind(dcont, index),
+			_slot_do_drop.bind(dcont, index))
 	return {"root": root, "swatch": swatch, "count": count}
 
 
-func _on_slot_pressed(index: int, mode: String) -> void:
-	match mode:
-		"select":
-			active_slot = index
-			_refresh_slots()
-		"to_station":
-			_move_inv_to_station(index)
-		"from_station":
-			_move_station_to_inv(index)
+func _on_slot_pressed(index: int) -> void:
+	active_slot = index
+	_refresh_slots()
+
+
+# --- drag & drop --------------------------------------------------------------
+
+func _slot_ref(cont: String, index: int) -> Dictionary:
+	if cont == "inv":
+		return inv[index]
+	if cont == "stor" and _station_open != null:
+		return _station_open.storage[index]
+	return {}
+
+
+func _slot_get_drag(_at: Vector2, cont: String, index: int, root: Control) -> Variant:
+	var slot := _slot_ref(cont, index)
+	if slot.is_empty() or int(slot["count"]) <= 0:
+		return null
+	var pv := ColorRect.new()
+	pv.size = Vector2(44, 44)
+	pv.position = Vector2(-22, -22)
+	var mat: Dictionary = slot.get("mat", {})
+	pv.color = mat["color"] if mat.has("color") else Blocks.color_of(slot["id"])
+	var wrap := Control.new()
+	wrap.add_child(pv)
+	root.set_drag_preview(wrap)
+	return {"cont": cont, "index": index}
+
+
+func _slot_can_drop(_at: Vector2, data: Variant, _cont: String, _index: int) -> bool:
+	return typeof(data) == TYPE_DICTIONARY and data.has("cont")
+
+
+func _slot_do_drop(_at: Vector2, data: Variant, cont: String, index: int) -> void:
+	_transfer(data["cont"], int(data["index"]), cont, index)
+
+
+func _clear_slot(s: Dictionary) -> void:
+	s["id"] = Blocks.AIR
+	s["count"] = 0
+	s["props"] = {}
+	s["src"] = ""
+	s["mat"] = {}
+
+
+func _copy_slot(src: Dictionary, dst: Dictionary) -> void:
+	dst["id"] = src["id"]
+	dst["count"] = src["count"]
+	dst["props"] = src.get("props", {})
+	dst["src"] = src.get("src", "")
+	dst["mat"] = src.get("mat", {})
+
+
+func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
+	if fc == tc and fi == ti:
+		return
+	var from := _slot_ref(fc, fi)
+	var to := _slot_ref(tc, ti)
+	if from.is_empty() or to.is_empty() or int(from["count"]) <= 0:
+		return
+	# dropping INTO a station's storage must match what it accepts
+	if tc == "stor" and fc != "stor" and _station_open != null:
+		if _station_open.kind == Blocks.SMELTER and not Blocks.is_ore(from["id"]):
+			_toast("Smelter takes raw ore")
+			return
+		if _station_open.kind != Blocks.SMELTER and not Blocks.is_refined(from["id"]):
+			_toast("%s takes refined material" % _station_open.title())
+			return
+	if to["count"] > 0 and to["id"] == from["id"] and to.get("src", "") == from.get("src", ""):
+		var cap: int = STACK_MAX if tc == "inv" else 100000
+		var mv: int = mini(cap - to["count"], from["count"])
+		to["count"] += mv
+		from["count"] -= mv
+		if from["count"] <= 0:
+			_clear_slot(from)
+	elif to["count"] == 0:
+		_copy_slot(from, to)
+		_clear_slot(from)
+	else:
+		var tmp := {"id": to["id"], "count": to["count"], "props": to.get("props", {}),
+			"src": to.get("src", ""), "mat": to.get("mat", {})}
+		_copy_slot(from, to)
+		from["id"] = tmp["id"]
+		from["count"] = tmp["count"]
+		from["props"] = tmp["props"]
+		from["src"] = tmp["src"]
+		from["mat"] = tmp["mat"]
+	_refresh_slots()
+	_refresh_station_ui()
 
 
 func _refresh_slots() -> void:
@@ -1358,11 +1444,14 @@ func _do_recipe(idx: int) -> void:
 
 # --- crafting stations --------------------------------------------------------
 
+const _LEFT_W := 168   # left column (blueprints/actions) width
 func _build_station_ui(layer: CanvasLayer) -> void:
 	var cols := Station.STORAGE_SLOTS
+	var rx := 12 + _LEFT_W + 12         # right column x
+	var grid_w := cols * 60
 	_station_panel = Panel.new()
 	_station_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_station_panel.custom_minimum_size = Vector2(cols * 60 + 24, 206 + 4 * 60 + 16)
+	_station_panel.custom_minimum_size = Vector2(rx + grid_w + 12, 124 + 4 * 60 + 16)
 	_station_panel.size = _station_panel.custom_minimum_size
 	_station_panel.position = -_station_panel.size * 0.5
 	_station_panel.visible = false
@@ -1372,49 +1461,57 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	_station_title.position = Vector2(14, 8)
 	_station_panel.add_child(_station_title)
 
+	# --- left column: blueprints / actions -----------------------------------
+	_left_header = Label.new()
+	_left_header.modulate = Color(1, 1, 1, 0.7)
+	_left_header.position = Vector2(14, 36)
+	_station_panel.add_child(_left_header)
+
+	_refine_btn = Button.new()
+	_refine_btn.text = "Refine"
+	_refine_btn.position = Vector2(12, 62)
+	_refine_btn.custom_minimum_size = Vector2(_LEFT_W, 30)
+	_refine_btn.pressed.connect(_on_refine)
+	_station_panel.add_child(_refine_btn)
+
+	# per-station craft buttons are (re)built when the station opens
+	_craft_row = Control.new()
+	_craft_row.position = Vector2(12, 62)
+	_station_panel.add_child(_craft_row)
+
+	_preview_label = Label.new()
+	_preview_label.position = Vector2(14, 210)
+	_preview_label.custom_minimum_size = Vector2(_LEFT_W, 0)
+	_preview_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_preview_label.modulate = Color(0.82, 0.92, 1.0)
+	_station_panel.add_child(_preview_label)
+
+	# --- right column: machine storage (top) + your inventory (bottom) -------
 	_station_store_label = Label.new()
-	_station_store_label.text = "Contents  (click to take)"
 	_station_store_label.modulate = Color(1, 1, 1, 0.7)
-	_station_store_label.position = Vector2(14, 32)
+	_station_store_label.position = Vector2(rx + 2, 36)
 	_station_panel.add_child(_station_store_label)
 
 	var sgrid := GridContainer.new()
 	sgrid.columns = cols
 	sgrid.add_theme_constant_override("h_separation", 4)
 	sgrid.add_theme_constant_override("v_separation", 4)
-	sgrid.position = Vector2(12, 56)
+	sgrid.position = Vector2(rx, 60)
 	_station_panel.add_child(sgrid)
 	for i in cols:
 		_station_cells.append(_make_slot(sgrid, i, "from_station"))
 
-	_refine_btn = Button.new()
-	_refine_btn.text = "Refine"
-	_refine_btn.position = Vector2(12, 120)
-	_refine_btn.custom_minimum_size = Vector2(120, 30)
-	_refine_btn.pressed.connect(_on_refine)
-	_station_panel.add_child(_refine_btn)
-
-	# per-station craft buttons are (re)built when the station opens
-	_craft_row = Control.new()
-	_craft_row.position = Vector2(12, 118)
-	_station_panel.add_child(_craft_row)
-
-	_preview_label = Label.new()
-	_preview_label.position = Vector2(12, 154)
-	_preview_label.modulate = Color(0.82, 0.92, 1.0)
-	_station_panel.add_child(_preview_label)
-
 	var ilabel := Label.new()
-	ilabel.text = "Your inventory  (click to add)"
+	ilabel.text = "Your inventory  (drag to move)"
 	ilabel.modulate = Color(1, 1, 1, 0.7)
-	ilabel.position = Vector2(14, 182)
+	ilabel.position = Vector2(rx + 2, 122)
 	_station_panel.add_child(ilabel)
 
 	var pgrid := GridContainer.new()
 	pgrid.columns = HOTBAR_SLOTS
 	pgrid.add_theme_constant_override("h_separation", 4)
 	pgrid.add_theme_constant_override("v_separation", 4)
-	pgrid.position = Vector2(12, 206)
+	pgrid.position = Vector2(rx, 146)
 	_station_panel.add_child(pgrid)
 	for i in SLOTS:
 		_pinv_cells.append(_make_slot(pgrid, i, "to_station"))
@@ -1433,24 +1530,26 @@ func _open_station(st: Station) -> void:
 	if inv_open:
 		_toggle_inventory()
 	_station_title.text = st.title()
-	_station_store_label.text = "%s contents  (click to take)" % st.title()
-	_refine_btn.visible = (st.kind == Blocks.SMELTER)
+	_station_store_label.text = "%s contents  (drag to move)" % st.title()
+	var is_smelter: bool = st.kind == Blocks.SMELTER
+	_refine_btn.visible = is_smelter
+	_left_header.text = "Actions" if is_smelter else "Blueprints"
 
-	# rebuild this station's craft buttons
+	# rebuild this station's craft buttons as a vertical list in the left column
 	for b in _craft_buttons:
 		b.queue_free()
 	_craft_buttons.clear()
 	var crafts: Array = Blocks.STATION_CRAFTS.get(st.kind, [])
-	var bx := 0.0
+	var by := 0.0
 	for craft in crafts:
 		var b := Button.new()
 		b.text = craft["label"]
-		b.position = Vector2(bx, 0)
-		b.custom_minimum_size = Vector2(150, 30)
+		b.position = Vector2(0, by)
+		b.custom_minimum_size = Vector2(_LEFT_W, 30)
 		b.pressed.connect(_on_station_craft.bind(craft))
 		_craft_row.add_child(b)
 		_craft_buttons.append(b)
-		bx += 158.0
+		by += 34.0
 	_preview_label.visible = not crafts.is_empty()
 
 	_station_panel.visible = true
@@ -1474,46 +1573,6 @@ func _refresh_station_ui() -> void:
 		_paint_cell(_pinv_cells[i], inv[i], false)
 	if Blocks.STATION_CRAFTS.has(_station_open.kind):
 		_preview_label.text = _craft_preview_text(_station_open.kind)
-
-
-func _move_inv_to_station(index: int) -> void:
-	if _station_open == null:
-		return
-	var s = inv[index]
-	if s["count"] <= 0:
-		return
-	if _station_open.kind == Blocks.SMELTER and not Blocks.is_ore(s["id"]):
-		_toast("Smelter takes raw ore")
-		return
-	if _station_open.kind != Blocks.SMELTER and not Blocks.is_refined(s["id"]):
-		_toast("%s takes refined material" % _station_open.title())
-		return
-	var left: int = _station_open.store_add(s["id"], s["count"], s.get("props", {}), s.get("src", ""), s.get("mat", {}))
-	if left == s["count"]:
-		_toast("Machine is full")
-		return
-	s["count"] = left
-	if s["count"] <= 0:
-		s["id"] = Blocks.AIR
-	_refresh_station_ui()
-	_refresh_slots()
-
-
-func _move_station_to_inv(index: int) -> void:
-	if _station_open == null:
-		return
-	var s = _station_open.storage[index]
-	if s["count"] <= 0:
-		return
-	var left: int = _add_item(s["id"], s["count"], s.get("props", {}), s.get("src", ""), s.get("mat", {}))
-	if left == s["count"]:
-		_toast("Inventory full")
-		return
-	s["count"] = left
-	if s["count"] <= 0:
-		s["id"] = Blocks.AIR
-	_refresh_station_ui()
-	_refresh_slots()
 
 
 func _on_refine() -> void:
