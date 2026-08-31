@@ -47,9 +47,11 @@ var canopy_min := 2.0
 var canopy_max := 4.0
 var tree_reach := 0.0         # how far above the surface trees can extend
 
-# --- ores (derived from seed) ---
+# --- ores (procedural per planet, derived from seed) ---
 var ore_threshold := 1.0      # ore_noise above this => an ore vein (lower = richer)
-var ores: Array = []          # [{id, w (weight), mind (min depth in blocks)}...]
+# each def: {block, name, color, tier, props{h,d,e,r}, hardness, min_power, w, mind}
+var ore_defs: Array = []
+var _ore_by_block := {}       # block id (ORE_0..3) -> def, for fast lookup
 var _ore_wsum := 0.0
 
 # --- water (derived from seed unless overridden) ---
@@ -145,15 +147,59 @@ func _derive_ores() -> void:
 	orng.seed = _seed + 999
 	var richness := orng.randf_range(0.04, 0.11)  # fraction of rock that is ore
 	ore_threshold = 0.72 - richness * 3.2          # lower threshold => more ore
-	var pool: Array = Blocks.ORE_IDS.duplicate()
 	var n := orng.randi_range(2, 4)
+	# tiers: guarantee at least one hand-mineable (tier 0/1) so a fresh planet is
+	# never a dead end, then spread the rest across all tiers.
+	var tiers: Array[int] = [orng.randi_range(0, 1)]
+	for i in n - 1:
+		tiers.append(orng.randi_range(0, 3))
 	for i in n:
-		var id: int = pool.pop_at(orng.randi() % pool.size())
-		var deep := orng.randf() < 0.4
-		var mind := maxf(radius * 0.25, 8.0) if deep else 4.0
-		var w := orng.randf_range(0.3, 1.0)
-		ores.append({"id": id, "w": w, "mind": mind})
-		_ore_wsum += w
+		var tier: int = tiers[i]
+		ore_defs.append(_make_ore(orng, i, tier))
+		_ore_by_block[ore_defs[i]["block"]] = ore_defs[i]
+		_ore_wsum += ore_defs[i]["w"]
+
+
+# Invent one ore: a unique name & color for this planet, with tier-derived stats.
+func _make_ore(orng: RandomNumberGenerator, slot: int, tier: int) -> Dictionary:
+	var name: String = Blocks.ORE_NAME_PRE[orng.randi() % Blocks.ORE_NAME_PRE.size()] \
+		+ Blocks.ORE_NAME_SUF[orng.randi() % Blocks.ORE_NAME_SUF.size()]
+	# colour: random hue, saturation/value that read as a mineral; a touch brighter
+	# and more saturated at higher tiers so exotic ores catch the eye.
+	var hue := orng.randf()
+	var sat := 0.45 + 0.12 * tier + orng.randf_range(-0.05, 0.05)
+	var val := 0.55 + 0.08 * tier + orng.randf_range(-0.05, 0.05)
+	var color := Color.from_hsv(hue, clampf(sat, 0.3, 0.95), clampf(val, 0.4, 0.9))
+	# props: tier archetype +/- per-ore variance
+	var base: Dictionary = Blocks.TIER_PROPS[tier]
+	var props := {}
+	for k in Blocks.PROP_KEYS:
+		props[k] = clampi(int(round(float(base[k]) * orng.randf_range(0.85, 1.15))), 1, 100)
+	var hardness: float = Blocks.TIER_HARDNESS[tier] * orng.randf_range(0.9, 1.1)
+	var deep := tier >= 2 or orng.randf() < 0.4   # rarer ores tend to sit deeper
+	var mind := maxf(radius * 0.25, 8.0) if deep else 4.0
+	return {
+		"block": Blocks.ORE_SLOT_IDS[slot], "name": name, "color": color, "tier": tier,
+		"props": props, "hardness": hardness, "min_power": Blocks.TIER_MIN_POWER[tier],
+		"w": orng.randf_range(0.3, 1.0), "mind": mind,
+	}
+
+
+# --- per-planet ore lookups (block id is a generic ORE slot) ------------------
+func ore_def(block_id: int) -> Dictionary:
+	return _ore_by_block.get(block_id, {})
+
+func ore_color(block_id: int) -> Color:
+	var d := ore_def(block_id)
+	return d["color"] if d.has("color") else Blocks.color_of(block_id)
+
+func ore_hardness(block_id: int) -> float:
+	var d := ore_def(block_id)
+	return d["hardness"] if d.has("hardness") else 1.0
+
+func ore_min_power(block_id: int) -> float:
+	var d := ore_def(block_id)
+	return d["min_power"] if d.has("min_power") else 1.0
 
 
 # Give each planet a distinct forest: color palette, wood tone, canopy shape and
@@ -290,7 +336,7 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 	if depth < 4.0:
 		return pal_sub
 	# rock layer: sometimes an ore vein
-	if not ores.is_empty() and ore_noise.get_noise_3d(gx, gy, gz) > ore_threshold:
+	if not ore_defs.is_empty() and ore_noise.get_noise_3d(gx, gy, gz) > ore_threshold:
 		var o := _pick_ore(gx, gy, gz, depth)
 		if o != Blocks.AIR:
 			return o
@@ -301,17 +347,17 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 # minimum depth. Deterministic via a position hash.
 func _pick_ore(gx: int, gy: int, gz: int, depth: float) -> int:
 	var wsum := 0.0
-	for o in ores:
+	for o in ore_defs:
 		if depth >= o["mind"]:
 			wsum += o["w"]
 	if wsum <= 0.0:
 		return Blocks.AIR
 	var r := _hash01(Vector3i(gx, gy, gz), 11) * wsum
-	for o in ores:
+	for o in ore_defs:
 		if depth >= o["mind"]:
 			r -= o["w"]
 			if r <= 0.0:
-				return o["id"]
+				return o["block"]
 	return Blocks.AIR
 
 
@@ -561,21 +607,6 @@ func _chunk_possibly_solid(cc: Vector3i) -> bool:
 
 
 # --- editing ------------------------------------------------------------------
-
-## This planet's take on an ore's material properties: the ore's base profile with
-## a small deterministic per-planet +/- variance, so "Copper is always Copper" yet
-## each world's copper reads a little differently. Values are ints 1..100.
-func ore_props(ore_id: int) -> Dictionary:
-	var base := Blocks.base_props(ore_id)
-	var out := {}
-	var i := 0
-	for k in Blocks.PROP_KEYS:
-		# 0.85..1.15 factor keyed off (planet seed, ore, property)
-		var f := 0.85 + 0.30 * _hash01(Vector3i(ore_id, i, 7), ore_id * 31 + i)
-		out[k] = clampi(int(round(float(base.get(k, 0)) * f)), 1, 100)
-		i += 1
-	return out
-
 
 ## Replace all player edits (used by the save system). Any chunks already loaded
 ## are queued for an async re-mesh so they reflect the loaded edits.

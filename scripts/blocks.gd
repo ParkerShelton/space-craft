@@ -42,7 +42,8 @@ const LEAF_11 := 27  # mint
 const LEAF_IDS := [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
 const WOOD_IDS := [13, 14, 15]
 
-# --- ores (IRON_ORE=6 already exists) ---
+# --- legacy fixed ore ids (kept so old planet configs don't break; no longer
+#     generated -- ores are now procedural per planet, see ORE slots below) ---
 const COPPER_ORE := 28
 const GOLD_ORE := 29
 const TITANIUM_ORE := 30
@@ -50,54 +51,60 @@ const SILICON_ORE := 31
 const URANIUM_ORE := 32
 const WATER := 33  # liquid: transparent, non-collidable (rendered as a second surface)
 
-const ORE_IDS := [IRON_ORE, COPPER_ORE, GOLD_ORE, TITANIUM_ORE, SILICON_ORE, URANIUM_ORE]
-
 # --- crafting stations (placed in the world, not voxel blocks) ---
 const SMELTER := 34
 const FABRICATOR := 35
 const SHIPWORKS := 36
 const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS]
 
-# --- refined materials (inventory-only items produced by the Smelter) ---
-const REFINED_IRON := 37
-const REFINED_COPPER := 38
-const REFINED_GOLD := 39
-const REFINED_TITANIUM := 40
-const REFINED_SILICON := 41
-const REFINED_URANIUM := 42
-const REFINED_IDS := [REFINED_IRON, REFINED_COPPER, REFINED_GOLD,
-	REFINED_TITANIUM, REFINED_SILICON, REFINED_URANIUM]
+# --- procedural ore slots ---------------------------------------------------
+# Each planet invents its own ores (unique name + color) and assigns each to a
+# generic slot id below and a universal TIER. The slot id is what gets stored in
+# the voxel/edit data; the real identity (name, color, tier, props) lives in the
+# planet's ore definition and travels with mined items as metadata. So Verdis and
+# Frost can both have a "tier-2" ore that looks and is named completely differently.
+const ORE_0 := 43
+const ORE_1 := 44
+const ORE_2 := 45
+const ORE_3 := 46
+const ORE_SLOT_IDS := [ORE_0, ORE_1, ORE_2, ORE_3]
+# refined counterparts (inventory-only items the Smelter produces)
+const REFINED_0 := 47
+const REFINED_1 := 48
+const REFINED_2 := 49
+const REFINED_3 := 50
+const REFINED_SLOT_IDS := [REFINED_0, REFINED_1, REFINED_2, REFINED_3]
 
-# raw ore id -> refined material id
-const REFINED_OF := {
-	IRON_ORE: REFINED_IRON, COPPER_ORE: REFINED_COPPER, GOLD_ORE: REFINED_GOLD,
-	TITANIUM_ORE: REFINED_TITANIUM, SILICON_ORE: REFINED_SILICON, URANIUM_ORE: REFINED_URANIUM,
-}
+# Universal ore tiers (0=most common/soft .. 3=exotic). A planet's ore maps to one.
+const TIER_NAMES := ["Common", "Uncommon", "Rare", "Exotic"]
+# base material properties per tier (h/d/e/r, 0..100); planet adds per-ore variance
+const TIER_PROPS := [
+	{"h": 40, "d": 40, "e": 30, "r": 15},
+	{"h": 55, "d": 50, "e": 50, "r": 30},
+	{"h": 72, "d": 62, "e": 68, "r": 55},
+	{"h": 88, "d": 82, "e": 85, "r": 85},
+]
+const TIER_HARDNESS := [1.0, 1.4, 2.0, 2.8]   # base mining seconds (before hand penalty / tool)
+const TIER_MIN_POWER := [1.0, 1.0, 1.6, 2.4]  # mine_power needed to break at all (hands=1.0)
 
-# Base material property profile per ore type (0..100). A planet applies a small
-# +/- variance on top (Planet.ore_props), so "Copper is always Copper" but each
-# world's copper differs a little. Keys: h=Hardness d=Density e=Energy r=Reactivity.
+# Syllables for inventing ore names (planet combines a prefix + suffix from its seed).
+const ORE_NAME_PRE := ["Vel", "Cryo", "Pyr", "Aur", "Fer", "Lum", "Xen", "Tor",
+	"Zin", "Mag", "Cor", "Nyx", "Hal", "Ryn", "Quar", "Bas", "Dra", "Eos"]
+const ORE_NAME_SUF := ["ite", "ium", "ex", "ora", "yte", "ine", "ar", "onite", "ax", "yr"]
+
 const PROP_KEYS := ["h", "d", "e", "r"]
 const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy", "r": "Reactivity"}
-const ORE_PROPS := {
-	IRON_ORE:     {"h": 60, "d": 55, "e": 25, "r": 10},  # balanced hull/tool
-	COPPER_ORE:   {"h": 35, "d": 45, "e": 70, "r": 20},  # conductive: thrusters/wiring
-	GOLD_ORE:     {"h": 20, "d": 80, "e": 85, "r": 15},  # soft, dense, very conductive
-	TITANIUM_ORE: {"h": 90, "d": 40, "e": 30, "r": 10},  # hard & light: best armor
-	SILICON_ORE:  {"h": 45, "d": 30, "e": 55, "r": 25},  # circuits/glass
-	URANIUM_ORE:  {"h": 50, "d": 90, "e": 40, "r": 95},  # reactor fuel
-}
 
 # Hand-craftable recipes that need NO station (bootstrap only). cost = {id: count}.
 const HAND_CRAFT := {
 	SMELTER: {ROCK: 15},
 }
 
-# Everything the player can place (scroll-wheel cycles this list).
+# Everything the player can place (scroll-wheel cycles this list). Ores are now raw
+# materials for crafting, not placeable blocks.
 const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	WOOD, WOOD_PALE, WOOD_DARK,
 	16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-	IRON_ORE, COPPER_ORE, GOLD_ORE, TITANIUM_ORE, SILICON_ORE, URANIUM_ORE,
 	COCKPIT, THRUSTER]
 
 const NAMES := {
@@ -138,12 +145,9 @@ const NAMES := {
 	SMELTER: "Smelter",
 	FABRICATOR: "Fabricator",
 	SHIPWORKS: "Shipworks",
-	REFINED_IRON: "Refined Iron",
-	REFINED_COPPER: "Refined Copper",
-	REFINED_GOLD: "Refined Gold",
-	REFINED_TITANIUM: "Refined Titanium",
-	REFINED_SILICON: "Refined Silicon",
-	REFINED_URANIUM: "Refined Uranium",
+	ORE_0: "Ore", ORE_1: "Ore", ORE_2: "Ore", ORE_3: "Ore",
+	REFINED_0: "Refined Material", REFINED_1: "Refined Material",
+	REFINED_2: "Refined Material", REFINED_3: "Refined Material",
 }
 
 # What each ore is (eventually) used for -- shown when you aim at it.
@@ -205,12 +209,11 @@ const COLORS := {
 	SMELTER: Color(0.34, 0.30, 0.32),
 	FABRICATOR: Color(0.30, 0.40, 0.46),
 	SHIPWORKS: Color(0.40, 0.42, 0.30),
-	REFINED_IRON: Color(0.75, 0.76, 0.78),
-	REFINED_COPPER: Color(0.88, 0.55, 0.34),
-	REFINED_GOLD: Color(1.00, 0.84, 0.35),
-	REFINED_TITANIUM: Color(0.82, 0.85, 0.90),
-	REFINED_SILICON: Color(0.70, 0.78, 0.85),
-	REFINED_URANIUM: Color(0.55, 0.95, 0.45),
+	# generic fallbacks; real ore colors are planet-defined and travel with the item
+	ORE_0: Color(0.7, 0.6, 0.4), ORE_1: Color(0.6, 0.7, 0.5),
+	ORE_2: Color(0.5, 0.6, 0.7), ORE_3: Color(0.7, 0.5, 0.7),
+	REFINED_0: Color(0.8, 0.72, 0.55), REFINED_1: Color(0.72, 0.8, 0.62),
+	REFINED_2: Color(0.62, 0.72, 0.82), REFINED_3: Color(0.82, 0.62, 0.82),
 }
 
 static func is_solid(id: int) -> bool:
@@ -223,22 +226,24 @@ static func use_of(id: int) -> String:
 	return USES.get(id, "")
 
 static func is_ore(id: int) -> bool:
-	return id in ORE_IDS
+	return id in ORE_SLOT_IDS
+
+static func is_refined(id: int) -> bool:
+	return id in REFINED_SLOT_IDS
+
+static func is_material(id: int) -> bool:
+	return id in ORE_SLOT_IDS or id in REFINED_SLOT_IDS
 
 static func is_station(id: int) -> bool:
 	return id in STATION_IDS
 
-static func is_refined(id: int) -> bool:
-	return id in REFINED_IDS
-
 static func is_placeable_block(id: int) -> bool:
 	return id in PLACEABLE
 
+# raw ore slot id -> its refined counterpart (same slot index)
 static func refined_of(ore_id: int) -> int:
-	return REFINED_OF.get(ore_id, AIR)
-
-static func base_props(ore_id: int) -> Dictionary:
-	return ORE_PROPS.get(ore_id, {})
+	var i := ORE_SLOT_IDS.find(ore_id)
+	return REFINED_SLOT_IDS[i] if i >= 0 else AIR
 
 static func color_of(id: int) -> Color:
 	return COLORS.get(id, Color.MAGENTA)

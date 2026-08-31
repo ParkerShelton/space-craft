@@ -19,7 +19,7 @@ var _col: CollisionShape3D
 
 func _init() -> void:
 	for i in STORAGE_SLOTS:
-		storage.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": ""})
+		storage.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}})
 
 
 func configure(k: int, w: WorldManager) -> void:
@@ -66,7 +66,7 @@ func _build_visual() -> void:
 # --- storage helpers ----------------------------------------------------------
 
 ## Add items to internal storage; returns leftover that didn't fit.
-func store_add(id: int, n: int, props: Dictionary = {}, src: String = "") -> int:
+func store_add(id: int, n: int, props: Dictionary = {}, src: String = "", mat: Dictionary = {}) -> int:
 	if id == Blocks.AIR or n <= 0:
 		return n
 	for s in storage:
@@ -79,12 +79,13 @@ func store_add(id: int, n: int, props: Dictionary = {}, src: String = "") -> int
 			s["count"] = n
 			s["props"] = props
 			s["src"] = src
+			s["mat"] = mat
 			return 0
 	return n  # full
 
 
-## Smelt every raw-ore slot into its refined material, carrying the (now revealed)
-## properties. Returns how many slots were refined.
+## Smelt every raw-ore slot into its refined material, keeping its identity/props
+## (which the tooltip now reveals). Returns how many slots were refined.
 func refine_all() -> int:
 	var done := 0
 	for s in storage:
@@ -92,6 +93,5 @@ func refine_all() -> int:
 			var refined := Blocks.refined_of(s["id"])
 			if refined != Blocks.AIR:
 				s["id"] = refined
-				# props were assigned at mine time; refining just reveals them
 				done += 1
 	return done

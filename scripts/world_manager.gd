@@ -43,12 +43,22 @@ func save_game() -> bool:
 	for p in planets:
 		if not p._edits_by_chunk.is_empty():
 			data["planets"][p.planet_name] = p._edits_by_chunk
+	var ship_index := {}
 	for s in _ships:
 		if is_instance_valid(s) and not s.blocks.is_empty():
+			ship_index[s] = data["ships"].size()
 			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform})
 	for st in _stations:
-		if is_instance_valid(st):
-			data["stations"].append({"kind": st.kind, "xform": st.global_transform, "storage": st.storage})
+		if not is_instance_valid(st):
+			continue
+		var entry := {"kind": st.kind, "storage": st.storage}
+		var par := st.get_parent()
+		if par is Ship and ship_index.has(par):
+			entry["ship"] = ship_index[par]   # mounted -> save relative to its ship
+			entry["local"] = st.transform
+		else:
+			entry["xform"] = st.global_transform
+		data["stations"].append(entry)
 
 	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
 	if f == null:
@@ -98,9 +108,16 @@ func load_game() -> bool:
 	_stations.clear()
 	for std in data.get("stations", []):
 		var station := Station.new()
-		add_child(station)
-		station.configure(std.get("kind", Blocks.SMELTER), self)
-		station.global_transform = std.get("xform", Transform3D.IDENTITY)
+		var skind: int = std.get("kind", Blocks.SMELTER)
+		if std.has("ship") and int(std["ship"]) >= 0 and int(std["ship"]) < _ships.size():
+			var ship: Ship = _ships[int(std["ship"])]
+			ship.add_child(station)
+			station.configure(skind, self)
+			station.transform = std.get("local", Transform3D.IDENTITY)
+		else:
+			add_child(station)
+			station.configure(skind, self)
+			station.global_transform = std.get("xform", Transform3D.IDENTITY)
 		if std.has("storage"):
 			station.storage = std["storage"]
 		_stations.append(station)
@@ -181,6 +198,16 @@ func spawn_station(kind: int, pos: Vector3, up: Vector3, fwd: Vector3) -> Statio
 	var z := -f
 	var x := y.cross(z)
 	st.global_transform = Transform3D(Basis(x, y, z), pos.round())
+	_stations.append(st)
+	return st
+
+
+## Mount a station on a ship at a local grid cell; it rides along with the ship.
+func spawn_station_on_ship(kind: int, ship: Ship, local_v: Vector3i) -> Station:
+	var st := Station.new()
+	ship.add_child(st)
+	st.configure(kind, self)
+	st.transform = Transform3D(Basis.IDENTITY, Vector3(local_v))
 	_stations.append(st)
 	return st
 

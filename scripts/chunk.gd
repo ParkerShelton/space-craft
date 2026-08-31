@@ -240,11 +240,19 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				mask[k + j * CS] = val
 
 		var w_coord := a + (1 if dir > 0 else 0)
-		_emit_mask(mask, d, u, v, dir, w_coord, normal,
+		_emit_mask(planet, mask, d, u, v, dir, w_coord, normal,
 			verts, normals, colors, wverts, wnormals, wcolors)
 
 
-static func _emit_mask(mask: PackedInt32Array, d: int, u: int, v: int, dir: int, w_coord: int,
+# Opaque blocks use their registry colour, except procedural ores, whose colour is
+# defined by the planet (each world's ores look different).
+static func _block_color(planet: Planet, id: int) -> Color:
+	if Blocks.is_ore(id):
+		return planet.ore_color(id)
+	return Blocks.color_of(id)
+
+
+static func _emit_mask(planet: Planet, mask: PackedInt32Array, d: int, u: int, v: int, dir: int, w_coord: int,
 		normal: Vector3,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray) -> void:
@@ -274,7 +282,7 @@ static func _emit_mask(mask: PackedInt32Array, d: int, u: int, v: int, dir: int,
 			# Bake per-face directional shading into the vertex color so faces of
 			# different orientation read distinctly even under flat ambient light.
 			var s := _face_shade(d, dir)
-			var base := Blocks.color_of(val)
+			var base := _block_color(planet, val)
 			var col := Color(base.r * s, base.g * s, base.b * s, base.a)  # keep alpha (water)
 			var p00 := _corner(d, u, v, w_coord, k, j)
 			var p10 := _corner(d, u, v, w_coord, k + wdt, j)

@@ -121,7 +121,7 @@ func _ready() -> void:
 func _init_inventory() -> void:
 	inv.clear()
 	for i in SLOTS:
-		inv.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": ""})
+		inv.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}})
 	# starting kit so you can build a ship and terraform right away
 	_add_item(Blocks.COCKPIT, 2)
 	_add_item(Blocks.THRUSTER, 8)
@@ -135,7 +135,7 @@ func _init_inventory() -> void:
 
 # Add n of an item; fills matching stacks first, then empty slots. Returns leftover.
 # Items with different props/src (e.g. copper from different planets) don't stack.
-func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "") -> int:
+func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: Dictionary = {}) -> int:
 	if id == Blocks.AIR or n <= 0:
 		return n
 	for s in inv:
@@ -150,6 +150,7 @@ func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "") -> int
 			s["id"] = id
 			s["props"] = props
 			s["src"] = src
+			s["mat"] = mat
 			var add: int = mini(n, STACK_MAX)
 			s["count"] = add
 			n -= add
@@ -768,8 +769,9 @@ func _edit_block(_break_it: bool) -> void:
 			_consume_active()
 
 
-## Place a crafting station in the empty cell you're aiming at (planet surface only
-## for now), flat to the ground, and consume it from the active slot.
+## Place a crafting station in the empty cell you're aiming at -- on a planet
+## surface OR on a ship (where it rides along, so bigger ships become mobile bases).
+## Consumes it from the active slot.
 func _place_station(id: int) -> void:
 	if world == null:
 		return
@@ -777,21 +779,29 @@ func _place_station(id: int) -> void:
 	if not _ray.is_colliding():
 		return
 	var collider := _ray.get_collider()
-	if not (collider is Chunk):
-		_toast("Place stations on the ground")
-		return
-	var planet: Planet = (collider as Chunk).planet
 	var point := _ray.get_collision_point()
 	var normal := _ray.get_collision_normal()
-	var v := planet.world_to_voxel(point + normal * 0.5)  # the empty neighbor cell
-	var corner := planet.to_global(Vector3(v))
-	if corner.distance_to(global_position) < 1.1:
-		return  # don't place inside yourself
-	var g := world.gravity_at(corner)
-	var up := (-g).normalized() if g.length() > 0.01 else normal
-	world.spawn_station(id, corner, up, -global_transform.basis.z)
-	_consume_active()
-	_toast(Blocks.name_of(id) + " placed")
+	if collider is Chunk:
+		var planet: Planet = (collider as Chunk).planet
+		var v := planet.world_to_voxel(point + normal * 0.5)  # the empty neighbor cell
+		var corner := planet.to_global(Vector3(v))
+		if corner.distance_to(global_position) < 1.1:
+			return  # don't place inside yourself
+		var g := world.gravity_at(corner)
+		var up := (-g).normalized() if g.length() > 0.01 else normal
+		world.spawn_station(id, corner, up, -global_transform.basis.z)
+		_consume_active()
+		_toast(Blocks.name_of(id) + " placed")
+	elif collider is Ship:
+		var ship := collider as Ship
+		var lv := ship.world_to_voxel(point + normal * 0.5)
+		if ship.get_id(lv) != Blocks.AIR:
+			return  # cell already occupied by a ship block
+		world.spawn_station_on_ship(id, ship, lv)
+		_consume_active()
+		_toast(Blocks.name_of(id) + " mounted on ship")
+	else:
+		_toast("Aim at the ground or a ship")
 
 
 # Hold left-click to break the targeted block; harder blocks take longer. Broken
@@ -833,8 +843,25 @@ func _process_mining(delta: float) -> void:
 		_mine_time = 0.0
 		return
 
-	var use := Blocks.use_of(id)
-	_look_name = Blocks.name_of(id) + ("  (" + use + ")" if use != "" else "")
+	# Ore is a procedural, unidentified material until refined; everything else
+	# shows its name + use.
+	var is_ore := planet != null and Blocks.is_ore(id)
+	var od: Dictionary = planet.ore_def(id) if is_ore else {}
+	if is_ore:
+		_look_name = od.get("name", "Ore") + " Ore  (unidentified)"
+	else:
+		var use := Blocks.use_of(id)
+		_look_name = Blocks.name_of(id) + ("  (" + use + ")" if use != "" else "")
+
+	# High-tier ore is too hard for weak tools -- that gate is itself the tier hint.
+	var hardness := Blocks.hardness(id)
+	if is_ore:
+		hardness = planet.ore_hardness(id)
+		if mine_power < planet.ore_min_power(id):
+			_look_name = od.get("name", "Ore") + " Ore  — too hard, needs a stronger drill"
+			_mine_key = ""
+			_mine_time = 0.0
+			return
 
 	var holding := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 	if not holding:
@@ -844,15 +871,15 @@ func _process_mining(delta: float) -> void:
 	if key != _mine_key:
 		_mine_key = key
 		_mine_time = 0.0
-		_mine_total = Blocks.hardness(id) * BARE_MINE_MULT / mine_power
+		_mine_total = hardness * BARE_MINE_MULT / mine_power
 	_mine_time += delta
 	if _mine_time >= _mine_total:
 		if planet != null:
 			planet.set_block(v, Blocks.AIR)
 			planet.flow_water(v)  # let adjacent water pour into the gap
-			# ore carries this planet's material properties (hidden until smelted)
-			if Blocks.is_ore(id):
-				_add_item(id, 1, planet.ore_props(id), planet.planet_name)
+			if is_ore:
+				_add_item(id, 1, od["props"], planet.planet_name,
+					{"name": od["name"], "color": od["color"], "tier": od["tier"]})
 			else:
 				_add_item(id, 1)
 		elif ship != null:
@@ -1104,7 +1131,8 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 	var swatch: ColorRect = cell["swatch"]
 	var count: Label = cell["count"]
 	if slot["count"] > 0:
-		swatch.color = Blocks.color_of(slot["id"])
+		var mat: Dictionary = slot.get("mat", {})
+		swatch.color = mat["color"] if mat.has("color") else Blocks.color_of(slot["id"])
 		count.text = str(slot["count"])
 		cell["root"].tooltip_text = _item_tooltip(slot)
 	else:
@@ -1114,23 +1142,26 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 	cell["root"].modulate = Color(1.4, 1.4, 0.7) if highlight else Color(1, 1, 1)
 
 
-# Hover text: name (+ source planet), and property bars once identified.
+# Hover text. Raw ore stays unidentified (tier & stats hidden); a refined material
+# shows its tier and property bars. Source planet is shown for both.
 func _item_tooltip(slot: Dictionary) -> String:
 	var id: int = slot["id"]
-	var name := Blocks.name_of(id)
+	var mat: Dictionary = slot.get("mat", {})
+	var mname: String = mat.get("name", Blocks.name_of(id))
 	var src: String = slot.get("src", "")
-	if src != "":
-		name += "  ·  " + src
+	var suffix := ("  ·  " + src) if src != "" else ""
 	if Blocks.is_ore(id):
-		return name + "\nUnidentified ore — smelt to reveal properties"
-	var props: Dictionary = slot.get("props", {})
-	if props.is_empty():
-		var use := Blocks.use_of(id)
-		return name + ("\n" + use if use != "" else "")
-	var lines := [name]
-	for k in Blocks.PROP_KEYS:
-		lines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(props.get(k, 0))])
-	return "\n".join(lines)
+		return "%s Ore%s\nUnidentified — refine to reveal its tier & stats" % [mname, suffix]
+	if Blocks.is_refined(id):
+		var tier: int = int(mat.get("tier", 0))
+		var props: Dictionary = slot.get("props", {})
+		var lines := ["Refined %s%s  (%s · Tier %d)" % [mname, suffix, Blocks.TIER_NAMES[tier], tier]]
+		for k in Blocks.PROP_KEYS:
+			lines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(props.get(k, 0))])
+		return "\n".join(lines)
+	# ordinary block / item
+	var use := Blocks.use_of(id)
+	return Blocks.name_of(id) + ("\n" + use if use != "" else "")
 
 
 func _craft_smelter() -> void:
@@ -1242,7 +1273,7 @@ func _move_inv_to_station(index: int) -> void:
 	if _station_open.kind == Blocks.SMELTER and not Blocks.is_ore(s["id"]):
 		_toast("Smelter takes raw ore")
 		return
-	var left: int = _station_open.store_add(s["id"], s["count"], s.get("props", {}), s.get("src", ""))
+	var left: int = _station_open.store_add(s["id"], s["count"], s.get("props", {}), s.get("src", ""), s.get("mat", {}))
 	if left == s["count"]:
 		_toast("Machine is full")
 		return
@@ -1259,7 +1290,7 @@ func _move_station_to_inv(index: int) -> void:
 	var s = _station_open.storage[index]
 	if s["count"] <= 0:
 		return
-	var left: int = _add_item(s["id"], s["count"], s.get("props", {}), s.get("src", ""))
+	var left: int = _add_item(s["id"], s["count"], s.get("props", {}), s.get("src", ""), s.get("mat", {}))
 	if left == s["count"]:
 		_toast("Inventory full")
 		return
