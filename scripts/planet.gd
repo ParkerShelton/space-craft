@@ -562,6 +562,14 @@ func _chunk_possibly_solid(cc: Vector3i) -> bool:
 
 # --- editing ------------------------------------------------------------------
 
+## Replace all player edits (used by the save system). Any chunks already loaded
+## are queued for an async re-mesh so they reflect the loaded edits.
+func load_edits(e: Dictionary) -> void:
+	_edits_by_chunk = e if e != null else {}
+	for cc in loaded_chunks.keys():
+		_dirty[cc] = true
+
+
 func set_block(v: Vector3i, id: int) -> void:
 	var cc := chunk_of(v)
 	if not _edits_by_chunk.has(cc):

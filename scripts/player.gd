@@ -64,6 +64,8 @@ var _hotbar_label: Label
 var _mode_label: Label
 var _ship_label: Label
 var _target_label: Label
+var _toast_label: Label            # transient "Saved"/"Loaded" confirmation
+var _toast_time := 0.0
 var _inv_panel: Control            # full inventory overlay (toggled with E)
 var _hotbar_cells: Array = []      # always-visible hotbar slot views
 var _grid_cells: Array = []        # full-inventory slot buttons
@@ -177,6 +179,20 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toggle_inventory()
 			else:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+		elif event.keycode == KEY_F5:
+			if world != null and world.save_game():
+				_toast("Saved")
+			else:
+				_toast("Save failed")
+		elif event.keycode == KEY_F9:
+			# Reload only while on foot -- avoids tearing down ship/pilot state.
+			if piloting != null or aboard != null or eva:
+				_toast("Can't load while flying")
+			elif world != null and world.has_save():
+				world.load_game()
+				_toast("Loaded")
+			else:
+				_toast("No save found")
 		elif event.keycode == KEY_E:
 			_toggle_inventory()
 		elif event.keycode == KEY_F:
@@ -207,6 +223,10 @@ func _toggle_inventory() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if _toast_time > 0.0:
+		_toast_time -= delta
+		if _toast_time <= 0.0 and _toast_label != null:
+			_toast_label.visible = false
 	if eva:
 		_eva_physics(delta)
 		_process_mining(delta)
@@ -881,10 +901,29 @@ func _build_ui() -> void:
 	help.position = Vector2(16, 108)
 	help.text = "WASD move  |  Mouse look  |  Space up  |  Shift down  |  R-click place  |  Hold L-click mine\n" \
 		+ "1-8 slot  |  Scroll = slot  |  E inventory  |  G ship  |  F cockpit  |  T EVA  |  Q/E roll  |  Esc\n" \
-		+ "Build Cockpit + Thruster + hull, F to fly, hold Space to lift off. Aboard in space: F/T"
+		+ "F5 save  |  F9 load  |  Build Cockpit + Thruster + hull, F to fly, hold Space to lift off. Aboard: F/T"
 	help.modulate = Color(1, 1, 1, 0.55)
 	layer.add_child(help)
+
+	# transient save/load confirmation, top-center
+	_toast_label = Label.new()
+	_toast_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_toast_label.position = Vector2(0, 24)
+	_toast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_toast_label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_toast_label.add_theme_font_size_override("font_size", 22)
+	_toast_label.visible = false
+	layer.add_child(_toast_label)
+
 	_update_ui()
+
+
+func _toast(msg: String) -> void:
+	if _toast_label == null:
+		return
+	_toast_label.text = msg
+	_toast_label.visible = true
+	_toast_time = 2.0
 
 
 # Build the always-visible hotbar strip and the toggleable full-inventory grid.

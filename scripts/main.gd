@@ -13,6 +13,14 @@ var _sky_mat: ShaderMaterial
 var _sun: DirectionalLight3D
 var _atmo := 0.0
 
+func _notification(what: int) -> void:
+	# Autosave when the window is closed (X button, Alt+F4, etc.).
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		if _world != null:
+			_world.save_game()
+		get_tree().quit()
+
+
 func _ready() -> void:
 	_setup_environment()
 
@@ -73,11 +81,24 @@ func _ready() -> void:
 	add_child(player)
 	world.player = player
 
-	# Build a small stack of chunks under the spawn point synchronously so the
-	# player lands on solid ground instead of falling while workers catch up.
-	var pcc := home.chunk_of(home.world_to_voxel(player.global_position))
-	for dy in range(1, -4, -1):
-		home.build_chunk_sync(pcc + Vector3i(0, dy, 0))
+	# If a save exists, load it now (this moves the player, restores inventory,
+	# planet edits and ships). Otherwise we keep the fresh spawn point above.
+	if world.has_save():
+		world.load_game()
+
+	# Don't let the OS close the window until we've flushed a save.
+	get_tree().set_auto_accept_quit(false)
+
+	# Build a small stack of chunks under the (possibly loaded) player position
+	# synchronously so the player lands on solid ground instead of falling while
+	# workers catch up.
+	var ground: Planet = world.nearest_planet(player.global_position)
+	if ground == null:
+		ground = home
+	if ground.altitude(player.global_position) < 96.0:
+		var pcc := ground.chunk_of(ground.world_to_voxel(player.global_position))
+		for dy in range(1, -4, -1):
+			ground.build_chunk_sync(pcc + Vector3i(0, dy, 0))
 
 
 func _setup_environment() -> void:

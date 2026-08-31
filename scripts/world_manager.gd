@@ -12,6 +12,97 @@ var planets: Array[Planet] = []
 var player: Node3D
 var _ships: Array[Ship] = []
 
+const SAVE_PATH := "user://spacecraft_save.dat"
+const SAVE_VERSION := 1
+
+
+func has_save() -> bool:
+	return FileAccess.file_exists(SAVE_PATH)
+
+
+## Write the whole mutable world to disk. Terrain, ores, flora and water are all
+## pure functions of each planet's seed (defined in code), so we only persist what
+## the player changed: block edits per planet, the player's state, and any ships.
+func save_game() -> bool:
+	var data := {
+		"version": SAVE_VERSION,
+		"player": {},
+		"planets": {},   # planet name -> edits_by_chunk
+		"ships": [],
+	}
+	if player != null:
+		var pl = player  # untyped: reach Player-specific members off the Node3D ref
+		data["player"] = {
+			"pos": pl.global_position,
+			"basis": pl.global_transform.basis,
+			"inv": pl.inv,
+			"active_slot": pl.active_slot,
+		}
+	for p in planets:
+		if not p._edits_by_chunk.is_empty():
+			data["planets"][p.planet_name] = p._edits_by_chunk
+	for s in _ships:
+		if is_instance_valid(s) and not s.blocks.is_empty():
+			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform})
+
+	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	if f == null:
+		push_warning("save_game: could not open " + SAVE_PATH)
+		return false
+	f.store_var(data)  # binary Variant serialization handles Vector3i keys natively
+	f.close()
+	return true
+
+
+## Restore a saved world. Safe to call at startup (nothing streamed yet) or live
+## while on foot -- edited chunks that are already loaded get re-meshed.
+func load_game() -> bool:
+	if not has_save():
+		return false
+	var f := FileAccess.open(SAVE_PATH, FileAccess.READ)
+	if f == null:
+		return false
+	var data = f.get_var()
+	f.close()
+	if typeof(data) != TYPE_DICTIONARY:
+		return false
+
+	# planets: swap in the saved edits and re-mesh anything already loaded
+	var pedits: Dictionary = data.get("planets", {})
+	for p in planets:
+		p.load_edits(pedits.get(p.planet_name, {}))
+
+	# ships: rebuild from scratch
+	for s in _ships:
+		if is_instance_valid(s):
+			s.queue_free()
+	_ships.clear()
+	for sd in data.get("ships", []):
+		var ship := Ship.new()
+		ship.world = self
+		add_child(ship)
+		ship.blocks = sd.get("blocks", {})
+		ship.global_transform = sd.get("xform", Transform3D.IDENTITY)
+		ship.rebuild()
+		_ships.append(ship)
+
+	# player
+	var pd: Dictionary = data.get("player", {})
+	if player != null and not pd.is_empty():
+		var pl = player  # untyped: reach Player-specific members off the Node3D ref
+		if pd.has("pos"):
+			pl.global_position = pd["pos"]
+		if pd.has("basis"):
+			var t: Transform3D = pl.global_transform
+			t.basis = pd["basis"]
+			pl.global_transform = t
+		if pd.has("inv"):
+			pl.inv = pd["inv"]
+		pl.active_slot = pd.get("active_slot", 0)
+		pl.velocity = Vector3.ZERO
+		pl._refresh_slots()
+	return true
+
 
 ## Create a new ship seeded with a cockpit. Snaps orientation to the block grid
 ## (axis-aligned, parallel to the floor) and position to whole cells, so it lines
