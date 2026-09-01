@@ -235,6 +235,10 @@ func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, 
 		"atmo_height": rng.randf_range(600.0, 950.0),
 		"water_style": water, "water_amount": water_amount,
 		"hazard": a["hazard"], "hazard_dps": a["hdps"],
+		# TEST ONLY: guarantee a settlement on the home planet so it's easy to find
+		# without exploring -- remove once settlements are common enough to just
+		# stumble into naturally (or once there's a proper reason to seek one out)
+		"force_settlement": index == 0,
 	}
 
 

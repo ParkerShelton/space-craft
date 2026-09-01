@@ -80,6 +80,15 @@ const WATER_ICE := 2
 var water_style := WATER_NONE
 var water_level := 0.0         # everything above the terrain and below this is water/ice
 
+# --- settlements (procedural villages/towns/cities, derived from seed like ores) ---
+const SETTLEMENT_SLOTS := 10   # candidate locations spread around the planet
+const BUILDING_CELL := 9.0     # local grid spacing for buildings within a settlement
+const SETTLEMENT_TIER_NAMES := ["Outpost", "Village", "Town", "City"]
+const SETTLEMENT_TIER_RADIUS := [22.0, 42.0, 68.0, 100.0]
+const SETTLEMENT_TIER_DENSITY := [0.32, 0.42, 0.5, 0.58]  # chance a building-cell in range holds a building
+var settlements: Array = []    # each: {dir, up, u, v, anchor, tier, radius, density, wall_mat, roof_mat, seed}
+var settlement_reach := 0.0    # tallest a building can get, for streaming/reach purposes
+
 # --- fauna (procedural creatures, derived from seed like ores) ---
 var fauna_land: Array = []     # surface species defs (see _make_species)
 var fauna_fish: Array = []     # fish species defs; only non-empty on liquid-water planets
@@ -144,6 +153,7 @@ func configure(cfg: Dictionary) -> void:
 	_derive_caves(cfg.get("cave_amount", -1.0))
 	_derive_water(cfg)
 	_derive_fauna()  # after water: fish generation depends on water_style
+	_derive_settlements(cfg.get("force_settlement", false))  # after flora/water: siting depends on both
 	_add_distant_sphere()
 
 
@@ -387,9 +397,9 @@ func _spawn_at(world_pos: Vector3, sp: Dictionary, world: WorldManager) -> void:
 	_creatures.append(c)
 
 
-# How far from center anything (terrain, trees, or water) can possibly exist.
+# How far from center anything (terrain, trees, buildings, or water) can possibly exist.
 func _max_reach() -> float:
-	return maxf(radius + terrain_amp + tree_reach, water_level)
+	return maxf(radius + terrain_amp + maxf(tree_reach, settlement_reach), water_level)
 
 
 # Each planet gets a random ore mix + abundance from its seed: which ores it holds,
@@ -550,6 +560,85 @@ func _derive_flora(density: float) -> void:
 	tree_reach = float(trunk_max) + canopy_max * 2.0 + 2.0
 
 
+# --- settlements: invent small-to-large civilizations from the seed, exactly ----
+# like ores/fauna -- a handful of candidate sites spread around the planet, each
+# independently rolling whether it holds a settlement and how big. Materials are
+# picked to match the planet (wood on forested worlds, ice on frost worlds, stone
+# everywhere else) so they read as built FROM the world they're on, not pasted in.
+func _derive_settlements(force_one: bool) -> void:
+	settlements.clear()
+	settlement_reach = 0.0
+	# how hospitable this world is -- shapes both how likely a site is to be
+	# settled at all, and how big it grows when it is
+	var hab := 0.0
+	if has_atmosphere:
+		hab += 1.0
+	if hazard == "none":
+		hab += 1.0
+	if water_style != WATER_NONE:
+		hab += 0.3
+	if tree_density > 0.1:
+		hab += 0.3
+
+	var wall_mat: int
+	var roof_mat: int
+	if tree_density > 0.0:
+		wall_mat = flora_wood
+		roof_mat = Blocks.WOOD_DARK
+	elif pal_top == Blocks.SNOW or pal_top == Blocks.ICE:
+		wall_mat = Blocks.ICE
+		roof_mat = Blocks.METAL
+	elif pal_top == Blocks.REGOLITH:
+		wall_mat = Blocks.REGOLITH
+		roof_mat = Blocks.METAL
+	else:
+		wall_mat = pal_rock
+		roof_mat = Blocks.METAL
+
+	# candidate directions spread evenly around the whole planet (a Fibonacci
+	# sphere), so settlements aren't clustered near one pole -- works for both
+	# cube and sphere shapes since only the DIRECTION matters here
+	var golden := PI * (3.0 - sqrt(5.0))
+	for i in SETTLEMENT_SLOTS:
+		var y := 1.0 - (float(i) / float(maxi(SETTLEMENT_SLOTS - 1, 1))) * 2.0
+		var rr := sqrt(maxf(0.0, 1.0 - y * y))
+		var theta := golden * float(i)
+		var dir := Vector3(cos(theta) * rr, y, sin(theta) * rr).normalized()
+
+		var forced: bool = force_one and i == 0
+		if not forced:
+			var prob := clampf(0.10 + hab * 0.09, 0.05, 0.45)
+			if _hash01(Vector3i(i, 4242, 0), 31) >= prob:
+				continue
+
+		var anchor := _surface_point(dir)
+		if water_style != WATER_NONE and _norm(anchor) <= water_level + 2.0:
+			continue  # no settlements underwater
+
+		var srng := RandomNumberGenerator.new()
+		var sseed := _seed + i * 7907 + 5151
+		srng.seed = sseed
+		var troll := srng.randf() - hab * 0.18
+		var tier := 3 if troll < 0.08 else (2 if troll < 0.30 else (1 if troll < 0.65 else 0))
+		if forced:
+			tier = maxi(tier, 1)  # the guaranteed test settlement is at least a Village
+
+		var up := _axis_of(dir) if shape_cube else dir
+		var tang := up.cross(Vector3.RIGHT)
+		if tang.length() < 0.1:
+			tang = up.cross(Vector3.FORWARD)
+		var u := tang.normalized()
+		var v := up.cross(u).normalized()
+
+		settlements.append({
+			"dir": dir, "up": up, "u": u, "v": v, "anchor": anchor,
+			"tier": tier, "radius": SETTLEMENT_TIER_RADIUS[tier],
+			"density": SETTLEMENT_TIER_DENSITY[tier],
+			"wall_mat": wall_mat, "roof_mat": roof_mat, "seed": sseed,
+		})
+		settlement_reach = maxf(settlement_reach, 9.0)  # max building height (5) + roof taper (~4)
+
+
 # A simple lit sphere just below the surface so the planet is visible from afar
 # (chunks only stream in when you're close). Sized under the lowest terrain so the
 # real voxel surface covers it once you arrive.
@@ -647,8 +736,13 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 	var surf := _surf(dir)
 
 	if d > surf:
-		# above the terrain: water first (fills anything up to the water level),
-		# otherwise maybe a tree, otherwise air
+		# above the terrain: a building takes priority (so trees don't grow through
+		# houses), then water fills anything up to the water level, otherwise maybe
+		# a tree, otherwise air
+		if not settlements.is_empty() and d <= surf + settlement_reach + 2.0:
+			var sid := _settlement_id_at(p)
+			if sid != Blocks.AIR:
+				return sid
 		if water_style != WATER_NONE and d <= water_level:
 			return _water_block()
 		if tree_density > 0.0 and d <= surf + tree_reach:
@@ -759,6 +853,78 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 					var li: int = flora_leaves[int(_hash01(cc, 3) * flora_leaves.size()) % flora_leaves.size()]
 					return li
 	return Blocks.AIR
+
+
+# Is voxel p part of a settlement building? Checked against each nearby
+# settlement's plaza, then the building-cell grid within it (same cell-check
+# pattern as _tree_at, just one level up: settlement -> building cell).
+func _settlement_id_at(p: Vector3) -> int:
+	for st in settlements:
+		var anchor: Vector3 = st["anchor"]
+		if p.distance_to(anchor) > float(st["radius"]) + 12.0:
+			continue
+		var up: Vector3 = st["up"]
+		var u: Vector3 = st["u"]
+		var v: Vector3 = st["v"]
+		var rel := p - anchor
+		var pu := rel.dot(u)
+		var pv := rel.dot(v)
+		var cell := BUILDING_CELL
+		var ccx := floori(pu / cell)
+		var ccy := floori(pv / cell)
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				var cx := ccx + dx
+				var cy := ccy + dy
+				var cu := (float(cx) + 0.5) * cell
+				var cv := (float(cy) + 0.5) * cell
+				if Vector2(cu, cv).length() > float(st["radius"]):
+					continue  # outside the settlement's plaza radius
+				if _hash01(Vector3i(cx, cy, 0), st["seed"]) >= float(st["density"]):
+					continue  # this cell rolled empty (a street/yard gap)
+				var id := _building_block(p, anchor, up, u, v, cu, cv, cx, cy, st)
+				if id != Blocks.AIR:
+					return id
+	return Blocks.AIR
+
+
+# One building, footprint centered at local tangent-plane coords (cu, cv) within
+# its settlement: a hollow walled box with a simple peaked roof and a real,
+# openable two-tall Door (Blocks.DOOR -- the same door the player can build and
+# toggle) on the wall facing the settlement's center.
+func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Vector3,
+		cu: float, cv: float, cx: int, cy: int, st: Dictionary) -> int:
+	var w := 3 + int(_hash01(Vector3i(cx, cy, 1), st["seed"]) * 3.0)       # 3..5
+	var dd := 3 + int(_hash01(Vector3i(cx, cy, 2), st["seed"]) * 3.0)      # 3..5
+	var height := 3 + int(_hash01(Vector3i(cx, cy, 3), st["seed"]) * 3.0)  # 3..5
+	var base := anchor + u * cu + v * cv
+	var rel := p - base
+	var along := rel.dot(up)
+	var lu := rel.dot(u)
+	var lv := rel.dot(v)
+	var hw := float(w) * 0.5
+	var hd := float(dd) * 0.5
+	if along < -0.1 or absf(lu) > hw + 0.1 or absf(lv) > hd + 0.1:
+		return Blocks.AIR
+	if along >= float(height):
+		# roof: a simple peak, shrinking the footprint by one ring per layer
+		var shrink := along - float(height) + 1.0
+		if absf(lu) > hw - shrink + 0.1 or absf(lv) > hd - shrink + 0.1:
+			return Blocks.AIR
+		return int(st["roof_mat"])
+	var on_wall: bool = absf(lu) >= hw - 0.6 or absf(lv) >= hd - 0.6
+	if not on_wall:
+		return Blocks.AIR  # hollow interior -- no floor/furniture yet, just a shell
+	if along < 2.0:
+		# the door sits on whichever wall faces back toward the settlement's center
+		var door_axis_u: bool = absf(cu) >= absf(cv)
+		var raw: float = cu if door_axis_u else cv
+		var door_sign: float = -1.0 if raw >= 0.0 else 1.0
+		if door_axis_u and absf(lu) >= hw - 0.6 and signf(lu) == door_sign and absf(lv) < 1.0:
+			return Blocks.DOOR
+		if not door_axis_u and absf(lv) >= hd - 0.6 and signf(lv) == door_sign and absf(lu) < 1.0:
+			return Blocks.DOOR
+	return int(st["wall_mat"])
 
 
 ## Block id at a voxel, with player edits taking precedence over terrain.
