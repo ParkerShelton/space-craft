@@ -634,7 +634,18 @@ func _exit_pilot() -> void:
 func _board(ship: Ship, reposition := true) -> void:
 	aboard = ship
 	reparent(ship, true)          # child of the ship: local position rides along automatically
-	rotation = Vector3.ZERO       # align to ship axes: up = ship up, facing ship forward
+	# Level out (pitch/roll relative to the ship go to zero, since _walk_interior
+	# only ever yaws around local Y) but keep facing whichever way you were
+	# already looking, flattened onto the ship's own horizontal plane -- a bare
+	# `rotation = Vector3.ZERO` here used to snap your view to the ship's own
+	# forward axis on EVERY board, including just brushing against the hull.
+	var ship_up := ship.global_transform.basis.y
+	var fwd := -global_transform.basis.z
+	var flat_fwd := fwd - ship_up * fwd.dot(ship_up)
+	if flat_fwd.length() > 0.01:
+		look_at(global_position + flat_fwd, ship_up)
+	else:
+		rotation = Vector3.ZERO
 	if reposition:
 		var stand := _find_interior_stand(ship, ship.cockpit_local())
 		position = Vector3(stand) + Vector3(0.5, 1.0, 0.5)  # inside the ship, on the floor

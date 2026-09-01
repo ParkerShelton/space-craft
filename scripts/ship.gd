@@ -246,7 +246,18 @@ func contains(world_pos: Vector3) -> bool:
 		return false
 	if c.x > _bbox_max.x or c.y > _bbox_max.y or c.z > _bbox_max.z:
 		return false
-	return not blocks.has(c) or blocks[c] == Blocks.DOOR_OPEN
+	if blocks.has(c) and blocks[c] != Blocks.DOOR_OPEN:
+		return false
+	# Also require an actual ceiling somewhere overhead -- otherwise this is
+	# just an exposed deck/roof (e.g. a ship you're mid-build on), and standing
+	# on it shouldn't auto-board you into "aboard" mode.
+	for dy in range(1, 5):
+		var above := c + Vector3i(0, dy, 0)
+		if above.y > _bbox_max.y:
+			break
+		if blocks.has(above) and blocks[above] != Blocks.DOOR_OPEN:
+			return true
+	return false
 
 
 const MAX_DOOR_GROUP := 9  # a door wall opens/closes together, up to a 3x3-ish patch
