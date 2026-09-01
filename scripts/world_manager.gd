@@ -35,25 +35,36 @@ func current_system() -> Dictionary:
 	return galaxy.systems[current_system_index]
 
 
-## Tear down the current system and generate a different one in its place,
-## dropping the player at the new home world's spawn point. No travel time,
-## fuel, or distance yet -- this is instant fast-travel while the actual "pick
-## a system" UI and any real interstellar-flight mechanic are still ahead.
-## KNOWN LIMITATION: ships and stations in the old system are NOT preserved --
-## there's no per-system save state yet, only "whatever's currently loaded," so
-## anything left behind is gone. Warping only while on foot (player.gd enforces
-## this) sidesteps stranding a ship mid-flight, but a parked one is still lost.
-func warp_to_system(index: int) -> Dictionary:
+## Tear down the current system and generate a different one in its place. If
+## `warp_ship` is given (the ship performing the warp -- it needs a Warp Drive
+## and must already be in space, enforced by player.gd before calling this),
+## that ship travels along and arrives in space above the new home world,
+## along with anything mounted on it; the player rides along already (piloting
+## slaves the player's position to the ship every physics tick). Otherwise the
+## player itself is placed at the new home world's spawn point on foot.
+## No travel time/fuel/distance yet -- this is instant, not real flight.
+## KNOWN LIMITATION: anything else in the old system -- other ships, world-
+## placed stations, a base you built -- is NOT preserved. There's no per-system
+## save state yet, only "whatever's currently loaded," so it's simply gone.
+func warp_to_system(index: int, warp_ship: Ship = null) -> Dictionary:
 	if galaxy == null or index < 0 or index >= galaxy.systems.size() or not planet_generator.is_valid():
 		return {}
+	var keep_ship := warp_ship if (warp_ship != null and is_instance_valid(warp_ship)) else null
 	for s in _ships:
-		if is_instance_valid(s):
+		if is_instance_valid(s) and s != keep_ship:
 			s.queue_free()
 	_ships.clear()
+	if keep_ship != null:
+		_ships.append(keep_ship)
+	var kept_stations: Array[Station] = []
 	for st in _stations:
-		if is_instance_valid(st):
+		if not is_instance_valid(st):
+			continue
+		if keep_ship != null and st.get_parent() == keep_ship:
+			kept_stations.append(st)  # mounted on the warping ship -- travels with it
+		else:
 			st.queue_free()
-	_stations.clear()
+	_stations = kept_stations
 	for p in planets:
 		if is_instance_valid(p):
 			p.queue_free()
@@ -62,9 +73,16 @@ func warp_to_system(index: int) -> Dictionary:
 	current_system_index = index
 	var sysdef: Dictionary = galaxy.systems[index]
 	planet_generator.call(self, sysdef)
+	if planets.is_empty():
+		return sysdef
+	var home: Planet = planets[0]
 
-	if player != null and not planets.is_empty():
-		var home: Planet = planets[0]
+	if keep_ship != null:
+		var arrive: Vector3 = home.to_global(
+			home._point_at_height(Vector3.UP, home.radius + home.atmo_height + 300.0))
+		keep_ship.global_position = arrive
+		keep_ship.velocity = Vector3.ZERO
+	elif player != null:
 		var pl = player  # untyped: reach Player-specific members off the Node3D ref
 		pl.global_position = home.find_spawn_point(Vector3.UP)
 		pl.velocity = Vector3.ZERO

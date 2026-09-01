@@ -126,17 +126,20 @@ func get_status() -> Dictionary:
 	var has_cockpit := false
 	var thrusters := 0
 	var life_support := false
+	var warp_drive := false
 	for v in blocks:
 		match blocks[v]:
 			Blocks.COCKPIT: has_cockpit = true
 			Blocks.THRUSTER: thrusters += 1
 			Blocks.LIFE_SUPPORT: life_support = true
+			Blocks.WARP_DRIVE: warp_drive = true
 	return {
 		"count": blocks.size(),
 		"cockpit": has_cockpit,
 		"thrusters": thrusters,
 		"can_fly": has_cockpit and thrusters >= 1 and blocks.size() >= 4,
 		"life_support": life_support,
+		"warp_drive": warp_drive,
 		"sealed": _sealed,
 		"habitable": _habitable,
 	}
@@ -170,6 +173,16 @@ func _recompute_habitable() -> void:
 func _has_life_support() -> bool:
 	for v in blocks:
 		if blocks[v] == Blocks.LIFE_SUPPORT:
+			return true
+	return false
+
+
+## Warp travel requires a Warp Drive block actually built onto the ship --
+## checked live (not cached) since it's cheap and can change any time you're
+## docked, unlike _habitable which only needs recomputing on block edits.
+func has_warp_drive() -> bool:
+	for v in blocks:
+		if blocks[v] == Blocks.WARP_DRIVE:
 			return true
 	return false
 

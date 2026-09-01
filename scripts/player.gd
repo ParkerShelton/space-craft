@@ -347,16 +347,18 @@ func _unhandled_input(event: InputEvent) -> void:
 				_close_station()
 			else:
 				_toggle_inventory()
-		elif event.keycode == KEY_M and piloting == null:
-			_toggle_starmap()
 		elif _station_open != null:
 			return  # a station panel is open: swallow other keys
 		elif event.keycode == KEY_F:
 			_toggle_pilot()
 		elif event.keycode == KEY_T:
 			_toggle_eva()
+		elif event.keycode == KEY_M:
+			# warp requires actually piloting a ship built with a Warp Drive, in
+			# space -- an exception to "only F/Esc/mouse-look work while flying"
+			_try_open_starmap()
 		elif piloting:
-			return  # while flying, only F/Esc/mouse-look do anything
+			return  # while flying, only F/M/Esc/mouse-look do anything
 		elif event.keycode == KEY_G:
 			if aboard == null and not eva:
 				_start_ship()
@@ -417,16 +419,24 @@ func _build_starmap_ui(layer: CanvasLayer) -> void:
 	_starmap_panel.add_child(_starmap_warp_btn)
 
 
-func _toggle_starmap() -> void:
+# Warp requires actually flying a ship built with a Warp Drive, out in space --
+# not just standing on a planet. Toasts an explanation for whichever condition
+# is missing instead of silently doing nothing.
+func _try_open_starmap() -> void:
 	if _starmap_panel == null or world == null or world.galaxy == null:
 		return
 	if _starmap_panel.visible:
 		_close_starmap()
 		return
-	if inv_open:
-		_toggle_inventory()
-	if _station_open != null:
-		_close_station()
+	if piloting == null:
+		_toast("Fly a ship with a Warp Drive to open the star map")
+		return
+	if not piloting.has_warp_drive():
+		_toast("This ship has no Warp Drive")
+		return
+	if piloting.in_gravity:
+		_toast("Must be in space to warp")
+		return
 	_refresh_starmap_rows()
 	_starmap_panel.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -466,13 +476,22 @@ func _on_starmap_row_pressed(i: int) -> void:
 func _on_warp_pressed() -> void:
 	if world == null or _starmap_selected < 0:
 		return
-	if piloting != null or aboard != null or eva:
-		_toast("Can't warp while flying or aboard a ship")
+	# re-check on click too -- the ship could have left space, lost its drive,
+	# or you could've exited the cockpit while the map sat open
+	if piloting == null or not is_instance_valid(piloting):
+		_toast("Not piloting a ship")
+		_close_starmap()
+		return
+	if not piloting.has_warp_drive():
+		_toast("This ship has no Warp Drive")
+		return
+	if piloting.in_gravity:
+		_toast("Must be in space to warp")
 		return
 	if _starmap_selected == world.current_system_index:
 		_toast("Already in this system")
 		return
-	var sysdef := world.warp_to_system(_starmap_selected)
+	var sysdef := world.warp_to_system(_starmap_selected, piloting)
 	_close_starmap()
 	if sysdef.is_empty():
 		_toast("Warp failed")

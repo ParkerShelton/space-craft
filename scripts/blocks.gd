@@ -128,6 +128,7 @@ const INTERFACE := 65  # placeable trigger block: surround it with a recognized 
                         # pattern (see MULTIBLOCK_RECIPES) to build a bigger structure
 const ROOF_SLAB := 66   # half-height roof block (real partial-height geometry, like water)
 const PATH := 67         # worn dirt/gravel walkway generated between settlement buildings
+const WARP_DRIVE := 68   # ship block: with the ship in space, unlocks the star map for warp travel
 
 # A 3x3x3 shell of `shell` around a placed INTERFACE block collapses into a
 # `result` station -- the multiblock alternative to just crafting a plain item.
@@ -209,6 +210,7 @@ const STATION_CRAFTS := {
 	SHIPWORKS: [
 		{"label": "Thruster", "out": THRUSTER, "n": 1, "cost": 3},
 		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "cost": 4},
+		{"label": "Warp Drive", "out": WARP_DRIVE, "n": 1, "cost": 10},
 		{"label": "Hull Plate x4", "out": METAL, "n": 4, "reqs": [{"id": ALLOY, "n": 2}]},
 	],
 	CARPENTER: [
@@ -224,7 +226,7 @@ const STATION_CRAFTS := {
 const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	WOOD, WOOD_PALE, WOOD_DARK,
 	16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-	COCKPIT, THRUSTER, LIFE_SUPPORT, GLASS, DOOR, INTERFACE]
+	COCKPIT, THRUSTER, LIFE_SUPPORT, GLASS, DOOR, INTERFACE, WARP_DRIVE]
 
 const NAMES := {
 	AIR: "Air",
@@ -277,6 +279,7 @@ const NAMES := {
 	INTERFACE: "Interface Core",
 	ROOF_SLAB: "Roof Slab",
 	PATH: "Path",
+	WARP_DRIVE: "Warp Drive",
 	ORE_0: "Ore", ORE_1: "Ore", ORE_2: "Ore", ORE_3: "Ore",
 	REFINED_0: "Refined Material", REFINED_1: "Refined Material",
 	REFINED_2: "Refined Material", REFINED_3: "Refined Material",
@@ -359,6 +362,7 @@ const COLORS := {
 	INTERFACE: Color(0.75, 0.35, 0.85),
 	ROOF_SLAB: Color(0.40, 0.28, 0.20),
 	PATH: Color(0.58, 0.50, 0.38),
+	WARP_DRIVE: Color(0.55, 0.30, 0.90),
 	# generic fallbacks; real ore colors are planet-defined and travel with the item
 	ORE_0: Color(0.7, 0.6, 0.4), ORE_1: Color(0.6, 0.7, 0.5),
 	ORE_2: Color(0.5, 0.6, 0.7), ORE_3: Color(0.7, 0.5, 0.7),
