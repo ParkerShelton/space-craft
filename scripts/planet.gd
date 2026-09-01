@@ -82,7 +82,12 @@ var water_level := 0.0         # everything above the terrain and below this is 
 
 # --- settlements (procedural villages/towns/cities, derived from seed like ores) ---
 const SETTLEMENT_SLOTS := 10   # candidate locations spread around the planet
-const BUILDING_CELL := 9.0     # local grid spacing for buildings within a settlement
+# Local grid spacing for buildings within a settlement. MUST stay > 2*(max
+# half-width + SETTLEMENT_PAD) below, or neighboring buildings' grading pads
+# overlap and fight over the ground height at the seam -- that fight is exactly
+# what caused walls to float/sink where two buildings met (max footprint is 8,
+# half-width 4; pad 4 -> need > 16; kept a margin above the minimum).
+const BUILDING_CELL := 20.0
 const SETTLEMENT_TIER_NAMES := ["Outpost", "Village", "Town", "City"]
 const SETTLEMENT_TIER_RADIUS := [22.0, 42.0, 68.0, 100.0]
 const SETTLEMENT_TIER_DENSITY := [0.32, 0.42, 0.5, 0.58]  # chance a building-cell in range holds a building
@@ -233,9 +238,14 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		hostile_bias += 0.30  # things in the dark bite
 	var roll := rng.randf()
 	var temperament: String
-	if roll < 0.15 + hostile_bias:
+	# Most non-hostile wildlife just ignores you (neutral) -- only a small slice
+	# is actually skittish enough to run (passive). Neutral gets the bulk of the
+	# remaining probability; passive gets whatever's left (roughly 4-10%).
+	var hostile_cut := 0.15 + hostile_bias
+	var neutral_cut := hostile_cut + 0.75
+	if roll < hostile_cut:
 		temperament = "hostile"
-	elif roll < 0.55:
+	elif roll < neutral_cut:
 		temperament = "neutral"
 	else:
 		temperament = "passive"
@@ -636,7 +646,7 @@ func _derive_settlements(force_one: bool) -> void:
 			"density": SETTLEMENT_TIER_DENSITY[tier],
 			"wall_mat": wall_mat, "roof_mat": roof_mat, "seed": sseed,
 		})
-		settlement_reach = maxf(settlement_reach, 9.0)  # max building height (5) + roof taper (~4)
+		settlement_reach = maxf(settlement_reach, 15.0)  # max building height (8) + roof taper (~5) + margin
 
 
 # A simple lit sphere just below the surface so the planet is visible from afar
@@ -734,6 +744,16 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 	var l2 := p.length()
 	var dir := p / maxf(l2, 0.0001)
 	var surf := _surf(dir)
+
+	# A settlement grades its own ground: each building sits on a small flat pad
+	# at ITS OWN local terrain height (not a single height for the whole
+	# settlement), blending smoothly back to the natural surface just past its
+	# walls -- otherwise a building the noisy terrain didn't happen to match ends
+	# up half-buried on one side and floating on the other.
+	if not settlements.is_empty():
+		var padded := _settlement_pad_surf(p, surf)
+		if padded >= 0.0:
+			surf = padded
 
 	if d > surf:
 		# above the terrain: a building takes priority (so trees don't grow through
@@ -855,6 +875,82 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 	return Blocks.AIR
 
 
+# A building's footprint size (width, depth, wall height), hashed per-cell so
+# it's deterministic and consistent across every call for the same cell.
+func _building_size(cx: int, cy: int, st: Dictionary) -> Vector3i:
+	var w := 4 + int(_hash01(Vector3i(cx, cy, 1), st["seed"]) * 5.0)       # 4..8
+	var dd := 4 + int(_hash01(Vector3i(cx, cy, 2), st["seed"]) * 5.0)      # 4..8
+	var height := 4 + int(_hash01(Vector3i(cx, cy, 3), st["seed"]) * 5.0)  # 4..8
+	return Vector3i(w, dd, height)
+
+
+# The direction (from planet center) toward a building's footprint center, given
+# its settlement's tangent frame and local offset -- used both to grade the
+# ground under it and to place its own floor, so the two always agree exactly.
+func _building_base_dir(anchor: Vector3, u: Vector3, v: Vector3, cu: float, cv: float) -> Vector3:
+	return (anchor + u * cu + v * cv).normalized()
+
+
+const SETTLEMENT_PAD := 4.0  # how far past a building's walls the grading blends back to natural terrain
+
+# Does `p` fall within grading range of any building's footprint? If so, returns
+# the flattened/blended surf height to use there; -1.0 if unaffected. Each
+# building grades its OWN small patch to ITS OWN local terrain height (not one
+# height for the whole settlement) -- so a village on a slope still steps down
+# the hill building-by-building instead of demanding one giant flat shelf.
+func _settlement_pad_surf(p: Vector3, natural_surf: float) -> float:
+	var best := -1.0
+	for st in settlements:
+		var anchor: Vector3 = st["anchor"]
+		var u: Vector3 = st["u"]
+		var v: Vector3 = st["v"]
+		var rel := p - anchor
+		var su := rel.dot(u)
+		var sv := rel.dot(v)
+		if Vector2(su, sv).length() > float(st["radius"]) + 20.0:
+			continue
+		var cell := BUILDING_CELL
+		var ccx := floori(su / cell)
+		var ccy := floori(sv / cell)
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				var cx := ccx + dx
+				var cy := ccy + dy
+				var cu := (float(cx) + 0.5) * cell
+				var cv := (float(cy) + 0.5) * cell
+				if Vector2(cu, cv).length() > float(st["radius"]):
+					continue
+				if _hash01(Vector3i(cx, cy, 0), st["seed"]) >= float(st["density"]):
+					continue
+				var sz := _building_size(cx, cy, st)
+				# Must use the EXACT same lu/lv as _building_block (projected through
+				# the curved surface via _surface_point), not the flat su-cu/sv-cv
+				# tangent-plane approximation -- at this radius (up to 100 units on a
+				# planet whose own radius can be as little as a few hundred) the
+				# curvature shift between the two is easily several units, enough for
+				# this grading check to miss a cell _building_block actually used,
+				# leaving a wall floating over ungraded terrain.
+				var base_dir := _building_base_dir(anchor, u, v, cu, cv)
+				var base := _surface_point(base_dir)
+				var brel := p - base
+				var lu := brel.dot(u)
+				var lv := brel.dot(v)
+				# +0.5 matches _building_block's own wall-edge tolerance (it rejects
+				# past hw/hd+0.1 and starts the wall band at hw/hd-0.6) -- without this
+				# the fully-flat zone here could end a hair short of where a wall pixel
+				# actually renders, leaving it floating over ungraded terrain by 1 voxel
+				var hw := float(sz.x) * 0.5 + 0.5
+				var hd := float(sz.y) * 0.5 + 0.5
+				var out_dist := maxf(absf(lu) - hw, absf(lv) - hd)
+				if out_dist > SETTLEMENT_PAD:
+					continue
+				var base_surf := _surf(base_dir)
+				var t := clampf(out_dist / SETTLEMENT_PAD, 0.0, 1.0)
+				var blended := lerpf(base_surf, natural_surf, smoothstep(0.0, 1.0, t))
+				best = blended if best < 0.0 else maxf(best, blended)
+	return best
+
+
 # Is voxel p part of a settlement building? Checked against each nearby
 # settlement's plaza, then the building-cell grid within it (same cell-check
 # pattern as _tree_at, just one level up: settlement -> building cell).
@@ -889,15 +985,20 @@ func _settlement_id_at(p: Vector3) -> int:
 
 
 # One building, footprint centered at local tangent-plane coords (cu, cv) within
-# its settlement: a hollow walled box with a simple peaked roof and a real,
-# openable two-tall Door (Blocks.DOOR -- the same door the player can build and
-# toggle) on the wall facing the settlement's center.
+# its settlement: a hollow walled box with a simple peaked roof, a couple of
+# window openings, and a real, openable two-tall Door (Blocks.DOOR -- the same
+# door the player can build and toggle) on the wall facing the settlement's
+# center. Its floor sits at the SAME flattened height _settlement_pad_surf graded
+# the ground to (both call _building_base_dir the same way), so the walls always
+# meet the ground exactly instead of floating or sinking into it.
 func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Vector3,
 		cu: float, cv: float, cx: int, cy: int, st: Dictionary) -> int:
-	var w := 3 + int(_hash01(Vector3i(cx, cy, 1), st["seed"]) * 3.0)       # 3..5
-	var dd := 3 + int(_hash01(Vector3i(cx, cy, 2), st["seed"]) * 3.0)      # 3..5
-	var height := 3 + int(_hash01(Vector3i(cx, cy, 3), st["seed"]) * 3.0)  # 3..5
-	var base := anchor + u * cu + v * cv
+	var sz := _building_size(cx, cy, st)
+	var w := sz.x
+	var dd := sz.y
+	var height := sz.z
+	var base_dir := _building_base_dir(anchor, u, v, cu, cv)
+	var base := _surface_point(base_dir)
 	var rel := p - base
 	var along := rel.dot(up)
 	var lu := rel.dot(u)
@@ -915,15 +1016,22 @@ func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Ve
 	var on_wall: bool = absf(lu) >= hw - 0.6 or absf(lv) >= hd - 0.6
 	if not on_wall:
 		return Blocks.AIR  # hollow interior -- no floor/furniture yet, just a shell
+	var door_axis_u: bool = absf(cu) >= absf(cv)
+	var raw: float = cu if door_axis_u else cv
+	var door_sign: float = -1.0 if raw >= 0.0 else 1.0
 	if along < 2.0:
 		# the door sits on whichever wall faces back toward the settlement's center
-		var door_axis_u: bool = absf(cu) >= absf(cv)
-		var raw: float = cu if door_axis_u else cv
-		var door_sign: float = -1.0 if raw >= 0.0 else 1.0
 		if door_axis_u and absf(lu) >= hw - 0.6 and signf(lu) == door_sign and absf(lv) < 1.0:
 			return Blocks.DOOR
 		if not door_axis_u and absf(lv) >= hd - 0.6 and signf(lv) == door_sign and absf(lu) < 1.0:
 			return Blocks.DOOR
+	# a window on the back wall (opposite the door), roughly at mid-height
+	var mid := float(height) * 0.5
+	if height >= 5 and along >= mid - 0.9 and along <= mid + 0.6:
+		if door_axis_u and absf(lu) >= hw - 0.6 and signf(lu) == -door_sign and absf(lv) < 1.0:
+			return Blocks.GLASS
+		if not door_axis_u and absf(lv) >= hd - 0.6 and signf(lv) == -door_sign and absf(lu) < 1.0:
+			return Blocks.GLASS
 	return int(st["wall_mat"])
 
 
