@@ -149,7 +149,6 @@ const HAND_RECIPES := [
 	{"out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 	{"out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 	{"out": CARPENTER, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 12, "label": "Wood"}]},
-	{"out": CLIMATE_UNIT, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 10, "label": "Wood"}, {"id": METAL, "n": 6}]},
 ]
 
 # Which material TYPE a station builds from (see Blocks.id_matches_material).
@@ -213,6 +212,8 @@ const STATION_CRAFTS := {
 	CARPENTER: [
 		{"label": "Door", "out": DOOR, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 6}, {"id": METAL, "n": 2}]},
 		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": METAL, "n": 1}]},
+		{"label": "Climate Unit", "out": CLIMATE_UNIT, "n": 1,
+			"reqs": [{"any": WOOD_IDS, "n": 10, "label": "Wood"}, {"id": METAL, "n": 6}]},
 	],
 }
 
