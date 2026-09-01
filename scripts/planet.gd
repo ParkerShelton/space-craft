@@ -28,6 +28,13 @@ var _seed := 0
 var surface_noise := FastNoiseLite.new()
 var ore_noise := FastNoiseLite.new()
 
+# --- caves (worm-tunnel networks carved from the rock layer) ---
+var cave_noise := FastNoiseLite.new()   # ridged 3D noise; tunnels where the ridge is thin
+var cave_noise2 := FastNoiseLite.new()  # second field, ANDed with the first -> branching networks
+var cave_enabled := false
+var cave_threshold := 0.94     # higher = thinner/rarer tunnels
+var cave_min_depth := 5.0      # no caves closer to the surface than this (keeps roofs solid)
+
 var shape_cube := false  # true => cube-shaped planet (Chebyshev distance)
 
 # --- atmosphere (for lighting/sky; set via configure) ---
@@ -113,6 +120,7 @@ func configure(cfg: Dictionary) -> void:
 
 	_derive_flora(cfg.get("tree_density", 0.0))
 	_derive_ores()
+	_derive_caves(cfg.get("cave_amount", -1.0))
 	_derive_water(cfg)
 	_add_distant_sphere()
 
@@ -206,6 +214,44 @@ func ore_hardness(block_id: int) -> float:
 func ore_min_power(block_id: int) -> float:
 	var d := ore_def(block_id)
 	return d["min_power"] if d.has("min_power") else 1.0
+
+
+# Decide how cave-riddled this planet is. `amount` overrides (0=none, 1=extreme);
+# -1 rolls randomly from the seed so most planets get caves, some barely any,
+# a few are honeycombed. Also sets tunnel SIZE (bigger caverns on cavier worlds).
+func _derive_caves(amount: float) -> void:
+	var a := amount
+	if a < 0.0:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = _seed + 8181
+		# skewed toward modest caves; occasional near-zero or very heavy world
+		a = clampf(rng.randf_range(-0.25, 1.15), 0.0, 1.0)
+	cave_enabled = a > 0.02
+	if not cave_enabled:
+		return
+	# more amount -> lower threshold (denser tunnels) and lower frequency (bigger caverns)
+	cave_threshold = lerpf(0.90, 0.62, a)
+	var freq := lerpf(4.5, 1.4, a) / maxf(radius, 1.0)
+	cave_noise.seed = _seed + 2020
+	cave_noise.frequency = freq
+	cave_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	cave_noise.fractal_type = FastNoiseLite.FRACTAL_RIDGED
+	cave_noise.fractal_octaves = 2
+	cave_noise2.seed = _seed + 3030
+	cave_noise2.frequency = freq * 1.37   # different frequency -> branching, not parallel tubes
+	cave_noise2.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	cave_noise2.fractal_type = FastNoiseLite.FRACTAL_RIDGED
+	cave_noise2.fractal_octaves = 2
+
+
+# Is (gx,gy,gz) inside a carved cave tunnel? Two ridged noise fields multiplied
+# together carve branching worm-like networks instead of straight parallel tubes.
+func _is_cave(gx: int, gy: int, gz: int) -> bool:
+	if not cave_enabled:
+		return false
+	var r1 := cave_noise.get_noise_3d(gx, gy, gz) * 0.5 + 0.5
+	var r2 := cave_noise2.get_noise_3d(gx, gy, gz) * 0.5 + 0.5
+	return r1 * r2 > cave_threshold
 
 
 # Give each planet a distinct forest: color palette, wood tone, canopy shape and
@@ -341,6 +387,10 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 		return pal_top
 	if depth < 4.0:
 		return pal_sub
+	# caves: hollow out the rock layer (never nearer the surface than cave_min_depth,
+	# nor into the core), so tunnels have a solid roof and don't hit magma
+	if cave_enabled and depth >= cave_min_depth and d > radius * 0.22 + 6.0 and _is_cave(gx, gy, gz):
+		return Blocks.AIR
 	# rock layer: sometimes an ore vein
 	if not ore_defs.is_empty() and ore_noise.get_noise_3d(gx, gy, gz) > ore_threshold:
 		var o := _pick_ore(gx, gy, gz, depth)
