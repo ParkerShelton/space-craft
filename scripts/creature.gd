@@ -21,6 +21,8 @@ const ALIGN_SPEED := 3.0
 var _wander_dir := Vector3.ZERO
 var _wander_timer := 0.0
 var _attack_cd := 0.0
+var _landing := false     # flyer: currently descending to perch on the ground
+var _perched := false     # flyer: sitting on the ground, wings folded, will take off again
 var _phase := 0.0
 var _legs: Array = []       # leg pivots (Node3D), animated for a walk cycle
 var _tail_pivot: Node3D     # tail or fish tail-fin pivot, animated as a wag
@@ -238,9 +240,14 @@ func _land_physics(delta: float) -> void:
 
 	if wish.length() > 0.001:
 		wish = (wish - up * wish.dot(up)).normalized()
-		var fwd := -global_transform.basis.z
-		var new_fwd := fwd.slerp(wish, clampf(delta * 6.0, 0.0, 1.0)) if fwd.dot(wish) > -0.98 else wish
-		look_at(global_position + new_fwd, up)
+		# land/cave creatures never enter water, even fleeing or chasing -- if the
+		# path ahead is water, try turning along the shore instead of stopping dead
+		if _blocked_by_water(wish):
+			wish = _avoid_water_dir(wish, up)
+		if wish.length() > 0.001:
+			var fwd := -global_transform.basis.z
+			var new_fwd := fwd.slerp(wish, clampf(delta * 6.0, 0.0, 1.0)) if fwd.dot(wish) > -0.98 else wish
+			look_at(global_position + new_fwd, up)
 
 	var v_up := velocity.dot(up)
 	v_up += -GRAVITY_ACCEL * delta
@@ -251,17 +258,154 @@ func _land_physics(delta: float) -> void:
 	move_and_slide()
 
 
+# Is the cell a short step ahead in `dir` (from here) water? Land/cave creatures
+# use this to refuse to walk into water under any circumstance.
+func _blocked_by_water(dir: Vector3) -> bool:
+	if planet == null or dir.length() < 0.01:
+		return false
+	var probe := global_position + dir.normalized() * 1.6
+	return planet.get_id(planet.world_to_voxel(probe)) == Blocks.WATER
+
+
+# Try turning along the shoreline instead of into the water: rotate the wished
+# direction around `up` by increasing angles until one isn't blocked. Returns
+# Vector3.ZERO (stay put) if fully hemmed in by water.
+func _avoid_water_dir(dir: Vector3, up: Vector3) -> Vector3:
+	if dir.length() < 0.001:
+		return Vector3.ZERO
+	var d := dir.normalized()
+	for deg in [30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180]:
+		var cand := d.rotated(up, deg_to_rad(deg))
+		if not _blocked_by_water(cand):
+			return cand
+	return Vector3.ZERO
+
+
+# Is the cell a short step ahead in `dir` actually water? Fish check this BEFORE
+# committing to a direction, so they never even brush the shore, let alone leave.
+# The probe reaches further at higher speed -- a fast-swimming fish needs more
+# braking distance than a slow one to actually turn before reaching the shore.
+func _ahead_is_water(dir: Vector3) -> bool:
+	if planet == null or dir.length() < 0.01:
+		return true
+	var probe_dist := maxf(2.5, velocity.length() * 0.8)
+	var probe := global_position + dir.normalized() * probe_dist
+	return planet.get_id(planet.world_to_voxel(probe)) == Blocks.WATER
+
+
+var _last_water_pos := Vector3.ZERO
+var _has_water_pos := false
+
+# "Deeper into the planet" for a CUBE-shaped planet is along the nearest face's
+# axis, not a straight line to the geometric center -- water depth follows the
+# same Chebyshev metric as terrain height (see Planet._norm), so a raw Euclidean
+# direction toward planet.global_position can point the "wrong way" once you're
+# off a face's center, exactly like Planet._surf/_axis_of everywhere else.
+# (This IS the right notion of "inward" for radial motion, e.g. a bird's climb/
+# descend -- but NOT for getting a fish back into water, see _find_water_dir.)
+func _inward_dir(pos: Vector3) -> Vector3:
+	if planet == null:
+		return Vector3.ZERO
+	var out_dir := (pos - planet.global_position).normalized()
+	if out_dir.length() < 0.001:
+		return Vector3.ZERO
+	var axis: Vector3 = planet._axis_of(out_dir) if planet.shape_cube else out_dir
+	return -axis
+
+
+# The face-normal axis at a point, used only as a ROTATION axis below -- not
+# as a direction to move along (that would be _inward_dir, which is wrong for
+# water: a lake sits on top of the terrain, so a few units straight down from
+# its shore is solid seafloor, not more water).
+func _water_up_axis(pos: Vector3) -> Vector3:
+	if planet == null:
+		return Vector3.UP
+	var out_dir := (pos - planet.global_position).normalized()
+	if out_dir.length() < 0.001:
+		return Vector3.UP
+	return planet._axis_of(out_dir) if planet.shape_cube else out_dir
+
+
+# Water bodies are a surface feature, not a depth gradient -- retreating from a
+# shoreline back into deep water means moving HORIZONTALLY (along the shore or
+# back the way we came), never radially toward the planet's center. Search by
+# rotating a seed direction around the local up axis, mirroring the land
+# creature's _avoid_water_dir but with the water/land test inverted.
+func _find_water_dir(from: Vector3, seed_dir: Vector3) -> Vector3:
+	var up := _water_up_axis(from)
+	var base := seed_dir - up * seed_dir.dot(up)
+	if base.length() < 0.01:
+		base = Vector3.RIGHT - up * Vector3.RIGHT.dot(up)
+	if base.length() < 0.01:
+		base = Vector3.FORWARD - up * Vector3.FORWARD.dot(up)
+	base = base.normalized()
+	for deg in [0, 30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180]:
+		var cand := base.rotated(up, deg_to_rad(deg))
+		if planet.get_id(planet.world_to_voxel(from + cand * 2.0)) == Blocks.WATER:
+			return cand
+	return -base
+
+
+# Snap a stranded fish back to a confirmed water voxel near `from`, searching
+# outward along `_find_water_dir` at increasing distances. Returns `from`
+# unchanged if nothing within range tests as water (shouldn't happen since
+# `from` is itself the last confirmed-water position).
+func _retreat_into_water(from: Vector3, seed_dir: Vector3) -> Vector3:
+	if planet == null:
+		return from
+	var dir := _find_water_dir(from, seed_dir)
+	for margin in [1.0, 2.0, 4.0, 8.0, 16.0]:
+		var cand: Vector3 = from + dir * float(margin)
+		if planet.get_id(planet.world_to_voxel(cand)) == Blocks.WATER:
+			return cand
+	return from
+
+
 func _swim_physics(delta: float) -> void:
 	var speed: float = species.get("speed", 2.5)
+	if planet != null:
+		# Hard safety net: predictive steering (below) handles the normal case, but
+		# voxel discretization + velocity smoothing can't guarantee zero overshoot
+		# in every case -- so if a fish is ever confirmed outside water, snap it
+		# straight back to its last known-good spot instead of merely re-steering.
+		# This bounds any excursion to a single tick, which is invisible in play.
+		if planet.get_id(planet.world_to_voxel(global_position)) == Blocks.WATER:
+			_last_water_pos = global_position
+			_has_water_pos = true
+		elif _has_water_pos:
+			# _last_water_pos is, by definition, the last position confirmed as
+			# water -- i.e. right at the boundary. Resetting exactly there isn't
+			# enough: the very next tick's velocity (freshly re-lerped from zero)
+			# is a deterministic step that can be just large enough to re-cross the
+			# same edge, forever, as a stable 1-tick oscillation. Retreat further
+			# inward for real breathing room -- and since some shorelines are
+			# irregular enough (thin peninsulas, complex terrain) that a single
+			# fixed push can itself land on another dry spot, retry at increasing
+			# distances until a confirmed water voxel is found.
+			var seed_dir := global_position - _last_water_pos
+			if seed_dir.length() < 0.01:
+				seed_dir = -velocity
+			var landed := _retreat_into_water(_last_water_pos, -seed_dir)
+			global_position = landed
+			velocity = Vector3.ZERO
+			_wander_dir = _find_water_dir(_last_water_pos, -seed_dir)
 	_wander_timer -= delta
 	if _wander_timer <= 0.0 or _wander_dir == Vector3.ZERO:
 		_wander_timer = randf_range(WANDER_MIN, WANDER_MAX)
 		_wander_dir = Vector3(randf() * 2 - 1, randf() * 2 - 1, randf() * 2 - 1).normalized()
-	# steer back toward the planet's center (deeper water) if drifted out of water
 	if planet != null:
-		var v := planet.world_to_voxel(global_position)
-		if planet.get_id(v) != Blocks.WATER:
-			_wander_dir = (planet.global_position - global_position).normalized()
+		# never let the chosen direction lead out of the water -- look ahead first;
+		# if it would leave, head back toward the planet's center (deeper water)
+		if not _ahead_is_water(_wander_dir):
+			var back_dir := _find_water_dir(global_position, _wander_dir)
+			_wander_dir = back_dir
+			# a smoothed velocity lerp isn't enough to stop momentum before it
+			# carries the fish across the boundary -- directly kill any velocity
+			# component still pointing toward shore (away from the water)
+			var away := -back_dir
+			var d := velocity.dot(away)
+			if d > 0.0:
+				velocity -= away * d
 	velocity = velocity.lerp(_wander_dir * speed, clampf(delta * 1.5, 0.0, 1.0))
 	if velocity.length() > 0.05:
 		look_at(global_position + velocity.normalized(), Vector3.UP)
@@ -270,6 +414,11 @@ func _swim_physics(delta: float) -> void:
 
 const FLY_MIN_ALT := 8.0
 const FLY_MAX_ALT := 45.0
+
+const PERCH_CHANCE := 0.3        # odds a wander cycle chooses to land instead of fly
+const PERCH_MIN := 3.0
+const PERCH_MAX := 7.0
+const LAND_ALT := 1.5            # altitude at which a descending bird counts as landed
 
 func _fly_physics(delta: float) -> void:
 	var speed: float = species.get("speed", 4.0)
@@ -285,6 +434,8 @@ func _fly_physics(delta: float) -> void:
 		if temperament == "hostile" and dist < float(species.get("aggro_range", 12.0)):
 			wish = to_player.normalized()
 			handled = true
+			_landing = false
+			_perched = false
 			if dist < ATTACK_RANGE and _attack_cd <= 0.0:
 				if world != null and world.player != null and world.player.has_method("take_damage"):
 					world.player.take_damage(float(species.get("damage", 5.0)))
@@ -293,22 +444,44 @@ func _fly_physics(delta: float) -> void:
 			wish = -to_player.normalized()
 			moving_speed = speed * 1.3
 			handled = true
+			_landing = false
+			_perched = false  # startled off the ground
 
 	if not handled:
-		_wander_timer -= delta
-		if _wander_timer <= 0.0 or _wander_dir == Vector3.ZERO:
-			_wander_timer = randf_range(WANDER_MIN, WANDER_MAX)
-			_wander_dir = Vector3(randf() * 2 - 1, randf() * 0.4 - 0.2, randf() * 2 - 1).normalized()
-		wish = _wander_dir
+		if _perched:
+			# sitting on the ground; wait out the perch, then take back off
+			_wander_timer -= delta
+			if _wander_timer <= 0.0:
+				_perched = false
+				_wander_dir = Vector3.ZERO  # force a fresh sky wander target
+		elif _landing and planet != null:
+			# descending toward a perch -- head straight down until grounded
+			wish = _inward_dir(global_position)  # already points inward/down
+			if planet.altitude(global_position) < LAND_ALT:
+				_landing = false
+				_perched = true
+				_wander_timer = randf_range(PERCH_MIN, PERCH_MAX)
+				velocity = Vector3.ZERO
+				wish = Vector3.ZERO
+		else:
+			_wander_timer -= delta
+			if _wander_timer <= 0.0 or _wander_dir == Vector3.ZERO:
+				if planet != null and randf() < PERCH_CHANCE:
+					_landing = true
+				else:
+					_wander_timer = randf_range(WANDER_MIN, WANDER_MAX)
+					_wander_dir = Vector3(randf() * 2 - 1, randf() * 0.4 - 0.2, randf() * 2 - 1).normalized()
+			wish = _wander_dir
 
-	# stay within an altitude band above the terrain
-	if planet != null:
+	# stay within an altitude band above the terrain (skip while intentionally
+	# landing or already perched)
+	if planet != null and not _landing and not _perched:
 		var alt := planet.altitude(global_position)
-		var out_dir := (global_position - planet.global_position).normalized()
+		var inward := _inward_dir(global_position)
 		if alt < FLY_MIN_ALT:
-			wish += out_dir * 0.8
+			wish -= inward * 0.8  # climb (outward)
 		elif alt > FLY_MAX_ALT:
-			wish -= out_dir * 0.8
+			wish += inward * 0.8  # descend (inward)
 
 	if wish.length() > 0.01:
 		wish = wish.normalized()
@@ -333,7 +506,8 @@ func _animate(delta: float) -> void:
 		seg.position.x = sin(_phase - float(i) * 0.9) * 0.15 * float(species.get("scale", 1.0)) * maxf(moving, 0.2)
 	for i in _wings.size():
 		var sgn := 1.0 if i == 0 else -1.0
-		_wings[i].rotation.z = sin(_phase * 1.6) * 0.6 * sgn * maxf(moving, 0.4) + 0.15 * sgn
+		var wing_amp := 0.0 if _perched else maxf(moving, 0.4)  # wings fold while perched
+		_wings[i].rotation.z = sin(_phase * 1.6) * 0.6 * sgn * wing_amp + 0.15 * sgn
 
 
 ## External damage (not yet exposed to the player -- reserved for a future
