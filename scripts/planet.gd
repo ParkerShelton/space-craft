@@ -32,8 +32,9 @@ var ore_noise := FastNoiseLite.new()
 var cave_noise := FastNoiseLite.new()   # ridged 3D noise; tunnels where the ridge is thin
 var cave_noise2 := FastNoiseLite.new()  # second field, ANDed with the first -> branching networks
 var cave_enabled := false
-var cave_threshold := 0.94     # higher = thinner/rarer tunnels
-var cave_min_depth := 5.0      # no caves closer to the surface than this (keeps roofs solid)
+var cave_threshold := 0.04     # higher = thinner/rarer tunnels
+var cave_min_depth := 5.0      # normal tunnels need at least this much roof
+var cave_breach_threshold := 1.0  # only the strongest tunnel cores punch through shallower/to the surface
 
 var shape_cube := false  # true => cube-shaped planet (Chebyshev distance)
 
@@ -59,7 +60,7 @@ var canopy_max := 4.0
 var tree_reach := 0.0         # how far above the surface trees can extend
 
 # --- ores (procedural per planet, derived from seed) ---
-var ore_threshold := 1.0      # ore_noise above this => an ore vein (lower = richer)
+var ore_threshold := 10.0      # ore_noise above this => an ore vein (lower = richer)
 # each def: {block, name, color, tier, props{h,d,e,r}, hardness, min_power, w, mind}
 var ore_defs: Array = []
 var _ore_by_block := {}       # block id (ORE_0..3) -> def, for fast lookup
@@ -217,20 +218,24 @@ func ore_min_power(block_id: int) -> float:
 
 
 # Decide how cave-riddled this planet is. `amount` overrides (0=none, 1=extreme);
-# -1 rolls randomly from the seed so most planets get caves, some barely any,
-# a few are honeycombed. Also sets tunnel SIZE (bigger caverns on cavier worlds).
+# -1 rolls randomly from the seed. Every planet gets AT LEAST a light network (the
+# floor is raised well above the enable threshold) so caves are a near-universal
+# feature you can dig into anywhere, while size/density still scale with amount --
+# some worlds are barely-there, most are modest, a few are honeycombed.
 func _derive_caves(amount: float) -> void:
 	var a := amount
 	if a < 0.0:
 		var rng := RandomNumberGenerator.new()
 		rng.seed = _seed + 8181
-		# skewed toward modest caves; occasional near-zero or very heavy world
-		a = clampf(rng.randf_range(-0.25, 1.15), 0.0, 1.0)
+		a = clampf(rng.randf_range(0.12, 1.12), 0.0, 1.0)
 	cave_enabled = a > 0.02
 	if not cave_enabled:
 		return
 	# more amount -> lower threshold (denser tunnels) and lower frequency (bigger caverns)
 	cave_threshold = lerpf(0.90, 0.62, a)
+	# only the strongest cores of a tunnel breach through shallow ground/topsoil to
+	# the surface, so entrances are rare and natural rather than swiss-cheesing it
+	cave_breach_threshold = minf(cave_threshold + 0.09, 0.985)
 	var freq := lerpf(4.5, 1.4, a) / maxf(radius, 1.0)
 	cave_noise.seed = _seed + 2020
 	cave_noise.frequency = freq
@@ -244,14 +249,17 @@ func _derive_caves(amount: float) -> void:
 	cave_noise2.fractal_octaves = 2
 
 
-# Is (gx,gy,gz) inside a carved cave tunnel? Two ridged noise fields multiplied
-# together carve branching worm-like networks instead of straight parallel tubes.
-func _is_cave(gx: int, gy: int, gz: int) -> bool:
-	if not cave_enabled:
-		return false
+# Raw tunnel strength at a cell (0..1ish): how deep inside a carved tunnel this
+# point sits. Two ridged noise fields multiplied together carve branching,
+# worm-like networks instead of straight parallel tubes.
+func _cave_strength(gx: int, gy: int, gz: int) -> float:
 	var r1 := cave_noise.get_noise_3d(gx, gy, gz) * 0.5 + 0.5
 	var r2 := cave_noise2.get_noise_3d(gx, gy, gz) * 0.5 + 0.5
-	return r1 * r2 > cave_threshold
+	return r1 * r2
+
+
+func _is_cave(gx: int, gy: int, gz: int) -> bool:
+	return cave_enabled and _cave_strength(gx, gy, gz) > cave_threshold
 
 
 # Give each planet a distinct forest: color palette, wood tone, canopy shape and
@@ -383,14 +391,19 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 	var depth := surf - d
 	if d < radius * 0.22:
 		return pal_core
+	# caves: hollowed from the rock layer. Normal tunnels need a solid roof
+	# (cave_min_depth) and stay clear of the core; only the STRONGEST tunnel cores
+	# breach shallower -- including straight through topsoil -- so occasional
+	# natural cave mouths let you walk in instead of always digging down.
+	if cave_enabled and d > radius * 0.22 + 6.0:
+		var near_surface := depth < cave_min_depth
+		var strong_enough := _cave_strength(gx, gy, gz) > (cave_breach_threshold if near_surface else cave_threshold)
+		if strong_enough:
+			return Blocks.AIR
 	if depth < 1.0:
 		return pal_top
 	if depth < 4.0:
 		return pal_sub
-	# caves: hollow out the rock layer (never nearer the surface than cave_min_depth,
-	# nor into the core), so tunnels have a solid roof and don't hit magma
-	if cave_enabled and depth >= cave_min_depth and d > radius * 0.22 + 6.0 and _is_cave(gx, gy, gz):
-		return Blocks.AIR
 	# rock layer: sometimes an ore vein
 	if not ore_defs.is_empty() and ore_noise.get_noise_3d(gx, gy, gz) > ore_threshold:
 		var o := _pick_ore(gx, gy, gz, depth)
