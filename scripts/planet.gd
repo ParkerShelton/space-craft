@@ -620,10 +620,17 @@ func _derive_settlements(force_one: bool) -> void:
 			var prob := clampf(0.10 + hab * 0.09, 0.05, 0.45)
 			if _hash01(Vector3i(i, 4242, 0), 31) >= prob:
 				continue
+		else:
+			# The forced test settlement uses the SAME dry-land search (same seed
+			# salt, 4040) that find_spawn_point uses for Vector3.UP -- so instead of
+			# a fixed direction that could land underwater (silently skipping the
+			# "guaranteed" settlement entirely) or just be far from wherever the
+			# player actually spawns, this always lands dry AND right next to spawn.
+			dir = _dry_land_dir(Vector3.UP, 4040)
 
 		var anchor := _surface_point(dir)
-		if water_style != WATER_NONE and _norm(anchor) <= water_level + 2.0:
-			continue  # no settlements underwater
+		if not forced and water_style != WATER_NONE and _norm(anchor) <= water_level + 2.0:
+			continue  # no (non-forced) settlements underwater
 
 		var srng := RandomNumberGenerator.new()
 		var sseed := _seed + i * 7907 + 5151
@@ -713,9 +720,13 @@ func altitude(world_pos: Vector3) -> float:
 
 
 # A world point above dry land near `prefer` (so the player doesn't spawn underwater).
-func find_spawn_point(prefer: Vector3) -> Vector3:
+## Jitter away from `prefer` until landing on dry ground, deterministically (same
+## seed salt always finds the same spot). Shared by find_spawn_point and the
+## forced test settlement in _derive_settlements so the two can be guaranteed to
+## coincide -- see the comment there for why that matters.
+func _dry_land_dir(prefer: Vector3, seed_salt: int) -> Vector3:
 	var rng := RandomNumberGenerator.new()
-	rng.seed = _seed + 4040
+	rng.seed = _seed + seed_salt
 	prefer = prefer.normalized()
 	var dir := prefer
 	for attempt in 80:
@@ -723,6 +734,11 @@ func find_spawn_point(prefer: Vector3) -> Vector3:
 			dir = (prefer + Vector3(rng.randf() * 2 - 1, rng.randf() * 2 - 1, rng.randf() * 2 - 1) * 0.6).normalized()
 		if water_style == WATER_NONE or _surf(dir) > water_level + 3.0:
 			break
+	return dir
+
+
+func find_spawn_point(prefer: Vector3) -> Vector3:
+	var dir := _dry_land_dir(prefer, 4040)
 	return to_global(_surface_point(dir) + dir * 8.0)
 
 
