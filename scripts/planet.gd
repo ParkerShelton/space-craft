@@ -264,14 +264,28 @@ func _try_spawn_creature(player_pos: Vector3, world: WorldManager) -> void:
 	if fauna_land.is_empty() and fauna_fish.is_empty():
 		return
 	var local_player := to_local(player_pos)
-	if local_player.length() < 1.0:
+	var player_d := local_player.length()
+	if player_d < 1.0:
 		return
-	var base_dir := local_player.normalized()
+	var base_dir := local_player / player_d
+	# Build a tangent frame at the player's location so spawn points can be offset
+	# by an actual DISTANCE (blocks), not a fixed jitter on the unit direction --
+	# jittering the direction vector put spawns anywhere from a few blocks to
+	# thousands away depending on planet radius (a small direction nudge on a
+	# radius-1500 world is a huge arc distance), so they spawned way outside
+	# render/despawn range and were gone before ever being seen.
+	var t1 := base_dir.cross(Vector3.UP)
+	if t1.length() < 0.1:
+		t1 = base_dir.cross(Vector3.RIGHT)
+	t1 = t1.normalized()
+	var t2 := base_dir.cross(t1).normalized()
 	var want_fish := not fauna_fish.is_empty() and (fauna_land.is_empty() or randf() < 0.35)
 
 	for attempt in 6:
-		var jitter := Vector3(randf() * 2.0 - 1.0, randf() * 2.0 - 1.0, randf() * 2.0 - 1.0) * 0.6
-		var dir := (base_dir + jitter).normalized()
+		var ang := randf() * TAU
+		var r := randf_range(15.0, CREATURE_SPAWN_RADIUS)
+		var offset := (t1 * cos(ang) + t2 * sin(ang)) * r
+		var dir := (base_dir * player_d + offset).normalized()
 		if want_fish:
 			var surf := _surf(dir)
 			if surf >= water_level - 2.0:
