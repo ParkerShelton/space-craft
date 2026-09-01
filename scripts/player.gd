@@ -2598,7 +2598,8 @@ func _craft_preview_text(kind: int) -> String:
 	if m.is_empty():
 		var label: String = {"refined": "a refined material", "circuit": "Circuitry",
 			"alloy": "Alloy Plating"}.get(mtype, "material")
-		return "Load %s to build from →" % label
+		var extra_hint := "\n(plus some Metal, loaded here too)" if Blocks.is_smelter_kind(kind) else ""
+		return "Load %s to build from →%s" % [label, extra_hint]
 	var p: Dictionary = m["props"]
 	var s := "%s   H%d D%d E%d R%d" % [m["mat"].get("name", "material"),
 		int(p.get("h", 0)), int(p.get("d", 0)), int(p.get("e", 0)), int(p.get("r", 0))]
@@ -2609,7 +2610,8 @@ func _craft_preview_text(kind: int) -> String:
 	elif kind == Blocks.SHIPWORKS:
 		s += "\nThruster thrust ↑ with Energy   |   Hull mass ↑ with Density"
 	elif Blocks.is_smelter_kind(kind):
-		s += "\nCombine with Metal → Alloy Plating (Shipworks) or Circuitry (Fabricator)"
+		s += "\nAlso load Metal, then pick a blueprint below:" \
+			+ "\nAlloy Plating (for Shipworks) or Circuitry (for Fabricator)"
 	return s
 
 
@@ -2620,7 +2622,13 @@ func _on_station_craft(craft: Dictionary) -> void:
 	if r == -1:
 		_toast("Busy…")
 	elif r == 0:
-		_toast("Missing materials" if craft.has("reqs") else "Need %d loaded" % int(craft["cost"]))
+		if craft.has("reqs"):
+			_toast("Missing materials")
+		elif craft.has("extra"):
+			_toast("Need %d loaded, plus %d %s" % [
+				int(craft["cost"]), int(craft["extra"]["n"]), Blocks.name_of(int(craft["extra"]["id"]))])
+		else:
+			_toast("Need %d loaded" % int(craft["cost"]))
 	else:
 		_toast("Crafting %s…" % Blocks.name_of(int(craft["out"])))
 	_refresh_station_ui()
