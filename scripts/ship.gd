@@ -260,42 +260,17 @@ func contains(world_pos: Vector3) -> bool:
 	return false
 
 
-const MAX_DOOR_GROUP := 9  # a door wall opens/closes together, up to a 3x3-ish patch
-const _DOOR_NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
-	Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
-
-## Toggle a door block open/closed (by local voxel). Returns true if it was a door.
-## Cube doors are built edge-to-edge as a wall, so opening one opens every door
-## cell touching it (flood-fill, capped at MAX_DOOR_GROUP) rather than just itself.
+## Toggle a door block open/closed (by local voxel). Returns true if it was a
+## door. Each cube door is independent -- toggling one never touches any
+## other door, however close together they're built (this used to flood-fill
+## and open every touching door cell together, which read as buggy/unexpected
+## in practice rather than useful, so it was removed).
 func toggle_door(local_v: Vector3i) -> bool:
 	var id: int = blocks.get(local_v, Blocks.AIR)
 	if not Blocks.is_door(id):
 		return false
-	var new_id := Blocks.door_toggle_of(id)
-	for v in _door_group(local_v):
-		set_block(v, new_id, block_meta.get(v, {}))
+	set_block(local_v, Blocks.door_toggle_of(id), block_meta.get(local_v, {}))
 	return true
-
-
-func _door_group(start: Vector3i) -> Array:
-	var seen := {start: true}
-	var queue: Array = [start]
-	var result: Array = [start]
-	var qi := 0
-	while qi < queue.size() and result.size() < MAX_DOOR_GROUP:
-		var cur: Vector3i = queue[qi]
-		qi += 1
-		for d in _DOOR_NEIGH6:
-			var nb: Vector3i = cur + d
-			if seen.has(nb):
-				continue
-			seen[nb] = true
-			if Blocks.is_door(blocks.get(nb, Blocks.AIR)):
-				result.append(nb)
-				queue.append(nb)
-				if result.size() >= MAX_DOOR_GROUP:
-					break
-	return result
 
 
 ## Available thrust acceleration (m/s^2) = total thrust / total mass. A thruster's

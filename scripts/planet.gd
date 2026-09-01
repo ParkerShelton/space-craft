@@ -1706,14 +1706,29 @@ func set_block(v: Vector3i, id: int) -> void:
 ## Planet doors are placed as TWO stacked voxels (see Player._edit_block) so they
 ## read as one two-block-tall doorway. Toggling either half toggles both -- look
 ## one cell outward and one cell inward along the local up axis for the partner.
+const _DOOR_NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+	Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+
+## Toggle one door voxel and its own other half (the 2-tall pair is always
+## exactly 1 voxel apart along SOME axis-aligned direction). Checks all 6
+## neighbors rather than recomputing "up" via _axis_of(v) -- that axis is only
+## an approximation of the true local up near a cube face's center, and drifts
+## for anything far from it (a big Advanced-city plaza can have a 150-unit
+## radius, easily far enough to disagree). A wrong axis meant a click could
+## flip only ONE of the two door voxels (so it never looked "open" until a
+## second click happened to hit the other half), and in the worst case could
+## even reach into a completely unrelated door a building over. Checking all 6
+## neighbors instead is strictly safer: buildings are spaced far enough apart
+## (BUILDING_CELL) that an unrelated door is never voxel-adjacent to this one,
+## so this only ever finds this door's own genuine other half.
 func toggle_door(v: Vector3i) -> bool:
 	var id := get_id(v)
 	if not Blocks.is_door(id):
 		return false
 	var new_id := Blocks.door_toggle_of(id)
 	set_block(v, new_id)
-	var axis: Vector3i = Vector3i(_axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5)))
-	for nb in [v + axis, v - axis]:
+	for n: Vector3i in _DOOR_NEIGH6:
+		var nb: Vector3i = v + n
 		if Blocks.is_door(get_id(nb)):
 			set_block(nb, new_id)
 	return true
