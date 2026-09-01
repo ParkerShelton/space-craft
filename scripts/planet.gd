@@ -974,6 +974,22 @@ func set_block(v: Vector3i, id: int) -> void:
 	if local.z == CS - 1: _rebuild_if_loaded(cc + Vector3i(0, 0, 1))
 
 
+## Planet doors are placed as TWO stacked voxels (see Player._edit_block) so they
+## read as one two-block-tall doorway. Toggling either half toggles both -- look
+## one cell outward and one cell inward along the local up axis for the partner.
+func toggle_door(v: Vector3i) -> bool:
+	var id := get_id(v)
+	if not Blocks.is_door(id):
+		return false
+	var new_id := Blocks.door_toggle_of(id)
+	set_block(v, new_id)
+	var axis: Vector3i = Vector3i(_axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5)))
+	for nb in [v + axis, v - axis]:
+		if Blocks.is_door(get_id(nb)):
+			set_block(nb, new_id)
+	return true
+
+
 # Queue a loaded chunk to be re-meshed on a worker thread (never blocks the main
 # thread). Applied a frame or two later via process_load_queue.
 func _rebuild_if_loaded(cc: Vector3i) -> void:

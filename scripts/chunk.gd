@@ -125,7 +125,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 			for x in CS:
 				var id := _id_at(planet, snap, Vector3i(base.x + x, base.y + y, base.z + z))
 				ids[i] = id
-				if id != Blocks.AIR:
+				if id != Blocks.AIR and id != Blocks.DOOR_OPEN:
 					any_solid = true
 				i += 1
 
@@ -225,17 +225,19 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				var lin := a * sd + k * su + row
 				var oid := ids[lin]
 				var val := 0
-				# opaque blocks only; WATER is meshed separately as partial-height boxes
-				if oid != Blocks.AIR and oid != Blocks.WATER:
+				# opaque blocks only; WATER is meshed separately as partial-height boxes,
+				# and an OPEN door draws as an empty gap (no face, no collision) so you
+				# can actually walk through it once opened
+				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN:
 					var na := a + dir
 					var nid: int
 					if na >= 0 and na < CS:
 						nid = ids[na * sd + k * su + row]
 					else:
 						nid = _id_at(planet, snap, _global_coord(base, d, u, v, na, k, j))
-					# draw a face if the neighbor is air or water (so the seabed shows
-					# under transparent water)
-					if nid == Blocks.AIR or nid == Blocks.WATER:
+					# draw a face if the neighbor is air, water, or an open doorway (so
+					# the seabed shows under water, and a room shows through an open door)
+					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN:
 						val = oid
 				mask[k + j * CS] = val
 

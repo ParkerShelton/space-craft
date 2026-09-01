@@ -65,6 +65,10 @@ const STACK_MAX := 99
 var inv: Array = []
 var active_slot := 0              # which slot we place from
 var inv_open := false
+# dedicated 2-slot-tall equip slot: a Suit only protects you once it's WORN here,
+# not just carried in the general grid (unlike the Drill/O2 Tank, which stay
+# passively equipped from anywhere). Same slot shape as an `inv` entry.
+var suit_slot: Dictionary = {"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}}
 # mining (hold left-click to break; harder blocks take longer)
 var _mine_key := ""               # identifies the block currently being mined
 var _mine_time := 0.0             # seconds spent mining the current block
@@ -104,6 +108,7 @@ var _hazard_label: Label           # "FREEZING"/"OVERHEATING" warning
 var _inv_panel: Control            # full inventory overlay (toggled with E)
 var _hotbar_cells: Array = []      # always-visible hotbar slot views
 var _grid_cells: Array = []        # full-inventory slot buttons
+var _equip_cell: Dictionary = {}   # the 2-slot-tall Suit equip slot view
 
 # --- crafting stations ---
 var _station_open: Station = null  # non-null while a station panel is open
@@ -1000,16 +1005,11 @@ func _raycast_voxel() -> Dictionary:
 func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: String) -> Dictionary:
 	# march in the object's local voxel space (planets are axis-aligned; ships rotate)
 	var ld: Vector3 = (obj.global_transform.basis.inverse() * dir_w).normalized()
-	# ships: march from the camera so open doors (which have no collider) are found;
-	# planets: start just outside the surface hit (cheaper, no doors to catch)
-	var start: Vector3
-	var steps: int
-	if kind == "ship":
-		start = obj.to_local(origin_w)
-		steps = 24
-	else:
-		start = obj.to_local(hit_w) - ld * 0.06
-		steps = 14
+	# march from the camera (not the surface hit) so an open door -- which has no
+	# collider -- doesn't block finding whatever's actually being aimed at, on a
+	# ship OR a planet base
+	var start: Vector3 = obj.to_local(origin_w)
+	var steps := 24
 	var v := Vector3i(floori(start.x), floori(start.y), floori(start.z))
 	var step := Vector3i(1 if ld.x >= 0.0 else -1, 1 if ld.y >= 0.0 else -1, 1 if ld.z >= 0.0 else -1)
 	var tmax := Vector3(_tmax(start.x, ld.x), _tmax(start.y, ld.y), _tmax(start.z, ld.z))
@@ -1072,7 +1072,9 @@ func _edit_block(_break_it: bool) -> void:
 		_place_station(place_id)
 		return
 	if not Blocks.is_placeable_block(place_id):
-		if Blocks.is_gear(place_id):
+		if place_id == Blocks.SUIT:
+			_toast("Drag the Suit into its equip slot (Inventory) to wear it")
+		elif Blocks.is_gear(place_id):
 			_toast("%s is worn gear — it works automatically while carried" % Blocks.name_of(place_id))
 		else:
 			_toast("Can't place that")
@@ -1084,7 +1086,16 @@ func _edit_block(_break_it: bool) -> void:
 	var pv: Vector3i = tgt["place"]
 	if tgt["kind"] == "planet":
 		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
-			obj.set_block(pv, place_id)
+			if place_id == Blocks.DOOR:
+				# planet doors are two stacked voxels (see Planet.toggle_door) so
+				# right-clicking either half always opens/closes the whole doorway
+				var axis: Vector3i = Vector3i((obj as Planet)._axis_of(Vector3(pv) + Vector3(0.5, 0.5, 0.5)))
+				if axis == Vector3i.ZERO:
+					axis = Vector3i(0, 1, 0)
+				obj.set_block(pv, place_id)
+				obj.set_block(pv + axis, place_id)
+			else:
+				obj.set_block(pv, place_id)
 			_consume_active()
 	elif tgt["kind"] == "ship":
 		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
@@ -1478,11 +1489,13 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	for i in HOTBAR_SLOTS:
 		_hotbar_cells.append(_make_slot(hb, i, "none"))
 
-	# full inventory overlay (E): inventory grid on the left, a scrollable "Craft"
-	# list on the right (scrolls instead of growing as recipes are added)
+	# full inventory overlay (E): inventory grid, a 2-tall Suit equip slot, and a
+	# scrollable "Craft" list (scrolls instead of growing as recipes are added)
 	var grid_w := HOTBAR_SLOTS * 60
 	var grid_h := 4 * 60
-	var craft_x := 12 + grid_w + 16
+	var equip_x := 12 + grid_w + 16
+	var equip_w := 64
+	var craft_x := equip_x + equip_w + 16
 	var craft_w := 220
 	_inv_panel = Panel.new()
 	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
@@ -1503,6 +1516,15 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	_inv_panel.add_child(grid)
 	for i in SLOTS:
 		_grid_cells.append(_make_slot(grid, i, "select"))
+
+	# equip slot: a Suit only protects you once dragged here -- carrying one loose
+	# in the grid above does nothing (unlike the Drill/O2 Tank)
+	var equip_label := Label.new()
+	equip_label.text = "Suit"
+	equip_label.modulate = Color(1, 1, 1, 0.7)
+	equip_label.position = Vector2(equip_x, 8)
+	_inv_panel.add_child(equip_label)
+	_equip_cell = _make_equip_slot(_inv_panel, Vector2(equip_x, 36))
 
 	# --- crafting column: a scrolling list of hand recipes ---
 	var chead := Label.new()
@@ -1568,6 +1590,31 @@ func _make_slot(parent: Node, index: int, mode: String) -> Dictionary:
 	return {"root": root, "swatch": swatch, "count": count}
 
 
+# A single equip slot that's visually two grid cells tall, holding one Suit at a
+# time (the item fills the whole slot, not spread across two separate cells).
+func _make_equip_slot(parent: Node, pos: Vector2) -> Dictionary:
+	var root := Panel.new()
+	root.custom_minimum_size = Vector2(56, 116)  # 2x56 + gap
+	root.position = pos
+	parent.add_child(root)
+	var swatch := ColorRect.new()
+	swatch.set_anchors_preset(Control.PRESET_FULL_RECT)
+	swatch.offset_left = 6; swatch.offset_top = 6
+	swatch.offset_right = -6; swatch.offset_bottom = -6
+	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(swatch)
+	var count := Label.new()
+	count.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	count.offset_left = -30; count.offset_top = -22
+	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(count)
+	root.set_drag_forwarding(
+		_slot_get_drag.bind("equip", 0, root),
+		_slot_can_drop.bind("equip", 0),
+		_slot_do_drop.bind("equip", 0))
+	return {"root": root, "swatch": swatch, "count": count}
+
+
 func _on_slot_pressed(index: int) -> void:
 	active_slot = index
 	_refresh_slots()
@@ -1578,6 +1625,8 @@ func _on_slot_pressed(index: int) -> void:
 func _slot_ref(cont: String, index: int) -> Dictionary:
 	if cont == "inv":
 		return inv[index]
+	if cont == "equip":
+		return suit_slot
 	if cont == "stor" and index >= 0 and index < _stor_map.size():
 		var m: Dictionary = _stor_map[index]
 		var st: Station = m["st"]
@@ -1641,8 +1690,12 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 		if tst.kind == Blocks.FABRICATOR and not Blocks.is_refined(from["id"]):
 			_toast("Fabricator takes refined material")
 			return
+	# the equip slot only ever holds a Suit -- that's what makes it worn, not just carried
+	if tc == "equip" and from["id"] != Blocks.SUIT:
+		_toast("Only a Suit fits there")
+		return
 	if to["count"] > 0 and to["id"] == from["id"] and to.get("src", "") == from.get("src", ""):
-		var cap: int = STACK_MAX if tc == "inv" else 100000
+		var cap: int = STACK_MAX if tc == "inv" else (1 if tc == "equip" else 100000)
 		var mv: int = mini(cap - to["count"], from["count"])
 		to["count"] += mv
 		from["count"] -= mv
@@ -1670,17 +1723,19 @@ func _refresh_slots() -> void:
 		_paint_cell(_hotbar_cells[i], inv[i], i == active_slot)
 	for i in _grid_cells.size():
 		_paint_cell(_grid_cells[i], inv[i], i == active_slot)
+	if not _equip_cell.is_empty():
+		_paint_cell(_equip_cell, suit_slot, false)
 	_update_mine_power()
 	_refresh_build_buttons()
 
 
 # Your effective mining power is the best drill you carry (bare hands = 1.0). This
-# sets mining speed and which ore tiers you can break. Also scans for O2 Tank,
-# Suit, and melee Weapon gear -- the best of each you carry applies automatically.
+# sets mining speed and which ore tiers you can break. Also scans for O2 Tank
+# gear -- the best you carry applies automatically. The Suit is different: it
+# only protects you while actually worn in `suit_slot` (see that var's comment).
 func _update_mine_power() -> void:
 	var best := 1.0
 	var o2b := 0.0
-	var resist := 0.0
 	for s in inv:
 		if s["count"] <= 0:
 			continue
@@ -1690,10 +1745,11 @@ func _update_mine_power() -> void:
 				best = maxf(best, float(mat.get("power", 1.0)))
 			Blocks.O2_TANK:
 				o2b = maxf(o2b, float(mat.get("o2", 0.0)))
-			Blocks.SUIT:
-				resist = maxf(resist, float(mat.get("resist", 0.0)))
 	mine_power = best
 	_o2_bonus = o2b
+	var resist := 0.0
+	if suit_slot.get("id", Blocks.AIR) == Blocks.SUIT and int(suit_slot.get("count", 0)) > 0:
+		resist = float(suit_slot.get("mat", {}).get("resist", 0.0))
 	_hazard_resist = clampf(resist, 0.0, 0.9)
 
 	# A melee weapon only does anything if it's the slot you're actively holding --
@@ -1750,9 +1806,9 @@ func _mk_view_box(size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
 
 
 func _build_held_weapon(color: Color) -> void:
-	_mk_view_box(Vector3(0.05, 0.05, 0.22), Vector3(0, 0, 0.12), Color(0.25, 0.22, 0.2))  # hilt
-	_mk_view_box(Vector3(0.16, 0.03, 0.03), Vector3(0, 0, 0.0), Color(0.35, 0.32, 0.3))   # guard
-	_mk_view_box(Vector3(0.05, 0.02, 0.55), Vector3(0, 0, -0.32), color)                  # blade
+	_mk_view_box(Vector3(0.05, 0.22, 0.05), Vector3(0, -0.14, 0), Color(0.25, 0.22, 0.2))  # hilt
+	_mk_view_box(Vector3(0.16, 0.03, 0.03), Vector3(0, 0.0, 0), Color(0.35, 0.32, 0.3))    # guard
+	_mk_view_box(Vector3(0.05, 0.55, 0.02), Vector3(0, 0.32, 0), color)                    # blade -- held vertical, not pointing forward
 
 
 func _build_held_drill(color: Color) -> void:
@@ -2003,12 +2059,18 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 # one is a walk-through gap that vents air).
 func _try_toggle_door() -> bool:
 	var tgt := _raycast_voxel()
-	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "ship":
+	if tgt.is_empty() or not tgt.get("hit", false):
 		return false
-	if not Blocks.is_door(int(tgt["id"])):
+	if not Blocks.is_door(int(tgt.get("id", Blocks.AIR))):
 		return false
-	(tgt["obj"] as Ship).toggle_door(tgt["voxel"])
-	return true
+	var kind: String = tgt.get("kind", "")
+	if kind == "ship":
+		(tgt["obj"] as Ship).toggle_door(tgt["voxel"])
+		return true
+	if kind == "planet":
+		(tgt["obj"] as Planet).toggle_door(tgt["voxel"])
+		return true
+	return false
 
 
 func _looked_at_station() -> Station:

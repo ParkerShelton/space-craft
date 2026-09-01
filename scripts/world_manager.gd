@@ -65,6 +65,7 @@ func save_game() -> bool:
 			"basis": pl.global_transform.basis,
 			"inv": pl.inv,
 			"active_slot": pl.active_slot,
+			"suit_slot": pl.suit_slot,
 		}
 	for p in planets:
 		if not p._edits_by_chunk.is_empty():
@@ -171,6 +172,8 @@ func load_game() -> bool:
 			pl.global_transform = t
 		if pd.has("inv"):
 			pl.inv = pd["inv"]
+		if pd.has("suit_slot"):
+			pl.suit_slot = pd["suit_slot"]
 		pl.active_slot = pd.get("active_slot", 0)
 		pl.velocity = Vector3.ZERO
 		pl._refresh_slots()
