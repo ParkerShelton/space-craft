@@ -801,6 +801,8 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 		if big or fine:
 			return Blocks.AIR
 	if depth < 1.0:
+		if not settlements.is_empty() and _settlement_path_at(p):
+			return Blocks.PATH
 		return pal_top
 	if depth < 4.0:
 		return pal_sub
@@ -1000,6 +1002,59 @@ func _settlement_id_at(p: Vector3) -> int:
 	return Blocks.AIR
 
 
+const PATH_WIDTH := 1.1  # half-width of a settlement path (so it's ~2.2 blocks wide)
+
+## Is voxel p (on the ground surface) part of a dirt path? Every building gets a
+## straight path from its own door back to the settlement's plaza center -- same
+## cell-neighborhood scan as the buildings themselves, checking each candidate
+## building's door-to-plaza line segment for proximity.
+func _settlement_path_at(p: Vector3) -> bool:
+	for st in settlements:
+		var anchor: Vector3 = st["anchor"]
+		var u: Vector3 = st["u"]
+		var v: Vector3 = st["v"]
+		var rel := p - anchor
+		var su := rel.dot(u)
+		var sv := rel.dot(v)
+		if Vector2(su, sv).length() > float(st["radius"]) + 20.0:
+			continue
+		var cell := BUILDING_CELL
+		var ccx := floori(su / cell)
+		var ccy := floori(sv / cell)
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				var cx := ccx + dx
+				var cy := ccy + dy
+				var cu := (float(cx) + 0.5) * cell
+				var cv := (float(cy) + 0.5) * cell
+				if Vector2(cu, cv).length() > float(st["radius"]):
+					continue
+				if _hash01(Vector3i(cx, cy, 0), st["seed"]) >= float(st["density"]):
+					continue
+				var sz := _building_size(cx, cy, st)
+				var door := _building_door_point(cu, cv, sz)
+				var seg := -door  # plaza center is local (0,0)
+				var seg_len := seg.length()
+				if seg_len < 0.01:
+					continue
+				var seg_dir := seg / seg_len
+				var t := clampf((Vector2(su, sv) - door).dot(seg_dir), 0.0, seg_len)
+				var closest := door + seg_dir * t
+				if Vector2(su, sv).distance_to(closest) <= PATH_WIDTH:
+					return true
+	return false
+
+
+# Local (u,v) point just outside a building's door -- where its path starts.
+func _building_door_point(cu: float, cv: float, sz: Vector3i) -> Vector2:
+	var hw := float(sz.x) * 0.5
+	var hd := float(sz.y) * 0.5
+	var door_info := _building_door_axis(cu, cv)
+	if door_info.x > 0.5:
+		return Vector2(cu + door_info.y * (hw + 1.5), cv)
+	return Vector2(cu, cv + door_info.y * (hd + 1.5))
+
+
 # One building, footprint centered at local tangent-plane coords (cu, cv) within
 # its settlement: a hollow walled box with a simple peaked roof, a couple of
 # window openings, and a real, openable two-tall Door (Blocks.DOOR -- the same
@@ -1007,6 +1062,17 @@ func _settlement_id_at(p: Vector3) -> int:
 # center. Its floor sits at the SAME flattened height _settlement_pad_surf graded
 # the ground to (both call _building_base_dir the same way), so the walls always
 # meet the ground exactly instead of floating or sinking into it.
+# Which wall of a building (by its local cu,cv within the settlement) the door
+# sits on: the one facing back toward the plaza center. Shared by the wall
+# renderer AND the path system so they can never disagree about where the door
+# is (see the settlement-grading lesson logged earlier this session).
+func _building_door_axis(cu: float, cv: float) -> Vector2:
+	var door_axis_u: bool = absf(cu) >= absf(cv)
+	var raw: float = cu if door_axis_u else cv
+	var door_sign: float = -1.0 if raw >= 0.0 else 1.0
+	return Vector2(1.0 if door_axis_u else 0.0, door_sign)
+
+
 func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Vector3,
 		cu: float, cv: float, cx: int, cy: int, st: Dictionary) -> int:
 	var sz := _building_size(cx, cy, st)
@@ -1021,32 +1087,58 @@ func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Ve
 	var lv := rel.dot(v)
 	var hw := float(w) * 0.5
 	var hd := float(dd) * 0.5
-	if along < -0.1 or absf(lu) > hw + 0.1 or absf(lv) > hd + 0.1:
+	if along < -0.1 or absf(lu) > hw + 0.6 or absf(lv) > hd + 0.6:
 		return Blocks.AIR
+
 	if along >= float(height):
-		# roof: a simple peak, shrinking the footprint by one ring per layer
-		var shrink := along - float(height) + 1.0
-		if absf(lu) > hw - shrink + 0.1 or absf(lv) > hd - shrink + 0.1:
+		# gable roof: the ridge runs along whichever axis is longer, so the roof
+		# only slopes across the SHORT dimension -- a real house silhouette, not a
+		# pyramid. The eave (first row) is a thin ROOF_SLAB overhang that pokes
+		# slightly past the wall face; rows above it climb to the ridge as full
+		# roof blocks.
+		var ridge_along_u: bool = w >= dd
+		var half_full := hw if ridge_along_u else hd
+		var half_short := hd if ridge_along_u else hw
+		var full_coord := lu if ridge_along_u else lv
+		var short_coord := lv if ridge_along_u else lu
+		var r := along - float(height)
+		var shrink := half_short - r
+		if shrink < -0.1 or absf(full_coord) > half_full + 0.4 or absf(short_coord) > shrink + 0.1:
 			return Blocks.AIR
-		return int(st["roof_mat"])
+		return Blocks.ROOF_SLAB if r < 0.9 else int(st["roof_mat"])
+
+	# the outer reject above was loosened to hw/hd+0.6 to let the roof eave
+	# overhang past the wall face -- but the walls themselves must stay at their
+	# nominal footprint, or they'd render half a block too thick everywhere
+	if absf(lu) > hw + 0.1 or absf(lv) > hd + 0.1:
+		return Blocks.AIR
 	var on_wall: bool = absf(lu) >= hw - 0.6 or absf(lv) >= hd - 0.6
+	var door_info := _building_door_axis(cu, cv)
+	var door_axis_u: bool = door_info.x > 0.5
+	var door_sign: float = door_info.y
 	if not on_wall:
-		return Blocks.AIR  # hollow interior -- no floor/furniture yet, just a shell
-	var door_axis_u: bool = absf(cu) >= absf(cv)
-	var raw: float = cu if door_axis_u else cv
-	var door_sign: float = -1.0 if raw >= 0.0 else 1.0
+		# a big enough building gets a real second room: a dividing wall down the
+		# middle with its own two-tall Door (not just an open gap) so there's an
+		# actual doorway between rooms, not floor-to-ceiling nothing
+		if w >= 6 and absf(lu) < 0.5:
+			if absf(lv) >= 1.0 or along >= 2.0:
+				return int(st["wall_mat"])
+			return Blocks.DOOR
+		return Blocks.AIR  # hollow room interior -- no floor/furniture yet
 	if along < 2.0:
-		# the door sits on whichever wall faces back toward the settlement's center
+		# the exterior door sits on whichever wall faces back toward the plaza
 		if door_axis_u and absf(lu) >= hw - 0.6 and signf(lu) == door_sign and absf(lv) < 1.0:
 			return Blocks.DOOR
 		if not door_axis_u and absf(lv) >= hd - 0.6 and signf(lv) == door_sign and absf(lu) < 1.0:
 			return Blocks.DOOR
-	# a window on the back wall (opposite the door), roughly at mid-height
+	# a centered window on EVERY exterior wall, roughly at mid-height (a small
+	# transom strip can land just above the door on the door's own wall -- a
+	# normal detail, not a conflict, since the door claims the lower band first)
 	var mid := float(height) * 0.5
 	if height >= 5 and along >= mid - 0.9 and along <= mid + 0.6:
-		if door_axis_u and absf(lu) >= hw - 0.6 and signf(lu) == -door_sign and absf(lv) < 1.0:
+		if absf(lu) >= hw - 0.6 and absf(lv) < 1.0:
 			return Blocks.GLASS
-		if not door_axis_u and absf(lv) >= hd - 0.6 and signf(lv) == -door_sign and absf(lu) < 1.0:
+		if absf(lv) >= hd - 0.6 and absf(lu) < 1.0:
 			return Blocks.GLASS
 	return int(st["wall_mat"])
 

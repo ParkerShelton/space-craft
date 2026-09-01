@@ -172,6 +172,29 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 					_emit_water_cell(lo, hi, gv, planet, snap, wverts, wnormals, wcolors)
 				idx += 1
 
+	# roof slabs: a half-height OPAQUE box per cell (real geometry, not just a
+	# smaller-looking color) -- same partial-height technique as water above, but
+	# written into the opaque arrays so it collides and renders solid, giving
+	# roofs a thinner, shingle-like edge instead of a full-cube block silhouette.
+	idx = 0
+	for z in CS:
+		for y in CS:
+			for x in CS:
+				if ids[idx] == Blocks.ROOF_SLAB:
+					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
+					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
+					var lo := Vector3(x, y, z)
+					var hi := Vector3(x + 1, y + 1, z + 1)
+					var h := 0.5
+					if up.x > 0.5: hi.x = lo.x + h
+					elif up.x < -0.5: lo.x = hi.x - h
+					elif up.y > 0.5: hi.y = lo.y + h
+					elif up.y < -0.5: lo.y = hi.y - h
+					elif up.z > 0.5: hi.z = lo.z + h
+					elif up.z < -0.5: lo.z = hi.z - h
+					_emit_solid_box_cell(lo, hi, gv, Blocks.ROOF_SLAB, planet, snap, verts, normals, colors)
+				idx += 1
+
 	return {"verts": verts, "normals": normals, "colors": colors,
 		"wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
@@ -192,6 +215,22 @@ static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Pla
 		var nrm := Vector3(n)
 		var q := _box_face(lo, hi, fi)
 		_quad(q[0], q[1], q[2], q[3], nrm, col, wverts, wnormals, wcolors)
+
+
+static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int, planet: Planet,
+		snap: Dictionary, verts: PackedVector3Array, normals: PackedVector3Array,
+		colors: PackedColorArray) -> void:
+	var base := _block_color(planet, id)
+	for fi in 6:
+		var n: Vector3i = _WFACE[fi]
+		var nid := _id_at(planet, snap, gv + n)
+		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN:
+			continue  # only the faces exposed to open space are drawn
+		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
+		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
+		var nrm := Vector3(n)
+		var q := _box_face(lo, hi, fi)
+		_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors)
 
 
 static func _box_face(lo: Vector3, hi: Vector3, fi: int) -> Array:
@@ -225,19 +264,20 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				var lin := a * sd + k * su + row
 				var oid := ids[lin]
 				var val := 0
-				# opaque blocks only; WATER is meshed separately as partial-height boxes,
-				# and an OPEN door draws as an empty gap (no face, no collision) so you
-				# can actually walk through it once opened
-				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN:
+				# opaque blocks only; WATER and ROOF_SLAB are meshed separately as
+				# partial-height boxes, and an OPEN door draws as an empty gap (no
+				# face, no collision) so you can actually walk through it once opened
+				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN and oid != Blocks.ROOF_SLAB:
 					var na := a + dir
 					var nid: int
 					if na >= 0 and na < CS:
 						nid = ids[na * sd + k * su + row]
 					else:
 						nid = _id_at(planet, snap, _global_coord(base, d, u, v, na, k, j))
-					# draw a face if the neighbor is air, water, or an open doorway (so
-					# the seabed shows under water, and a room shows through an open door)
-					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN:
+					# draw a face if the neighbor is air, water, an open doorway, or a
+					# roof slab (so the seabed shows under water, a room shows through
+					# an open door, and a wall/ridge shows past a half-height slab)
+					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN or nid == Blocks.ROOF_SLAB:
 						val = oid
 				mask[k + j * CS] = val
 

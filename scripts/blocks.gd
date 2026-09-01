@@ -126,6 +126,8 @@ const INTERMEDIATE_IDS := [ALLOY, CIRCUIT]
 
 const INTERFACE := 65  # placeable trigger block: surround it with a recognized shell
                         # pattern (see MULTIBLOCK_RECIPES) to build a bigger structure
+const ROOF_SLAB := 66   # half-height roof block (real partial-height geometry, like water)
+const PATH := 67         # worn dirt/gravel walkway generated between settlement buildings
 
 # A 3x3x3 shell of `shell` around a placed INTERFACE block collapses into a
 # `result` station -- the multiblock alternative to just crafting a plain item.
@@ -273,6 +275,8 @@ const NAMES := {
 	ALLOY: "Alloy Plating",
 	CIRCUIT: "Circuitry",
 	INTERFACE: "Interface Core",
+	ROOF_SLAB: "Roof Slab",
+	PATH: "Path",
 	ORE_0: "Ore", ORE_1: "Ore", ORE_2: "Ore", ORE_3: "Ore",
 	REFINED_0: "Refined Material", REFINED_1: "Refined Material",
 	REFINED_2: "Refined Material", REFINED_3: "Refined Material",
@@ -353,6 +357,8 @@ const COLORS := {
 	ALLOY: Color(0.68, 0.70, 0.76),
 	CIRCUIT: Color(0.35, 0.75, 0.45),
 	INTERFACE: Color(0.75, 0.35, 0.85),
+	ROOF_SLAB: Color(0.40, 0.28, 0.20),
+	PATH: Color(0.58, 0.50, 0.38),
 	# generic fallbacks; real ore colors are planet-defined and travel with the item
 	ORE_0: Color(0.7, 0.6, 0.4), ORE_1: Color(0.6, 0.7, 0.5),
 	ORE_2: Color(0.5, 0.6, 0.7), ORE_3: Color(0.7, 0.5, 0.7),
