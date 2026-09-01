@@ -1188,24 +1188,37 @@ func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Ve
 	var door_sign := int(door_info.y)
 
 	# --- roof ---
+	#
+	# ROOF_SLAB is a HALF-HEIGHT block (see Chunk._emit_solid_box_cell) -- it
+	# must never sit directly beneath another full-height block, or there's a
+	# visible half-voxel air gap between the slab's top and the block above it.
+	# So a slab is used ONLY where nothing is stacked on top of it: the eave/lip
+	# ring that oversteps the nominal footprint (nothing above it but sky), or a
+	# tower's roof deck (capped by nothing -- the parapet sits beside it, not on
+	# top of it). Anywhere the roof continues upward, that layer is a normal
+	# full block so it stacks flush with no gap.
 	if ih > h:
 		var r := ih - h - 1  # 0 = first roof layer
 		match style:
 			B_TOWER:
-				# flat deck + parapet: a pitched roof on a 20-block tower would
-				# read as a cottage on stilts
-				if r == 0:
-					return Blocks.ROOF_SLAB if (absi(iu) <= hw + 1 and absi(iv) <= hd + 1) else Blocks.AIR
-				if r == 1 and (absi(iu) == hw or absi(iv) == hd) and absi(iu) <= hw and absi(iv) <= hd:
-					return wall_mat
-				return Blocks.AIR
+				# flat deck + a parapet LIP at the same layer (not stacked above
+				# the deck) -- a pitched roof on a 20-block tower would read as a
+				# cottage on stilts
+				if r != 0 or absi(iu) > hw or absi(iv) > hd:
+					return Blocks.AIR
+				return wall_mat if (absi(iu) == hw or absi(iv) == hd) else Blocks.ROOF_SLAB
 			B_HUT:
 				# hip roof: pulls in on BOTH axes, so a small square hut comes to
 				# a point rather than wearing an oversized gable
+				var in_footprint: bool = absi(iu) <= hw and absi(iv) <= hd
+				if r == 0:
+					if in_footprint:
+						return int(st["roof_mat"])
+					return Blocks.ROOF_SLAB if (absi(iu) <= hw + 1 and absi(iv) <= hd + 1) else Blocks.AIR
 				var shrink := r - 1
 				if absi(iu) > hw - shrink or absi(iv) > hd - shrink:
 					return Blocks.AIR
-				return Blocks.ROOF_SLAB if r == 0 else int(st["roof_mat"])
+				return int(st["roof_mat"])
 			_:
 				# gable: ridge runs along the LONG axis so only the short axis
 				# slopes -- a real house silhouette
@@ -1214,12 +1227,17 @@ func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Ve
 				var short_c := iv if ridge_u else iu
 				var half_long := hw if ridge_u else hd
 				var half_short := hd if ridge_u else hw
-				var shrink2 := r - 1  # r == 0 is the overhanging eave
-				if absi(long_c) > half_long + (1 if r == 0 else 0):
+				var in_footprint2: bool = absi(long_c) <= half_long and absi(short_c) <= half_short
+				if r == 0:
+					if in_footprint2:
+						return int(st["roof_mat"])
+					if absi(long_c) <= half_long + 1 and absi(short_c) <= half_short + 1:
+						return Blocks.ROOF_SLAB
 					return Blocks.AIR
-				if absi(short_c) > half_short - shrink2:
+				var shrink2 := r - 1
+				if absi(long_c) > half_long or absi(short_c) > half_short - shrink2:
 					return Blocks.AIR
-				return Blocks.ROOF_SLAB if r == 0 else int(st["roof_mat"])
+				return int(st["roof_mat"])
 
 	# --- below the roof: strictly inside the footprint ---
 	if absi(iu) > hw or absi(iv) > hd:
