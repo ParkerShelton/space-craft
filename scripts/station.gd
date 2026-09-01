@@ -28,7 +28,11 @@ var _col: CollisionShape3D
 
 
 static func capacity_of(k: int) -> int:
-	return CHEST_SLOTS if k == Blocks.CHEST else STORAGE_SLOTS
+	if k == Blocks.CHEST:
+		return CHEST_SLOTS
+	if k == Blocks.FORGE:
+		return 16  # a multiblock-built upgrade over the hand-built Smelter
+	return STORAGE_SLOTS
 
 
 func capacity() -> int:
@@ -117,6 +121,52 @@ func store_add(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 	return n  # full
 
 
+## Plain multi-requirement crafts (Carpenter's structural blocks, Shipworks' Hull
+## Plate) are checked/consumed against THIS station's own storage, mirroring the
+## hand-recipe reqs format ({id,n} or {any:[ids],n}) but never touching the
+## player's inventory directly -- everything a station builds comes from what's
+## loaded into it.
+func _count_req(req: Dictionary) -> int:
+	var total := 0
+	for s in storage:
+		if s["count"] <= 0:
+			continue
+		if req.has("id") and s["id"] == int(req["id"]):
+			total += s["count"]
+		elif req.has("any") and s["id"] in req["any"]:
+			total += s["count"]
+	return total
+
+
+func _afford_reqs(reqs: Array) -> bool:
+	for r in reqs:
+		if _count_req(r) < int(r["n"]):
+			return false
+	return true
+
+
+func _consume_reqs(reqs: Array) -> void:
+	for r in reqs:
+		var need := int(r["n"])
+		for s in storage:
+			if need <= 0:
+				break
+			if s["count"] <= 0:
+				continue
+			var matches: bool = (r.has("id") and s["id"] == int(r["id"])) \
+				or (r.has("any") and s["id"] in r["any"])
+			if not matches:
+				continue
+			var take: int = mini(need, s["count"])
+			s["count"] -= take
+			need -= take
+			if s["count"] <= 0:
+				s["id"] = Blocks.AIR
+				s["props"] = {}
+				s["src"] = ""
+				s["mat"] = {}
+
+
 ## Smelt every raw-ore slot into its refined material, keeping its identity/props
 ## (which the tooltip now reveals). Returns how many slots were refined.
 func refine_all() -> int:
@@ -159,7 +209,8 @@ func start_refine() -> int:
 		return 0
 	_job = "refine"
 	_job_t = 0.0
-	_job_total = maxf(0.4, n * REFINE_TIME_PER)
+	var per := REFINE_TIME_PER * (0.5 if kind == Blocks.FORGE else 1.0)  # a Forge runs hot
+	_job_total = maxf(0.4, n * per)
 	return n
 
 
@@ -167,13 +218,24 @@ func start_refine() -> int:
 func start_craft(craft: Dictionary) -> int:
 	if _job != "":
 		return -1
+	if craft.has("reqs"):
+		if not _afford_reqs(craft["reqs"]):
+			return 0
+		_job = "craft"
+		_job_craft = craft
+		_job_t = 0.0
+		_job_total = 0.6
+		return 1
+	var mtype := Blocks.primary_material_for(kind)
 	var cost := int(craft["cost"])
-	var ok := false
+	var has_primary := false
 	for s in storage:
-		if s["count"] >= cost and Blocks.is_refined(s["id"]):
-			ok = true
+		if s["count"] >= cost and Blocks.id_matches_material(s["id"], mtype):
+			has_primary = true
 			break
-	if not ok:
+	if not has_primary:
+		return 0
+	if craft.has("extra") and _count_req(craft["extra"]) < int(craft["extra"]["n"]):
 		return 0
 	_job = "craft"
 	_job_craft = craft
@@ -198,12 +260,19 @@ func _process(delta: float) -> void:
 	_job_craft = {}
 
 
-# Consume the primary refined material and output the crafted item (into storage),
-# carrying the material's identity + derived gear stats.
+# Consume either a plain `reqs` list or the primary material (+ optional `extra`
+# resource) and output the crafted item into storage. Gear/ship-part outputs
+# carry the source material's identity + a derived stat; plain outputs (Alloy,
+# Circuitry, Hull Plate, Door, Glass) don't need one.
 func _do_craft(craft: Dictionary) -> void:
+	if craft.has("reqs"):
+		_consume_reqs(craft["reqs"])
+		store_add(int(craft["out"]), int(craft.get("n", 1)))
+		return
+	var mtype := Blocks.primary_material_for(kind)
 	var m = null
 	for s in storage:
-		if s["count"] > 0 and Blocks.is_refined(s["id"]):
+		if s["count"] > 0 and Blocks.id_matches_material(s["id"], mtype):
 			m = s
 			break
 	if m == null:
@@ -211,20 +280,30 @@ func _do_craft(craft: Dictionary) -> void:
 	var cost := int(craft["cost"])
 	if m["count"] < cost:
 		return
+	if craft.has("extra") and _count_req(craft["extra"]) < int(craft["extra"]["n"]):
+		return
+	var props: Dictionary = m["props"]
+	var src: String = m.get("src", "")
+	var mname: String = m["mat"].get("name", "")
+	var mcolor: Color = m["mat"].get("color", Color(0.8, 0.8, 0.8))
+	var mtier: int = m["mat"].get("tier", 0)
 	m["count"] -= cost
 	if m["count"] <= 0:
 		m["id"] = Blocks.AIR
+		m["props"] = {}
+		m["src"] = ""
+		m["mat"] = {}
+	if craft.has("extra"):
+		_consume_reqs([craft["extra"]])
 	var out := int(craft["out"])
-	var mname: String = m["mat"].get("name", "")
-	var cmat := {"name": mname, "color": m["mat"].get("color", Color(0.8, 0.8, 0.8)),
-		"tier": m["mat"].get("tier", 0)}
+	var cmat := {"name": mname, "color": mcolor, "tier": mtier}
 	match out:
 		Blocks.DRILL:
-			cmat["power"] = Blocks.drill_power(m["props"])
+			cmat["power"] = Blocks.drill_power(props)
 		Blocks.O2_TANK:
-			cmat["o2"] = Blocks.o2_capacity(m["props"])
+			cmat["o2"] = Blocks.o2_capacity(props)
 		Blocks.SUIT:
-			cmat["resist"] = Blocks.suit_resist(m["props"])
+			cmat["resist"] = Blocks.suit_resist(props)
 		Blocks.WEAPON:
-			cmat["damage"] = Blocks.weapon_damage(m["props"])
-	store_add(out, int(craft.get("n", 1)), m["props"], m.get("src", ""), cmat)
+			cmat["damage"] = Blocks.weapon_damage(props)
+	store_add(out, int(craft.get("n", 1)), props, src, cmat)

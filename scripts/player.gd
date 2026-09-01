@@ -794,11 +794,27 @@ func _has_air() -> bool:
 
 
 const HAZARD_RANGE := 300.0   # exposed to a planet's hazard when within this altitude
+const CLIMATE_RADIUS := 14.0  # a placed Climate Unit shelters everything within this range
+
+# A base's answer to a ship's Life Support -- a planted Climate Unit fully negates
+# hazard damage nearby, no suit required. Deliberately a DIFFERENT mechanic than
+# the ship's sealed-hull check (there's no cheap way to flood-fill "is this voxel
+# structure enclosed" for arbitrary player-built terrain), so it's proximity-based
+# instead: build a base around one rather than needing a fully sealed room.
+func _near_climate_unit() -> bool:
+	if world == null:
+		return false
+	for st in world._stations:
+		if is_instance_valid(st) and st.kind == Blocks.CLIMATE_UNIT \
+				and st.global_position.distance_to(global_position) <= CLIMATE_RADIUS:
+			return true
+	return false
+
 
 # Damage/sec from the current planet's climate when unprotected (0 if none, in
-# space, or sheltered in a ship). Phase 3 gear will reduce this.
+# space, sheltered in a ship, or near a planted Climate Unit).
 func _hazard_dps() -> float:
-	if _in_safe_ship() or world == null:
+	if _in_safe_ship() or _near_climate_unit() or world == null:
 		return 0.0
 	var p := world.nearest_planet(global_position)
 	if p == null or p.hazard_dps <= 0.0:
@@ -809,7 +825,7 @@ func _hazard_dps() -> float:
 
 
 func _current_hazard() -> String:
-	if _in_safe_ship() or world == null:
+	if _in_safe_ship() or _near_climate_unit() or world == null:
 		return ""
 	var p := world.nearest_planet(global_position)
 	if p == null or p.hazard_dps <= 0.0 or p.altitude(global_position) > HAZARD_RANGE:
@@ -1097,11 +1113,54 @@ func _edit_block(_break_it: bool) -> void:
 			else:
 				obj.set_block(pv, place_id)
 			_consume_active()
+			if place_id == Blocks.INTERFACE:
+				_check_multiblock(obj, pv)
 	elif tgt["kind"] == "ship":
 		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
 			# crafted ship blocks carry their material stats onto the ship
 			obj.set_block(pv, place_id, inv[active_slot].get("props", {}))
 			_consume_active()
+
+
+const _CUBE26_OFFSETS := [
+	Vector3i(-1, -1, -1), Vector3i(0, -1, -1), Vector3i(1, -1, -1),
+	Vector3i(-1, 0, -1), Vector3i(0, 0, -1), Vector3i(1, 0, -1),
+	Vector3i(-1, 1, -1), Vector3i(0, 1, -1), Vector3i(1, 1, -1),
+	Vector3i(-1, -1, 0), Vector3i(0, -1, 0), Vector3i(1, -1, 0),
+	Vector3i(-1, 0, 0), Vector3i(1, 0, 0),
+	Vector3i(-1, 1, 0), Vector3i(0, 1, 0), Vector3i(1, 1, 0),
+	Vector3i(-1, -1, 1), Vector3i(0, -1, 1), Vector3i(1, -1, 1),
+	Vector3i(-1, 0, 1), Vector3i(0, 0, 1), Vector3i(1, 0, 1),
+	Vector3i(-1, 1, 1), Vector3i(0, 1, 1), Vector3i(1, 1, 1),
+]
+
+## Placing an Interface block checks whether it's now the center of a recognized
+## 3x3x3 shell (Blocks.MULTIBLOCK_RECIPES) -- if so, the whole cube collapses into
+## the resulting station. Planets only for now (a ship's small voxel grid rarely
+## has room for a spare 3x3x3, and it complicates orientation); revisit if wanted.
+func _check_multiblock(obj: Object, center: Vector3i) -> void:
+	if not (obj is Planet):
+		return
+	var planet := obj as Planet
+	for recipe in Blocks.MULTIBLOCK_RECIPES:
+		var shell: int = recipe["shell"]
+		var complete := true
+		for off in _CUBE26_OFFSETS:
+			if planet.get_id(center + off) != shell:
+				complete = false
+				break
+		if not complete:
+			continue
+		for off in _CUBE26_OFFSETS:
+			planet.set_block(center + off, Blocks.AIR)
+		planet.set_block(center, Blocks.AIR)
+		var corner: Vector3 = planet.to_global(Vector3(center))
+		var g := world.gravity_at(corner)
+		var up := (-g).normalized() if g.length() > 0.01 else Vector3.UP
+		world.spawn_station(int(recipe["result"]), corner, up, -global_transform.basis.z)
+		_toast("The %s shell resonates — a %s takes shape!" % [
+			Blocks.name_of(shell), Blocks.name_of(int(recipe["result"]))])
+		return
 
 
 ## Place a crafting station in the empty cell you're aiming at -- on a planet
@@ -1681,14 +1740,20 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 	var to := _slot_ref(tc, ti)
 	if from.is_empty() or to.is_empty() or int(from["count"]) <= 0:
 		return
-	# dropping INTO a machine's storage must match what it accepts (chests take all)
+	# dropping INTO a machine's storage must match what it accepts (chests and the
+	# Carpenter's Bench take any plain resource; the rest are picky by design so
+	# each station's recipes read as one cohesive idea)
 	if tc == "stor" and fc != "stor" and ti < _stor_map.size():
 		var tst: Station = _stor_map[ti]["st"]
-		if tst.kind == Blocks.SMELTER and not Blocks.is_ore(from["id"]):
-			_toast("Smelter takes raw ore")
+		var fid: int = from["id"]
+		if Blocks.is_smelter_kind(tst.kind) and not (Blocks.is_ore(fid) or Blocks.is_refined(fid) or fid == Blocks.METAL):
+			_toast("Smelter takes raw ore, refined material, or Metal")
 			return
-		if tst.kind == Blocks.FABRICATOR and not Blocks.is_refined(from["id"]):
-			_toast("Fabricator takes refined material")
+		if tst.kind == Blocks.FABRICATOR and fid != Blocks.CIRCUIT:
+			_toast("Fabricator takes Circuitry")
+			return
+		if tst.kind == Blocks.SHIPWORKS and fid != Blocks.ALLOY:
+			_toast("Shipworks takes Alloy Plating")
 			return
 	# the equip slot only ever holds a Suit -- that's what makes it worn, not just carried
 	if tc == "equip" and from["id"] != Blocks.SUIT:
@@ -1786,7 +1851,7 @@ func _update_held_item(active: Dictionary) -> void:
 		_build_held_weapon(mat.get("color", Color(0.8, 0.8, 0.85)))
 	elif id == Blocks.DRILL:
 		_build_held_drill(mat.get("color", Color(0.7, 0.7, 0.75)))
-	elif Blocks.is_placeable_block(id) or Blocks.is_ore(id) or Blocks.is_refined(id):
+	elif Blocks.is_placeable_block(id) or Blocks.is_ore(id) or Blocks.is_refined(id) or Blocks.is_intermediate(id):
 		_build_held_block(mat.get("color", Blocks.color_of(id)))
 	# other gear (O2 Tank, Suit) is worn, not wielded -- nothing shown in hand
 
@@ -1866,6 +1931,14 @@ func _item_tooltip(slot: Dictionary) -> String:
 		for k in Blocks.PROP_KEYS:
 			lines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(props.get(k, 0))])
 		return "\n".join(lines)
+	if Blocks.is_intermediate(id):
+		var itier: int = int(mat.get("tier", 0))
+		var iprops: Dictionary = slot.get("props", {})
+		var ilines := ["%s — %s%s  (%s · Tier %d)" % [
+			Blocks.name_of(id), mname, suffix, Blocks.TIER_NAMES[itier], itier]]
+		for k in Blocks.PROP_KEYS:
+			ilines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(iprops.get(k, 0))])
+		return "\n".join(ilines)
 	# crafted ship part (thruster/hull) carrying a material's stats
 	var cprops: Dictionary = slot.get("props", {})
 	if not cprops.is_empty() and mat.has("name"):
@@ -2087,14 +2160,18 @@ func _open_station(st: Station) -> void:
 		_toggle_inventory()
 	_station_title.text = st.title()
 	_station_store_label.text = "%s contents  (drag to move)" % st.title()
-	var is_smelter: bool = st.kind == Blocks.SMELTER
+	var is_smelter: bool = Blocks.is_smelter_kind(st.kind)
 	_refine_btn.visible = is_smelter
 
-	# rebuild this station's craft buttons as a vertical list in the left column
+	# rebuild this station's craft buttons as a vertical list in the left column,
+	# below the Refine button when both are present (a Forge is a smelter, so it
+	# gets Refine AND the Alloy/Circuitry blueprints)
 	for b in _craft_buttons:
 		b.queue_free()
 	_craft_buttons.clear()
-	var crafts: Array = Blocks.STATION_CRAFTS.get(st.kind, [])
+	var crafts: Array = Blocks.STATION_CRAFTS.get(Blocks.SMELTER if is_smelter else st.kind, [])
+	var craft_top := 62.0 + (34.0 if is_smelter else 0.0)
+	_craft_row.position = Vector2(12, craft_top)
 	var by := 0.0
 	for craft in crafts:
 		var b := Button.new()
@@ -2111,7 +2188,7 @@ func _open_station(st: Station) -> void:
 
 	# preview + job label sit just below the action/blueprint buttons (same spot;
 	# only one shows at a time -- preview when idle, progress when working)
-	var left_bottom: int = 62 + (crafts.size() * 34 if not crafts.is_empty() else 34)
+	var left_bottom: int = int(craft_top) + (crafts.size() * 34 if not crafts.is_empty() else 34)
 	_preview_label.position = Vector2(14, left_bottom + 8)
 	_preview_label.visible = not crafts.is_empty()
 	_job_label.position = Vector2(14, left_bottom + 8)
@@ -2325,7 +2402,9 @@ func _refresh_station_ui() -> void:
 		_paint_cell(_station_cells[i], _slot_ref("stor", i), false)
 	for i in _pinv_cells.size():
 		_paint_cell(_pinv_cells[i], inv[i], false)
-	if Blocks.STATION_CRAFTS.has(_station_open.kind):
+	var craft_key: int = Blocks.SMELTER if Blocks.is_smelter_kind(_station_open.kind) else _station_open.kind
+	var has_crafts: bool = Blocks.STATION_CRAFTS.has(craft_key)
+	if has_crafts:
 		_preview_label.text = _craft_preview_text(_station_open.kind)
 	# show job progress while working; hide the idle preview during a job
 	var busy: bool = _station_open.busy()
@@ -2333,7 +2412,7 @@ func _refresh_station_ui() -> void:
 	_job_label.text = _station_open.job_text()
 	if busy:
 		_preview_label.visible = false
-	elif Blocks.STATION_CRAFTS.has(_station_open.kind):
+	elif has_crafts:
 		_preview_label.visible = true
 
 
@@ -2350,20 +2429,27 @@ func _on_refine() -> void:
 	_refresh_station_ui()
 
 
-# The refined material a station will build from (first refined slot loaded).
-func _station_primary_material() -> Dictionary:
+# The material a station will build from (first slot loaded matching its primary
+# material type -- refined for the Smelter/Forge, Circuitry for the Fabricator,
+# Alloy Plating for Shipworks).
+func _station_primary_material(mtype: String) -> Dictionary:
 	if _station_open == null:
 		return {}
 	for s in _station_open.storage:
-		if s["count"] > 0 and Blocks.is_refined(s["id"]):
+		if s["count"] > 0 and Blocks.id_matches_material(s["id"], mtype):
 			return s
 	return {}
 
 
 func _craft_preview_text(kind: int) -> String:
-	var m := _station_primary_material()
+	if kind == Blocks.CARPENTER:
+		return "Load Wood, Rock, and Metal to build →"
+	var mtype := Blocks.primary_material_for(kind)
+	var m := _station_primary_material(mtype)
 	if m.is_empty():
-		return "Load a refined material to build from →"
+		var label: String = {"refined": "a refined material", "circuit": "Circuitry",
+			"alloy": "Alloy Plating"}.get(mtype, "material")
+		return "Load %s to build from →" % label
 	var p: Dictionary = m["props"]
 	var s := "%s   H%d D%d E%d R%d" % [m["mat"].get("name", "material"),
 		int(p.get("h", 0)), int(p.get("d", 0)), int(p.get("e", 0)), int(p.get("r", 0))]
@@ -2373,6 +2459,8 @@ func _craft_preview_text(kind: int) -> String:
 		s += "\nWeapon: %.1f dmg/hit" % Blocks.weapon_damage(p)
 	elif kind == Blocks.SHIPWORKS:
 		s += "\nThruster thrust ↑ with Energy   |   Hull mass ↑ with Density"
+	elif Blocks.is_smelter_kind(kind):
+		s += "\nCombine with Metal → Alloy Plating (Shipworks) or Circuitry (Fabricator)"
 	return s
 
 
@@ -2383,7 +2471,7 @@ func _on_station_craft(craft: Dictionary) -> void:
 	if r == -1:
 		_toast("Busy…")
 	elif r == 0:
-		_toast("Need %d refined material" % int(craft["cost"]))
+		_toast("Missing materials" if craft.has("reqs") else "Need %d loaded" % int(craft["cost"]))
 	else:
 		_toast("Crafting %s…" % Blocks.name_of(int(craft["out"])))
 	_refresh_station_ui()

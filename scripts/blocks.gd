@@ -56,7 +56,10 @@ const SMELTER := 34
 const FABRICATOR := 35
 const SHIPWORKS := 36
 const CHEST := 52     # pure storage (bigger than a machine)
-const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST]
+const CARPENTER := 62 # base-building bench: structural blocks from plain resources
+const FORGE := 63     # multiblock-built smelter upgrade: bigger + faster
+const CLIMATE_UNIT := 64  # planet base shelter: negates hazard damage nearby
+const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT]
 
 # --- procedural ore slots ---------------------------------------------------
 # Each planet invents its own ores (unique name + color) and assigns each to a
@@ -114,6 +117,22 @@ const GLASS := 54            # transparent, solid hull -- windows that still sea
 const DOOR := 57             # closed door: solid, seals, collides
 const DOOR_OPEN := 58        # open door: passable, does NOT seal (air escapes)
 
+# --- intermediate materials (Smelter combines refined + a base resource into
+#     these; specific stations build FROM them instead of raw refined material,
+#     so not everything is gated behind "refine ore and you're done") ---
+const ALLOY := 60      # refined + Metal -> structural stock (Shipworks: Thruster, Life Support)
+const CIRCUIT := 61    # refined + Metal -> functional stock (Fabricator: Drill, O2 Tank, Suit, Weapon)
+const INTERMEDIATE_IDS := [ALLOY, CIRCUIT]
+
+const INTERFACE := 65  # placeable trigger block: surround it with a recognized shell
+                        # pattern (see MULTIBLOCK_RECIPES) to build a bigger structure
+
+# A 3x3x3 shell of `shell` around a placed INTERFACE block collapses into a
+# `result` station -- the multiblock alternative to just crafting a plain item.
+const MULTIBLOCK_RECIPES := [
+	{"shell": METAL, "result": FORGE},
+]
+
 # Hand recipes: things you can assemble from carried materials with no station
 # (the bootstrap chain). Each: {out, n, reqs}. A requirement is {id, n} for a
 # specific item, or {refined:true, n} for any refined material -- so anything that
@@ -128,23 +147,72 @@ const HAND_RECIPES := [
 	{"out": CHEST, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
 	{"out": METAL, "n": 4, "reqs": [{"refined": true, "n": 1}]},        # cast ingots into hull plates
 	{"out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
+	{"out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
+	{"out": CARPENTER, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 12, "label": "Wood"}]},
+	{"out": CLIMATE_UNIT, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 10, "label": "Wood"}, {"id": METAL, "n": 6}]},
 ]
-const DRILL_COST := 5        # refined material consumed to fabricate one drill
 
-# What each station can build from a loaded refined material. Each craft consumes
-# `cost` refined material and outputs `n` of `out`, carrying the material's stats.
-# The Fabricator is the crafting hub: gear + ship parts.
+# Which material TYPE a station builds from (see Blocks.id_matches_material).
+# The Smelter combines refined ore + a base resource into intermediates; the two
+# gear/ship stations then build from an INTERMEDIATE, not raw refined material,
+# so refining ore isn't the answer to every recipe.
+static func primary_material_for(kind: int) -> String:
+	match kind:
+		FABRICATOR:
+			return "circuit"
+		SHIPWORKS:
+			return "alloy"
+		SMELTER, FORGE:
+			return "refined"
+		_:
+			return "any"
+
+static func id_matches_material(id: int, mtype: String) -> bool:
+	match mtype:
+		"refined":
+			return is_refined(id)
+		"circuit":
+			return id == CIRCUIT
+		"alloy":
+			return id == ALLOY
+		_:
+			return is_refined(id) or id == ALLOY or id == CIRCUIT
+
+static func is_intermediate(id: int) -> bool:
+	return id in INTERMEDIATE_IDS
+
+static func is_smelter_kind(kind: int) -> bool:
+	return kind == SMELTER or kind == FORGE
+
+# Each craft consumes either `cost` units of the station's primary material (see
+# primary_material_for/id_matches_material above), optionally plus an `extra`
+# plain-resource requirement, OR (if it has no meaningful "material with stats")
+# a plain `reqs` list like a hand recipe -- checked against the STATION's own
+# storage, not the player's inventory. Split by station so recipes read as one
+# cohesive idea per bench instead of one giant grab-bag:
+#   Smelter/Forge  -- combine refined ore + Metal into intermediates
+#   Fabricator     -- personal gear, built from Circuitry
+#   Shipworks      -- hull & propulsion, built from Alloy Plating
+#   Carpenter      -- structural blocks, built from plain Wood/Rock/Metal
 const STATION_CRAFTS := {
+	SMELTER: [
+		{"label": "Alloy Plating x2", "out": ALLOY, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 3}},
+		{"label": "Circuitry x2", "out": CIRCUIT, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 2}},
+	],
 	FABRICATOR: [
-		{"label": "Drill", "out": DRILL, "n": 1, "cost": DRILL_COST},
-		{"label": "Thruster", "out": THRUSTER, "n": 1, "cost": 4},
-		{"label": "Hull Plate x4", "out": METAL, "n": 4, "cost": 2},
-		{"label": "Glass x4", "out": GLASS, "n": 4, "cost": 2},
-		{"label": "Door", "out": DOOR, "n": 1, "cost": 2},
-		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "cost": 6},
-		{"label": "O2 Tank", "out": O2_TANK, "n": 1, "cost": 5},
-		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 5},
-		{"label": "Melee Weapon", "out": WEAPON, "n": 1, "cost": 5},
+		{"label": "Drill", "out": DRILL, "n": 1, "cost": 3},
+		{"label": "O2 Tank", "out": O2_TANK, "n": 1, "cost": 3},
+		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 3},
+		{"label": "Melee Weapon", "out": WEAPON, "n": 1, "cost": 3},
+	],
+	SHIPWORKS: [
+		{"label": "Thruster", "out": THRUSTER, "n": 1, "cost": 3},
+		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "cost": 4},
+		{"label": "Hull Plate x4", "out": METAL, "n": 4, "reqs": [{"id": ALLOY, "n": 2}]},
+	],
+	CARPENTER: [
+		{"label": "Door", "out": DOOR, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 6}, {"id": METAL, "n": 2}]},
+		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": METAL, "n": 1}]},
 	],
 }
 
@@ -153,7 +221,7 @@ const STATION_CRAFTS := {
 const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	WOOD, WOOD_PALE, WOOD_DARK,
 	16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-	COCKPIT, THRUSTER, LIFE_SUPPORT, GLASS, DOOR]
+	COCKPIT, THRUSTER, LIFE_SUPPORT, GLASS, DOOR, INTERFACE]
 
 const NAMES := {
 	AIR: "Air",
@@ -194,10 +262,16 @@ const NAMES := {
 	FABRICATOR: "Fabricator",
 	SHIPWORKS: "Shipworks",
 	CHEST: "Wooden Chest",
+	CARPENTER: "Carpenter's Bench",
+	FORGE: "Forge",
+	CLIMATE_UNIT: "Climate Unit",
 	LIFE_SUPPORT: "Life Support",
 	GLASS: "Glass",
 	DOOR: "Door",
 	DOOR_OPEN: "Open Door",
+	ALLOY: "Alloy Plating",
+	CIRCUIT: "Circuitry",
+	INTERFACE: "Interface Core",
 	ORE_0: "Ore", ORE_1: "Ore", ORE_2: "Ore", ORE_3: "Ore",
 	REFINED_0: "Refined Material", REFINED_1: "Refined Material",
 	REFINED_2: "Refined Material", REFINED_3: "Refined Material",
@@ -227,6 +301,7 @@ const HARDNESS := {
 	IRON_ORE: 1.3, COPPER_ORE: 1.3, GOLD_ORE: 1.6,
 	TITANIUM_ORE: 1.9, SILICON_ORE: 1.2, URANIUM_ORE: 2.1,
 	METAL: 0.25, COCKPIT: 0.25, THRUSTER: 0.25,  # ship parts break fast
+	INTERFACE: 0.3,
 }
 
 const COLORS := {
@@ -267,10 +342,16 @@ const COLORS := {
 	FABRICATOR: Color(0.30, 0.40, 0.46),
 	SHIPWORKS: Color(0.40, 0.42, 0.30),
 	CHEST: Color(0.45, 0.31, 0.17),
+	CARPENTER: Color(0.48, 0.34, 0.20),
+	FORGE: Color(0.55, 0.22, 0.16),
+	CLIMATE_UNIT: Color(0.35, 0.62, 0.55),
 	LIFE_SUPPORT: Color(0.30, 0.78, 0.68),
 	GLASS: Color(0.62, 0.78, 0.88, 0.30),
 	DOOR: Color(0.55, 0.5, 0.4),
 	DOOR_OPEN: Color(0.55, 0.5, 0.4),
+	ALLOY: Color(0.68, 0.70, 0.76),
+	CIRCUIT: Color(0.35, 0.75, 0.45),
+	INTERFACE: Color(0.75, 0.35, 0.85),
 	# generic fallbacks; real ore colors are planet-defined and travel with the item
 	ORE_0: Color(0.7, 0.6, 0.4), ORE_1: Color(0.6, 0.7, 0.5),
 	ORE_2: Color(0.5, 0.6, 0.7), ORE_3: Color(0.7, 0.5, 0.7),
@@ -298,7 +379,7 @@ static func is_refined(id: int) -> bool:
 	return id in REFINED_SLOT_IDS
 
 static func is_material(id: int) -> bool:
-	return id in ORE_SLOT_IDS or id in REFINED_SLOT_IDS
+	return id in ORE_SLOT_IDS or id in REFINED_SLOT_IDS or id in INTERMEDIATE_IDS
 
 static func is_station(id: int) -> bool:
 	return id in STATION_IDS
