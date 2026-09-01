@@ -29,12 +29,19 @@ var surface_noise := FastNoiseLite.new()
 var ore_noise := FastNoiseLite.new()
 
 # --- caves (worm-tunnel networks carved from the rock layer) ---
-var cave_noise := FastNoiseLite.new()   # ridged 3D noise; tunnels where the ridge is thin
-var cave_noise2 := FastNoiseLite.new()  # second field, ANDed with the first -> branching networks
+# Two independent scales, unioned together: BIG (sparse, wide) makes the rare
+# giant caverns; FINE (common, narrow) is a pervasive vein network so digging
+# straight down from almost anywhere eventually breaks into a tunnel.
+var cave_noise := FastNoiseLite.new()   # BIG: ridged 3D noise; tunnels where the ridge is thin
+var cave_noise2 := FastNoiseLite.new()  # BIG: second field, multiplied with the first -> branching
+var cave_noise3 := FastNoiseLite.new()  # FINE: same technique, higher frequency, more common
+var cave_noise4 := FastNoiseLite.new()  # FINE: branching partner for cave_noise3
 var cave_enabled := false
-var cave_threshold := 0.04     # higher = thinner/rarer tunnels
-var cave_min_depth := 5.0      # normal tunnels need at least this much roof
-var cave_breach_threshold := 1.0  # only the strongest tunnel cores punch through shallower/to the surface
+var cave_threshold := 0.04         # BIG: higher = thinner/rarer caverns
+var cave_threshold_fine := 0.04    # FINE: higher = thinner/rarer veins
+var cave_min_depth := 5.0          # normal tunnels need at least this much roof
+var cave_breach_threshold := 1.0       # BIG: only the strongest cores punch through shallower/to the surface
+var cave_breach_threshold_fine := 1.0  # FINE: same idea for the vein network
 
 var shape_cube := false  # true => cube-shaped planet (Chebyshev distance)
 
@@ -231,10 +238,10 @@ func _derive_caves(amount: float) -> void:
 	cave_enabled = a > 0.02
 	if not cave_enabled:
 		return
-	# more amount -> lower threshold (denser tunnels) and lower frequency (bigger caverns)
+
+	# BIG network: sparse, wide -> the rare giant caverns. More amount -> lower
+	# threshold (denser) and lower frequency (bigger rooms).
 	cave_threshold = lerpf(0.90, 0.62, a)
-	# only the strongest cores of a tunnel breach through shallow ground/topsoil to
-	# the surface, so entrances are rare and natural rather than swiss-cheesing it
 	cave_breach_threshold = minf(cave_threshold + 0.09, 0.985)
 	var freq := lerpf(4.5, 1.4, a) / maxf(radius, 1.0)
 	cave_noise.seed = _seed + 2020
@@ -248,6 +255,27 @@ func _derive_caves(amount: float) -> void:
 	cave_noise2.fractal_type = FastNoiseLite.FRACTAL_RIDGED
 	cave_noise2.fractal_octaves = 2
 
+	# FINE network: common, narrow veins that spread everywhere -- tuned so a
+	# straight shaft dug down from almost any spot eventually breaks into one,
+	# without requiring you to stumble on a rare big cavern. Present even on
+	# "barely-there" (low amount) worlds so digging down always has a decent shot.
+	cave_threshold_fine = lerpf(0.62, 0.42, a)
+	# breach uses a near-absolute bar (NOT a small margin over the base threshold,
+	# which is tuned low for deep diggability and would make breaches everywhere)
+	# so surface entrances from the fine network stay rare regardless of density
+	cave_breach_threshold_fine = lerpf(0.965, 0.93, a)
+	var freq_fine := lerpf(9.0, 6.0, a) / maxf(radius, 1.0)
+	cave_noise3.seed = _seed + 4040
+	cave_noise3.frequency = freq_fine
+	cave_noise3.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	cave_noise3.fractal_type = FastNoiseLite.FRACTAL_RIDGED
+	cave_noise3.fractal_octaves = 2
+	cave_noise4.seed = _seed + 5050
+	cave_noise4.frequency = freq_fine * 1.31
+	cave_noise4.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	cave_noise4.fractal_type = FastNoiseLite.FRACTAL_RIDGED
+	cave_noise4.fractal_octaves = 2
+
 
 # Raw tunnel strength at a cell (0..1ish): how deep inside a carved tunnel this
 # point sits. Two ridged noise fields multiplied together carve branching,
@@ -258,8 +286,17 @@ func _cave_strength(gx: int, gy: int, gz: int) -> float:
 	return r1 * r2
 
 
+func _cave_strength_fine(gx: int, gy: int, gz: int) -> float:
+	var r1 := cave_noise3.get_noise_3d(gx, gy, gz) * 0.5 + 0.5
+	var r2 := cave_noise4.get_noise_3d(gx, gy, gz) * 0.5 + 0.5
+	return r1 * r2
+
+
 func _is_cave(gx: int, gy: int, gz: int) -> bool:
-	return cave_enabled and _cave_strength(gx, gy, gz) > cave_threshold
+	if not cave_enabled:
+		return false
+	return _cave_strength(gx, gy, gz) > cave_threshold \
+		or _cave_strength_fine(gx, gy, gz) > cave_threshold_fine
 
 
 # Give each planet a distinct forest: color palette, wood tone, canopy shape and
@@ -391,14 +428,17 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 	var depth := surf - d
 	if d < radius * 0.22:
 		return pal_core
-	# caves: hollowed from the rock layer. Normal tunnels need a solid roof
-	# (cave_min_depth) and stay clear of the core; only the STRONGEST tunnel cores
-	# breach shallower -- including straight through topsoil -- so occasional
-	# natural cave mouths let you walk in instead of always digging down.
+	# caves: hollowed from the rock layer -- a sparse BIG network (rare giant
+	# caverns) unioned with a common FINE network (pervasive veins, so digging
+	# straight down from almost anywhere breaks into a tunnel eventually). Normal
+	# tunnels need a solid roof (cave_min_depth) and stay clear of the core; only
+	# the STRONGEST cores of either network breach shallower -- including straight
+	# through topsoil -- for occasional natural cave mouths you can walk into.
 	if cave_enabled and d > radius * 0.22 + 6.0:
 		var near_surface := depth < cave_min_depth
-		var strong_enough := _cave_strength(gx, gy, gz) > (cave_breach_threshold if near_surface else cave_threshold)
-		if strong_enough:
+		var big := _cave_strength(gx, gy, gz) > (cave_breach_threshold if near_surface else cave_threshold)
+		var fine := _cave_strength_fine(gx, gy, gz) > (cave_breach_threshold_fine if near_surface else cave_threshold_fine)
+		if big or fine:
 			return Blocks.AIR
 	if depth < 1.0:
 		return pal_top
