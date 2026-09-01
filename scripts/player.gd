@@ -99,6 +99,7 @@ var _crosshair: Label
 var _hotbar_label: Label
 var _mode_label: Label
 var _ship_label: Label
+var _system_label: Label
 var _target_label: Label
 var _toast_label: Label            # transient "Saved"/"Loaded" confirmation
 var _toast_time := 0.0
@@ -1452,6 +1453,21 @@ func _build_ui() -> void:
 	_ship_label = Label.new()
 	_ship_label.position = Vector2(16, 72)
 	layer.add_child(_ship_label)
+
+	# top-right: which system you're in and how civilized it is -- the first
+	# visible piece of the galaxy layer; no warp travel yet, just showing where
+	# you actually are
+	_system_label = Label.new()
+	_system_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_system_label.position = Vector2(-260, 16)
+	_system_label.custom_minimum_size = Vector2(244, 0)
+	_system_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	_system_label.modulate = Color(0.75, 0.85, 1.0)
+	if world != null:
+		var sysdef := world.current_system()
+		if not sysdef.is_empty():
+			_system_label.text = "%s system\n%s" % [sysdef["name"], Galaxy.civ_name(sysdef["civ_tier"])]
+	layer.add_child(_system_label)
 
 	# what you're aiming at + mining progress, just under the crosshair
 	_target_label = Label.new()

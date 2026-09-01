@@ -146,7 +146,18 @@ func _start_world(load_existing: bool) -> void:
 	if wseed < 0:
 		wseed = _rand_seed()
 	world.world_seed = wseed
-	_generate_planets(world, wseed)
+
+	var galaxy := Galaxy.new()
+	galaxy.generate(wseed)
+	world.galaxy = galaxy
+	# home_system_index() finds the first system with at least a primitive colony,
+	# so a new game always starts somewhere with intelligent life nearby -- not
+	# necessarily system 0. No warp travel yet, so this is also just "the" system.
+	world.current_system_index = galaxy.home_system_index()
+	var sysdef: Dictionary = galaxy.systems[world.current_system_index]
+	print("[galaxy] %d systems generated -- starting in %s (%s, %d planets)" % [
+		galaxy.systems.size(), sysdef["name"], Galaxy.civ_name(sysdef["civ_tier"]), sysdef["planet_count"]])
+	_generate_planets(world, sysdef)
 
 	# player: drop in just above dry land on the home world
 	var home: Planet = world.planets[0]
@@ -174,16 +185,22 @@ func _start_world(load_existing: bool) -> void:
 			ground.build_chunk_sync(pcc + Vector3i(0, dy, 0))
 
 
-# Deterministically create a set of planets from a master seed. Planet 0 is the
-# habitable home world (verdant); the rest are random archetypes spread out in space.
-func _generate_planets(world: WorldManager, master_seed: int) -> void:
+# Deterministically create a system's planets from its seed. Planet 0 is the
+# habitable home world (verdant, and where the player spawns); the rest are
+# random archetypes spread out in space. Which planets (if any) get a
+# settlement, and how big it's allowed to grow, comes entirely from the
+# system's civilization tier (see galaxy.gd) -- not rolled per-planet.
+func _generate_planets(world: WorldManager, sysdef: Dictionary) -> void:
+	var master_seed: int = sysdef["seed"]
+	var civ_tier: int = sysdef["civ_tier"]
+	var count: int = sysdef["planet_count"]
 	var rng := RandomNumberGenerator.new()
 	rng.seed = master_seed
-	var count := rng.randi_range(4, 6)
+	var settled := _plan_settlements(rng, count, civ_tier)
 	var positions := []
 	var used_names := {}
 	for i in count:
-		var cfg := _make_planet_cfg(rng, i, master_seed, positions)
+		var cfg := _make_planet_cfg(rng, i, master_seed, positions, settled[i])
 		# guarantee unique names (saves key planet edits by name)
 		var nm: String = cfg["name"]
 		if used_names.has(nm):
@@ -194,7 +211,33 @@ func _generate_planets(world: WorldManager, master_seed: int) -> void:
 		world.add_planet(cfg)
 
 
-func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, used: Array) -> Dictionary:
+# Decide which planet indices in this system get a settlement and how big it
+# may grow, purely from the system's civilization tier. Planet 0 is always the
+# player's home world, so it's the guaranteed one when the system has any
+# civilization at all -- Advanced systems also seed 1-2 other colonized worlds,
+# giving a real reason to travel within the system later.
+func _plan_settlements(rng: RandomNumberGenerator, count: int, civ_tier: int) -> Array:
+	var out := []
+	for i in count:
+		out.append({"enabled": false, "forced": false, "tier_cap": 0})
+	if civ_tier == Galaxy.CIV_PRIMITIVE:
+		out[0] = {"enabled": true, "forced": true, "tier_cap": 2}
+	elif civ_tier == Galaxy.CIV_ADVANCED:
+		out[0] = {"enabled": true, "forced": true, "tier_cap": 3}
+		var pool := range(1, count)
+		for i in range(pool.size() - 1, 0, -1):  # deterministic Fisher-Yates (our own
+			var j := rng.randi_range(0, i)       # seeded rng, NOT Array.shuffle's global one)
+			var tmp = pool[i]
+			pool[i] = pool[j]
+			pool[j] = tmp
+		var extra := mini(rng.randi_range(1, 2), pool.size())
+		for k in extra:
+			out[pool[k]] = {"enabled": true, "forced": false, "tier_cap": 3}
+	return out
+
+
+func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, used: Array,
+		settled_info: Dictionary) -> Dictionary:
 	var a: Dictionary = _ARCHETYPES[0] if index == 0 else _ARCHETYPES[rng.randi_range(0, _ARCHETYPES.size() - 1)]
 	# home is always a big habitable world; others may be moons
 	var is_moon: bool = (index != 0) and bool(a["moon"]) and rng.randf() < 0.7
@@ -235,10 +278,9 @@ func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, 
 		"atmo_height": rng.randf_range(600.0, 950.0),
 		"water_style": water, "water_amount": water_amount,
 		"hazard": a["hazard"], "hazard_dps": a["hdps"],
-		# TEST ONLY: guarantee a settlement on the home planet so it's easy to find
-		# without exploring -- remove once settlements are common enough to just
-		# stumble into naturally (or once there's a proper reason to seek one out)
-		"force_settlement": index == 0,
+		"settlements_enabled": settled_info["enabled"],
+		"force_settlement": settled_info["forced"],
+		"settlement_tier_cap": settled_info["tier_cap"],
 	}
 
 

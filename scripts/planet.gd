@@ -92,6 +92,8 @@ const SETTLEMENT_TIER_NAMES := ["Outpost", "Village", "Town", "City"]
 const SETTLEMENT_TIER_RADIUS := [22.0, 42.0, 68.0, 100.0]
 const SETTLEMENT_TIER_DENSITY := [0.32, 0.42, 0.5, 0.58]  # chance a building-cell in range holds a building
 var settlements: Array = []    # each: {dir, up, u, v, anchor, tier, radius, density, wall_mat, roof_mat, seed}
+var settlements_enabled := true  # false = this planet never gets a settlement (set by civ tier)
+var settlement_tier_cap := 3     # highest settlement tier this planet may roll (set by civ tier)
 var settlement_reach := 0.0    # tallest a building can get, for streaming/reach purposes
 
 # --- fauna (procedural creatures, derived from seed like ores) ---
@@ -158,7 +160,12 @@ func configure(cfg: Dictionary) -> void:
 	_derive_caves(cfg.get("cave_amount", -1.0))
 	_derive_water(cfg)
 	_derive_fauna()  # after water: fish generation depends on water_style
-	_derive_settlements(cfg.get("force_settlement", false))  # after flora/water: siting depends on both
+	# after flora/water: siting depends on both. A system's civilization tier
+	# (see galaxy.gd) decides whether THIS planet is allowed settlements at all,
+	# how big they're allowed to get, and whether one is force-guaranteed.
+	settlements_enabled = cfg.get("settlements_enabled", true)
+	settlement_tier_cap = cfg.get("settlement_tier_cap", 3)
+	_derive_settlements(cfg.get("force_settlement", false))
 	_add_distant_sphere()
 
 
@@ -578,6 +585,8 @@ func _derive_flora(density: float) -> void:
 func _derive_settlements(force_one: bool) -> void:
 	settlements.clear()
 	settlement_reach = 0.0
+	if not settlements_enabled:
+		return  # this system's civilization tier doesn't put anyone on this planet
 	# how hospitable this world is -- shapes both how likely a site is to be
 	# settled at all, and how big it grows when it is
 	var hab := 0.0
@@ -638,7 +647,8 @@ func _derive_settlements(force_one: bool) -> void:
 		var troll := srng.randf() - hab * 0.18
 		var tier := 3 if troll < 0.08 else (2 if troll < 0.30 else (1 if troll < 0.65 else 0))
 		if forced:
-			tier = maxi(tier, 1)  # the guaranteed test settlement is at least a Village
+			tier = maxi(tier, 1)  # a forced settlement is at least a Village
+		tier = mini(tier, settlement_tier_cap)  # a low-civ system never rolls higher than this
 
 		var up := _axis_of(dir) if shape_cube else dir
 		var tang := up.cross(Vector3.RIGHT)

@@ -19,6 +19,18 @@ const SAVE_VERSION := 1
 
 var world_seed := 0   # master seed the planets were generated from (persisted)
 
+# --- galaxy (foundation for future warp travel; no travel UI yet) ---
+# The galaxy itself is a pure function of world_seed (like everything else),
+# so it's rebuilt on load rather than saved; only WHICH system is current needs
+# persisting. `planets` above are always just the current system's planets.
+var galaxy: Galaxy
+var current_system_index := 0
+
+func current_system() -> Dictionary:
+	if galaxy == null or current_system_index < 0 or current_system_index >= galaxy.systems.size():
+		return {}
+	return galaxy.systems[current_system_index]
+
 
 ## Read just the saved world seed (so planets can be regenerated identically before
 ## the rest of the save is applied). Returns -1 if there is no save.
@@ -53,6 +65,7 @@ func save_game() -> bool:
 	var data := {
 		"version": SAVE_VERSION,
 		"world_seed": world_seed,
+		"current_system_index": current_system_index,
 		"player": {},
 		"planets": {},   # planet name -> edits_by_chunk
 		"ships": [],
@@ -117,6 +130,10 @@ func load_game() -> bool:
 		data = _read_save(SAVE_BAK)
 	if typeof(data) != TYPE_DICTIONARY:
 		return false
+
+	# current_system_index just tags along for now (no warp travel yet, so it can
+	# never actually differ from what was already generated in main._start_world)
+	current_system_index = data.get("current_system_index", 0)
 
 	# planets: swap in the saved edits and re-mesh anything already loaded
 	var pedits: Dictionary = data.get("planets", {})
