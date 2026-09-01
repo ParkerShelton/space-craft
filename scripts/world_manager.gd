@@ -234,9 +234,10 @@ func spawn_station(kind: int, pos: Vector3, up: Vector3, fwd: Vector3) -> Statio
 		f = _any_perp(y)
 	var z := -f
 	var x := y.cross(z)
-	# `pos` is the exact voxel-cell corner in world space; don't round (planets sit
-	# at non-integer positions, so rounding would offset the station from the grid)
-	st.global_transform = Transform3D(Basis(x, y, z), pos)
+	# origin = the cell CENTER (corner + 0.5, in world space); the box sits at local
+	# zero so it stays centered whatever the orientation basis is. No rounding --
+	# planets sit at non-integer positions.
+	st.global_transform = Transform3D(Basis(x, y, z), pos + Vector3(0.5, 0.5, 0.5))
 	_stations.append(st)
 	return st
 
@@ -246,7 +247,7 @@ func spawn_station_on_ship(kind: int, ship: Ship, local_v: Vector3i) -> Station:
 	var st := Station.new()
 	ship.add_child(st)
 	st.configure(kind, self)
-	st.transform = Transform3D(Basis.IDENTITY, Vector3(local_v))
+	st.transform = Transform3D(Basis.IDENTITY, Vector3(local_v) + Vector3(0.5, 0.5, 0.5))
 	# The station is a static body inside the ship's own volume; without this the
 	# ship's move_and_collide would collide with it and the ship couldn't fly.
 	ship.add_collision_exception_with(st)

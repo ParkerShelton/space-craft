@@ -74,7 +74,9 @@ func _build_visual() -> void:
 	var box := BoxMesh.new()
 	box.size = Vector3(0.96, 0.96, 0.96)
 	_mi.mesh = box
-	_mi.position = Vector3(0.5, 0.5, 0.5)  # centered in the cell it was placed in
+	# the station's ORIGIN is the cell center (set on spawn), so the mesh/collision
+	# sit at local zero -- this keeps it centered regardless of the orientation basis
+	_mi.position = Vector3.ZERO
 	var mat := StandardMaterial3D.new()
 	var c := Blocks.color_of(kind)
 	mat.albedo_color = c
@@ -91,7 +93,7 @@ func _build_visual() -> void:
 	var shape := BoxShape3D.new()
 	shape.size = Vector3.ONE
 	_col.shape = shape
-	_col.position = Vector3(0.5, 0.5, 0.5)
+	_col.position = Vector3.ZERO
 
 
 # --- storage helpers ----------------------------------------------------------
