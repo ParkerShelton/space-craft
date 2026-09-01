@@ -672,7 +672,8 @@ func _derive_settlements(force_one: bool) -> void:
 
 		# An advanced empire builds UP: taller towers, packed tighter, over a
 		# wider footprint -- the difference between a village and a real city.
-		var max_floors: int = 4 if advanced else 1
+		# Even a modest town (tier >= 2) mixes in the occasional 2-story house.
+		var max_floors: int = 4 if advanced else (2 if tier >= 2 else 1)
 		var radius: float = SETTLEMENT_TIER_RADIUS[tier] * (1.5 if advanced else 1.0)
 		var density: float = minf(SETTLEMENT_TIER_DENSITY[tier] * (1.25 if advanced else 1.0), 0.85)
 		settlements.append({
@@ -682,7 +683,7 @@ func _derive_settlements(force_one: bool) -> void:
 			"advanced": advanced, "max_floors": max_floors,
 		})
 		# tallest possible building + roof, so chunks containing tower tops stream in
-		settlement_reach = maxf(settlement_reach, float(max_floors) * 8.0 + 8.0)
+		settlement_reach = maxf(settlement_reach, _settlement_max_height(max_floors))
 
 
 # A simple lit sphere just below the surface so the planet is visible from afar
@@ -892,6 +893,11 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 				# no trees standing in water -- skip if the base is at/below sea level
 				if water_style != WATER_NONE and _norm(base) <= water_level:
 					continue
+				# no trees rooted inside a settlement -- rejecting at the ROOT
+				# (not per-voxel) means a canopy can never end up sliced in half
+				# by a wall; the land people build on reads as actually cleared
+				if not settlements.is_empty() and _tree_blocked_by_settlement(base):
+					continue
 				# On a cube, trees grow straight out of the flat face (axis-aligned),
 				# not toward the center -- otherwise they lean on diagonal faces.
 				var up := _axis_of(cdir) if shape_cube else cdir
@@ -922,197 +928,85 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 	return Blocks.AIR
 
 
-# A building's footprint size (width, depth, wall height), hashed per-cell so
-# it's deterministic and consistent across every call for the same cell.
+# --- settlement buildings ------------------------------------------------------
+#
+# Buildings are laid out in EXACT INTEGER voxel coordinates. On a cube planet
+# (the default) a settlement's up/u/v frame is three cardinal axes, so once the
+# building's base voxel is snapped to integers every local coordinate is an
+# exact integer and each wall is a complete, gap-free ring.
+#
+# This replaced float-tolerance tests ("absf(lu) >= hw - 0.6"), which captured
+# 0, 1, or 2 voxels depending on where a building's center happened to fall
+# between grid lines -- that inconsistency is why walls and roofs went missing.
+#
+# Footprints are always ODD-sized (2*hw+1 by 2*hd+1) so every building has a
+# true center voxel for doors and windows to align to.
+
 const STORY_HEIGHT := 5   # wall height of one floor in a multi-story building
 
-func _building_size(cx: int, cy: int, st: Dictionary) -> Vector3i:
-	var w := 4 + int(_hash01(Vector3i(cx, cy, 1), st["seed"]) * 5.0)       # 4..8
-	var dd := 4 + int(_hash01(Vector3i(cx, cy, 2), st["seed"]) * 5.0)      # 4..8
-	var max_floors := int(st.get("max_floors", 1))
-	if max_floors > 1:
-		# an advanced city builds towers: total wall height is a whole number of
-		# storys, so interior floor slabs always land on an exact boundary
-		return Vector3i(w, dd, _building_floors(cx, cy, st) * STORY_HEIGHT)
-	var height := 4 + int(_hash01(Vector3i(cx, cy, 3), st["seed"]) * 5.0)  # 4..8
-	return Vector3i(w, dd, height)
+# Building styles, in order of how developed the settlement is.
+const B_HUT := 0     # one cramped room, hip roof -- an outpost or frontier village
+const B_HOUSE := 1   # proper home: gable roof, eaves, windows all round, 2 rooms
+const B_TOWER := 2   # advanced city block: multiple storys, flat roof, glass bands
 
 
-# How many storys tall this building is (1 for anything but an advanced city).
-# Biased toward shorter buildings so a skyline has a few standouts rather than
-# every block being the same height.
-func _building_floors(cx: int, cy: int, st: Dictionary) -> int:
-	var max_floors := int(st.get("max_floors", 1))
-	if max_floors <= 1:
-		return 1
-	var r := _hash01(Vector3i(cx, cy, 3), st["seed"])
-	return 1 + int(pow(r, 1.6) * float(max_floors))
+## Everything about one building, derived from its cell. Every consumer (the
+## voxel renderer, the ground grading, the path layout, tree clearing) goes
+## through this ONE function so they can never disagree about a building's
+## extent -- the class of bug that caused floating walls earlier.
+func _building_plan(cx: int, cy: int, st: Dictionary) -> Dictionary:
+	var seed_val = st["seed"]
+	var advanced: bool = bool(st.get("advanced", false))
+	var tier := int(st["tier"])
+	var r_style := _hash01(Vector3i(cx, cy, 11), seed_val)
+
+	# Style ladder: what a settlement builds depends on how developed it is, but
+	# always with a couple of humbler buildings mixed in so a town doesn't read
+	# as one repeated stamp.
+	var style: int
+	if advanced:
+		style = B_TOWER if r_style < 0.75 else B_HOUSE
+	elif tier >= 2:
+		style = B_HOUSE if r_style < 0.8 else B_HUT
+	elif tier == 1:
+		style = B_HOUSE if r_style < 0.45 else B_HUT
+	else:
+		style = B_HUT
+
+	var hw := 2
+	var hd := 2
+	var floors := 1
+	var h := 3
+	match style:
+		B_HUT:
+			hw = 2 + int(_hash01(Vector3i(cx, cy, 1), seed_val) * 2.0)   # 2..3 -> 5..7 wide
+			hd = 2 + int(_hash01(Vector3i(cx, cy, 2), seed_val) * 2.0)
+			h = 3
+		B_HOUSE:
+			hw = 3 + int(_hash01(Vector3i(cx, cy, 1), seed_val) * 2.0)   # 3..4 -> 7..9 wide
+			hd = 2 + int(_hash01(Vector3i(cx, cy, 2), seed_val) * 3.0)   # 2..4
+			# a town/city grows a second storey onto some homes
+			floors = 2 if (tier >= 2 and _hash01(Vector3i(cx, cy, 12), seed_val) < 0.35) else 1
+			h = floors * STORY_HEIGHT - 1
+		B_TOWER:
+			hw = 3 + int(_hash01(Vector3i(cx, cy, 1), seed_val) * 3.0)   # 3..5 -> 7..11 wide
+			hd = 3 + int(_hash01(Vector3i(cx, cy, 2), seed_val) * 3.0)
+			# pow() bias keeps most towers short so the few tall ones read as a
+			# skyline instead of every block being the same height
+			var max_floors := int(st.get("max_floors", 4))
+			floors = 1 + int(pow(_hash01(Vector3i(cx, cy, 3), seed_val), 1.6) * float(max_floors))
+			h = floors * STORY_HEIGHT
+	return {"hw": hw, "hd": hd, "h": h, "style": style, "floors": floors}
 
 
-# The direction (from planet center) toward a building's footprint center, given
-# its settlement's tangent frame and local offset -- used both to grade the
-# ground under it and to place its own floor, so the two always agree exactly.
-func _building_base_dir(anchor: Vector3, u: Vector3, v: Vector3, cu: float, cv: float) -> Vector3:
-	return (anchor + u * cu + v * cv).normalized()
+## Tallest anything a building of this style can reach above its base, used for
+## streaming reach and for the early-out in generation_sample.
+func _settlement_max_height(max_floors: int) -> float:
+	return float(maxi(max_floors, 1)) * float(STORY_HEIGHT) + 8.0
 
 
-const SETTLEMENT_PAD := 4.0  # how far past a building's walls the grading blends back to natural terrain
-
-# Does `p` fall within grading range of any building's footprint? If so, returns
-# the flattened/blended surf height to use there; -1.0 if unaffected. Each
-# building grades its OWN small patch to ITS OWN local terrain height (not one
-# height for the whole settlement) -- so a village on a slope still steps down
-# the hill building-by-building instead of demanding one giant flat shelf.
-func _settlement_pad_surf(p: Vector3, natural_surf: float) -> float:
-	var best := -1.0
-	for st in settlements:
-		var anchor: Vector3 = st["anchor"]
-		var u: Vector3 = st["u"]
-		var v: Vector3 = st["v"]
-		var rel := p - anchor
-		var su := rel.dot(u)
-		var sv := rel.dot(v)
-		if Vector2(su, sv).length() > float(st["radius"]) + 20.0:
-			continue
-		var cell := BUILDING_CELL
-		var ccx := floori(su / cell)
-		var ccy := floori(sv / cell)
-		for dx in range(-1, 2):
-			for dy in range(-1, 2):
-				var cx := ccx + dx
-				var cy := ccy + dy
-				var cu := (float(cx) + 0.5) * cell
-				var cv := (float(cy) + 0.5) * cell
-				if Vector2(cu, cv).length() > float(st["radius"]):
-					continue
-				if _hash01(Vector3i(cx, cy, 0), st["seed"]) >= float(st["density"]):
-					continue
-				var sz := _building_size(cx, cy, st)
-				# Must use the EXACT same lu/lv as _building_block (projected through
-				# the curved surface via _surface_point), not the flat su-cu/sv-cv
-				# tangent-plane approximation -- at this radius (up to 100 units on a
-				# planet whose own radius can be as little as a few hundred) the
-				# curvature shift between the two is easily several units, enough for
-				# this grading check to miss a cell _building_block actually used,
-				# leaving a wall floating over ungraded terrain.
-				var base_dir := _building_base_dir(anchor, u, v, cu, cv)
-				var base := _surface_point(base_dir)
-				var brel := p - base
-				var lu := brel.dot(u)
-				var lv := brel.dot(v)
-				# +0.5 matches _building_block's own wall-edge tolerance (it rejects
-				# past hw/hd+0.1 and starts the wall band at hw/hd-0.6) -- without this
-				# the fully-flat zone here could end a hair short of where a wall pixel
-				# actually renders, leaving it floating over ungraded terrain by 1 voxel
-				var hw := float(sz.x) * 0.5 + 0.5
-				var hd := float(sz.y) * 0.5 + 0.5
-				var out_dist := maxf(absf(lu) - hw, absf(lv) - hd)
-				if out_dist > SETTLEMENT_PAD:
-					continue
-				var base_surf := _surf(base_dir)
-				var t := clampf(out_dist / SETTLEMENT_PAD, 0.0, 1.0)
-				var blended := lerpf(base_surf, natural_surf, smoothstep(0.0, 1.0, t))
-				best = blended if best < 0.0 else maxf(best, blended)
-	return best
-
-
-# Is voxel p part of a settlement building? Checked against each nearby
-# settlement's plaza, then the building-cell grid within it (same cell-check
-# pattern as _tree_at, just one level up: settlement -> building cell).
-func _settlement_id_at(p: Vector3) -> int:
-	for st in settlements:
-		var anchor: Vector3 = st["anchor"]
-		if p.distance_to(anchor) > float(st["radius"]) + 12.0:
-			continue
-		var up: Vector3 = st["up"]
-		var u: Vector3 = st["u"]
-		var v: Vector3 = st["v"]
-		var rel := p - anchor
-		var pu := rel.dot(u)
-		var pv := rel.dot(v)
-		var cell := BUILDING_CELL
-		var ccx := floori(pu / cell)
-		var ccy := floori(pv / cell)
-		for dx in range(-1, 2):
-			for dy in range(-1, 2):
-				var cx := ccx + dx
-				var cy := ccy + dy
-				var cu := (float(cx) + 0.5) * cell
-				var cv := (float(cy) + 0.5) * cell
-				if Vector2(cu, cv).length() > float(st["radius"]):
-					continue  # outside the settlement's plaza radius
-				if _hash01(Vector3i(cx, cy, 0), st["seed"]) >= float(st["density"]):
-					continue  # this cell rolled empty (a street/yard gap)
-				var id := _building_block(p, anchor, up, u, v, cu, cv, cx, cy, st)
-				if id != Blocks.AIR:
-					return id
-	return Blocks.AIR
-
-
-const PATH_WIDTH := 1.1  # half-width of a settlement path (so it's ~2.2 blocks wide)
-
-## Is voxel p (on the ground surface) part of a dirt path? Every building gets a
-## straight path from its own door back to the settlement's plaza center -- same
-## cell-neighborhood scan as the buildings themselves, checking each candidate
-## building's door-to-plaza line segment for proximity.
-func _settlement_path_at(p: Vector3) -> bool:
-	for st in settlements:
-		var anchor: Vector3 = st["anchor"]
-		var u: Vector3 = st["u"]
-		var v: Vector3 = st["v"]
-		var rel := p - anchor
-		var su := rel.dot(u)
-		var sv := rel.dot(v)
-		if Vector2(su, sv).length() > float(st["radius"]) + 20.0:
-			continue
-		var cell := BUILDING_CELL
-		var ccx := floori(su / cell)
-		var ccy := floori(sv / cell)
-		for dx in range(-1, 2):
-			for dy in range(-1, 2):
-				var cx := ccx + dx
-				var cy := ccy + dy
-				var cu := (float(cx) + 0.5) * cell
-				var cv := (float(cy) + 0.5) * cell
-				if Vector2(cu, cv).length() > float(st["radius"]):
-					continue
-				if _hash01(Vector3i(cx, cy, 0), st["seed"]) >= float(st["density"]):
-					continue
-				var sz := _building_size(cx, cy, st)
-				var door := _building_door_point(cu, cv, sz)
-				var seg := -door  # plaza center is local (0,0)
-				var seg_len := seg.length()
-				if seg_len < 0.01:
-					continue
-				var seg_dir := seg / seg_len
-				var t := clampf((Vector2(su, sv) - door).dot(seg_dir), 0.0, seg_len)
-				var closest := door + seg_dir * t
-				if Vector2(su, sv).distance_to(closest) <= PATH_WIDTH:
-					return true
-	return false
-
-
-# Local (u,v) point just outside a building's door -- where its path starts.
-func _building_door_point(cu: float, cv: float, sz: Vector3i) -> Vector2:
-	var hw := float(sz.x) * 0.5
-	var hd := float(sz.y) * 0.5
-	var door_info := _building_door_axis(cu, cv)
-	if door_info.x > 0.5:
-		return Vector2(cu + door_info.y * (hw + 1.5), cv)
-	return Vector2(cu, cv + door_info.y * (hd + 1.5))
-
-
-# One building, footprint centered at local tangent-plane coords (cu, cv) within
-# its settlement: a hollow walled box with a simple peaked roof, a couple of
-# window openings, and a real, openable two-tall Door (Blocks.DOOR -- the same
-# door the player can build and toggle) on the wall facing the settlement's
-# center. Its floor sits at the SAME flattened height _settlement_pad_surf graded
-# the ground to (both call _building_base_dir the same way), so the walls always
-# meet the ground exactly instead of floating or sinking into it.
-# Which wall of a building (by its local cu,cv within the settlement) the door
-# sits on: the one facing back toward the plaza center. Shared by the wall
-# renderer AND the path system so they can never disagree about where the door
-# is (see the settlement-grading lesson logged earlier this session).
+## Which wall the door sits on: the one facing back toward the plaza centre.
+## Returns (axis_is_u, sign). Shared by the renderer AND the path layout.
 func _building_door_axis(cu: float, cv: float) -> Vector2:
 	var door_axis_u: bool = absf(cu) >= absf(cv)
 	var raw: float = cu if door_axis_u else cv
@@ -1120,109 +1014,267 @@ func _building_door_axis(cu: float, cv: float) -> Vector2:
 	return Vector2(1.0 if door_axis_u else 0.0, door_sign)
 
 
+## The exact voxel a building's ground floor rests on, snapped to integers so
+## the whole structure lands on voxel boundaries (see the block comment above).
+func _building_base(anchor: Vector3, u: Vector3, v: Vector3, cu: float, cv: float) -> Vector3:
+	var d := _building_base_dir(anchor, u, v, cu, cv)
+	var s := _surface_point(d)
+	return Vector3(roundi(s.x), roundi(s.y), roundi(s.z))
+
+
+# The direction (from planet center) toward a building's footprint center.
+func _building_base_dir(anchor: Vector3, u: Vector3, v: Vector3, cu: float, cv: float) -> Vector3:
+	return (anchor + u * cu + v * cv).normalized()
+
+
+## Every building-cell candidate near world point `p`, for one settlement, as
+## {cx, cy, cu, cv} dicts. Centralises the cell-neighbourhood scan that the
+## renderer, grading, and path layout all need, so they can never disagree
+## about which buildings are nearby.
+func _nearby_buildings(p: Vector3, st: Dictionary, margin: float) -> Array:
+	var out: Array = []
+	var anchor: Vector3 = st["anchor"]
+	var u: Vector3 = st["u"]
+	var v: Vector3 = st["v"]
+	var rel := p - anchor
+	var su := rel.dot(u)
+	var sv := rel.dot(v)
+	if Vector2(su, sv).length() > float(st["radius"]) + margin:
+		return out
+	var cell := BUILDING_CELL
+	var ccx := floori(su / cell)
+	var ccy := floori(sv / cell)
+	for dx in range(-1, 2):
+		for dy in range(-1, 2):
+			var cx := ccx + dx
+			var cy := ccy + dy
+			var cu := (float(cx) + 0.5) * cell
+			var cv := (float(cy) + 0.5) * cell
+			if _building_exists(cx, cy, cu, cv, st):
+				out.append({"cx": cx, "cy": cy, "cu": cu, "cv": cv})
+	return out
+
+
+## Does a building stand in this cell? The plaza centre is kept clear as a
+## village green / town square, which makes the paths radiating from it read as
+## a deliberate layout rather than random dirt.
+func _building_exists(cx: int, cy: int, cu: float, cv: float, st: Dictionary) -> bool:
+	var dist := Vector2(cu, cv).length()
+	if dist > float(st["radius"]):
+		return false
+	if dist < PLAZA_CLEAR:
+		return false
+	return _hash01(Vector3i(cx, cy, 0), st["seed"]) < float(st["density"])
+
+
+const PLAZA_CLEAR := 11.0  # radius of the open square at a settlement's centre
+const SETTLEMENT_PAD := 3.0  # how far past a building's walls the ground grading blends out
+
+
+## Ground height to use at `p`, flattened under any nearby building and blended
+## smoothly back to natural terrain past its walls. Returns -1.0 where no
+## building is close enough to matter. Each building grades to ITS OWN local
+## terrain height, so a village on a slope steps down the hill rather than
+## demanding one giant flat shelf.
+func _settlement_pad_surf(p: Vector3, natural_surf: float) -> float:
+	var best := -1.0
+	for st in settlements:
+		var anchor: Vector3 = st["anchor"]
+		var u: Vector3 = st["u"]
+		var v: Vector3 = st["v"]
+		for b in _nearby_buildings(p, st, 20.0):
+			var plan := _building_plan(b["cx"], b["cy"], st)
+			var base := _building_base(anchor, u, v, b["cu"], b["cv"])
+			var brel := p - base
+			var lu := brel.dot(u)
+			var lv := brel.dot(v)
+			# +0.5 covers the voxel's own extent past its integer centre
+			var out_dist := maxf(absf(lu) - (float(plan["hw"]) + 0.5),
+				absf(lv) - (float(plan["hd"]) + 0.5))
+			if out_dist > SETTLEMENT_PAD:
+				continue
+			var t := clampf(out_dist / SETTLEMENT_PAD, 0.0, 1.0)
+			var blended := lerpf(_norm(base), natural_surf, smoothstep(0.0, 1.0, t))
+			best = blended if best < 0.0 else maxf(best, blended)
+	return best
+
+
+## Is `p` inside a settlement building? Returns the block id, or AIR.
+func _settlement_id_at(p: Vector3) -> int:
+	for st in settlements:
+		var anchor: Vector3 = st["anchor"]
+		var up: Vector3 = st["up"]
+		var u: Vector3 = st["u"]
+		var v: Vector3 = st["v"]
+		for b in _nearby_buildings(p, st, 12.0):
+			var id := _building_block(p, anchor, up, u, v, b["cu"], b["cv"], b["cx"], b["cy"], st)
+			if id != Blocks.AIR:
+				return id
+	return Blocks.AIR
+
+
+## Would a tree rooted at world point `base` collide with a settlement? Trees
+## are rejected at their ROOT rather than clipped per-voxel, so a canopy can
+## never end up sliced in half by a wall or floating inside a room. The land a
+## settlement stands on reads as cleared, which is what people actually do.
+func _tree_blocked_by_settlement(base: Vector3) -> bool:
+	for st in settlements:
+		var anchor: Vector3 = st["anchor"]
+		var u: Vector3 = st["u"]
+		var v: Vector3 = st["v"]
+		var rel := base - anchor
+		if Vector2(rel.dot(u), rel.dot(v)).length() <= float(st["radius"]) + 6.0:
+			return true
+	return false
+
+
+const PATH_WIDTH := 1.6  # half-width of a settlement path
+
+## Is `p` (on the ground surface) part of a dirt path? Every building gets a
+## path from its own doorstep back to the plaza, so the settlement reads as
+## connected rather than scattered.
+func _settlement_path_at(p: Vector3) -> bool:
+	for st in settlements:
+		var anchor: Vector3 = st["anchor"]
+		var u: Vector3 = st["u"]
+		var v: Vector3 = st["v"]
+		var rel := p - anchor
+		var here := Vector2(rel.dot(u), rel.dot(v))
+		if here.length() < PLAZA_CLEAR:
+			return true  # the open square itself is paved
+		for b in _nearby_buildings(p, st, 20.0):
+			var plan := _building_plan(b["cx"], b["cy"], st)
+			var door := _building_door_point(b["cu"], b["cv"], plan)
+			var seg := -door  # plaza centre is local (0,0)
+			var seg_len := seg.length()
+			if seg_len < 0.01:
+				continue
+			var seg_dir := seg / seg_len
+			var t := clampf((here - door).dot(seg_dir), 0.0, seg_len)
+			if here.distance_to(door + seg_dir * t) <= PATH_WIDTH:
+				return true
+	return false
+
+
+# Local (u,v) point just outside a building's door -- where its path starts.
+func _building_door_point(cu: float, cv: float, plan: Dictionary) -> Vector2:
+	var door_info := _building_door_axis(cu, cv)
+	if door_info.x > 0.5:
+		return Vector2(cu + door_info.y * (float(plan["hw"]) + 1.0), cv)
+	return Vector2(cu, cv + door_info.y * (float(plan["hd"]) + 1.0))
+
+
+## One building's voxel at `p`. All comparisons are exact integer tests against
+## the building's plan, so walls/roofs are always complete.
 func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Vector3,
 		cu: float, cv: float, cx: int, cy: int, st: Dictionary) -> int:
-	var sz := _building_size(cx, cy, st)
-	var w := sz.x
-	var dd := sz.y
-	var height := sz.z
-	var base_dir := _building_base_dir(anchor, u, v, cu, cv)
-	var base := _surface_point(base_dir)
+	var plan := _building_plan(cx, cy, st)
+	var hw: int = plan["hw"]
+	var hd: int = plan["hd"]
+	var h: int = plan["h"]
+	var style: int = plan["style"]
+
+	var base := _building_base(anchor, u, v, cu, cv)
 	var rel := p - base
-	var along := rel.dot(up)
-	var lu := rel.dot(u)
-	var lv := rel.dot(v)
-	var hw := float(w) * 0.5
-	var hd := float(dd) * 0.5
-	if along < -0.1 or absf(lu) > hw + 0.6 or absf(lv) > hd + 0.6:
-		return Blocks.AIR
+	var iu := roundi(rel.dot(u))
+	var iv := roundi(rel.dot(v))
+	var ih := roundi(rel.dot(up))
+	if ih < 1:
+		return Blocks.AIR  # ih 0 is the ground voxel the building rests on
 
-	var advanced: bool = bool(st.get("advanced", false))
-
-	if along >= float(height):
-		var r := along - float(height)
-		if advanced:
-			# a tower gets a FLAT roof deck with a parapet wall around the edge --
-			# a pitched roof on a 20-block tower would read as a cottage on stilts
-			if r > 1.1:
-				return Blocks.AIR
-			if r < 0.9:
-				if absf(lu) > hw + 0.4 or absf(lv) > hd + 0.4:
-					return Blocks.AIR
-				return Blocks.ROOF_SLAB
-			if absf(lu) > hw + 0.1 or absf(lv) > hd + 0.1:
-				return Blocks.AIR
-			if absf(lu) >= hw - 0.6 or absf(lv) >= hd - 0.6:
-				return int(st["wall_mat"])
-			return Blocks.AIR
-		# gable roof: the ridge runs along whichever axis is longer, so the roof
-		# only slopes across the SHORT dimension -- a real house silhouette, not a
-		# pyramid. The eave (first row) is a thin ROOF_SLAB overhang that pokes
-		# slightly past the wall face; rows above it climb to the ridge as full
-		# roof blocks.
-		var ridge_along_u: bool = w >= dd
-		var half_full := hw if ridge_along_u else hd
-		var half_short := hd if ridge_along_u else hw
-		var full_coord := lu if ridge_along_u else lv
-		var short_coord := lv if ridge_along_u else lu
-		var shrink := half_short - r
-		if shrink < -0.1 or absf(full_coord) > half_full + 0.4 or absf(short_coord) > shrink + 0.1:
-			return Blocks.AIR
-		return Blocks.ROOF_SLAB if r < 0.9 else int(st["roof_mat"])
-
-	# the outer reject above was loosened to hw/hd+0.6 to let the roof eave
-	# overhang past the wall face -- but the walls themselves must stay at their
-	# nominal footprint, or they'd render half a block too thick everywhere
-	if absf(lu) > hw + 0.1 or absf(lv) > hd + 0.1:
-		return Blocks.AIR
-	var on_wall: bool = absf(lu) >= hw - 0.6 or absf(lv) >= hd - 0.6
+	var wall_mat: int = st["wall_mat"]
 	var door_info := _building_door_axis(cu, cv)
 	var door_axis_u: bool = door_info.x > 0.5
-	var door_sign: float = door_info.y
+	var door_sign := int(door_info.y)
+
+	# --- roof ---
+	if ih > h:
+		var r := ih - h - 1  # 0 = first roof layer
+		match style:
+			B_TOWER:
+				# flat deck + parapet: a pitched roof on a 20-block tower would
+				# read as a cottage on stilts
+				if r == 0:
+					return Blocks.ROOF_SLAB if (absi(iu) <= hw + 1 and absi(iv) <= hd + 1) else Blocks.AIR
+				if r == 1 and (absi(iu) == hw or absi(iv) == hd) and absi(iu) <= hw and absi(iv) <= hd:
+					return wall_mat
+				return Blocks.AIR
+			B_HUT:
+				# hip roof: pulls in on BOTH axes, so a small square hut comes to
+				# a point rather than wearing an oversized gable
+				var shrink := r - 1
+				if absi(iu) > hw - shrink or absi(iv) > hd - shrink:
+					return Blocks.AIR
+				return Blocks.ROOF_SLAB if r == 0 else int(st["roof_mat"])
+			_:
+				# gable: ridge runs along the LONG axis so only the short axis
+				# slopes -- a real house silhouette
+				var ridge_u: bool = hw >= hd
+				var long_c := iu if ridge_u else iv
+				var short_c := iv if ridge_u else iu
+				var half_long := hw if ridge_u else hd
+				var half_short := hd if ridge_u else hw
+				var shrink2 := r - 1  # r == 0 is the overhanging eave
+				if absi(long_c) > half_long + (1 if r == 0 else 0):
+					return Blocks.AIR
+				if absi(short_c) > half_short - shrink2:
+					return Blocks.AIR
+				return Blocks.ROOF_SLAB if r == 0 else int(st["roof_mat"])
+
+	# --- below the roof: strictly inside the footprint ---
+	if absi(iu) > hw or absi(iv) > hd:
+		return Blocks.AIR
+	var on_wall: bool = absi(iu) == hw or absi(iv) == hd
+
 	if not on_wall:
-		if advanced:
-			# floor slabs divide a tower into real storys. One corner is left open
-			# all the way up as a stairwell shaft so the floors aren't sealed boxes.
-			var on_floor_line: bool = along > 0.5 and int(round(along)) % STORY_HEIGHT == 0
-			var in_stairwell: bool = lu > hw - 2.5 and lv > hd - 2.5
-			if on_floor_line and not in_stairwell:
+		if style == B_TOWER or (style == B_HOUSE and int(plan["floors"]) > 1):
+			# floor slabs divide the storys, with one corner left open the whole
+			# height as a stairwell so the floors aren't sealed boxes
+			var in_stairwell: bool = iu >= hw - 2 and iv >= hd - 2
+			if ih % STORY_HEIGHT == 0 and not in_stairwell:
 				return Blocks.ROOF_SLAB
 			return Blocks.AIR
-		# a big enough building gets a real second room: a dividing wall down the
-		# middle with its own two-tall Door (not just an open gap) so there's an
-		# actual doorway between rooms, not floor-to-ceiling nothing
-		if w >= 6 and absf(lu) < 0.5:
-			if absf(lv) >= 1.0 or along >= 2.0:
-				return int(st["wall_mat"])
+		# a house wide enough gets a second room behind a real internal door
+		if style == B_HOUSE and hw >= 3 and iu == 0:
+			if iv == 0 and ih <= 2:
+				return Blocks.DOOR
+			return wall_mat
+		return Blocks.AIR
+
+	# --- exterior door, on the wall facing the plaza ---
+	if ih <= 2:
+		if door_axis_u and iu == door_sign * hw and iv == 0:
 			return Blocks.DOOR
-		return Blocks.AIR  # hollow room interior -- no floor/furniture yet
-	if along < 2.0:
-		# the exterior door sits on whichever wall faces back toward the plaza
-		if door_axis_u and absf(lu) >= hw - 0.6 and signf(lu) == door_sign and absf(lv) < 1.0:
+		if not door_axis_u and iv == door_sign * hd and iu == 0:
 			return Blocks.DOOR
-		if not door_axis_u and absf(lv) >= hd - 0.6 and signf(lv) == door_sign and absf(lu) < 1.0:
-			return Blocks.DOOR
-	if advanced:
-		# a horizontal glass band wrapping every story, stopping short of the
-		# corners so solid posts remain -- reads as an office tower rather than a
-		# cottage with one punched-out window
-		var story_local := int(round(along)) % STORY_HEIGHT
-		if story_local == 2 or story_local == 3:
-			if absf(lu) >= hw - 0.6 and absf(lv) <= hd - 1.5:
-				return Blocks.GLASS
-			if absf(lv) >= hd - 0.6 and absf(lu) <= hw - 1.5:
-				return Blocks.GLASS
-		return int(st["wall_mat"])
-	# a centered window on EVERY exterior wall, roughly at mid-height (a small
-	# transom strip can land just above the door on the door's own wall -- a
-	# normal detail, not a conflict, since the door claims the lower band first)
-	var mid := float(height) * 0.5
-	if height >= 5 and along >= mid - 0.9 and along <= mid + 0.6:
-		if absf(lu) >= hw - 0.6 and absf(lv) < 1.0:
-			return Blocks.GLASS
-		if absf(lv) >= hd - 0.6 and absf(lu) < 1.0:
-			return Blocks.GLASS
-	return int(st["wall_mat"])
+
+	# --- windows ---
+	match style:
+		B_TOWER:
+			# a glass band wrapping every storey, stopping short of the corners
+			# so solid posts remain -- reads as an office tower
+			var sl := ih % STORY_HEIGHT
+			if sl == 2 or sl == 3:
+				if absi(iu) == hw and absi(iv) <= hd - 2:
+					return Blocks.GLASS
+				if absi(iv) == hd and absi(iu) <= hw - 2:
+					return Blocks.GLASS
+		B_HUT:
+			# one small window opposite the door: a hut is humble
+			if ih == 2:
+				if door_axis_u and iu == -door_sign * hw and iv == 0:
+					return Blocks.GLASS
+				if not door_axis_u and iv == -door_sign * hd and iu == 0:
+					return Blocks.GLASS
+		_:
+			# a proper house has a window on every wall of every storey
+			var sl2 := ih % STORY_HEIGHT
+			if sl2 == 2 or sl2 == 3:
+				if absi(iu) == hw and absi(iv) <= hd - 2 and absi(iv) <= 1:
+					return Blocks.GLASS
+				if absi(iv) == hd and absi(iu) <= hw - 2 and absi(iu) <= 1:
+					return Blocks.GLASS
+	return wall_mat
 
 
 ## Block id at a voxel, with player edits taking precedence over terrain.
