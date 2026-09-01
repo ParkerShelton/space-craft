@@ -2624,11 +2624,14 @@ func _on_station_craft(craft: Dictionary) -> void:
 	elif r == 0:
 		if craft.has("reqs"):
 			_toast("Missing materials")
-		elif craft.has("extra"):
-			_toast("Need %d loaded, plus %d %s" % [
-				int(craft["cost"]), int(craft["extra"]["n"]), Blocks.name_of(int(craft["extra"]["id"]))])
 		else:
-			_toast("Need %d loaded" % int(craft["cost"]))
+			var mtype := Blocks.primary_material_for(_station_open.kind)
+			var mat_label: String = {"refined": "Refined Material", "circuit": "Circuitry",
+				"alloy": "Alloy Plating"}.get(mtype, "material")
+			var msg := "Need %d %s loaded" % [int(craft["cost"]), mat_label]
+			if craft.has("extra"):
+				msg += ", plus %d %s" % [int(craft["extra"]["n"]), Blocks.name_of(int(craft["extra"]["id"]))]
+			_toast(msg)
 	else:
 		_toast("Crafting %s…" % Blocks.name_of(int(craft["out"])))
 	_refresh_station_ui()
