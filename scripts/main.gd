@@ -57,6 +57,7 @@ func _ready() -> void:
 	world.name = "World"
 	add_child(world)
 	_world = world
+	world.planet_generator = Callable(self, "_generate_planets")
 	_build_menu()
 
 

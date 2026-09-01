@@ -100,6 +100,11 @@ var _hotbar_label: Label
 var _mode_label: Label
 var _ship_label: Label
 var _system_label: Label
+var _starmap_panel: Panel
+var _starmap_list: VBoxContainer
+var _starmap_warp_btn: Button
+var _starmap_rows: Array = []
+var _starmap_selected := -1
 var _target_label: Label
 var _toast_label: Label            # transient "Saved"/"Loaded" confirmation
 var _toast_time := 0.0
@@ -317,6 +322,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_close_station()
 			elif inv_open:
 				_toggle_inventory()
+			elif _starmap_panel != null and _starmap_panel.visible:
+				_close_starmap()
 			else:
 				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		elif event.keycode == KEY_F5:
@@ -340,6 +347,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_close_station()
 			else:
 				_toggle_inventory()
+		elif event.keycode == KEY_M and piloting == null:
+			_toggle_starmap()
 		elif _station_open != null:
 			return  # a station panel is open: swallow other keys
 		elif event.keycode == KEY_F:
@@ -367,6 +376,110 @@ func _toggle_inventory() -> void:
 		_inv_panel.visible = inv_open
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if inv_open else Input.MOUSE_MODE_CAPTURED
 	_refresh_slots()
+
+
+# --- star map / warp travel -----------------------------------------------------
+
+func _build_starmap_ui(layer: CanvasLayer) -> void:
+	_starmap_panel = Panel.new()
+	_starmap_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_starmap_panel.custom_minimum_size = Vector2(360, 420)
+	_starmap_panel.size = _starmap_panel.custom_minimum_size
+	_starmap_panel.position = -_starmap_panel.size * 0.5
+	_starmap_panel.visible = false
+	layer.add_child(_starmap_panel)
+
+	var title := Label.new()
+	title.text = "Star Map"
+	title.position = Vector2(14, 8)
+	_starmap_panel.add_child(title)
+	var hint := Label.new()
+	hint.text = "Select a system, then Warp (on foot only)"
+	hint.modulate = Color(1, 1, 1, 0.6)
+	hint.position = Vector2(14, 30)
+	_starmap_panel.add_child(hint)
+
+	var scroll := ScrollContainer.new()
+	scroll.position = Vector2(12, 56)
+	scroll.custom_minimum_size = Vector2(336, 316)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_starmap_panel.add_child(scroll)
+	_starmap_list = VBoxContainer.new()
+	_starmap_list.add_theme_constant_override("separation", 4)
+	_starmap_list.custom_minimum_size = Vector2(320, 0)
+	scroll.add_child(_starmap_list)
+
+	_starmap_warp_btn = Button.new()
+	_starmap_warp_btn.text = "Warp"
+	_starmap_warp_btn.position = Vector2(12, 380)
+	_starmap_warp_btn.custom_minimum_size = Vector2(336, 32)
+	_starmap_warp_btn.pressed.connect(_on_warp_pressed)
+	_starmap_panel.add_child(_starmap_warp_btn)
+
+
+func _toggle_starmap() -> void:
+	if _starmap_panel == null or world == null or world.galaxy == null:
+		return
+	if _starmap_panel.visible:
+		_close_starmap()
+		return
+	if inv_open:
+		_toggle_inventory()
+	if _station_open != null:
+		_close_station()
+	_refresh_starmap_rows()
+	_starmap_panel.visible = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _close_starmap() -> void:
+	if _starmap_panel != null:
+		_starmap_panel.visible = false
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _refresh_starmap_rows() -> void:
+	for r in _starmap_rows:
+		r.queue_free()
+	_starmap_rows.clear()
+	_starmap_selected = world.current_system_index
+	for i in world.galaxy.systems.size():
+		var s: Dictionary = world.galaxy.systems[i]
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(320, 32)
+		b.toggle_mode = true
+		b.button_pressed = i == _starmap_selected
+		var cur := "   (current)" if i == world.current_system_index else ""
+		b.text = "%s -- %s -- %d planets%s" % [
+			s["name"], Galaxy.civ_name(s["civ_tier"]), int(s["planet_count"]), cur]
+		b.pressed.connect(_on_starmap_row_pressed.bind(i))
+		_starmap_list.add_child(b)
+		_starmap_rows.append(b)
+
+
+func _on_starmap_row_pressed(i: int) -> void:
+	_starmap_selected = i
+	for j in _starmap_rows.size():
+		_starmap_rows[j].button_pressed = j == i
+
+
+func _on_warp_pressed() -> void:
+	if world == null or _starmap_selected < 0:
+		return
+	if piloting != null or aboard != null or eva:
+		_toast("Can't warp while flying or aboard a ship")
+		return
+	if _starmap_selected == world.current_system_index:
+		_toast("Already in this system")
+		return
+	var sysdef := world.warp_to_system(_starmap_selected)
+	_close_starmap()
+	if sysdef.is_empty():
+		_toast("Warp failed")
+		return
+	_toast("Warped to %s (%s)" % [sysdef["name"], Galaxy.civ_name(sysdef["civ_tier"])])
+	if _system_label != null:
+		_system_label.text = "%s system\n%s" % [sysdef["name"], Galaxy.civ_name(sysdef["civ_tier"])]
 
 
 func _physics_process(delta: float) -> void:
@@ -1479,6 +1592,7 @@ func _build_ui() -> void:
 
 	_build_inventory_ui(layer)
 	_build_station_ui(layer)
+	_build_starmap_ui(layer)
 
 	# transient save/load confirmation, top-center
 	_toast_label = Label.new()

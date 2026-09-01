@@ -19,17 +19,60 @@ const SAVE_VERSION := 1
 
 var world_seed := 0   # master seed the planets were generated from (persisted)
 
-# --- galaxy (foundation for future warp travel; no travel UI yet) ---
+# --- galaxy + warp travel ---
 # The galaxy itself is a pure function of world_seed (like everything else),
 # so it's rebuilt on load rather than saved; only WHICH system is current needs
 # persisting. `planets` above are always just the current system's planets.
 var galaxy: Galaxy
 var current_system_index := 0
+# main.gd points this at its own _generate_planets so WorldManager can rebuild
+# a system's planets without needing to know anything about Main's type.
+var planet_generator: Callable
 
 func current_system() -> Dictionary:
 	if galaxy == null or current_system_index < 0 or current_system_index >= galaxy.systems.size():
 		return {}
 	return galaxy.systems[current_system_index]
+
+
+## Tear down the current system and generate a different one in its place,
+## dropping the player at the new home world's spawn point. No travel time,
+## fuel, or distance yet -- this is instant fast-travel while the actual "pick
+## a system" UI and any real interstellar-flight mechanic are still ahead.
+## KNOWN LIMITATION: ships and stations in the old system are NOT preserved --
+## there's no per-system save state yet, only "whatever's currently loaded," so
+## anything left behind is gone. Warping only while on foot (player.gd enforces
+## this) sidesteps stranding a ship mid-flight, but a parked one is still lost.
+func warp_to_system(index: int) -> Dictionary:
+	if galaxy == null or index < 0 or index >= galaxy.systems.size() or not planet_generator.is_valid():
+		return {}
+	for s in _ships:
+		if is_instance_valid(s):
+			s.queue_free()
+	_ships.clear()
+	for st in _stations:
+		if is_instance_valid(st):
+			st.queue_free()
+	_stations.clear()
+	for p in planets:
+		if is_instance_valid(p):
+			p.queue_free()
+	planets.clear()
+
+	current_system_index = index
+	var sysdef: Dictionary = galaxy.systems[index]
+	planet_generator.call(self, sysdef)
+
+	if player != null and not planets.is_empty():
+		var home: Planet = planets[0]
+		var pl = player  # untyped: reach Player-specific members off the Node3D ref
+		pl.global_position = home.find_spawn_point(Vector3.UP)
+		pl.velocity = Vector3.ZERO
+		if home.altitude(pl.global_position) < 96.0:
+			var pcc := home.chunk_of(home.world_to_voxel(pl.global_position))
+			for dy in range(1, -4, -1):
+				home.build_chunk_sync(pcc + Vector3i(0, dy, 0))
+	return sysdef
 
 
 ## Read just the saved world seed (so planets can be regenerated identically before
