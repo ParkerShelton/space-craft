@@ -221,10 +221,12 @@ func _init_inventory() -> void:
 	inv.clear()
 	for i in SLOTS:
 		inv.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}})
-	# starting kit so you can build a ship and terraform right away
-	_add_item(Blocks.COCKPIT, 2)
+	# Starting kit so you can build a ship and terraform right away. No Cockpit:
+	# pressing G to start a ship already seeds one for free (see
+	# WorldManager.spawn_ship), so carrying spares was redundant.
 	_add_item(Blocks.THRUSTER, 8)
-	_add_item(Blocks.METAL, 64)
+	_add_item(Blocks.WARP_DRIVE, 1)
+	_add_item(Blocks.METAL, 256)
 	_add_item(Blocks.GRASS, 64)
 	_add_item(Blocks.DIRT, 64)
 	_add_item(Blocks.ROCK, 64)

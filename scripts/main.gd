@@ -202,6 +202,7 @@ func _generate_planets(world: WorldManager, sysdef: Dictionary) -> void:
 	var used_names := {}
 	for i in count:
 		var cfg := _make_planet_cfg(rng, i, master_seed, positions, settled[i])
+		cfg["civ_tier"] = civ_tier  # drives settlement architecture, not just placement
 		# guarantee unique names (saves key planet edits by name)
 		var nm: String = cfg["name"]
 		if used_names.has(nm):

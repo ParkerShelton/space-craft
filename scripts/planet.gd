@@ -94,6 +94,11 @@ const SETTLEMENT_TIER_DENSITY := [0.32, 0.42, 0.5, 0.58]  # chance a building-ce
 var settlements: Array = []    # each: {dir, up, u, v, anchor, tier, radius, density, wall_mat, roof_mat, seed}
 var settlements_enabled := true  # false = this planet never gets a settlement (set by civ tier)
 var settlement_tier_cap := 3     # highest settlement tier this planet may roll (set by civ tier)
+# The system's civilization tier (Galaxy.CIV_*). Beyond gating WHETHER a planet
+# is settled, this decides what its architecture looks like: a primitive colony
+# builds low cottages out of whatever the planet provides, while an advanced
+# empire builds tall metal-and-glass towers that look the same on any world.
+var civ_tier := 2
 var settlement_reach := 0.0    # tallest a building can get, for streaming/reach purposes
 
 # --- fauna (procedural creatures, derived from seed like ores) ---
@@ -165,6 +170,7 @@ func configure(cfg: Dictionary) -> void:
 	# how big they're allowed to get, and whether one is force-guaranteed.
 	settlements_enabled = cfg.get("settlements_enabled", true)
 	settlement_tier_cap = cfg.get("settlement_tier_cap", 3)
+	civ_tier = cfg.get("civ_tier", 2)
 	_derive_settlements(cfg.get("force_settlement", false))
 	_add_distant_sphere()
 
@@ -599,9 +605,16 @@ func _derive_settlements(force_one: bool) -> void:
 	if tree_density > 0.1:
 		hab += 0.3
 
+	# An ADVANCED empire ships its own prefab materials in, so its architecture
+	# reads the same on every world it colonizes -- metal and glass, not local
+	# stone. A primitive colony builds from whatever the planet itself provides.
+	var advanced: bool = civ_tier >= 3
 	var wall_mat: int
 	var roof_mat: int
-	if tree_density > 0.0:
+	if advanced:
+		wall_mat = Blocks.METAL
+		roof_mat = Blocks.ROOF_SLAB
+	elif tree_density > 0.0:
 		wall_mat = flora_wood
 		roof_mat = Blocks.WOOD_DARK
 	elif pal_top == Blocks.SNOW or pal_top == Blocks.ICE:
@@ -657,13 +670,19 @@ func _derive_settlements(force_one: bool) -> void:
 		var u := tang.normalized()
 		var v := up.cross(u).normalized()
 
+		# An advanced empire builds UP: taller towers, packed tighter, over a
+		# wider footprint -- the difference between a village and a real city.
+		var max_floors: int = 4 if advanced else 1
+		var radius: float = SETTLEMENT_TIER_RADIUS[tier] * (1.5 if advanced else 1.0)
+		var density: float = minf(SETTLEMENT_TIER_DENSITY[tier] * (1.25 if advanced else 1.0), 0.85)
 		settlements.append({
 			"dir": dir, "up": up, "u": u, "v": v, "anchor": anchor,
-			"tier": tier, "radius": SETTLEMENT_TIER_RADIUS[tier],
-			"density": SETTLEMENT_TIER_DENSITY[tier],
+			"tier": tier, "radius": radius, "density": density,
 			"wall_mat": wall_mat, "roof_mat": roof_mat, "seed": sseed,
+			"advanced": advanced, "max_floors": max_floors,
 		})
-		settlement_reach = maxf(settlement_reach, 15.0)  # max building height (8) + roof taper (~5) + margin
+		# tallest possible building + roof, so chunks containing tower tops stream in
+		settlement_reach = maxf(settlement_reach, float(max_floors) * 8.0 + 8.0)
 
 
 # A simple lit sphere just below the surface so the planet is visible from afar
@@ -905,11 +924,29 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 
 # A building's footprint size (width, depth, wall height), hashed per-cell so
 # it's deterministic and consistent across every call for the same cell.
+const STORY_HEIGHT := 5   # wall height of one floor in a multi-story building
+
 func _building_size(cx: int, cy: int, st: Dictionary) -> Vector3i:
 	var w := 4 + int(_hash01(Vector3i(cx, cy, 1), st["seed"]) * 5.0)       # 4..8
 	var dd := 4 + int(_hash01(Vector3i(cx, cy, 2), st["seed"]) * 5.0)      # 4..8
+	var max_floors := int(st.get("max_floors", 1))
+	if max_floors > 1:
+		# an advanced city builds towers: total wall height is a whole number of
+		# storys, so interior floor slabs always land on an exact boundary
+		return Vector3i(w, dd, _building_floors(cx, cy, st) * STORY_HEIGHT)
 	var height := 4 + int(_hash01(Vector3i(cx, cy, 3), st["seed"]) * 5.0)  # 4..8
 	return Vector3i(w, dd, height)
+
+
+# How many storys tall this building is (1 for anything but an advanced city).
+# Biased toward shorter buildings so a skyline has a few standouts rather than
+# every block being the same height.
+func _building_floors(cx: int, cy: int, st: Dictionary) -> int:
+	var max_floors := int(st.get("max_floors", 1))
+	if max_floors <= 1:
+		return 1
+	var r := _hash01(Vector3i(cx, cy, 3), st["seed"])
+	return 1 + int(pow(r, 1.6) * float(max_floors))
 
 
 # The direction (from planet center) toward a building's footprint center, given
@@ -1100,7 +1137,24 @@ func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Ve
 	if along < -0.1 or absf(lu) > hw + 0.6 or absf(lv) > hd + 0.6:
 		return Blocks.AIR
 
+	var advanced: bool = bool(st.get("advanced", false))
+
 	if along >= float(height):
+		var r := along - float(height)
+		if advanced:
+			# a tower gets a FLAT roof deck with a parapet wall around the edge --
+			# a pitched roof on a 20-block tower would read as a cottage on stilts
+			if r > 1.1:
+				return Blocks.AIR
+			if r < 0.9:
+				if absf(lu) > hw + 0.4 or absf(lv) > hd + 0.4:
+					return Blocks.AIR
+				return Blocks.ROOF_SLAB
+			if absf(lu) > hw + 0.1 or absf(lv) > hd + 0.1:
+				return Blocks.AIR
+			if absf(lu) >= hw - 0.6 or absf(lv) >= hd - 0.6:
+				return int(st["wall_mat"])
+			return Blocks.AIR
 		# gable roof: the ridge runs along whichever axis is longer, so the roof
 		# only slopes across the SHORT dimension -- a real house silhouette, not a
 		# pyramid. The eave (first row) is a thin ROOF_SLAB overhang that pokes
@@ -1111,7 +1165,6 @@ func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Ve
 		var half_short := hd if ridge_along_u else hw
 		var full_coord := lu if ridge_along_u else lv
 		var short_coord := lv if ridge_along_u else lu
-		var r := along - float(height)
 		var shrink := half_short - r
 		if shrink < -0.1 or absf(full_coord) > half_full + 0.4 or absf(short_coord) > shrink + 0.1:
 			return Blocks.AIR
@@ -1127,6 +1180,14 @@ func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Ve
 	var door_axis_u: bool = door_info.x > 0.5
 	var door_sign: float = door_info.y
 	if not on_wall:
+		if advanced:
+			# floor slabs divide a tower into real storys. One corner is left open
+			# all the way up as a stairwell shaft so the floors aren't sealed boxes.
+			var on_floor_line: bool = along > 0.5 and int(round(along)) % STORY_HEIGHT == 0
+			var in_stairwell: bool = lu > hw - 2.5 and lv > hd - 2.5
+			if on_floor_line and not in_stairwell:
+				return Blocks.ROOF_SLAB
+			return Blocks.AIR
 		# a big enough building gets a real second room: a dividing wall down the
 		# middle with its own two-tall Door (not just an open gap) so there's an
 		# actual doorway between rooms, not floor-to-ceiling nothing
@@ -1141,6 +1202,17 @@ func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Ve
 			return Blocks.DOOR
 		if not door_axis_u and absf(lv) >= hd - 0.6 and signf(lv) == door_sign and absf(lu) < 1.0:
 			return Blocks.DOOR
+	if advanced:
+		# a horizontal glass band wrapping every story, stopping short of the
+		# corners so solid posts remain -- reads as an office tower rather than a
+		# cottage with one punched-out window
+		var story_local := int(round(along)) % STORY_HEIGHT
+		if story_local == 2 or story_local == 3:
+			if absf(lu) >= hw - 0.6 and absf(lv) <= hd - 1.5:
+				return Blocks.GLASS
+			if absf(lv) >= hd - 0.6 and absf(lu) <= hw - 1.5:
+				return Blocks.GLASS
+		return int(st["wall_mat"])
 	# a centered window on EVERY exterior wall, roughly at mid-height (a small
 	# transom strip can land just above the door on the door's own wall -- a
 	# normal detail, not a conflict, since the door claims the lower band first)
