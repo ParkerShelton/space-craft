@@ -817,6 +817,16 @@ func _process_survival(delta: float) -> void:
 	_update_survival_ui()
 
 
+## Damage from an external source (e.g. a hostile creature's bite). Suppressed
+## while a habitable ship shelters you.
+func take_damage(amount: float) -> void:
+	if _in_safe_ship():
+		return
+	health = maxf(health - amount, 0.0)
+	if health <= 0.0:
+		_respawn()
+
+
 func _respawn() -> void:
 	if eva:
 		_end_eva()

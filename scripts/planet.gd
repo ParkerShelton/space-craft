@@ -80,6 +80,16 @@ const WATER_ICE := 2
 var water_style := WATER_NONE
 var water_level := 0.0         # everything above the terrain and below this is water/ice
 
+# --- fauna (procedural creatures, derived from seed like ores) ---
+var fauna_land: Array = []     # land species defs (see _make_species)
+var fauna_fish: Array = []     # fish species defs; only non-empty on liquid-water planets
+var _creatures: Array = []     # live Creature nodes currently spawned here
+const MAX_CREATURES := 10
+const CREATURE_SPAWN_RADIUS := 70.0   # spawn attempts land within this of the player
+const CREATURE_DESPAWN_RADIUS := 160.0
+const CREATURE_SPAWN_INTERVAL := 3.0
+var _spawn_timer := 0.0
+
 var lod_sphere: MeshInstance3D  # low-res far-away representation (hidden when close)
 
 # player edits grouped by chunk: Vector3i(chunk) -> { Vector3i(voxel) -> id }
@@ -130,6 +140,7 @@ func configure(cfg: Dictionary) -> void:
 	_derive_ores()
 	_derive_caves(cfg.get("cave_amount", -1.0))
 	_derive_water(cfg)
+	_derive_fauna()  # after water: fish generation depends on water_style
 	_add_distant_sphere()
 
 
@@ -155,6 +166,144 @@ func _derive_water(cfg: Dictionary) -> void:
 
 func _water_block() -> int:
 	return Blocks.WATER if water_style == WATER_LIQUID else Blocks.ICE
+
+
+# --- fauna: invent this planet's creatures from its seed, exactly like ores ----
+
+func _derive_fauna() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _seed + 6060
+	var n_land := rng.randi_range(2, 4)
+	for i in n_land:
+		fauna_land.append(_make_species(rng, "land"))
+	if water_style == WATER_LIQUID:
+		var rng2 := RandomNumberGenerator.new()
+		rng2.seed = _seed + 7070
+		var n_fish := rng2.randi_range(1, 3)
+		for i in n_fish:
+			fauna_fish.append(_make_species(rng2, "fish"))
+
+
+# Invent one species: a unique name, body plan, size, color, and behavior. Harsher
+# (hazardous) planets skew a bit more toward hostile wildlife.
+func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
+	var sname: String = Blocks.FAUNA_NAME_PRE[rng.randi() % Blocks.FAUNA_NAME_PRE.size()] \
+		+ Blocks.FAUNA_NAME_SUF[rng.randi() % Blocks.FAUNA_NAME_SUF.size()]
+	var body: String
+	if kind == "fish":
+		body = "fish"
+	else:
+		var bodies := ["quad", "quad", "biped", "serpent"]  # quad is the common case
+		body = bodies[rng.randi() % bodies.size()]
+	var scale: float = rng.randf_range(0.5, 2.0) if kind == "land" else rng.randf_range(0.4, 1.6)
+	var hue := rng.randf()
+	var sat := rng.randf_range(0.35, 0.85)
+	var val := rng.randf_range(0.35, 0.85)
+	var color := Color.from_hsv(hue, sat, val)
+	var accent := Color.from_hsv(fmod(hue + rng.randf_range(0.08, 0.18), 1.0),
+		clampf(sat * 0.8, 0.2, 0.9), clampf(val * 1.15, 0.2, 0.95))
+	var hostile_bias := 0.06 if hazard != "none" else 0.0
+	var roll := rng.randf()
+	var temperament: String
+	if roll < 0.15 + hostile_bias:
+		temperament = "hostile"
+	elif roll < 0.55:
+		temperament = "neutral"
+	else:
+		temperament = "passive"
+	var base_speed: float = {"quad": 5.0, "biped": 4.0, "serpent": 4.0, "fish": 3.0}.get(body, 4.0)
+	var speed := base_speed * rng.randf_range(0.8, 1.3) / maxf(scale * 0.6, 0.6)
+	var health := rng.randf_range(18.0, 45.0) * scale
+	var damage := rng.randf_range(4.0, 14.0) if temperament == "hostile" else 0.0
+	var aggro := rng.randf_range(9.0, 17.0) if temperament == "hostile" else 0.0
+	var flee := rng.randf_range(8.0, 14.0) if temperament == "passive" else 0.0
+	return {
+		"name": sname, "kind": kind, "body": body, "scale": scale,
+		"color": color, "accent": accent, "temperament": temperament,
+		"speed": speed, "health": health, "damage": damage,
+		"aggro_range": aggro, "flee_range": flee,
+	}
+
+
+# A point at `d_target` distance-from-center along `dir`, shape-aware (mirrors
+# _surface_point but for an arbitrary target distance, not just the terrain height).
+func _point_at_height(dir: Vector3, d_target: float) -> Vector3:
+	if shape_cube:
+		var m := maxf(maxf(absf(dir.x), absf(dir.y)), absf(dir.z))
+		return dir * (d_target / maxf(m, 0.0001))
+	return dir * d_target
+
+
+## Called once per physics frame for the ACTIVE planet only (see WorldManager).
+## Despawns creatures that drifted too far from the player, then occasionally
+## attempts to spawn a new one nearby.
+func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> void:
+	_creatures = _creatures.filter(func(c): return is_instance_valid(c))
+	for c in _creatures.duplicate():
+		if c.global_position.distance_to(player_pos) > CREATURE_DESPAWN_RADIUS:
+			c.queue_free()
+	_creatures = _creatures.filter(func(c): return is_instance_valid(c))
+
+	_spawn_timer -= delta
+	if _spawn_timer > 0.0 or _creatures.size() >= MAX_CREATURES:
+		return
+	_spawn_timer = CREATURE_SPAWN_INTERVAL
+	_try_spawn_creature(player_pos, world)
+
+
+## Immediately clears all fauna (called when this planet stops being the active
+## one -- wildlife only exists meaningfully near the player).
+func clear_fauna() -> void:
+	for c in _creatures:
+		if is_instance_valid(c):
+			c.queue_free()
+	_creatures.clear()
+
+
+func _try_spawn_creature(player_pos: Vector3, world: WorldManager) -> void:
+	if fauna_land.is_empty() and fauna_fish.is_empty():
+		return
+	var local_player := to_local(player_pos)
+	if local_player.length() < 1.0:
+		return
+	var base_dir := local_player.normalized()
+	var want_fish := not fauna_fish.is_empty() and (fauna_land.is_empty() or randf() < 0.35)
+
+	for attempt in 6:
+		var jitter := Vector3(randf() * 2.0 - 1.0, randf() * 2.0 - 1.0, randf() * 2.0 - 1.0) * 0.6
+		var dir := (base_dir + jitter).normalized()
+		if want_fish:
+			var surf := _surf(dir)
+			if surf >= water_level - 2.0:
+				continue  # not enough water depth in this direction
+			var d := lerpf(surf + 0.5, water_level - 0.5, randf_range(0.3, 0.8))
+			var local_pos := _point_at_height(dir, d)
+			var v := world_to_voxel(to_global(local_pos))
+			if get_id(v) != Blocks.WATER:
+				continue
+			_spawn_at(to_global(local_pos), fauna_fish[randi() % fauna_fish.size()], world)
+			return
+		else:
+			var surface_pt := _surface_point(dir)
+			var up := _axis_of(dir) if shape_cube else dir
+			var ground_v := world_to_voxel(to_global(surface_pt - up * 0.5))
+			var stand_v := world_to_voxel(to_global(surface_pt + up * 0.3))
+			var head_v := world_to_voxel(to_global(surface_pt + up * 1.3))
+			var gid := get_id(ground_v)
+			if gid == Blocks.AIR or gid == Blocks.WATER:
+				continue  # no solid ground here
+			if get_id(stand_v) != Blocks.AIR or get_id(head_v) != Blocks.AIR:
+				continue  # no headroom
+			_spawn_at(to_global(surface_pt + up * 0.05), fauna_land[randi() % fauna_land.size()], world)
+			return
+
+
+func _spawn_at(world_pos: Vector3, sp: Dictionary, world: WorldManager) -> void:
+	var c := Creature.new()
+	add_child(c)
+	c.global_position = world_pos
+	c.configure(sp, self, world)
+	_creatures.append(c)
 
 
 # How far from center anything (terrain, trees, or water) can possibly exist.

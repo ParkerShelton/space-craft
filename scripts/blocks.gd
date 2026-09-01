@@ -93,6 +93,12 @@ const ORE_NAME_PRE := ["Vel", "Cryo", "Pyr", "Aur", "Fer", "Lum", "Xen", "Tor",
 	"Zin", "Mag", "Cor", "Nyx", "Hal", "Ryn", "Quar", "Bas", "Dra", "Eos"]
 const ORE_NAME_SUF := ["ite", "ium", "ex", "ora", "yte", "ine", "ar", "onite", "ax", "yr"]
 
+# Syllables for inventing creature/fish species names (per-planet, like ores).
+const FAUNA_NAME_PRE := ["Grum", "Ska", "Bri", "Lox", "Fen", "Wob", "Thal", "Kree",
+	"Mun", "Snap", "Grov", "Piv", "Ux", "Yar", "Zeph", "Bok", "Crin", "Dus"]
+const FAUNA_NAME_SUF := ["ling", "back", "hide", "fang", "snout", "wing", "tail",
+	"claw", "hopper", "crawler", "gill", "fin", "runt", "beast"]
+
 const PROP_KEYS := ["h", "d", "e", "r"]
 const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy", "r": "Reactivity"}
 

@@ -316,7 +316,7 @@ func nearest_planet(world_pos: Vector3) -> Planet:
 	return best
 
 
-func _physics_process(_delta: float) -> void:
+func _physics_process(delta: float) -> void:
 	if player == null:
 		return
 	var here := player.global_position
@@ -327,3 +327,6 @@ func _physics_process(_delta: float) -> void:
 			if p.center_distance(here) <= reach + RENDER_DISTANCE * Blocks.CHUNK_SIZE:
 				p.stream(p.world_to_voxel(here), RENDER_DISTANCE)
 				p.process_load_queue(LOADS_PER_FRAME)
+				p.update_fauna(delta, here, self)
+		elif not p._creatures.is_empty():
+			p.clear_fauna()  # wildlife only exists meaningfully near the player
