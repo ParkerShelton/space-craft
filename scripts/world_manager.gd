@@ -409,5 +409,9 @@ func _physics_process(delta: float) -> void:
 				p.stream(p.world_to_voxel(here), RENDER_DISTANCE)
 				p.process_load_queue(LOADS_PER_FRAME)
 				p.update_fauna(delta, here, self)
-		elif not p._creatures.is_empty():
-			p.clear_fauna()  # wildlife only exists meaningfully near the player
+				p.update_npcs(delta, here, self)
+		else:
+			if not p._creatures.is_empty():
+				p.clear_fauna()  # wildlife only exists meaningfully near the player
+			if not p._npcs.is_empty():
+				p.clear_npcs()

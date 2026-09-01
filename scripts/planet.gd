@@ -114,6 +114,17 @@ const CREATURE_DESPAWN_RADIUS := 160.0
 const CREATURE_SPAWN_INTERVAL := 3.0
 var _spawn_timer := 0.0
 
+# --- NPCs (settlement residents, derived from seed like ores/fauna) -- v1 is
+# population only: they exist, wander their home town, and are never hostile
+# (no law/faction system yet to give that a reason). Trading/dialogue/guards
+# are explicitly future work, not attempted here.
+var npc_species: Array = []
+const MAX_NPCS := 8
+const NPC_SPAWN_INTERVAL := 4.0
+const NPC_DESPAWN_RADIUS := 160.0
+var _npcs: Array = []
+var _npc_spawn_timer := 0.0
+
 var lod_sphere: MeshInstance3D  # low-res far-away representation (hidden when close)
 
 # player edits grouped by chunk: Vector3i(chunk) -> { Vector3i(voxel) -> id }
@@ -172,6 +183,7 @@ func configure(cfg: Dictionary) -> void:
 	settlement_tier_cap = cfg.get("settlement_tier_cap", 3)
 	civ_tier = cfg.get("civ_tier", 2)
 	_derive_settlements(cfg.get("force_settlement", false))
+	_derive_npcs()  # after settlements: NPCs only exist where there's a town to live in
 	_add_distant_sphere()
 
 
@@ -226,6 +238,85 @@ func _derive_fauna() -> void:
 		fauna_air.append(_make_species(rng4, "air"))
 
 
+# A handful of resident "professions" (really just look/behavior archetypes,
+# same idea as fauna species) shared by every settlement on the planet. Only
+# generated at all if there's actually a settlement to live in.
+func _derive_npcs() -> void:
+	npc_species.clear()
+	if settlements.is_empty():
+		return
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _seed + 6767
+	var n := rng.randi_range(2, 3)
+	for i in n:
+		npc_species.append(_make_species(rng, "npc"))
+
+
+## Called once per physics frame for the ACTIVE planet only (see WorldManager),
+## same shape as update_fauna: despawn anyone who's drifted far from the
+## player, then occasionally try to populate a nearby settlement a bit more.
+func update_npcs(delta: float, player_pos: Vector3, world: WorldManager) -> void:
+	_npcs = _npcs.filter(func(c): return is_instance_valid(c))
+	for c in _npcs.duplicate():
+		if c.global_position.distance_to(player_pos) > NPC_DESPAWN_RADIUS:
+			c.queue_free()
+	_npcs = _npcs.filter(func(c): return is_instance_valid(c))
+
+	if npc_species.is_empty():
+		return
+	_npc_spawn_timer -= delta
+	if _npc_spawn_timer > 0.0 or _npcs.size() >= MAX_NPCS:
+		return
+	_npc_spawn_timer = NPC_SPAWN_INTERVAL
+	_try_spawn_npc(player_pos, world)
+
+
+## Immediately clears all NPCs (this planet stopped being the active one).
+func clear_npcs() -> void:
+	for c in _npcs:
+		if is_instance_valid(c):
+			c.queue_free()
+	_npcs.clear()
+
+
+# Only spawns when the player is actually near a settlement -- an NPC's home
+# is that settlement (anchor + radius, see Creature's leash), and its start
+# position is a real building's doorway within it, not an arbitrary point.
+func _try_spawn_npc(player_pos: Vector3, world: WorldManager) -> void:
+	var local_player := to_local(player_pos)
+	var st: Dictionary = {}
+	for s in settlements:
+		if local_player.distance_to(s["anchor"]) <= float(s["radius"]) + 40.0:
+			st = s
+			break
+	if st.is_empty():
+		return
+	var buildings := _nearby_buildings(local_player, st, 40.0)
+	if buildings.is_empty():
+		return
+	var anchor: Vector3 = st["anchor"]
+	var up: Vector3 = st["up"]
+	var u: Vector3 = st["u"]
+	var v: Vector3 = st["v"]
+	var b = buildings[randi() % buildings.size()]
+	var plan := _building_plan(b["cx"], b["cy"], st)
+	var door := _building_door_point(b["cu"], b["cv"], plan)
+	var door_local := _building_base(anchor, u, v, door.x, door.y)  # correctly graded ground height
+	var ground_v := world_to_voxel(to_global(door_local - up * 0.5))
+	var stand_v := world_to_voxel(to_global(door_local + up * 0.3))
+	var gid := get_id(ground_v)
+	if gid == Blocks.AIR or gid == Blocks.WATER:
+		return  # no solid ground here
+	if get_id(stand_v) != Blocks.AIR:
+		return  # no headroom
+	var sp: Dictionary = npc_species[randi() % npc_species.size()]
+	var c := Creature.new()
+	add_child(c)
+	c.global_position = to_global(door_local + up * 0.05)
+	c.configure(sp, self, world, to_global(anchor), float(st["radius"]))
+	_npcs.append(c)
+
+
 # Invent one species: a unique name, body plan, size, color, and behavior. Harsher
 # (hazardous) planets skew a bit more toward hostile wildlife; cave dwellers skew
 # hostile and dark-colored (no sunlight down there).
@@ -236,11 +327,14 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 	match kind:
 		"fish": body = "fish"
 		"air": body = "flyer"
+		"npc": body = "biped"  # settlement residents always stand upright
 		"cave": body = ["serpent", "serpent", "quad", "biped"][rng.randi() % 4]
 		_: body = ["quad", "quad", "biped", "serpent"][rng.randi() % 4]  # land
-	var scale: float = rng.randf_range(0.5, 2.0) if kind in ["land", "cave"] else rng.randf_range(0.4, 1.6)
+	var scale: float = rng.randf_range(0.85, 1.15) if kind == "npc" \
+		else (rng.randf_range(0.5, 2.0) if kind in ["land", "cave"] else rng.randf_range(0.4, 1.6))
 	var hue := rng.randf()
-	var sat := rng.randf_range(0.35, 0.85)
+	# NPCs read as clothing (muted, everyday colors), not animal hide/plumage
+	var sat := rng.randf_range(0.25, 0.55) if kind == "npc" else rng.randf_range(0.35, 0.85)
 	# cave dwellers are dim/dark (no sun down there); everything else reads bright
 	var val := rng.randf_range(0.12, 0.35) if kind == "cave" else rng.randf_range(0.35, 0.85)
 	var color := Color.from_hsv(hue, sat, val)
@@ -251,19 +345,27 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		hostile_bias += 0.30  # things in the dark bite
 	var roll := rng.randf()
 	var temperament: String
-	# Most non-hostile wildlife just ignores you (neutral) -- only a small slice
-	# is actually skittish enough to run (passive). Neutral gets the bulk of the
-	# remaining probability; passive gets whatever's left (roughly 4-10%).
-	var hostile_cut := 0.15 + hostile_bias
-	var neutral_cut := hostile_cut + 0.75
-	if roll < hostile_cut:
-		temperament = "hostile"
-	elif roll < neutral_cut:
-		temperament = "neutral"
+	if kind == "npc":
+		# Settlement residents are never hostile in v1 -- there's no law/faction
+		# system yet to give an unprovoked attack a reason, so "aggressive
+		# civilians" would just read as a bug. Mostly neutral (going about their
+		# day), a modest passive slice (shy around a stranger).
+		temperament = "passive" if roll < 0.25 else "neutral"
 	else:
-		temperament = "passive"
+		# Most non-hostile wildlife just ignores you (neutral) -- only a small
+		# slice is actually skittish enough to run (passive). Neutral gets the
+		# bulk of the remaining probability; passive gets whatever's left
+		# (roughly 4-10%).
+		var hostile_cut := 0.15 + hostile_bias
+		var neutral_cut := hostile_cut + 0.75
+		if roll < hostile_cut:
+			temperament = "hostile"
+		elif roll < neutral_cut:
+			temperament = "neutral"
+		else:
+			temperament = "passive"
 	var base_speed: float = {"quad": 5.0, "biped": 4.0, "serpent": 4.0, "fish": 3.0, "flyer": 6.0}.get(body, 4.0)
-	var speed := base_speed * rng.randf_range(0.8, 1.3) / maxf(scale * 0.6, 0.6)
+	var speed := (base_speed * 0.6 if kind == "npc" else base_speed) * rng.randf_range(0.8, 1.3) / maxf(scale * 0.6, 0.6)
 	var health := rng.randf_range(18.0, 45.0) * scale
 	var damage := rng.randf_range(4.0, 14.0) if temperament == "hostile" else 0.0
 	var aggro := rng.randf_range(9.0, 17.0) if temperament == "hostile" else 0.0

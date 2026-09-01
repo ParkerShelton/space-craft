@@ -11,6 +11,11 @@ var species: Dictionary = {}
 var planet: Planet
 var world: WorldManager
 
+# NPCs (kind=="npc") are leashed to their home settlement instead of roaming
+# the whole planet like wildlife -- home_radius 0 means no leash (fauna).
+var _home_center := Vector3.ZERO
+var _home_radius := 0.0
+
 const GRAVITY_ACCEL := 14.0
 const WANDER_MIN := 2.0
 const WANDER_MAX := 5.0
@@ -32,10 +37,12 @@ var _model: Node3D
 var _health := 20.0
 
 
-func configure(sp: Dictionary, p: Planet, w: WorldManager) -> void:
+func configure(sp: Dictionary, p: Planet, w: WorldManager, home_center := Vector3.ZERO, home_radius := 0.0) -> void:
 	species = sp
 	planet = p
 	world = w
+	_home_center = home_center
+	_home_radius = home_radius
 	_health = float(sp.get("health", 20.0))
 	_build_body()
 	rotate_y(randf() * TAU)
@@ -237,6 +244,18 @@ func _land_physics(delta: float) -> void:
 			if randf() < 0.25:
 				_wander_dir = Vector3.ZERO  # idle pause sometimes
 		wish = _wander_dir
+
+	# NPCs are leashed to their home settlement -- once outside it (however they
+	# got there: wandering, fleeing, chasing, or even an idle pause), head
+	# straight back before anything else, so a town's population doesn't slowly
+	# drain away across the planet. Deliberately OUTSIDE the `wish.length()`
+	# gate below: an idle pause sets wish to exactly zero, which must not be
+	# able to suppress the leash while stranded outside the radius.
+	if _home_radius > 0.0:
+		var from_home := global_position - _home_center
+		var flat_from_home := from_home - up * from_home.dot(up)
+		if flat_from_home.length() > _home_radius:
+			wish = -flat_from_home
 
 	if wish.length() > 0.001:
 		wish = (wish - up * wish.dot(up)).normalized()
