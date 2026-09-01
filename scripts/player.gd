@@ -45,6 +45,14 @@ const MELEE_RANGE := 3.0          # a bit shorter than block REACH -- combat is 
 var _melee_damage := UNARMED_DAMAGE
 var _attack_cd := 0.0
 
+# --- held item view-model ---
+const HAND_IDLE_ROT := Vector3(-0.15, 0.35, -0.12)
+const SWING_DURATION := 0.28
+var _hand_pivot: Node3D
+var _held_root: Node3D        # current item mesh, child of _hand_pivot
+var _held_key := ""           # cache key; only rebuild the model when this changes
+var _swing_t := 999.0         # counts up from 0 during a swing; >=SWING_DURATION = idle
+
 var world: WorldManager           # set by main.gd
 var grounded := false
 
@@ -137,6 +145,14 @@ func _ready() -> void:
 	_ray.target_position = Vector3(0, 0, -REACH)
 	_ray.collide_with_bodies = true
 	_camera.add_child(_ray)
+
+	# view-model: whatever you're actively holding (weapon/drill/block) shows in
+	# your hand, so a melee weapon's bonus damage requires actually wielding it --
+	# not just carrying one somewhere in the pack.
+	_hand_pivot = Node3D.new()
+	_hand_pivot.position = Vector3(0.34, -0.28, -0.55)
+	_hand_pivot.rotation = HAND_IDLE_ROT
+	_camera.add_child(_hand_pivot)
 
 	# With axis-snapped gravity the ground is always flat, so keep the character
 	# glued to it and don't let it slide.
@@ -354,6 +370,7 @@ func _physics_process(delta: float) -> void:
 			_toast_label.visible = false
 	_process_survival(delta)
 	_check_ship_transitions()
+	_update_swing(delta)
 	if _station_open != null:
 		if is_instance_valid(_station_open):
 			_refresh_station_ui()  # live-update job progress + finished output
@@ -1223,9 +1240,24 @@ func _process_attack(creature: Creature) -> void:
 	if not holding or _attack_cd > 0.0:
 		return
 	_attack_cd = MELEE_COOLDOWN
+	_swing_t = 0.0
 	var died := creature.take_hit(_melee_damage)
 	if died:
 		_toast("Killed " + cname)
+
+
+## Advance the held-item swing animation: a quick chop-and-return arc, triggered
+## by _process_attack on each hit so you can actually see the attack happen.
+func _update_swing(delta: float) -> void:
+	if _hand_pivot == null:
+		return
+	if _swing_t >= SWING_DURATION:
+		_hand_pivot.rotation = HAND_IDLE_ROT
+		return
+	_swing_t += delta
+	var t := clampf(_swing_t / SWING_DURATION, 0.0, 1.0)
+	var s := sin(t * PI)
+	_hand_pivot.rotation = HAND_IDLE_ROT + Vector3(-1.1, 0.5, -0.4) * s
 
 
 func _pick_up_station(st: Station) -> void:
@@ -1649,7 +1681,6 @@ func _update_mine_power() -> void:
 	var best := 1.0
 	var o2b := 0.0
 	var resist := 0.0
-	var dmg := UNARMED_DAMAGE
 	for s in inv:
 		if s["count"] <= 0:
 			continue
@@ -1661,12 +1692,76 @@ func _update_mine_power() -> void:
 				o2b = maxf(o2b, float(mat.get("o2", 0.0)))
 			Blocks.SUIT:
 				resist = maxf(resist, float(mat.get("resist", 0.0)))
-			Blocks.WEAPON:
-				dmg = maxf(dmg, float(mat.get("damage", 0.0)))
 	mine_power = best
 	_o2_bonus = o2b
 	_hazard_resist = clampf(resist, 0.0, 0.9)
-	_melee_damage = dmg
+
+	# A melee weapon only does anything if it's the slot you're actively holding --
+	# unlike worn gear (drill/tank/suit), carrying one in the pack isn't enough.
+	var active: Dictionary = inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
+	if active.get("id", -1) == Blocks.WEAPON and int(active.get("count", 0)) > 0:
+		_melee_damage = float(active.get("mat", {}).get("damage", UNARMED_DAMAGE))
+	else:
+		_melee_damage = UNARMED_DAMAGE
+	_update_held_item(active)
+
+
+# --- held item view-model ------------------------------------------------------
+
+func _update_held_item(active: Dictionary) -> void:
+	var id: int = int(active.get("id", Blocks.AIR)) if not active.is_empty() else Blocks.AIR
+	var mat: Dictionary = active.get("mat", {}) if not active.is_empty() else {}
+	var count: int = int(active.get("count", 0)) if not active.is_empty() else 0
+	var key := "%d:%s" % [id, mat.get("name", "")]
+	if count <= 0:
+		id = Blocks.AIR
+		key = "air"
+	if key == _held_key:
+		return
+	_held_key = key
+	if _held_root != null:
+		_held_root.queue_free()
+		_held_root = null
+	if id == Blocks.AIR or _hand_pivot == null:
+		return
+	_held_root = Node3D.new()
+	_hand_pivot.add_child(_held_root)
+	if id == Blocks.WEAPON:
+		_build_held_weapon(mat.get("color", Color(0.8, 0.8, 0.85)))
+	elif id == Blocks.DRILL:
+		_build_held_drill(mat.get("color", Color(0.7, 0.7, 0.75)))
+	elif Blocks.is_placeable_block(id) or Blocks.is_ore(id) or Blocks.is_refined(id):
+		_build_held_block(mat.get("color", Blocks.color_of(id)))
+	# other gear (O2 Tank, Suit) is worn, not wielded -- nothing shown in hand
+
+
+func _mk_view_box(size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var m := BoxMesh.new()
+	m.size = size
+	mi.mesh = m
+	mi.position = pos
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.roughness = 0.7
+	mi.material_override = mat
+	_held_root.add_child(mi)
+	return mi
+
+
+func _build_held_weapon(color: Color) -> void:
+	_mk_view_box(Vector3(0.05, 0.05, 0.22), Vector3(0, 0, 0.12), Color(0.25, 0.22, 0.2))  # hilt
+	_mk_view_box(Vector3(0.16, 0.03, 0.03), Vector3(0, 0, 0.0), Color(0.35, 0.32, 0.3))   # guard
+	_mk_view_box(Vector3(0.05, 0.02, 0.55), Vector3(0, 0, -0.32), color)                  # blade
+
+
+func _build_held_drill(color: Color) -> void:
+	_mk_view_box(Vector3(0.16, 0.16, 0.34), Vector3(0, 0, 0.06), Color(0.3, 0.3, 0.32))  # body
+	_mk_view_box(Vector3(0.06, 0.06, 0.3), Vector3(0, 0, -0.28), color)                   # bit
+
+
+func _build_held_block(color: Color) -> void:
+	_mk_view_box(Vector3(0.22, 0.22, 0.22), Vector3(0, 0, -0.15), color)
 
 
 func _max_oxygen() -> float:
