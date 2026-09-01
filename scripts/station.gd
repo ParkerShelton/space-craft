@@ -225,4 +225,6 @@ func _do_craft(craft: Dictionary) -> void:
 			cmat["o2"] = Blocks.o2_capacity(m["props"])
 		Blocks.SUIT:
 			cmat["resist"] = Blocks.suit_resist(m["props"])
+		Blocks.WEAPON:
+			cmat["damage"] = Blocks.weapon_damage(m["props"])
 	store_add(out, int(craft.get("n", 1)), m["props"], m.get("src", ""), cmat)

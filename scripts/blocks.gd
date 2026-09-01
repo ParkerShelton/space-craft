@@ -106,7 +106,8 @@ const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy", "r": "Reac
 const DRILL := 51            # mining tool; its power (from its material) sets mine speed & max tier
 const O2_TANK := 55          # worn gear: raises max oxygen (capacity from Reactivity)
 const SUIT := 56             # worn gear: reduces hazard damage (insulation from Density)
-const TOOL_IDS := [DRILL, O2_TANK, SUIT]
+const WEAPON := 59           # melee weapon: its damage (from its material) beats bare hands
+const TOOL_IDS := [DRILL, O2_TANK, SUIT, WEAPON]
 
 const LIFE_SUPPORT := 53     # ship block: with a sealed interior it makes the ship habitable
 const GLASS := 54            # transparent, solid hull -- windows that still seal a cabin
@@ -143,6 +144,7 @@ const STATION_CRAFTS := {
 		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "cost": 6},
 		{"label": "O2 Tank", "out": O2_TANK, "n": 1, "cost": 5},
 		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 5},
+		{"label": "Melee Weapon", "out": WEAPON, "n": 1, "cost": 5},
 	],
 }
 
@@ -202,6 +204,7 @@ const NAMES := {
 	DRILL: "Drill",
 	O2_TANK: "O2 Tank",
 	SUIT: "Insulated Suit",
+	WEAPON: "Melee Weapon",
 }
 
 # What each ore is (eventually) used for -- shown when you aim at it.
@@ -276,6 +279,7 @@ const COLORS := {
 	DRILL: Color(0.75, 0.76, 0.80),
 	O2_TANK: Color(0.45, 0.7, 0.9),
 	SUIT: Color(0.8, 0.7, 0.4),
+	WEAPON: Color(0.75, 0.78, 0.82),
 }
 
 static func is_solid(id: int) -> bool:
@@ -320,6 +324,11 @@ static func o2_capacity(props: Dictionary) -> float:
 # Insulated Suit hazard-damage reduction (0..0.9) from its material's Density.
 static func suit_resist(props: Dictionary) -> float:
 	return 0.30 + float(props.get("d", 0)) / 100.0 * 0.60
+
+# Melee weapon damage per hit from its material's Hardness + Energy. Bare hands
+# hit for UNARMED_DAMAGE (see player.gd); any crafted weapon beats that.
+static func weapon_damage(props: Dictionary) -> float:
+	return 8.0 + float(props.get("h", 0)) / 100.0 * 16.0 + float(props.get("e", 0)) / 100.0 * 8.0
 
 # Highest ore tier a given mining power can break (via TIER_MIN_POWER).
 static func max_tier_for_power(power: float) -> int:

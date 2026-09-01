@@ -81,11 +81,14 @@ var water_style := WATER_NONE
 var water_level := 0.0         # everything above the terrain and below this is water/ice
 
 # --- fauna (procedural creatures, derived from seed like ores) ---
-var fauna_land: Array = []     # land species defs (see _make_species)
+var fauna_land: Array = []     # surface species defs (see _make_species)
 var fauna_fish: Array = []     # fish species defs; only non-empty on liquid-water planets
+var fauna_cave: Array = []     # underground species defs; found only inside carved tunnels
+var fauna_air: Array = []      # flying species defs; wander an altitude band above the surface
 var _creatures: Array = []     # live Creature nodes currently spawned here
 const MAX_CREATURES := 10
 const CREATURE_SPAWN_RADIUS := 70.0   # spawn attempts land within this of the player
+const CREATURE_CAVE_MAX_DEPTH := 55.0 # how far down a cave spawn search will probe
 const CREATURE_DESPAWN_RADIUS := 160.0
 const CREATURE_SPAWN_INTERVAL := 3.0
 var _spawn_timer := 0.0
@@ -182,27 +185,42 @@ func _derive_fauna() -> void:
 		var n_fish := rng2.randi_range(1, 3)
 		for i in n_fish:
 			fauna_fish.append(_make_species(rng2, "fish"))
+	if cave_enabled:
+		var rng3 := RandomNumberGenerator.new()
+		rng3.seed = _seed + 8282
+		var n_cave := rng3.randi_range(1, 3)
+		for i in n_cave:
+			fauna_cave.append(_make_species(rng3, "cave"))
+	var rng4 := RandomNumberGenerator.new()
+	rng4.seed = _seed + 9292
+	var n_air := rng4.randi_range(1, 3)
+	for i in n_air:
+		fauna_air.append(_make_species(rng4, "air"))
 
 
 # Invent one species: a unique name, body plan, size, color, and behavior. Harsher
-# (hazardous) planets skew a bit more toward hostile wildlife.
+# (hazardous) planets skew a bit more toward hostile wildlife; cave dwellers skew
+# hostile and dark-colored (no sunlight down there).
 func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 	var sname: String = Blocks.FAUNA_NAME_PRE[rng.randi() % Blocks.FAUNA_NAME_PRE.size()] \
 		+ Blocks.FAUNA_NAME_SUF[rng.randi() % Blocks.FAUNA_NAME_SUF.size()]
 	var body: String
-	if kind == "fish":
-		body = "fish"
-	else:
-		var bodies := ["quad", "quad", "biped", "serpent"]  # quad is the common case
-		body = bodies[rng.randi() % bodies.size()]
-	var scale: float = rng.randf_range(0.5, 2.0) if kind == "land" else rng.randf_range(0.4, 1.6)
+	match kind:
+		"fish": body = "fish"
+		"air": body = "flyer"
+		"cave": body = ["serpent", "serpent", "quad", "biped"][rng.randi() % 4]
+		_: body = ["quad", "quad", "biped", "serpent"][rng.randi() % 4]  # land
+	var scale: float = rng.randf_range(0.5, 2.0) if kind in ["land", "cave"] else rng.randf_range(0.4, 1.6)
 	var hue := rng.randf()
 	var sat := rng.randf_range(0.35, 0.85)
-	var val := rng.randf_range(0.35, 0.85)
+	# cave dwellers are dim/dark (no sun down there); everything else reads bright
+	var val := rng.randf_range(0.12, 0.35) if kind == "cave" else rng.randf_range(0.35, 0.85)
 	var color := Color.from_hsv(hue, sat, val)
 	var accent := Color.from_hsv(fmod(hue + rng.randf_range(0.08, 0.18), 1.0),
 		clampf(sat * 0.8, 0.2, 0.9), clampf(val * 1.15, 0.2, 0.95))
 	var hostile_bias := 0.06 if hazard != "none" else 0.0
+	if kind == "cave":
+		hostile_bias += 0.30  # things in the dark bite
 	var roll := rng.randf()
 	var temperament: String
 	if roll < 0.15 + hostile_bias:
@@ -211,7 +229,7 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		temperament = "neutral"
 	else:
 		temperament = "passive"
-	var base_speed: float = {"quad": 5.0, "biped": 4.0, "serpent": 4.0, "fish": 3.0}.get(body, 4.0)
+	var base_speed: float = {"quad": 5.0, "biped": 4.0, "serpent": 4.0, "fish": 3.0, "flyer": 6.0}.get(body, 4.0)
 	var speed := base_speed * rng.randf_range(0.8, 1.3) / maxf(scale * 0.6, 0.6)
 	var health := rng.randf_range(18.0, 45.0) * scale
 	var damage := rng.randf_range(4.0, 14.0) if temperament == "hostile" else 0.0
@@ -261,7 +279,7 @@ func clear_fauna() -> void:
 
 
 func _try_spawn_creature(player_pos: Vector3, world: WorldManager) -> void:
-	if fauna_land.is_empty() and fauna_fish.is_empty():
+	if fauna_land.is_empty() and fauna_fish.is_empty() and fauna_cave.is_empty() and fauna_air.is_empty():
 		return
 	var local_player := to_local(player_pos)
 	var player_d := local_player.length()
@@ -279,37 +297,86 @@ func _try_spawn_creature(player_pos: Vector3, world: WorldManager) -> void:
 		t1 = base_dir.cross(Vector3.RIGHT)
 	t1 = t1.normalized()
 	var t2 := base_dir.cross(t1).normalized()
-	var want_fish := not fauna_fish.is_empty() and (fauna_land.is_empty() or randf() < 0.35)
+
+	# pick a habitat to try this attempt-set, weighted by what's available; cave
+	# only gets picked (and will only actually succeed) where a real tunnel exists,
+	# so cave fauna naturally shows up once you're near/inside one
+	var habitats := []
+	if not fauna_land.is_empty(): habitats.append("land")
+	if not fauna_fish.is_empty(): habitats.append("fish")
+	if not fauna_cave.is_empty(): habitats.append("cave")
+	if not fauna_air.is_empty(): habitats.append("air")
+	if habitats.is_empty():
+		return
+	var habitat: String = habitats[randi() % habitats.size()]
 
 	for attempt in 6:
 		var ang := randf() * TAU
 		var r := randf_range(15.0, CREATURE_SPAWN_RADIUS)
 		var offset := (t1 * cos(ang) + t2 * sin(ang)) * r
 		var dir := (base_dir * player_d + offset).normalized()
-		if want_fish:
-			var surf := _surf(dir)
-			if surf >= water_level - 2.0:
-				continue  # not enough water depth in this direction
-			var d := lerpf(surf + 0.5, water_level - 0.5, randf_range(0.3, 0.8))
-			var local_pos := _point_at_height(dir, d)
-			var v := world_to_voxel(to_global(local_pos))
-			if get_id(v) != Blocks.WATER:
-				continue
-			_spawn_at(to_global(local_pos), fauna_fish[randi() % fauna_fish.size()], world)
-			return
-		else:
-			var surface_pt := _surface_point(dir)
-			var up := _axis_of(dir) if shape_cube else dir
-			var ground_v := world_to_voxel(to_global(surface_pt - up * 0.5))
-			var stand_v := world_to_voxel(to_global(surface_pt + up * 0.3))
-			var head_v := world_to_voxel(to_global(surface_pt + up * 1.3))
-			var gid := get_id(ground_v)
-			if gid == Blocks.AIR or gid == Blocks.WATER:
-				continue  # no solid ground here
-			if get_id(stand_v) != Blocks.AIR or get_id(head_v) != Blocks.AIR:
-				continue  # no headroom
-			_spawn_at(to_global(surface_pt + up * 0.05), fauna_land[randi() % fauna_land.size()], world)
-			return
+		match habitat:
+			"fish":
+				var surf := _surf(dir)
+				if surf >= water_level - 2.0:
+					continue  # not enough water depth in this direction
+				var d := lerpf(surf + 0.5, water_level - 0.5, randf_range(0.3, 0.8))
+				var local_pos := _point_at_height(dir, d)
+				var v := world_to_voxel(to_global(local_pos))
+				if get_id(v) != Blocks.WATER:
+					continue
+				_spawn_at(to_global(local_pos), fauna_fish[randi() % fauna_fish.size()], world)
+				return
+			"air":
+				var surf := _surf(dir)
+				var d := surf + randf_range(Creature.FLY_MIN_ALT, Creature.FLY_MAX_ALT)
+				var local_pos := _point_at_height(dir, d)
+				var v := world_to_voxel(to_global(local_pos))
+				if get_id(v) != Blocks.AIR:
+					continue
+				_spawn_at(to_global(local_pos), fauna_air[randi() % fauna_air.size()], world)
+				return
+			"cave":
+				var found := _find_cave_spawn(dir)
+				if found.is_empty():
+					continue
+				_spawn_at(found["pos"], fauna_cave[randi() % fauna_cave.size()], world)
+				return
+			_:  # land
+				var surface_pt := _surface_point(dir)
+				var up := _axis_of(dir) if shape_cube else dir
+				var ground_v := world_to_voxel(to_global(surface_pt - up * 0.5))
+				var stand_v := world_to_voxel(to_global(surface_pt + up * 0.3))
+				var head_v := world_to_voxel(to_global(surface_pt + up * 1.3))
+				var gid := get_id(ground_v)
+				if gid == Blocks.AIR or gid == Blocks.WATER:
+					continue  # no solid ground here
+				if get_id(stand_v) != Blocks.AIR or get_id(head_v) != Blocks.AIR:
+					continue  # no headroom
+				_spawn_at(to_global(surface_pt + up * 0.05), fauna_land[randi() % fauna_land.size()], world)
+				return
+
+
+# Look for an actual carved cave pocket along `dir`, scanning depth from
+# cave_min_depth down to CREATURE_CAVE_MAX_DEPTH. Returns {} if none found within
+# range (most attempts on a random direction won't hit one -- that's fine, cave
+# fauna will simply show up more once you're actually near/inside a tunnel).
+func _find_cave_spawn(dir: Vector3) -> Dictionary:
+	var surf := _surf(dir)
+	var up := _axis_of(dir) if shape_cube else dir
+	var depth := cave_min_depth
+	while depth <= CREATURE_CAVE_MAX_DEPTH:
+		var local_pos := _point_at_height(dir, surf - depth)
+		var v := world_to_voxel(to_global(local_pos))
+		if get_id(v) == Blocks.AIR:
+			# confirm there's a bit of headroom (one step further in) so the
+			# creature doesn't spawn wedged right against the ceiling
+			var local_pos2 := _point_at_height(dir, surf - (depth + 1.0))
+			var v2 := world_to_voxel(to_global(local_pos2))
+			if get_id(v2) == Blocks.AIR:
+				return {"pos": to_global(local_pos2)}
+		depth += 1.0
+	return {}
 
 
 func _spawn_at(world_pos: Vector3, sp: Dictionary, world: WorldManager) -> void:

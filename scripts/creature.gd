@@ -25,6 +25,7 @@ var _phase := 0.0
 var _legs: Array = []       # leg pivots (Node3D), animated for a walk cycle
 var _tail_pivot: Node3D     # tail or fish tail-fin pivot, animated as a wag
 var _segments: Array = []   # serpent body segments, animated as a wiggle
+var _wings: Array = []      # flyer wing pivots, animated as a flap
 var _model: Node3D
 var _health := 20.0
 
@@ -63,6 +64,7 @@ func _build_body() -> void:
 		"biped": _build_biped(s, color, accent)
 		"serpent": _build_serpent(s, color, accent)
 		"fish": _build_fish(s, color, accent)
+		"flyer": _build_flyer(s, color, accent)
 		_: _build_quad(s, color, accent)
 
 
@@ -128,6 +130,18 @@ func _build_serpent(s: float, color: Color, accent: Color) -> void:
 		_segments.append(_mk_box(_model, Vector3(sz, sz, seg_len * 1.05), pos, c))
 
 
+func _build_flyer(s: float, color: Color, accent: Color) -> void:
+	var body := Vector3(0.4, 0.32, 0.75) * s
+	_mk_box(_model, body, Vector3.ZERO, color)
+	_mk_box(_model, Vector3(0.32, 0.3, 0.32) * s, Vector3(0, body.y * 0.1, -body.z * 0.5 - 0.15 * s), accent)
+	for sx in [-1, 1]:
+		var pivot := _mk_pivot(_model, Vector3(sx * body.x * 0.45, body.y * 0.2, 0))
+		_mk_box(pivot, Vector3(0.75, 0.06, 0.32) * s, Vector3(sx * 0.4 * s, 0, 0), accent)
+		_wings.append(pivot)
+	_tail_pivot = _mk_pivot(_model, Vector3(0, 0, body.z * 0.5))
+	_mk_box(_tail_pivot, Vector3(0.05, 0.3, 0.3) * s, Vector3(0, 0, 0.15 * s), accent)
+
+
 func _build_fish(s: float, color: Color, accent: Color) -> void:
 	var body := Vector3(0.34, 0.34, 1.0) * s
 	_mk_box(_model, body, Vector3.ZERO, color)
@@ -164,10 +178,10 @@ func _align_up(up: Vector3, delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
-	if species.get("kind", "land") == "fish":
-		_swim_physics(delta)
-	else:
-		_land_physics(delta)
+	match species.get("kind", "land"):
+		"fish": _swim_physics(delta)
+		"air": _fly_physics(delta)
+		_: _land_physics(delta)  # "land" and "cave" both walk the same way
 	_animate(delta)
 	if _attack_cd > 0.0:
 		_attack_cd -= delta
@@ -254,6 +268,56 @@ func _swim_physics(delta: float) -> void:
 	move_and_slide()
 
 
+const FLY_MIN_ALT := 8.0
+const FLY_MAX_ALT := 45.0
+
+func _fly_physics(delta: float) -> void:
+	var speed: float = species.get("speed", 4.0)
+	var temperament: String = species.get("temperament", "neutral")
+	var wish := Vector3.ZERO
+	var moving_speed := speed
+	var ppos = _player_pos()
+	var handled := false
+
+	if ppos != null:
+		var to_player: Vector3 = ppos - global_position
+		var dist := to_player.length()
+		if temperament == "hostile" and dist < float(species.get("aggro_range", 12.0)):
+			wish = to_player.normalized()
+			handled = true
+			if dist < ATTACK_RANGE and _attack_cd <= 0.0:
+				if world != null and world.player != null and world.player.has_method("take_damage"):
+					world.player.take_damage(float(species.get("damage", 5.0)))
+				_attack_cd = ATTACK_COOLDOWN
+		elif temperament == "passive" and dist < float(species.get("flee_range", 10.0)):
+			wish = -to_player.normalized()
+			moving_speed = speed * 1.3
+			handled = true
+
+	if not handled:
+		_wander_timer -= delta
+		if _wander_timer <= 0.0 or _wander_dir == Vector3.ZERO:
+			_wander_timer = randf_range(WANDER_MIN, WANDER_MAX)
+			_wander_dir = Vector3(randf() * 2 - 1, randf() * 0.4 - 0.2, randf() * 2 - 1).normalized()
+		wish = _wander_dir
+
+	# stay within an altitude band above the terrain
+	if planet != null:
+		var alt := planet.altitude(global_position)
+		var out_dir := (global_position - planet.global_position).normalized()
+		if alt < FLY_MIN_ALT:
+			wish += out_dir * 0.8
+		elif alt > FLY_MAX_ALT:
+			wish -= out_dir * 0.8
+
+	if wish.length() > 0.01:
+		wish = wish.normalized()
+	velocity = velocity.lerp(wish * moving_speed, clampf(delta * 2.0, 0.0, 1.0))
+	if velocity.length() > 0.1:
+		look_at(global_position + velocity.normalized(), Vector3.UP)
+	move_and_slide()
+
+
 func _animate(delta: float) -> void:
 	var top_speed: float = maxf(float(species.get("speed", 3.0)), 0.1)
 	var moving: float = clampf(velocity.length() / top_speed, 0.0, 1.0)
@@ -267,6 +331,9 @@ func _animate(delta: float) -> void:
 	for i in _segments.size():
 		var seg: MeshInstance3D = _segments[i]
 		seg.position.x = sin(_phase - float(i) * 0.9) * 0.15 * float(species.get("scale", 1.0)) * maxf(moving, 0.2)
+	for i in _wings.size():
+		var sgn := 1.0 if i == 0 else -1.0
+		_wings[i].rotation.z = sin(_phase * 1.6) * 0.6 * sgn * maxf(moving, 0.4) + 0.15 * sgn
 
 
 ## External damage (not yet exposed to the player -- reserved for a future

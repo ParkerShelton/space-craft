@@ -38,6 +38,13 @@ var oxygen := MAX_OXYGEN
 var _o2_bonus := 0.0          # extra oxygen capacity from the best O2 Tank carried
 var _hazard_resist := 0.0     # 0..0.9 hazard-damage reduction from the best Suit carried
 
+# --- melee combat ---
+const UNARMED_DAMAGE := 3.0       # bare-hand punch; a crafted Weapon beats this
+const MELEE_COOLDOWN := 0.5       # seconds between hits
+const MELEE_RANGE := 3.0          # a bit shorter than block REACH -- combat is close-range
+var _melee_damage := UNARMED_DAMAGE
+var _attack_cd := 0.0
+
 var world: WorldManager           # set by main.gd
 var grounded := false
 
@@ -968,6 +975,8 @@ func _raycast_voxel() -> Dictionary:
 		return _dda(collider, origin, dir, hit, "ship")
 	if collider is Station:
 		return {"kind": "station", "obj": collider, "hit": false}
+	if collider is Creature:
+		return {"kind": "creature", "obj": collider, "hit": false}
 	return {}
 
 
@@ -1105,10 +1114,15 @@ func _place_station(id: int) -> void:
 # blocks are added to the inventory. Also sets `_look_name` for the HUD.
 func _process_mining(delta: float) -> void:
 	_look_name = ""
+	if _attack_cd > 0.0:
+		_attack_cd -= delta
 	var tgt := _raycast_voxel()
 	_update_outline(tgt)
 	if tgt.get("kind", "") == "station":
 		_process_station_mining(delta, tgt["obj"])
+		return
+	if tgt.get("kind", "") == "creature":
+		_process_attack(tgt["obj"])
 		return
 	if tgt.is_empty() or not tgt.get("hit", false):
 		_mine_key = ""
@@ -1192,6 +1206,26 @@ func _process_station_mining(delta: float, st: Station) -> void:
 		_pick_up_station(st)
 		_mine_key = ""
 		_mine_time = 0.0
+
+
+## Melee combat: hold left-click on a creature to hit it once per cooldown. Bare
+## hands work (UNARMED_DAMAGE); a crafted Weapon hits harder.
+func _process_attack(creature: Creature) -> void:
+	if not is_instance_valid(creature):
+		return
+	var dist := global_position.distance_to(creature.global_position)
+	var cname: String = creature.species.get("name", "Creature")
+	if dist > MELEE_RANGE:
+		_look_name = cname + "  (too far to hit)"
+		return
+	_look_name = "%s  (%.0f dmg, hold to attack)" % [cname, _melee_damage]
+	var holding := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	if not holding or _attack_cd > 0.0:
+		return
+	_attack_cd = MELEE_COOLDOWN
+	var died := creature.take_hit(_melee_damage)
+	if died:
+		_toast("Killed " + cname)
 
 
 func _pick_up_station(st: Station) -> void:
@@ -1609,11 +1643,13 @@ func _refresh_slots() -> void:
 
 
 # Your effective mining power is the best drill you carry (bare hands = 1.0). This
-# sets mining speed and which ore tiers you can break.
+# sets mining speed and which ore tiers you can break. Also scans for O2 Tank,
+# Suit, and melee Weapon gear -- the best of each you carry applies automatically.
 func _update_mine_power() -> void:
 	var best := 1.0
 	var o2b := 0.0
 	var resist := 0.0
+	var dmg := UNARMED_DAMAGE
 	for s in inv:
 		if s["count"] <= 0:
 			continue
@@ -1625,9 +1661,12 @@ func _update_mine_power() -> void:
 				o2b = maxf(o2b, float(mat.get("o2", 0.0)))
 			Blocks.SUIT:
 				resist = maxf(resist, float(mat.get("resist", 0.0)))
+			Blocks.WEAPON:
+				dmg = maxf(dmg, float(mat.get("damage", 0.0)))
 	mine_power = best
 	_o2_bonus = o2b
 	_hazard_resist = clampf(resist, 0.0, 0.9)
+	_melee_damage = dmg
 
 
 func _max_oxygen() -> float:
@@ -2174,6 +2213,7 @@ func _craft_preview_text(kind: int) -> String:
 	if kind == Blocks.FABRICATOR:
 		var power := Blocks.drill_power(p)
 		s += "\nDrill: power %.1f — up to Tier %d" % [power, Blocks.max_tier_for_power(power)]
+		s += "\nWeapon: %.1f dmg/hit" % Blocks.weapon_damage(p)
 	elif kind == Blocks.SHIPWORKS:
 		s += "\nThruster thrust ↑ with Energy   |   Hull mass ↑ with Density"
 	return s
