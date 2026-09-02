@@ -76,8 +76,60 @@ var _circle_dir := 1.0          # +-1, which way to strafe during "circle"
 var _was_blockable := false     # edge-tracks player.is_heavy_telegraphed() so the block roll fires once per charge
 var _sword: Node3D              # held-weapon visuals (pattern == "lunger" only)
 var _shield: Node3D
+var _shield_rest_x := 0.0       # non-block target for _shield.rotation.x -- 0 for the pivot body, ARM_REST_FIX's counter-angle for the skeleton body
 var _telegraph_total := 0.45    # the actual (jittered) duration chosen for the current telegraph
-var _swing_t := 999.0           # counts up from 0 during the sword-arm swing animation (see _animate)
+var _swing_t := 999.0           # counts up from 0 during "attack" (real clip duration or the pivot-fallback swing)
+var _attack_clip_len := 0.0     # real clip length once playing, else SWORD_SWING_DURATION (pivot fallback)
+var _hit_applied := false       # guards against applying one swing's damage twice
+var _engaged := false           # aggro hysteresis latch -- see _land_physics
+
+# --- lunger skeleton rig: a real Skeleton3D (from the imported FBX) instead
+# of the hand-built pivot chain, so real animation clips can drive it. Only
+# used if the rig loads; otherwise falls back to the pivot-based body/anim
+# (see _build_biped_skeleton, _animate). Bone indices are -1 if not found.
+const ATTACK_ANIM_SCENE := preload("res://anims/Standing Melee Attack Downward.fbx")
+const RUN_ANIM_SCENE := preload("res://anims/Slow Run.fbx")
+const SKELETON_SCALE := 1.0     # first guess -- Mixamo's ~1.8m rig is already close to this game's voxel-unit creature height
+# Measured the blade's own pointing direction (grip->tip) against the
+# to-player vector across the WHOLE clip: it swings AWAY from the player for
+# roughly the first 30-40% (a real backswing -- dot goes as low as -0.65),
+# then swings sharply TOWARD the player from ~40-80% (dot > 0.7, peaking at
+# 0.997 around 70%), then a brief away-swinging follow-through/reset at the
+# very end. Playing the WHOLE clip during "attack" meant the player watched
+# the away-swinging backswing as part of the attack itself -- which is what
+# actually read as "it swings away from me," no matter when damage applied.
+# Fix: split the clip at the direction crossover instead. The away-swinging
+# first portion becomes the TELEGRAPH windup itself (scrubbed through by hand
+# as the telegraph timer counts down -- see _animate) instead of a separate
+# hand-posed pose; "attack" only plays the clip forward from that crossover,
+# so what the player sees during "attack" is just the toward-player swing.
+const WINDUP_END_FRACTION := 0.4   # telegraph shows clip[0 .. this] -- the real backswing
+const ATTACK_END_FRACTION := 0.85  # attack shows clip[WINDUP_END_FRACTION .. this], then cuts to recover -- skips the away-swinging tail follow-through entirely
+const ATTACK_HIT_FRACTION := 0.65  # absolute fraction of the FULL clip (not the attack sub-range) -- falls well inside the toward-player window above
+const STATE_CLIPS := {
+	# state name -> clip names to randomly pick among (one today; more --
+	# alternate attacks, eventually block -- are planned to drop in here)
+	"attack": ["mixamo_com"],
+}
+var _skeleton: Skeleton3D
+var _anim_player: AnimationPlayer
+var _bi_r_arm := -1
+var _bi_r_forearm := -1
+var _bi_l_arm := -1
+var _bi_l_forearm := -1
+var _bi_r_thigh := -1
+var _bi_r_shin := -1
+var _bi_l_thigh := -1
+var _bi_l_shin := -1
+# The rig's bind pose holds the arms out to the sides (T/A-pose), not hanging
+# down the way the old pivot-based body assumed -- confirmed by measuring the
+# actual bone positions (the hand ended up ~0.6 units straight out to the
+# side, not below the shoulder). This first-guess correction rotates the
+# UPPER arm bone from that bind pose into a natural hanging pose before any
+# of my own animation deltas are added on top (see _set_arm_pose); the
+# forearm needs no separate fix since its OWN rest is a straight continuation
+# of wherever the (now-corrected) upper arm points.
+const ARM_REST_FIX := Quaternion(Vector3.RIGHT, 1.4)
 
 
 func configure(sp: Dictionary, p: Planet, w: WorldManager, home_center := Vector3.ZERO, home_radius := 0.0) -> void:
@@ -162,6 +214,8 @@ func _build_quad(s: float, color: Color, accent: Color) -> void:
 
 
 func _build_biped(s: float, color: Color, accent: Color) -> void:
+	if species.get("pattern", "") == "lunger" and _build_biped_skeleton(s, color, accent):
+		return
 	var leg_len := 0.6 * s
 	var torso := Vector3(0.55, 0.85, 0.5) * s
 	var torso_y := leg_len + torso.y * 0.5
@@ -215,6 +269,212 @@ func _build_biped(s: float, color: Color, accent: Color) -> void:
 		_build_shield(_elbows[0], s, fore_len)
 
 
+## Applies an animation delta ON TOP of ARM_REST_FIX rather than replacing it
+## -- set_bone_pose_rotation overwrites the whole pose each call, so every
+## upper-arm pose write needs to go through here, not straight to the
+## skeleton, or it'll snap back to the T/A-pose bind orientation.
+func _set_arm_pose(bone_idx: int, delta_angle: float) -> void:
+	_skeleton.set_bone_pose_rotation(bone_idx, ARM_REST_FIX * Quaternion(Vector3.RIGHT, delta_angle))
+
+
+## AnimationPlayer.stop() halts playback but does NOT revert the bone poses it
+## was driving back to rest -- they stay exactly where the clip's last-played
+## frame left them. Every non-attack state only hand-poses the arms/forearms/
+## thighs/shins every frame (overwriting whatever the clip left there), but
+## NOTHING ever touches Hips/Spine/Spine1/Spine2/Neck/Head -- so after a real
+## clip plays, those bones stay frozen at the swing's final (often twisted/
+## crouched) pose forever, even while just walking around afterward. Call
+## this right after every _anim_player.stop() to put the whole skeleton back
+## to a clean rest before any hand-posing resumes.
+func _reset_skeleton_pose() -> void:
+	for i in _skeleton.get_bone_count():
+		_skeleton.reset_bone_pose(i)
+
+
+## Where bone `child_bi`'s REST origin falls in bone `parent_bi`'s OWN local
+## rest frame -- i.e. exactly the value _mk_box's `pos` needs to place a box
+## reaching from `parent_bi` to `child_bi`, since an unposed BoneAttachment3D's
+## local frame IS the bone's own rest frame. Measured directly off the loaded
+## rig rather than guessed/copied, so box geometry actually matches whatever
+## skeleton got imported instead of numbers tuned for the old hand-built pivot
+## chain's own (unrelated) convention.
+func _bone_child_offset(parent_bi: int, child_bi: int) -> Vector3:
+	if parent_bi < 0 or child_bi < 0:
+		return Vector3.ZERO
+	var parent_rest := _skeleton.get_bone_global_rest(parent_bi)
+	return parent_rest.affine_inverse() * _skeleton.get_bone_global_rest(child_bi).origin
+
+
+func _mk_bone_attachment(bone_idx: int) -> BoneAttachment3D:
+	var att := BoneAttachment3D.new()
+	_skeleton.add_child(att)
+	att.bone_idx = bone_idx
+	return att
+
+
+## Builds a lunger's body on a real Skeleton3D (the imported FBX rig) instead
+## of the hand-built pivot chain every other biped uses, so real animation
+## clips (currently one sword swing, more planned per the user) can drive the
+## whole body during "attack" -- non-attack states still use the exact poses
+## already tuned this session, just applied as bone-pose deltas instead of
+## Node3D rotations (see _animate). Box sizes/colors/offsets are the same
+## numbers already screenshot-verified for the pivot body -- reparented onto
+## bones, not redesigned. Returns false (caller falls back to the normal
+## pivot body) if the rig failed to load for any reason, so a bad/missing
+## asset can't leave the creature with no body at all.
+func _build_biped_skeleton(s: float, color: Color, accent: Color) -> bool:
+	var rig := ATTACK_ANIM_SCENE.instantiate()
+	if rig == null:
+		return false
+	_model.add_child(rig)
+	rig.scale = Vector3.ONE * SKELETON_SCALE
+	# This rig's visual FRONT is its local +Z, but look_at (used everywhere in
+	# this file to aim a creature) points a node's -Z at the target -- so the
+	# character renders exactly 180 degrees backwards, both running and
+	# attacking, until corrected here.
+	#
+	# Established from the animation's own data, not from a bone-axis guess:
+	# in an IN-PLACE run cycle the planted foot must slide BACKWARD relative to
+	# the hips (the treadmill effect), so the stance foot's travel direction is
+	# unambiguously character-rearward. Measured across the clip, BOTH feet
+	# slide toward -Z during stance (mean -0.014 right / -0.016 left), putting
+	# forward at +Z. Independently corroborated by the run clip's original
+	# baked root motion, which translated the Hips from Z=0.02 to Z=+2.31 --
+	# i.e. a character running forward travels toward +Z.
+	#
+	# Do NOT "verify" this by dotting a Mixamo bone's local -Z against velocity:
+	# that assumes -Z is the visual front, which is precisely the assumption
+	# this rig violates. Such a test reads +1.0 while the character is visibly
+	# running backwards, and it is what made several earlier rounds of this fix
+	# measure clean while the actual game looked wrong.
+	rig.rotation.y = PI
+	for c in rig.get_children():
+		if c is Skeleton3D:
+			_skeleton = c
+		elif c is AnimationPlayer:
+			_anim_player = c
+	if _skeleton == null:
+		rig.queue_free()
+		_anim_player = null
+		return false
+
+	var bi_hips := _skeleton.find_bone("mixamorig_Hips")
+	var bi_spine := _skeleton.find_bone("mixamorig_Spine2")
+	var bi_neck := _skeleton.find_bone("mixamorig_Neck")
+	var bi_head := _skeleton.find_bone("mixamorig_Head")
+	var bi_head_top := _skeleton.find_bone("mixamorig_HeadTop_End")
+	var bi_r_hand := _skeleton.find_bone("mixamorig_RightHand")
+	var bi_l_hand := _skeleton.find_bone("mixamorig_LeftHand")
+	_bi_r_arm = _skeleton.find_bone("mixamorig_RightArm")
+	_bi_r_forearm = _skeleton.find_bone("mixamorig_RightForeArm")
+	_bi_l_arm = _skeleton.find_bone("mixamorig_LeftArm")
+	_bi_l_forearm = _skeleton.find_bone("mixamorig_LeftForeArm")
+	_bi_r_thigh = _skeleton.find_bone("mixamorig_RightUpLeg")
+	_bi_r_shin = _skeleton.find_bone("mixamorig_RightLeg")
+	_bi_l_thigh = _skeleton.find_bone("mixamorig_LeftUpLeg")
+	_bi_l_shin = _skeleton.find_bone("mixamorig_LeftLeg")
+	if bi_spine < 0 or _bi_r_arm < 0 or _bi_l_arm < 0 or _bi_r_thigh < 0 or _bi_l_thigh < 0:
+		rig.queue_free()  # rig doesn't match the expected Mixamo bone names -- bail out cleanly
+		_skeleton = null
+		_anim_player = null
+		return false
+
+	# Every box below is sized/centered from the REAL rig's own rest-pose bone
+	# positions (_bone_child_offset), not guessed constants -- the previous
+	# version copied numbers straight from the old hand-built pivot chain,
+	# which used its OWN unrelated convention (children hang along a pivot's
+	# local -Y). This rig's actual bones put a child at local +Y from its
+	# parent, and the old numbers didn't account for that at all: the torso
+	# was sized for a completely different (much taller) span and centered
+	# with the wrong-sign offset, which is why it swallowed the head whole.
+	if bi_hips >= 0 and bi_neck >= 0:
+		var hips_off := _bone_child_offset(bi_spine, bi_hips)
+		var neck_off := _bone_child_offset(bi_spine, bi_neck)
+		var torso := Vector3(0.34, (neck_off - hips_off).length(), 0.26) * s
+		_mk_box(_mk_bone_attachment(bi_spine), torso, (hips_off + neck_off) * 0.5 * s, color)
+	if bi_head >= 0:
+		if bi_head_top >= 0:
+			var head_off := _bone_child_offset(bi_head, bi_head_top)
+			# A cube's flat faces undershoot a rounded head's actual silhouette
+			# at the same corner-to-corner span -- pad it out a little, but not
+			# enough to end up wider than the torso (1.5x did that).
+			var head_size := head_off.length() * 1.2
+			_mk_box(_mk_bone_attachment(bi_head), Vector3.ONE * head_size * s, head_off * 0.5 * s, accent)
+		else:
+			_mk_box(_mk_bone_attachment(bi_head), Vector3(0.35, 0.35, 0.35) * s, Vector3(0, 0.12 * s, 0), accent)
+	var upper_off := _bone_child_offset(_bi_r_arm, _bi_r_forearm)
+	var fore_off := _bone_child_offset(_bi_r_forearm, bi_r_hand) if bi_r_hand >= 0 else Vector3(0, 0.28, 0)
+	_mk_box(_mk_bone_attachment(_bi_r_arm), Vector3(0.16, upper_off.length(), 0.16) * s, upper_off * 0.5 * s, color)
+	_mk_box(_mk_bone_attachment(_bi_r_forearm), Vector3(0.14, fore_off.length(), 0.14) * s, fore_off * 0.5 * s, color)
+	_mk_box(_mk_bone_attachment(_bi_l_arm), Vector3(0.16, upper_off.length(), 0.16) * s, upper_off * 0.5 * s, color)
+	_mk_box(_mk_bone_attachment(_bi_l_forearm), Vector3(0.14, fore_off.length(), 0.14) * s, fore_off * 0.5 * s, color)
+	var thigh_off := _bone_child_offset(_bi_r_thigh, _bi_r_shin)
+	var bi_r_foot := _skeleton.find_bone("mixamorig_RightFoot")
+	var shin_off := _bone_child_offset(_bi_r_shin, bi_r_foot) if bi_r_foot >= 0 else Vector3(0, 0.44, 0)
+	_mk_box(_mk_bone_attachment(_bi_r_thigh), Vector3(0.2, thigh_off.length(), 0.22) * s, thigh_off * 0.5 * s, accent)
+	_mk_box(_mk_bone_attachment(_bi_r_shin), Vector3(0.17, shin_off.length(), 0.19) * s, shin_off * 0.5 * s, accent)
+	_mk_box(_mk_bone_attachment(_bi_l_thigh), Vector3(0.2, thigh_off.length(), 0.22) * s, thigh_off * 0.5 * s, accent)
+	_mk_box(_mk_bone_attachment(_bi_l_shin), Vector3(0.17, shin_off.length(), 0.19) * s, shin_off * 0.5 * s, accent)
+
+	# Sword/shield hang from the hand bones directly (their origin IS the
+	# wrist), so no "-reach" offset is needed the way the pivot-fallback body
+	# needed to reach past the whole forearm length -- pass reach=0.
+	var r_hand_att := _mk_bone_attachment(bi_r_hand) if bi_r_hand >= 0 else _mk_bone_attachment(_bi_r_forearm)
+	var l_hand_att := _mk_bone_attachment(bi_l_hand) if bi_l_hand >= 0 else _mk_bone_attachment(_bi_l_forearm)
+	_build_sword(r_hand_att, s, 0.0)
+	_build_shield(l_hand_att, s, 0.0)
+	# The hand bones inherit ARM_REST_FIX's rotation through the parent chain
+	# (nothing else in the forearm/hand rest orientation adds further net
+	# rotation), which the sword/shield geometry -- designed assuming an
+	# unrotated hand, matching the pivot-fallback body -- doesn't account for.
+	# Counter-rotate by the same amount to bring them back level.
+	_sword.rotation.x = -1.4
+	# The hand bone attachment's rest basis isn't a simple hang-down frame like
+	# the old pivot system's -- measured its actual world-space axes directly
+	# (global_transform.basis) rather than guessing signs: the shield's own
+	# "normal" axis (local X) already points forward correctly, but its
+	# "height" axis (local Y, the board's long 0.9-unit dimension) was pointing
+	# ~70 degrees off vertical, into the horizontal plane, which is what read
+	# as a tilted diamond instead of a flat upright board. Solved for the
+	# exact roll needed to bring that axis to true up: 1.4 (the old guess) +
+	# 1.2266 rad of additional roll around the shared axis.
+	_shield.rotation.x = 2.6266
+	_shield_rest_x = 2.6266  # _animate's shield-raise lerp must target this, not 0.0, or it erases the correction every frame
+
+	# Merge in a second real clip (a run cycle) for actual movement, replacing
+	# the hand-posed sin-wave walk cycle entirely -- a real authored clip
+	# either looks right immediately (proving the hand-posed formulas, not
+	# the rig/attachment orientation, were the source of "legs up by the
+	# head") or looks wrong in the exact same way the attack once did
+	# (proving something about the rig itself). Both clips share the literal
+	# name "mixamo_com" (Mixamo's generic export name), so this one is
+	# registered under "run" in the SAME AnimationPlayer/library the attack
+	# clip already lives in, rather than instantiating a second skeleton.
+	var run_rig := RUN_ANIM_SCENE.instantiate()
+	var run_ap: AnimationPlayer = null
+	for c in run_rig.get_children():
+		if c is AnimationPlayer:
+			run_ap = c
+	if run_ap != null and run_ap.has_animation("mixamo_com"):
+		var run_anim := run_ap.get_animation("mixamo_com")
+		run_anim.loop_mode = Animation.LOOP_LINEAR
+		# NOTE: an earlier export of this clip baked ~2.3 units of real forward
+		# root motion into the Hips POSITION track (start/end Z mismatched too,
+		# so looping it snapped every cycle) -- stacked on top of the game's
+		# own physics-driven translation, that was the real cause of "lagging,
+		# moving glitchy." Fixed at the source by re-authoring the clip in
+		# place (measured: Hips position now just a small +-0.06 sway with
+		# identical start/end keys, i.e. a clean seamless loop), so it's kept
+		# as-is here, natural vertical bounce included, with no track surgery.
+		var lib_names := _anim_player.get_animation_library_list()
+		if lib_names.size() > 0:
+			var lib := _anim_player.get_animation_library(lib_names[0])
+			if not lib.has_animation("run"):
+				lib.add_animation("run", run_anim)
+	run_rig.queue_free()
+	return true
+
+
 # An emissive variant of _mk_box -- glows regardless of scene lighting/ambient
 # tint, unlike a plain albedo color which a near-white blade turned out to
 # pick up a strong blue cast from the space-ambient light in practice.
@@ -250,17 +510,28 @@ func _build_shield(hand: Node3D, s: float, reach: float) -> void:
 	hand.add_child(_shield)
 	# Offset outward from the arm (not straight down) so the body doesn't hide it.
 	_shield.position = Vector3(0.2 * s, -reach * 0.5, 0.07 * s)
-	_mk_box(_shield, Vector3(0.09, 0.9, 0.65) * s, Vector3(0, 0, 0), Color(0.58, 0.6, 0.64))                # board -- cool steel-gray, deliberately distinct from the warm torso/accent colors so it doesn't just blend into the body's silhouette
-	_mk_glow_box(_shield, Vector3(0.13, 0.22, 0.22) * s, Vector3(0.07 * s, 0, 0), BLADE_GLOW, 1.2)         # boss -- same glow color as the blade, reads as "this enemy's kit"
+	# Board size cut from 0.9x0.65 -- at the original size, attached rigidly
+	# to the hand, it dominated/overlapped every busy pose (attack windup,
+	# the clip's own crouched start frame) badly enough to read as "the model
+	# is broken" rather than "a shield is swinging with the arm."
+	_mk_box(_shield, Vector3(0.09, 0.7, 0.5) * s, Vector3(0, 0, 0), Color(0.58, 0.6, 0.64))                # board -- cool steel-gray, deliberately distinct from the warm torso/accent colors so it doesn't just blend into the body's silhouette
+	_mk_glow_box(_shield, Vector3(0.11, 0.18, 0.18) * s, Vector3(0.07 * s, 0, 0), BLADE_GLOW, 1.2)         # boss -- same glow color as the blade, reads as "this enemy's kit"
 
 
 func _build_serpent(s: float, color: Color, accent: Color) -> void:
 	var n := 5
 	var seg_len := 0.5 * s
+	# Segment 0 (i=0, the largest -- the head) sits at the root's own origin,
+	# with the rest of the body trailing BEHIND it (+Z, matching every other
+	# creature's own head-at-front/tail-at-back convention). The previous
+	# sign put the head at the origin but stacked the REST of the body ahead
+	# of it in -Z (the actual forward/direction-of-travel axis, per look_at's
+	# convention elsewhere in this file) -- the tail end was consistently the
+	# leading edge, so the whole creature visibly slithered tail-first.
 	for i in n:
 		var c := color if i % 2 == 0 else accent
 		var sz := lerpf(0.55, 0.28, float(i) / float(n - 1)) * s
-		var pos := Vector3(0, sz * 0.5, -float(i) * seg_len)
+		var pos := Vector3(0, sz * 0.5, float(i) * seg_len)
 		_segments.append(_mk_box(_model, Vector3(sz, sz, seg_len * 1.05), pos, c))
 
 
@@ -338,16 +609,41 @@ func _land_physics(delta: float) -> void:
 	var moving_speed := speed
 	var ppos = _player_pos()
 	var handled := false
+	# _lunger_ai aims the body itself (it must keep facing the player even while
+	# strafing sideways or standing still), so the generic movement-direction
+	# look_at at the bottom of this function must NOT also run for it. Two
+	# look_at calls per frame pulling toward DIFFERENT targets -- the player vs.
+	# the "circle" state's sideways strafe wish, a full 90 degrees apart -- is a
+	# per-frame tug-of-war, and it read in-game as the body jittering/vibrating
+	# rather than turning cleanly.
+	var facing_owned := false
 
 	if ppos != null:
 		var to_player: Vector3 = ppos - global_position
 		var dist := to_player.length()
-		if temperament == "hostile" and dist < float(species.get("aggro_range", 12.0)):
+		# Hysteresis on the aggro range: engage at aggro_range, but don't
+		# DISengage until well outside it. With a single hard threshold, a
+		# creature sitting near the boundary flipped between "chase the player"
+		# and "wander randomly" every few frames -- and since those two branches
+		# aim the body at completely different targets (the player vs. a random
+		# wander heading), the body whipped back and forth. Measured at the
+		# boundary: 4.2 deg/frame of facing swing with spikes past 20, versus
+		# ~0.5-0.8 deg/frame in every committed state. Chasing also drags the
+		# creature back inside the range, so the flip-flop sustains itself
+		# instead of settling.
+		var aggro: float = float(species.get("aggro_range", 12.0))
+		if _engaged:
+			if dist > aggro * 1.35:
+				_engaged = false
+		elif dist < aggro:
+			_engaged = true
+		if temperament == "hostile" and _engaged:
 			handled = true
 			if species.get("pattern", "") == "lunger":
 				var r := _lunger_ai(delta, up, ppos, dist, to_player)
 				wish = r["wish"]
 				moving_speed = speed * float(r["speed_mult"])
+				facing_owned = true
 			else:
 				wish = to_player - up * to_player.dot(up)
 				if dist < ATTACK_RANGE and _attack_cd <= 0.0:
@@ -393,9 +689,18 @@ func _land_physics(delta: float) -> void:
 		# path ahead is water, try turning along the shore instead of stopping dead
 		if _blocked_by_water(wish):
 			wish = _avoid_water_dir(wish, up)
-		if wish.length() > 0.001:
+		if wish.length() > 0.001 and not facing_owned:
 			var fwd := -global_transform.basis.z
-			var new_fwd := fwd.slerp(wish, clampf(delta * 6.0, 0.0, 1.0)) if fwd.dot(wish) > -0.98 else wish
+			# Turn toward the new heading at a fixed rate even when it's directly
+			# behind: the old code SNAPPED instantly (`else wish`) once the two
+			# were more than ~168 degrees apart, which is exactly the case a
+			# direction reversal passes through, so every reversal popped.
+			# slerp is undefined for perfectly opposed vectors, so nudge off the
+			# degenerate axis instead of snapping.
+			var target := wish
+			if fwd.dot(target) < -0.999:
+				target = (target + global_transform.basis.x * 0.01).normalized()
+			var new_fwd := fwd.slerp(target, clampf(delta * 6.0, 0.0, 1.0))
 			look_at(global_position + new_fwd, up)
 
 	var v_up := velocity.dot(up)
@@ -458,6 +763,34 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 	var skill: float = float(species.get("skill", 0.5))
 	_state_t -= delta
 
+	# Always face the player while engaged, independent of movement -- a real
+	# fighter keeps eye contact with their opponent through circling, winding
+	# up, and swinging, not just while chasing. Without this, "circle" (which
+	# strafes SIDEWAYS) left the body facing the strafe direction rather than
+	# the player -- since _land_physics's shared look_at is gated on nonzero
+	# wish, telegraph/attack (wish often zero) never got a chance to correct
+	# it, so the whole windup+swing played out sideways-on and read as barely
+	# anything happening at all.
+	# During "attack" specifically, still track the player, but MUCH more
+	# slowly than everywhere else. A hard freeze here (tried first) protects
+	# the swing's own motion from being distorted frame-to-frame, but a real
+	# player keeps moving/circling for the WHOLE ~1s+ the clip plays -- with a
+	# full freeze, a fully-committed attack cycle measurably drifted from
+	# hips_dot=0.99 (facing the player) at the start down to hips_dot=-0.85
+	# (facing almost exactly AWAY) by the end, just from the player circling
+	# at an ordinary strafe speed the entire time. That's the real source of
+	# "the whole body faces backward when it attacks" -- not a mirrored rig,
+	# not a wrong axis, just a frozen heading going stale against a target
+	# that never stood still. A slow crawl (rate 8 elsewhere, ~1.5 here) keeps
+	# the swing's own frame-to-frame motion essentially undistorted while
+	# still closing most of the gap over the clip's real duration.
+	var look_rate := 8.0 if _state != "attack" else 1.5
+	var flat_to_player := to_player - up * to_player.dot(up)
+	if flat_to_player.length() > 0.01:
+		var fwd := -global_transform.basis.z
+		var new_fwd := fwd.slerp(flat_to_player.normalized(), clampf(delta * look_rate, 0.0, 1.0))
+		look_at(global_position + new_fwd, up)
+
 	if _state == "chase" or _state == "circle":
 		var blockable: bool = dist < attack_range * 2.0 and world.player.is_heavy_telegraphed()
 		if blockable and not _was_blockable and randf() < lerpf(0.15, 0.7, skill):
@@ -480,10 +813,29 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 		"circle":
 			if _state_t <= 0.0:
 				_state = "telegraph"
-				_is_feint = randf() < lerpf(0.05, 0.4, skill)
+				# Feints disabled for now (see below, they need reworking to fit
+				# the new scrub-the-real-clip windup instead of a hand-posed one).
+				_is_feint = false
 				var tt: float = maxf(float(species.get("telegraph_time", 0.45)), 0.05)
 				_state_t = randf_range(tt * 0.7, tt * 1.3)  # per-attempt jitter, not a fixed metronome
 				_telegraph_total = _state_t
+				# Start the real clip NOW, frozen at frame 0 -- the windup is
+				# the clip's own first WINDUP_END_FRACTION, scrubbed through by
+				# hand in _animate() as the telegraph timer counts down, not a
+				# separate hand-posed pose. speed_scale=0 hands full control to
+				# that manual scrub; "attack" below just sets it back to 1 and
+				# lets the SAME clip keep playing forward from wherever it is.
+				_attack_clip_len = SWORD_SWING_DURATION
+				if _anim_player != null:
+					var clip_names: Array = STATE_CLIPS.get("attack", [])
+					if not clip_names.is_empty():
+						var clip_name: String = clip_names[randi() % clip_names.size()]
+						var anim := _anim_player.get_animation(clip_name)
+						if anim != null:
+							_attack_clip_len = anim.length
+						_anim_player.play(clip_name)
+						_anim_player.seek(0.0, true)
+						_anim_player.speed_scale = 0.0
 				return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 			var flat_to_p := to_player - up * to_player.dot(up)
 			if flat_to_p.length() < 0.01:
@@ -494,22 +846,54 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 				if _is_feint:
 					_state = "recover"
 					_state_t = FEINT_RESET_TIME
+					if _anim_player != null:
+						_anim_player.stop()
+						_reset_skeleton_pose()
 				else:
 					_state = "attack"
-					_state_t = LUNGE_DURATION
-					_swing_t = 0.0
+					_swing_t = 0.0  # only the pivot-fallback body's own swing math reads this, but reset unconditionally
+					_hit_applied = false
 					_lunge_target = ppos  # captured NOW, not re-tracked -- see doc comment above
+					if _anim_player != null:
+						_anim_player.speed_scale = 1.0  # resume forward from wherever the windup scrub left off
+						# Safety-cap timeout: the REMAINING portion of the clip
+						# still to play, plus a small margin -- the real exit
+						# condition below is the clip's own playback position,
+						# this only guards against that somehow never being hit.
+						_state_t = (ATTACK_END_FRACTION - WINDUP_END_FRACTION) * _attack_clip_len + 0.2
+					else:
+						_state_t = _attack_clip_len  # pivot-fallback body: matches its own exit condition below
 			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 		"attack":
-			var to_target := _lunge_target - global_position
-			var flat_target := to_target - up * to_target.dot(up)
-			if dist < attack_range or _state_t <= 0.0:
+			_swing_t += delta  # only the pivot-fallback body's own separate swing math uses this
+			var clip_pos: float = _anim_player.current_animation_position if _anim_player != null else _swing_t
+			var hit_point_reached: bool = clip_pos >= ATTACK_HIT_FRACTION * _attack_clip_len if _anim_player != null else _swing_t >= _attack_clip_len * ATTACK_HIT_FRACTION
+			var clip_done: bool = clip_pos >= ATTACK_END_FRACTION * _attack_clip_len if _anim_player != null else _swing_t >= _attack_clip_len
+			# Damage lands partway through the swing (measured against the real
+			# clip's own playback position now, not a separately-tracked timer)
+			# instead of only at the very end or the instant we're in range --
+			# and only once per swing.
+			if not _hit_applied and hit_point_reached:
+				_hit_applied = true
 				if dist < attack_range * 1.4 and world.player.has_method("take_damage"):
 					world.player.take_damage(float(species.get("damage", 5.0)))
+			var to_target := _lunge_target - global_position
+			var flat_target := to_target - up * to_target.dot(up)
+			if clip_done or _state_t <= 0.0:
+				if _anim_player != null:
+					_anim_player.stop()
+					_anim_player.speed_scale = 1.0
+					_reset_skeleton_pose()
 				_state = "recover"
 				_state_t = RECOVER_TIME
 				return {"wish": Vector3.ZERO, "speed_mult": 1.0}
-			return {"wish": flat_target, "speed_mult": LUNGE_SPEED_MULT}
+			# Keep closing only up to the hit (and only if not already in
+			# range) -- this is what actually fixed the old "blows straight
+			# through the player" bug; once the hit has landed or we're
+			# already close, just hold in place through the rest of the swing.
+			if not _hit_applied and dist > attack_range:
+				return {"wish": flat_target, "speed_mult": LUNGE_SPEED_MULT}
+			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 		_:  # "chase"
 			if dist < attack_range:
 				_state = "circle"
@@ -786,10 +1170,10 @@ func _animate(delta: float) -> void:
 		# reads as a stiff mannequin, and holds a sword/shield flat against
 		# the leg where it's hard to make out
 		_elbows[i].rotation.x = 0.5 + maxf(0.0, sin(_phase * esgn - 0.6)) * 0.4 * moving
-	# "lunger" wind-up/dash visual: lean back during telegraph (a readable cue
-	# to dodge -- identical whether it's a real attack or a feint, on purpose),
-	# snap forward into the dash, ease back to neutral otherwise.
-	if _model != null:
+	# "lunger" wind-up/dash visual: lean back during telegraph. Only for the
+	# pivot-fallback body -- the real clip (see below) already has its own
+	# authored lean/crouch baked in, and adding this on top doubled it up.
+	if _model != null and _skeleton == null:
 		var scale_f: float = species.get("scale", 1.0)
 		if _state == "telegraph":
 			var t := clampf(1.0 - _state_t / maxf(_telegraph_total, 0.05), 0.0, 1.0)
@@ -798,40 +1182,95 @@ func _animate(delta: float) -> void:
 			_model.position.z = lerpf(_model.position.z, -0.15 * scale_f, clampf(delta * 14.0, 0.0, 1.0))
 		else:
 			_model.position.z = lerpf(_model.position.z, 0.0, clampf(delta * 8.0, 0.0, 1.0))
-	# Sword-arm swing + shield-raise: overrides the generic walk-swing above
-	# for the weapon arms specifically, so an attack reads as a deliberate
-	# slash rather than a running arm-pump. Same smooth sin(t*PI) technique
-	# as the fish tail / player's own swing (_update_swing in player.gd) --
-	# eases in and back out rather than snapping between poses.
-	if species.get("pattern", "") == "lunger" and _arms.size() >= 2 and _elbows.size() >= 2:
+	# Sword-arm swing + shield-raise, for lungers only. Two paths:
+	if _skeleton != null:
+		# Real Skeleton3D rig (see _build_biped_skeleton). "telegraph" AND
+		# "attack" both hand the WHOLE skeleton to the imported AnimationPlayer
+		# clip now -- the windup is literally the clip's own first portion,
+		# scrubbed through by hand as the telegraph timer counts down, and
+		# "attack" is that same clip simply allowed to keep playing forward.
+		# One continuous animation, not a hand-posed windup handed off to a
+		# separately-started clip -- no more pop at the handoff, and the
+		# "wind-up" visually IS the real swing's own backswing, not a fake.
+		# Don't touch any bone pose by hand while either is playing, or we'd
+		# fight the clip every frame. Every OTHER state still drives bone
+		# poses by hand with the exact formulas the pivot-based body used.
+		if _state == "telegraph" and _anim_player != null:
+			# Scrub through the clip's own first WINDUP_END_FRACTION by hand,
+			# proportional to how far through the (jittered-length) telegraph
+			# window we are -- this IS the windup, not a separate pose.
+			var wt := clampf(1.0 - _state_t / maxf(_telegraph_total, 0.05), 0.0, 1.0)
+			_anim_player.seek(wt * WINDUP_END_FRACTION * _attack_clip_len, true)
+		elif _state == "chase" or _state == "circle":
+			# Real "run" clip instead of the old hand-posed sin-wave walk
+			# cycle, replacing it entirely rather than patching it further --
+			# a real authored clip either looks right immediately (meaning
+			# the hand-posed formulas, not the rig, were the actual source of
+			# "legs up by the head") or breaks in the same specific way the
+			# attack clip once did (meaning something about the rig/attachment
+			# setup itself).
+			if _anim_player != null:
+				if _anim_player.current_animation != "run" or not _anim_player.is_playing():
+					_anim_player.play("run")
+				_anim_player.speed_scale = 1.0
+		elif _state != "attack":
+			# recover, block: no real clip for these yet. Stop "run" cleanly
+			# if it was still playing (reset_bone_pose reverts EVERYTHING,
+			# arms included, to the raw T-pose bind -- a stiff arm sticking
+			# straight out to the side -- since nothing else corrects it once
+			# "run" stops driving the whole skeleton), then always re-apply
+			# the same baseline ARM_REST_FIX hang both arms need regardless
+			# of state, same as the old idle formula at moving=0.
+			if _anim_player != null and _anim_player.current_animation == "run":
+				_anim_player.stop()
+				_reset_skeleton_pose()
+			_set_arm_pose(_bi_r_arm, 0.0)
+			_skeleton.set_bone_pose_rotation(_bi_r_forearm, Quaternion(Vector3.RIGHT, 0.5))
+			if _state == "block":
+				_set_arm_pose(_bi_l_arm, -1.4)
+				_skeleton.set_bone_pose_rotation(_bi_l_forearm, Quaternion(Vector3.RIGHT, 0.8))
+			else:
+				_set_arm_pose(_bi_l_arm, 0.0)
+				_skeleton.set_bone_pose_rotation(_bi_l_forearm, Quaternion(Vector3.RIGHT, 0.5))
+	elif species.get("pattern", "") == "lunger" and _arms.size() >= 2 and _elbows.size() >= 2:
+		# Fallback: the original hand-built pivot body/animation, only reached
+		# if the skeleton rig failed to load for some reason. Same smooth
+		# sin(t*PI) technique as the fish tail / player's own swing
+		# (_update_swing in player.gd) -- eases in and back out rather than
+		# snapping between poses.
 		match _state:
 			"telegraph":
-				# Big, unmistakable wind-up: the sword arm draws back and UP
-				# overhead with the elbow tucked in tight -- a completely
-				# different silhouette from idle (Dark Souls-style "about to
-				# swing" read), identical for a real attack and a feint since
-				# that's the whole point of a feint.
 				var wt := clampf(1.0 - _state_t / maxf(_telegraph_total, 0.05), 0.0, 1.0)
 				_arms[1].rotation.x = lerpf(_arms[1].rotation.x, -2.1 * wt, clampf(delta * 9.0, 0.0, 1.0))
 				_elbows[1].rotation.x = lerpf(_elbows[1].rotation.x, 1.4 * wt, clampf(delta * 9.0, 0.0, 1.0))
 			"attack":
-				# Committed overhead chop THROUGH the wind-up pose -- a big
-				# swing, not a twitch, so it's readable as "the hit is now."
-				_swing_t += delta
 				var st := clampf(_swing_t / SWORD_SWING_DURATION, 0.0, 1.0)
 				var swing := sin(st * PI)  # smooth 0->1->0, same as the fish tail
 				_arms[1].rotation.x = -2.1 + swing * 3.2
 				_elbows[1].rotation.x = 1.4 - swing * 1.2
 			_:
-				_swing_t = 999.0  # arms[1]/elbows[1] just keep the generic walk-swing set above
+				pass
 		if _state == "block":
 			_arms[0].rotation.x = lerpf(_arms[0].rotation.x, -1.4, clampf(delta * 10.0, 0.0, 1.0))
 			_elbows[0].rotation.x = lerpf(_elbows[0].rotation.x, 0.8, clampf(delta * 10.0, 0.0, 1.0))
 	# Shield raises while actively blocking -- the visual payoff for the
-	# player's heavy-swing tell actually meaning something to the enemy.
-	if _shield != null:
-		var target_rot := -1.1 if _state == "block" else 0.0
-		_shield.rotation.x = lerpf(_shield.rotation.x, target_rot, clampf(delta * 10.0, 0.0, 1.0))
+	# player's heavy-swing tell actually meaning something to the enemy. The
+	# lift itself comes from the arm-raise pose above (_set_arm_pose on the
+	# skeleton path, the old pivot lerp on the fallback path); the shield's
+	# OWN rotation always targets _shield_rest_x (not a separate "block"
+	# value) since that's the one roll angle, measured directly off the rig's
+	# actual bone basis, that keeps the board reading as a flat upright
+	# shield rather than a tilted diamond -- any other value (including the
+	# old pivot system's -1.1, tuned for a completely different parent frame)
+	# just rolls it back toward diamond territory. This lerp target must stay
+	# _shield_rest_x either way, or it'll fight/erase the build-time
+	# correction every frame.
+	# EXCEPT while the real skeleton is mid-attack: the imported clip is
+	# driving the whole left arm through a completely different range of
+	# motion then, and this lerp fighting it every frame is exactly what made
+	# the shield look broken/detached during the swing.
+	if _shield != null and not (_skeleton != null and _state == "attack"):
+		_shield.rotation.x = lerpf(_shield.rotation.x, _shield_rest_x, clampf(delta * 10.0, 0.0, 1.0))
 	if _tail_pivot != null:
 		var amp := 0.5 if species.get("kind") == "fish" else 0.25
 		_tail_pivot.rotation.y = sin(_phase * 0.6) * amp * maxf(moving, 0.3)
@@ -871,6 +1310,10 @@ func take_hit(dmg: float, stagger: float = 0.0) -> bool:
 
 func _apply_stagger_interrupt() -> void:
 	_stagger = float(species.get("stagger_max", 3.0))
+	if _anim_player != null and _anim_player.is_playing():
+		_anim_player.stop()  # a stagger mid-swing shouldn't leave the attack clip playing over a flinch
+		_anim_player.speed_scale = 1.0
+		_reset_skeleton_pose()
 	_state = "recover"
 	_state_t = RECOVER_TIME
 	_knockback_t = KNOCKBACK_TIME
