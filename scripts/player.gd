@@ -237,6 +237,15 @@ func _init_inventory() -> void:
 	_add_item(Blocks.THRUSTER, 8)
 	_add_item(Blocks.WARP_DRIVE, 1)
 	_add_item(Blocks.METAL, 256)
+	# A starting sword so combat is usable immediately, not just once you've
+	# found a Fabricator -- built from baseline (Tier 0) material stats via
+	# the same weapon_damage() a crafted one would use, so it's a normal,
+	# unremarkable blade rather than a special hardcoded stat.
+	var starter_props: Dictionary = Blocks.TIER_PROPS[0]
+	_add_item(Blocks.WEAPON, 1, starter_props, "Standard Issue", {
+		"name": "Standard-Issue", "color": Color(0.75, 0.78, 0.82),
+		"tier": 0, "damage": Blocks.weapon_damage(starter_props),
+	})
 	_add_item(Blocks.GRASS, 64)
 	_add_item(Blocks.DIRT, 64)
 	_add_item(Blocks.ROCK, 64)
