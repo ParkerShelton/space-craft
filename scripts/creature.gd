@@ -201,18 +201,24 @@ func _build_biped(s: float, color: Color, accent: Color) -> void:
 func _build_sword(hand: Node3D, s: float, reach: float) -> void:
 	_sword = Node3D.new()
 	hand.add_child(_sword)
-	_sword.position = Vector3(0, -reach, 0.02 * s)
-	_mk_box(_sword, Vector3(0.06, 0.16, 0.06) * s, Vector3(0, -0.05 * s, 0), Color(0.3, 0.25, 0.2))    # hilt
-	_mk_box(_sword, Vector3(0.22, 0.04, 0.04) * s, Vector3(0, 0.03 * s, 0), Color(0.55, 0.5, 0.45))    # guard
-	_mk_box(_sword, Vector3(0.07, 0.7, 0.03) * s, Vector3(0, 0.38 * s, 0), Color(0.85, 0.87, 0.9))     # blade -- long + thick enough to actually see
+	_sword.position = Vector3(0, -reach, 0.03 * s)
+	# Grip, crossguard, then blade -- each stacked further NEGATIVE-Y from the
+	# hand (i.e. continuing past the fist, away from the elbow). Getting this
+	# sign backwards was the original bug: a +Y blade offset put it back UP
+	# the forearm, overlapping the arm itself instead of extending past the
+	# hand -- which is why it barely read as a sword at all.
+	_mk_box(_sword, Vector3(0.07, 0.16, 0.07) * s, Vector3(0, -0.08 * s, 0), Color(0.35, 0.25, 0.15))       # grip
+	_mk_box(_sword, Vector3(0.26, 0.045, 0.045) * s, Vector3(0, -0.16 * s, 0), Color(0.55, 0.45, 0.3))      # crossguard
+	_mk_box(_sword, Vector3(0.08, 0.65, 0.035) * s, Vector3(0, -0.485 * s, 0), Color(0.88, 0.9, 0.93))      # blade -- long, bright, unmistakable
 
 
 func _build_shield(hand: Node3D, s: float, reach: float) -> void:
 	_shield = Node3D.new()
 	hand.add_child(_shield)
 	# Offset outward from the arm (not straight down) so the body doesn't hide it.
-	_shield.position = Vector3(0.12 * s, -reach * 0.6, 0.04 * s)
-	_mk_box(_shield, Vector3(0.06, 0.7, 0.5) * s, Vector3(0, 0, 0), Color(0.45, 0.34, 0.2))
+	_shield.position = Vector3(0.16 * s, -reach * 0.5, 0.05 * s)
+	_mk_box(_shield, Vector3(0.06, 0.75, 0.55) * s, Vector3(0, 0, 0), Color(0.45, 0.34, 0.2))               # board
+	_mk_box(_shield, Vector3(0.1, 0.16, 0.16) * s, Vector3(0.05 * s, 0, 0), Color(0.6, 0.6, 0.63))          # metal boss
 
 
 func _build_serpent(s: float, color: Color, accent: Color) -> void:
@@ -363,9 +369,29 @@ func _land_physics(delta: float) -> void:
 	v_up += -GRAVITY_ACCEL * delta
 	if is_on_floor():
 		v_up = maxf(v_up, 0.0)
+	if wish.length() > 0.001 and _step_up_needed(wish, up):
+		v_up = STEP_UP_SPEED
 	velocity = wish * moving_speed + up * v_up
 	up_direction = up
 	move_and_slide()
+
+
+const STEP_PROBE_DIST := 0.6
+const STEP_UP_SPEED := 6.0
+
+## Is there a low (1-voxel) ledge directly ahead that a hop would clear --
+## solid at foot height, clear one voxel above that? Without this, land/cave
+## creatures walked straight into every curb-height step in the terrain and
+## just stood there pushing against it forever (everything except flyers,
+## which never touch the ground, got stuck this way). Checked continuously
+## (not one-shot) so a staircase-like slope gets climbed one hop at a time.
+func _step_up_needed(dir: Vector3, up: Vector3) -> bool:
+	if planet == null or dir.length() < 0.01 or not is_on_floor():
+		return false
+	var base := global_position + dir.normalized() * STEP_PROBE_DIST
+	var low_blocked := planet.is_solid(planet.world_to_voxel(base + up * 0.2))
+	var high_clear := not planet.is_solid(planet.world_to_voxel(base + up * 1.2))
+	return low_blocked and high_clear
 
 
 ## chase -> circle (brief hesitation/strafe) -> telegraph-or-feint -> [feint:
@@ -735,17 +761,22 @@ func _animate(delta: float) -> void:
 	if species.get("pattern", "") == "lunger" and _arms.size() >= 2 and _elbows.size() >= 2:
 		match _state:
 			"telegraph":
-				# raised, cocked-back "ready to swing" pose -- identical for a
-				# real attack and a feint, since that's the whole point
+				# Big, unmistakable wind-up: the sword arm draws back and UP
+				# overhead with the elbow tucked in tight -- a completely
+				# different silhouette from idle (Dark Souls-style "about to
+				# swing" read), identical for a real attack and a feint since
+				# that's the whole point of a feint.
 				var wt := clampf(1.0 - _state_t / maxf(_telegraph_total, 0.05), 0.0, 1.0)
-				_arms[1].rotation.x = lerpf(_arms[1].rotation.x, -1.1 * wt, clampf(delta * 10.0, 0.0, 1.0))
-				_elbows[1].rotation.x = lerpf(_elbows[1].rotation.x, 0.6 * wt, clampf(delta * 10.0, 0.0, 1.0))
+				_arms[1].rotation.x = lerpf(_arms[1].rotation.x, -2.1 * wt, clampf(delta * 9.0, 0.0, 1.0))
+				_elbows[1].rotation.x = lerpf(_elbows[1].rotation.x, 1.4 * wt, clampf(delta * 9.0, 0.0, 1.0))
 			"attack":
+				# Committed overhead chop THROUGH the wind-up pose -- a big
+				# swing, not a twitch, so it's readable as "the hit is now."
 				_swing_t += delta
 				var st := clampf(_swing_t / SWORD_SWING_DURATION, 0.0, 1.0)
-				var swing := sin(st * PI)
-				_arms[1].rotation.x = -1.1 + swing * 1.6
-				_elbows[1].rotation.x = 0.6 - swing * 0.5
+				var swing := sin(st * PI)  # smooth 0->1->0, same as the fish tail
+				_arms[1].rotation.x = -2.1 + swing * 3.2
+				_elbows[1].rotation.x = 1.4 - swing * 1.2
 			_:
 				_swing_t = 999.0  # arms[1]/elbows[1] just keep the generic walk-swing set above
 		if _state == "block":
