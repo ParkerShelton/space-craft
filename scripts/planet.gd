@@ -11,6 +11,12 @@ extends Node3D
 
 const CS := Blocks.CHUNK_SIZE
 
+# Settlements (civilization buildings) and NPCs turned off for now -- see the
+# comment where this is used in configure(). Building generation was a real
+# per-chunk cost contributor and complicates loading-perf debugging, so it's
+# out of the picture entirely until it's brought back deliberately.
+const SETTLEMENTS_DISABLED := true
+
 # --- configuration (set via configure()) ---
 var planet_name := "Planet"
 var radius := 64.0          # nominal surface radius in voxels
@@ -195,7 +201,10 @@ func configure(cfg: Dictionary) -> void:
 	# after flora/water: siting depends on both. A system's civilization tier
 	# (see galaxy.gd) decides whether THIS planet is allowed settlements at all,
 	# how big they're allowed to get, and whether one is force-guaranteed.
-	settlements_enabled = cfg.get("settlements_enabled", true)
+	# Settlements/buildings/NPCs disabled for now (2026-09-01, user request) --
+	# flip SETTLEMENTS_DISABLED back to false to re-enable; the cfg value is
+	# still read so re-enabling doesn't require touching any other file.
+	settlements_enabled = false if SETTLEMENTS_DISABLED else cfg.get("settlements_enabled", true)
 	settlement_tier_cap = cfg.get("settlement_tier_cap", 3)
 	civ_tier = cfg.get("civ_tier", 2)
 	_derive_settlements(cfg.get("force_settlement", false))

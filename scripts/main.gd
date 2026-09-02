@@ -198,7 +198,20 @@ func _start_world(load_existing: bool) -> void:
 
 # --- loading screen -------------------------------------------------------------
 
-const LOAD_READY_RADIUS := 1    # chunk radius that must have real collision before we reveal the world
+## Chunk radius that must have real collision before we reveal the world.
+##
+## Tried both extremes: radius 1 revealed almost instantly but then the full
+## view distance (WorldManager.RENDER_DISTANCE=5, 1331 candidate chunks)
+## visibly popped in around the player, which felt broken rather than fast.
+## Waiting for the FULL render distance measured ~25-28s even after every
+## other optimization here -- actual sustained throughput on this machine is
+## ~48 chunks/sec, so 1331 chunks is just a genuinely large amount of work.
+## Radius 2 (up to 125 candidates) is the practical middle ground: everything
+## in your immediate surroundings is solid before you ever see it, and it
+## reveals in a few seconds instead of ~30 -- render-distance streaming then
+## continues to fill in the horizon exactly like normal gameplay streaming
+## already does when you walk toward new terrain.
+const LOAD_READY_RADIUS := 2
 const LOAD_TIMEOUT_SEC := 25.0  # safety cap so a bug elsewhere can't hang the screen forever
 var _loading_layer: CanvasLayer
 var _loading_root: Control  # fades out on hide -- CanvasLayer itself has no modulate
