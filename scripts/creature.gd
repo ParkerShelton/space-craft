@@ -24,13 +24,21 @@ const ATTACK_COOLDOWN := 1.2
 const ALIGN_SPEED := 3.0
 
 # --- "lunger" attack pattern (species.pattern == "lunger", see Planet._make_species) ---
-# chase -> telegraph (stand still, real dodge window) -> attack (dash + hit) -> recover -> chase.
-# Getting staggered force-jumps straight to recover + a brief knockback, from any state.
-const LUNGE_DURATION := 0.25
+# chase -> circle (brief hesitation/strafe) -> telegraph or feint -> [feint:
+# abort back to chase] or [attack: closing step + hit] -> recover -> chase.
+# Blocking can preempt chase/circle (never an already-committed telegraph/
+# attack) if the player visibly winds up a heavy swing. Getting staggered
+# force-jumps straight to recover + a brief knockback, from any state.
+const LUNGE_DURATION := 0.6      # safety cap; the real exit is closing to attack_range (see _lunger_ai)
+const LUNGE_SPEED_MULT := 1.6    # a committed step, not a blink -- was 3.0, which blew straight through the player
 const RECOVER_TIME := 0.6
 const KNOCKBACK_TIME := 0.25
 const KNOCKBACK_MULT := 3.0
-const LUNGE_SPEED_MULT := 3.0
+const CIRCLE_MIN := 0.2
+const CIRCLE_MAX := 0.5
+const FEINT_RESET_TIME := 0.35
+const BLOCK_MAX_TIME := 1.5      # safety cap in case is_heavy_telegraphed() gets stuck true
+const BLOCK_DAMAGE_MULT := 0.2
 
 var _wander_dir := Vector3.ZERO
 var _wander_timer := 0.0
@@ -47,12 +55,18 @@ var _model: Node3D
 var _health := 20.0
 
 # "lunger" pattern state (unused/harmless for every other pattern)
-var _state := "chase"       # "chase" / "telegraph" / "attack" / "recover"
+var _state := "chase"       # "chase" / "circle" / "telegraph" / "attack" / "recover" / "block"
 var _state_t := 0.0
 var _stagger := 0.0
 var _lunge_target := Vector3.ZERO
 var _knockback_dir := Vector3.ZERO
 var _knockback_t := 0.0
+var _is_feint := false          # set when telegraph starts, read only when it ends
+var _circle_dir := 1.0          # +-1, which way to strafe during "circle"
+var _was_blockable := false     # edge-tracks player.is_heavy_telegraphed() so the block roll fires once per charge
+var _sword: Node3D              # held-weapon visuals (pattern == "lunger" only)
+var _shield: Node3D
+var _telegraph_total := 0.45    # the actual (jittered) duration chosen for the current telegraph
 
 
 func configure(sp: Dictionary, p: Planet, w: WorldManager, home_center := Vector3.ZERO, home_radius := 0.0) -> void:
@@ -158,6 +172,30 @@ func _build_biped(s: float, color: Color, accent: Color) -> void:
 		var pivot := _mk_pivot(_model, Vector3(sx * (torso.x * 0.5 + 0.06 * s), shoulder_y, 0))
 		_mk_box(pivot, Vector3(0.16, arm_len, 0.16) * s, Vector3(0, -arm_len * 0.5, 0), color)
 		_arms.append(pivot)
+	# A "lunger" gets a visible sword (right hand) + shield (left hand) -- the
+	# whole point of the user's ask ("actually feel like a real player"), and
+	# reuses the same box-mesh view-model style as the player's held weapon
+	# (see player.gd:_build_held_weapon). Held via the arm pivots so they
+	# naturally follow the existing arm-swing animation.
+	if species.get("pattern", "") == "lunger" and _arms.size() >= 2:
+		_build_sword(_arms[1], s)
+		_build_shield(_arms[0], s)
+
+
+func _build_sword(hand: Node3D, s: float) -> void:
+	_sword = Node3D.new()
+	hand.add_child(_sword)
+	_sword.position = Vector3(0, -0.5 * s, 0.05 * s)
+	_mk_box(_sword, Vector3(0.05, 0.22, 0.05) * s, Vector3(0, -0.11 * s, 0), Color(0.3, 0.25, 0.2))    # hilt
+	_mk_box(_sword, Vector3(0.18, 0.03, 0.03) * s, Vector3(0, 0, 0), Color(0.4, 0.38, 0.35))           # guard
+	_mk_box(_sword, Vector3(0.05, 0.5, 0.02) * s, Vector3(0, 0.28 * s, 0), Color(0.75, 0.78, 0.82))    # blade
+
+
+func _build_shield(hand: Node3D, s: float) -> void:
+	_shield = Node3D.new()
+	hand.add_child(_shield)
+	_shield.position = Vector3(0, -0.4 * s, 0.05 * s)
+	_mk_box(_shield, Vector3(0.05, 0.5, 0.35) * s, Vector3(0, 0, 0), Color(0.35, 0.3, 0.25))
 
 
 func _build_serpent(s: float, color: Color, accent: Color) -> void:
@@ -313,20 +351,40 @@ func _land_physics(delta: float) -> void:
 	move_and_slide()
 
 
-## Chase -> telegraph -> attack -> recover, for species.pattern == "lunger".
-## Returns {"wish": Vector3, "speed_mult": float} for the caller to apply --
-## kept as a plain return rather than mutating velocity directly so this stays
-## a pure decision function, easy to reason about/extend with more patterns.
+## chase -> circle (brief hesitation/strafe) -> telegraph-or-feint -> [feint:
+## short reset back to chase] or [attack: closing step + hit] -> recover ->
+## chase, for species.pattern == "lunger". Blocking can preempt an unengaged
+## creature (chase/circle only -- never an already-committed telegraph/feint/
+## attack) when the player visibly winds up a heavy swing. Returns
+## {"wish": Vector3, "speed_mult": float} for the caller to apply -- kept as a
+## plain return rather than mutating velocity directly so this stays a pure
+## decision function, easy to extend with more patterns later.
+##
 ## The telegraph is a real, beatable dodge window: the creature stands still
 ## and visibly winds up (see _animate's _state handling) for telegraph_time
-## seconds, THEN commits to a dash toward wherever the player was standing
-## the instant the windup ended -- so moving away during the windup is a
-## genuine dodge, not just a cosmetic delay before an unavoidable hit.
+## seconds. A feint plays the IDENTICAL wind-up -- no early tell, that's the
+## point -- but aborts instead of committing, punishing a dodge thrown on the
+## first visual cue instead of the actual commit. A real attack closes toward
+## the player's CURRENT position every frame (not a single captured point)
+## and resolves as soon as it's genuinely within range, so it can't blow
+## straight through a player who ended up closer than expected.
 func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player: Vector3) -> Dictionary:
 	var attack_range: float = float(species.get("attack_range", 2.4))
-	var telegraph_time: float = maxf(float(species.get("telegraph_time", 0.45)), 0.05)
+	var skill: float = float(species.get("skill", 0.5))
 	_state_t -= delta
+
+	if _state == "chase" or _state == "circle":
+		var blockable: bool = dist < attack_range * 2.0 and world.player.is_heavy_telegraphed()
+		if blockable and not _was_blockable and randf() < lerpf(0.15, 0.7, skill):
+			_state = "block"
+			_state_t = BLOCK_MAX_TIME
+		_was_blockable = blockable
+
 	match _state:
+		"block":
+			if not world.player.is_heavy_telegraphed() or _state_t <= 0.0:
+				_state = "chase"
+			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 		"recover":
 			if _knockback_t > 0.0:
 				_knockback_t -= delta
@@ -334,17 +392,33 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 			if _state_t <= 0.0:
 				_state = "chase"
 			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
+		"circle":
+			if _state_t <= 0.0:
+				_state = "telegraph"
+				_is_feint = randf() < lerpf(0.05, 0.4, skill)
+				var tt: float = maxf(float(species.get("telegraph_time", 0.45)), 0.05)
+				_state_t = randf_range(tt * 0.7, tt * 1.3)  # per-attempt jitter, not a fixed metronome
+				_telegraph_total = _state_t
+				return {"wish": Vector3.ZERO, "speed_mult": 1.0}
+			var flat_to_p := to_player - up * to_player.dot(up)
+			if flat_to_p.length() < 0.01:
+				return {"wish": Vector3.ZERO, "speed_mult": 1.0}
+			return {"wish": flat_to_p.cross(up).normalized() * _circle_dir, "speed_mult": 0.6}
 		"telegraph":
 			if _state_t <= 0.0:
-				_state = "attack"
-				_state_t = LUNGE_DURATION
-				_lunge_target = ppos  # captured NOW, not re-tracked -- see doc comment above
+				if _is_feint:
+					_state = "recover"
+					_state_t = FEINT_RESET_TIME
+				else:
+					_state = "attack"
+					_state_t = LUNGE_DURATION
+					_lunge_target = ppos  # captured NOW, not re-tracked -- see doc comment above
 			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 		"attack":
 			var to_target := _lunge_target - global_position
 			var flat_target := to_target - up * to_target.dot(up)
-			if _state_t <= 0.0:
-				if dist < attack_range * 1.3 and world.player.has_method("take_damage"):
+			if dist < attack_range or _state_t <= 0.0:
+				if dist < attack_range * 1.4 and world.player.has_method("take_damage"):
 					world.player.take_damage(float(species.get("damage", 5.0)))
 				_state = "recover"
 				_state_t = RECOVER_TIME
@@ -352,8 +426,9 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 			return {"wish": flat_target, "speed_mult": LUNGE_SPEED_MULT}
 		_:  # "chase"
 			if dist < attack_range:
-				_state = "telegraph"
-				_state_t = telegraph_time
+				_state = "circle"
+				_state_t = randf_range(CIRCLE_MIN, CIRCLE_MAX)
+				_circle_dir = 1.0 if randf() < 0.5 else -1.0
 				return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 			return {"wish": to_player - up * to_player.dot(up), "speed_mult": 1.0}
 
@@ -615,17 +690,22 @@ func _animate(delta: float) -> void:
 		var asgn := -1.0 if i % 2 == 0 else 1.0  # opposite leg on the same side
 		_arms[i].rotation.x = sin(_phase * asgn) * 0.35 * moving
 	# "lunger" wind-up/dash visual: lean back during telegraph (a readable cue
-	# to dodge), snap forward into the dash, ease back to neutral otherwise.
+	# to dodge -- identical whether it's a real attack or a feint, on purpose),
+	# snap forward into the dash, ease back to neutral otherwise.
 	if _model != null:
 		var scale_f: float = species.get("scale", 1.0)
 		if _state == "telegraph":
-			var telegraph_time: float = maxf(float(species.get("telegraph_time", 0.45)), 0.05)
-			var t := clampf(1.0 - _state_t / telegraph_time, 0.0, 1.0)
+			var t := clampf(1.0 - _state_t / maxf(_telegraph_total, 0.05), 0.0, 1.0)
 			_model.position.z = 0.3 * scale_f * t
 		elif _state == "attack":
 			_model.position.z = lerpf(_model.position.z, -0.15 * scale_f, clampf(delta * 14.0, 0.0, 1.0))
 		else:
 			_model.position.z = lerpf(_model.position.z, 0.0, clampf(delta * 8.0, 0.0, 1.0))
+	# Shield raises while actively blocking -- the visual payoff for the
+	# player's heavy-swing tell actually meaning something to the enemy.
+	if _shield != null:
+		var target_rot := -0.9 if _state == "block" else 0.0
+		_shield.rotation.x = lerpf(_shield.rotation.x, target_rot, clampf(delta * 10.0, 0.0, 1.0))
 	if _tail_pivot != null:
 		var amp := 0.5 if species.get("kind") == "fish" else 0.25
 		_tail_pivot.rotation.y = sin(_phase * 0.6) * amp * maxf(moving, 0.3)
@@ -638,17 +718,25 @@ func _animate(delta: float) -> void:
 		_wings[i].rotation.z = sin(_phase * 1.6) * 0.6 * sgn * wing_amp + 0.15 * sgn
 
 
-## Damage from the player's weapon (melee or a projectile hit). `stagger`
-## (only meaningful for the "lunger" pattern) depletes the creature's stagger
-## meter; hitting 0 force-interrupts whatever it was doing (mid-telegraph or
-## mid-dash) into a brief knockback + recovery, refilling the meter. Returns
-## true if the creature died from this hit.
+## Damage from the player's weapon (melee or a projectile hit). A raised
+## shield (species.pattern == "lunger", currently _state == "block") cuts the
+## damage way down and resists the stagger entirely -- a physical shield
+## blocks whatever hits it, light or heavy; the enemy just won't choose to
+## raise it in reaction to a light swing since there's no time to react to
+## one. Otherwise `stagger` depletes the creature's stagger meter; hitting 0
+## force-interrupts whatever it was doing (mid-telegraph or mid-dash) into a
+## brief knockback + recovery, refilling the meter. Returns true if the
+## creature died from this hit.
 func take_hit(dmg: float, stagger: float = 0.0) -> bool:
-	_health -= dmg
-	if stagger > 0.0 and species.get("pattern", "") == "lunger":
-		_stagger -= stagger
-		if _stagger <= 0.0:
-			_apply_stagger_interrupt()
+	var is_lunger: bool = species.get("pattern", "") == "lunger"
+	if is_lunger and _state == "block":
+		_health -= dmg * BLOCK_DAMAGE_MULT
+	else:
+		_health -= dmg
+		if stagger > 0.0 and is_lunger:
+			_stagger -= stagger
+			if _stagger <= 0.0:
+				_apply_stagger_interrupt()
 	if _health <= 0.0:
 		queue_free()
 		return true

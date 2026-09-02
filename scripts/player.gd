@@ -1468,6 +1468,16 @@ func _active_item() -> Dictionary:
 	return inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
 
 
+## True once a held heavy melee swing has actually crossed the charge
+## threshold -- i.e. "this will land as a heavy hit if released right now."
+## A real, already-visible tell (the player is visibly holding the swing),
+## which is what lets an enemy's block reaction feel earned rather than
+## psychic. Read by Creature via world.player (duck-typed, like take_damage).
+func is_heavy_telegraphed() -> bool:
+	var shape: Dictionary = Blocks.WEAPON_SHAPES.get(Blocks.WEAPON, {})
+	return _charging and _charge_t >= float(shape.get("heavy_charge", 0.5))
+
+
 ## Melee combat: tap for a fast light hit, or hold past the weapon's heavy-
 ## charge threshold and release for a slower, harder, stagger-heavy hit. Bare
 ## hands work (UNARMED_DAMAGE, using the Weapon shape's timing/range); a
