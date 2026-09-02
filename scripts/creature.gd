@@ -23,6 +23,15 @@ const ATTACK_RANGE := 1.8
 const ATTACK_COOLDOWN := 1.2
 const ALIGN_SPEED := 3.0
 
+# --- "lunger" attack pattern (species.pattern == "lunger", see Planet._make_species) ---
+# chase -> telegraph (stand still, real dodge window) -> attack (dash + hit) -> recover -> chase.
+# Getting staggered force-jumps straight to recover + a brief knockback, from any state.
+const LUNGE_DURATION := 0.25
+const RECOVER_TIME := 0.6
+const KNOCKBACK_TIME := 0.25
+const KNOCKBACK_MULT := 3.0
+const LUNGE_SPEED_MULT := 3.0
+
 var _wander_dir := Vector3.ZERO
 var _wander_timer := 0.0
 var _attack_cd := 0.0
@@ -30,11 +39,20 @@ var _landing := false     # flyer: currently descending to perch on the ground
 var _perched := false     # flyer: sitting on the ground, wings folded, will take off again
 var _phase := 0.0
 var _legs: Array = []       # leg pivots (Node3D), animated for a walk cycle
+var _arms: Array = []       # arm pivots (bipeds only), light counter-swing
 var _tail_pivot: Node3D     # tail or fish tail-fin pivot, animated as a wag
 var _segments: Array = []   # serpent body segments, animated as a wiggle
 var _wings: Array = []      # flyer wing pivots, animated as a flap
 var _model: Node3D
 var _health := 20.0
+
+# "lunger" pattern state (unused/harmless for every other pattern)
+var _state := "chase"       # "chase" / "telegraph" / "attack" / "recover"
+var _state_t := 0.0
+var _stagger := 0.0
+var _lunge_target := Vector3.ZERO
+var _knockback_dir := Vector3.ZERO
+var _knockback_t := 0.0
 
 
 func configure(sp: Dictionary, p: Planet, w: WorldManager, home_center := Vector3.ZERO, home_radius := 0.0) -> void:
@@ -44,6 +62,7 @@ func configure(sp: Dictionary, p: Planet, w: WorldManager, home_center := Vector
 	_home_center = home_center
 	_home_radius = home_radius
 	_health = float(sp.get("health", 20.0))
+	_stagger = float(sp.get("stagger_max", 3.0))
 	_build_body()
 	rotate_y(randf() * TAU)
 	_build_collision()
@@ -127,6 +146,18 @@ func _build_biped(s: float, color: Color, accent: Color) -> void:
 		var pivot := _mk_pivot(_model, Vector3(sx * 0.18 * s, leg_len, 0))
 		_mk_box(pivot, Vector3(0.2, leg_len, 0.24) * s, Vector3(0, -leg_len * 0.5, 0), accent)
 		_legs.append(pivot)
+	# Arms -- makes a biped actually read as humanoid instead of a legged torso.
+	# arm_count is data-driven (species dict) for future extra-limb variety, but
+	# only 2 is used today. Attached at shoulder height, animated as a light
+	# counter-swing to the legs in _animate.
+	var arm_len := 0.55 * s
+	var arm_count: int = int(species.get("arm_count", 2))
+	var shoulder_y := torso_y + torso.y * 0.32
+	for i in arm_count:
+		var sx := -1.0 if i % 2 == 0 else 1.0
+		var pivot := _mk_pivot(_model, Vector3(sx * (torso.x * 0.5 + 0.06 * s), shoulder_y, 0))
+		_mk_box(pivot, Vector3(0.16, arm_len, 0.16) * s, Vector3(0, -arm_len * 0.5, 0), color)
+		_arms.append(pivot)
 
 
 func _build_serpent(s: float, color: Color, accent: Color) -> void:
@@ -218,12 +249,17 @@ func _land_physics(delta: float) -> void:
 		var to_player: Vector3 = ppos - global_position
 		var dist := to_player.length()
 		if temperament == "hostile" and dist < float(species.get("aggro_range", 12.0)):
-			wish = to_player - up * to_player.dot(up)
 			handled = true
-			if dist < ATTACK_RANGE and _attack_cd <= 0.0:
-				if world.player.has_method("take_damage"):
-					world.player.take_damage(float(species.get("damage", 5.0)))
-				_attack_cd = ATTACK_COOLDOWN
+			if species.get("pattern", "") == "lunger":
+				var r := _lunger_ai(delta, up, ppos, dist, to_player)
+				wish = r["wish"]
+				moving_speed = speed * float(r["speed_mult"])
+			else:
+				wish = to_player - up * to_player.dot(up)
+				if dist < ATTACK_RANGE and _attack_cd <= 0.0:
+					if world.player.has_method("take_damage"):
+						world.player.take_damage(float(species.get("damage", 5.0)))
+					_attack_cd = ATTACK_COOLDOWN
 		elif temperament == "passive" and dist < float(species.get("flee_range", 10.0)):
 			wish = global_position - ppos
 			wish = wish - up * wish.dot(up)
@@ -275,6 +311,51 @@ func _land_physics(delta: float) -> void:
 	velocity = wish * moving_speed + up * v_up
 	up_direction = up
 	move_and_slide()
+
+
+## Chase -> telegraph -> attack -> recover, for species.pattern == "lunger".
+## Returns {"wish": Vector3, "speed_mult": float} for the caller to apply --
+## kept as a plain return rather than mutating velocity directly so this stays
+## a pure decision function, easy to reason about/extend with more patterns.
+## The telegraph is a real, beatable dodge window: the creature stands still
+## and visibly winds up (see _animate's _state handling) for telegraph_time
+## seconds, THEN commits to a dash toward wherever the player was standing
+## the instant the windup ended -- so moving away during the windup is a
+## genuine dodge, not just a cosmetic delay before an unavoidable hit.
+func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player: Vector3) -> Dictionary:
+	var attack_range: float = float(species.get("attack_range", 2.4))
+	var telegraph_time: float = maxf(float(species.get("telegraph_time", 0.45)), 0.05)
+	_state_t -= delta
+	match _state:
+		"recover":
+			if _knockback_t > 0.0:
+				_knockback_t -= delta
+				return {"wish": _knockback_dir, "speed_mult": KNOCKBACK_MULT}
+			if _state_t <= 0.0:
+				_state = "chase"
+			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
+		"telegraph":
+			if _state_t <= 0.0:
+				_state = "attack"
+				_state_t = LUNGE_DURATION
+				_lunge_target = ppos  # captured NOW, not re-tracked -- see doc comment above
+			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
+		"attack":
+			var to_target := _lunge_target - global_position
+			var flat_target := to_target - up * to_target.dot(up)
+			if _state_t <= 0.0:
+				if dist < attack_range * 1.3 and world.player.has_method("take_damage"):
+					world.player.take_damage(float(species.get("damage", 5.0)))
+				_state = "recover"
+				_state_t = RECOVER_TIME
+				return {"wish": Vector3.ZERO, "speed_mult": 1.0}
+			return {"wish": flat_target, "speed_mult": LUNGE_SPEED_MULT}
+		_:  # "chase"
+			if dist < attack_range:
+				_state = "telegraph"
+				_state_t = telegraph_time
+				return {"wish": Vector3.ZERO, "speed_mult": 1.0}
+			return {"wish": to_player - up * to_player.dot(up), "speed_mult": 1.0}
 
 
 # Is the cell a short step ahead in `dir` (from here) water? Land/cave creatures
@@ -530,6 +611,21 @@ func _animate(delta: float) -> void:
 	for i in _legs.size():
 		var sgn := 1.0 if i % 2 == 0 else -1.0
 		_legs[i].rotation.x = sin(_phase * sgn + (PI if i >= 2 else 0.0)) * 0.5 * moving
+	for i in _arms.size():
+		var asgn := -1.0 if i % 2 == 0 else 1.0  # opposite leg on the same side
+		_arms[i].rotation.x = sin(_phase * asgn) * 0.35 * moving
+	# "lunger" wind-up/dash visual: lean back during telegraph (a readable cue
+	# to dodge), snap forward into the dash, ease back to neutral otherwise.
+	if _model != null:
+		var scale_f: float = species.get("scale", 1.0)
+		if _state == "telegraph":
+			var telegraph_time: float = maxf(float(species.get("telegraph_time", 0.45)), 0.05)
+			var t := clampf(1.0 - _state_t / telegraph_time, 0.0, 1.0)
+			_model.position.z = 0.3 * scale_f * t
+		elif _state == "attack":
+			_model.position.z = lerpf(_model.position.z, -0.15 * scale_f, clampf(delta * 14.0, 0.0, 1.0))
+		else:
+			_model.position.z = lerpf(_model.position.z, 0.0, clampf(delta * 8.0, 0.0, 1.0))
 	if _tail_pivot != null:
 		var amp := 0.5 if species.get("kind") == "fish" else 0.25
 		_tail_pivot.rotation.y = sin(_phase * 0.6) * amp * maxf(moving, 0.3)
@@ -542,11 +638,37 @@ func _animate(delta: float) -> void:
 		_wings[i].rotation.z = sin(_phase * 1.6) * 0.6 * sgn * wing_amp + 0.15 * sgn
 
 
-## External damage (not yet exposed to the player -- reserved for a future
-## combat pass). Returns true if the creature died from this hit.
-func take_hit(dmg: float) -> bool:
+## Damage from the player's weapon (melee or a projectile hit). `stagger`
+## (only meaningful for the "lunger" pattern) depletes the creature's stagger
+## meter; hitting 0 force-interrupts whatever it was doing (mid-telegraph or
+## mid-dash) into a brief knockback + recovery, refilling the meter. Returns
+## true if the creature died from this hit.
+func take_hit(dmg: float, stagger: float = 0.0) -> bool:
 	_health -= dmg
+	if stagger > 0.0 and species.get("pattern", "") == "lunger":
+		_stagger -= stagger
+		if _stagger <= 0.0:
+			_apply_stagger_interrupt()
 	if _health <= 0.0:
 		queue_free()
 		return true
 	return false
+
+
+func _apply_stagger_interrupt() -> void:
+	_stagger = float(species.get("stagger_max", 3.0))
+	_state = "recover"
+	_state_t = RECOVER_TIME
+	_knockback_t = KNOCKBACK_TIME
+	var ppos = _player_pos()
+	if ppos == null:
+		_knockback_dir = Vector3.ZERO
+		return
+	var up := Vector3.UP
+	if world != null:
+		var g := world.gravity_at(global_position)
+		if g.length() > 0.01:
+			up = -g.normalized()
+	var away: Vector3 = global_position - ppos
+	away = away - up * away.dot(up)
+	_knockback_dir = away.normalized() if away.length() > 0.01 else Vector3.ZERO

@@ -387,6 +387,11 @@ func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, 
 		"settlements_enabled": settled_info["enabled"],
 		"force_settlement": settled_info["forced"],
 		"settlement_tier_cap": settled_info["tier_cap"],
+		# Combat v1 testing (2026-09-01): guarantee a hostile enemy on the home
+		# planet regardless of the normal wildlife roll, so there's always
+		# something to fight right at spawn. Remove once enemies are common
+		# enough on their own merits.
+		"force_hostile_enemy": index == 0,
 	}
 
 

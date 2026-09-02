@@ -44,6 +44,16 @@ const MELEE_COOLDOWN := 0.5       # seconds between hits
 const MELEE_RANGE := 3.0          # a bit shorter than block REACH -- combat is close-range
 var _melee_damage := UNARMED_DAMAGE
 var _attack_cd := 0.0
+# Light (tap) vs heavy (hold past heavy_charge, then release) attack tracking.
+# Shared LMB edge-tracking also drives ranged fire below -- only one of the two
+# paths runs in a given frame (dispatch is by what's in your hand), so one
+# flag is enough.
+var _lmb_was_down := false
+var _charging := false
+var _charge_t := 0.0
+
+# --- ranged combat ---
+var _ranged_cd := 0.0
 
 # --- held item view-model ---
 const HAND_IDLE_ROT := Vector3(-0.15, 0.35, -0.12)
@@ -1349,13 +1359,25 @@ func _process_mining(delta: float) -> void:
 	_look_name = ""
 	if _attack_cd > 0.0:
 		_attack_cd -= delta
+	if _ranged_cd > 0.0:
+		_ranged_cd -= delta
+	var lmb_down := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	var lmb_pressed := lmb_down and not _lmb_was_down
+	var lmb_released := not lmb_down and _lmb_was_down
+	_lmb_was_down = lmb_down
+	# A ranged weapon fires wherever you're looking, not just when a creature is
+	# under the crosshair (like a real gun) -- so it's dispatched before the
+	# raycast-target branches below, and consumes the click either way.
+	if _process_ranged_fire(lmb_pressed):
+		_update_outline({})
+		return
 	var tgt := _raycast_voxel()
 	_update_outline(tgt)
 	if tgt.get("kind", "") == "station":
 		_process_station_mining(delta, tgt["obj"])
 		return
 	if tgt.get("kind", "") == "creature":
-		_process_attack(tgt["obj"])
+		_process_attack(tgt["obj"], delta, lmb_down, lmb_pressed, lmb_released)
 		return
 	if tgt.is_empty() or not tgt.get("hit", false):
 		_mine_key = ""
@@ -1441,25 +1463,89 @@ func _process_station_mining(delta: float, st: Station) -> void:
 		_mine_time = 0.0
 
 
-## Melee combat: hold left-click on a creature to hit it once per cooldown. Bare
-## hands work (UNARMED_DAMAGE); a crafted Weapon hits harder.
-func _process_attack(creature: Creature) -> void:
+## Currently active hotbar slot, or {} if empty/out of range.
+func _active_item() -> Dictionary:
+	return inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
+
+
+## Melee combat: tap for a fast light hit, or hold past the weapon's heavy-
+## charge threshold and release for a slower, harder, stagger-heavy hit. Bare
+## hands work (UNARMED_DAMAGE, using the Weapon shape's timing/range); a
+## crafted Weapon hits harder via _melee_damage (see _update_mine_power).
+func _process_attack(creature: Creature, delta: float, lmb_down: bool, lmb_pressed: bool, lmb_released: bool) -> void:
+	var shape: Dictionary = Blocks.WEAPON_SHAPES.get(Blocks.WEAPON, {})
 	if not is_instance_valid(creature):
+		_charging = false
 		return
 	var dist := global_position.distance_to(creature.global_position)
 	var cname: String = creature.species.get("name", "Creature")
-	if dist > MELEE_RANGE:
+	var rng: float = float(shape.get("range", MELEE_RANGE))
+	if dist > rng:
 		_look_name = cname + "  (too far to hit)"
+		_charging = false
 		return
-	_look_name = "%s  (%.0f dmg, hold to attack)" % [cname, _melee_damage]
-	var holding := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
-	if not holding or _attack_cd > 0.0:
-		return
-	_attack_cd = MELEE_COOLDOWN
-	_swing_t = 0.0
-	var died := creature.take_hit(_melee_damage)
-	if died:
-		_toast("Killed " + cname)
+	if lmb_pressed and _attack_cd <= 0.0:
+		_charging = true
+		_charge_t = 0.0
+	if _charging and lmb_down:
+		_charge_t += delta
+	var heavy_charge: float = float(shape.get("heavy_charge", 0.5))
+	if lmb_released and _charging:
+		_charging = false
+		if _attack_cd <= 0.0:
+			var heavy := _charge_t >= heavy_charge
+			var mult: float = float(shape.get("heavy_mult", 1.0)) if heavy else 1.0
+			var stagger: float = float(shape.get("heavy_stagger" if heavy else "light_stagger", 0.0))
+			_attack_cd = float(shape.get("light_cooldown", MELEE_COOLDOWN))
+			_swing_t = 0.0
+			var died := creature.take_hit(_melee_damage * mult, stagger)
+			if died:
+				_toast("Killed " + cname)
+	if _attack_cd > 0.0:
+		_look_name = "%s  (recovering)" % cname
+	elif _charging:
+		_look_name = "%s  (%.0f dmg, %s)" % [cname,
+			_melee_damage * (float(shape.get("heavy_mult", 1.0)) if _charge_t >= heavy_charge else 1.0),
+			"HEAVY ready, release!" if _charge_t >= heavy_charge else "charging..."]
+	else:
+		_look_name = "%s  (%.0f dmg, click for light / hold+release for heavy)" % [cname, _melee_damage]
+
+
+## Ranged combat: fires along the camera's forward ray regardless of what's
+## under the crosshair -- returns true if the active item is a ranged weapon
+## at all (so the caller skips block/creature targeting for this frame),
+## whether or not a shot was actually fired this frame (still on cooldown,
+## slot empty, etc).
+func _process_ranged_fire(lmb_pressed: bool) -> bool:
+	var active := _active_item()
+	var id: int = int(active.get("id", -1))
+	if int(active.get("count", 0)) <= 0:
+		return false
+	var shape: Dictionary = Blocks.WEAPON_SHAPES.get(id, {})
+	if shape.get("category", "") != "ranged":
+		return false
+	var dmg: float = float(active.get("mat", {}).get("damage", 5.0))
+	if _ranged_cd > 0.0:
+		_look_name = "%s  (recharging)" % Blocks.name_of(id)
+	else:
+		_look_name = "%s  (%.0f dmg, click to fire)" % [Blocks.name_of(id), dmg]
+	if lmb_pressed and _ranged_cd <= 0.0:
+		_fire_ranged_weapon(shape, dmg)
+		_ranged_cd = float(shape.get("cooldown", 0.4))
+		_swing_t = 0.0  # reuses the same recoil-ish hand-flick as melee
+	return true
+
+
+## Spawns a traveling Projectile along the camera's forward ray. Kept separate
+## from hitscan on purpose -- a launcher/rifle later can add a "hitscan" shape
+## branch here without touching this path.
+func _fire_ranged_weapon(shape: Dictionary, dmg: float) -> void:
+	var proj := Projectile.new()
+	world.add_child(proj)
+	var from := _camera.global_position
+	var dir := -_camera.global_transform.basis.z
+	proj.launch(from, dir, float(shape.get("projectile_speed", 40.0)), dmg,
+		float(shape.get("stagger", 0.0)), float(shape.get("range", 30.0)))
 
 
 ## Advance the held-item swing animation: a quick chop-and-return arc, triggered
@@ -2011,6 +2097,8 @@ func _update_held_item(active: Dictionary) -> void:
 	_hand_pivot.add_child(_held_root)
 	if id == Blocks.WEAPON:
 		_build_held_weapon(mat.get("color", Color(0.8, 0.8, 0.85)))
+	elif id == Blocks.PULSE_PISTOL:
+		_build_held_pistol(mat.get("color", Color(0.3, 0.75, 0.85)))
 	elif id == Blocks.DRILL:
 		_build_held_drill(mat.get("color", Color(0.7, 0.7, 0.75)))
 	elif Blocks.is_placeable_block(id) or Blocks.is_ore(id) or Blocks.is_refined(id) or Blocks.is_intermediate(id):
@@ -2036,6 +2124,12 @@ func _build_held_weapon(color: Color) -> void:
 	_mk_view_box(Vector3(0.05, 0.22, 0.05), Vector3(0, -0.14, 0), Color(0.25, 0.22, 0.2))  # hilt
 	_mk_view_box(Vector3(0.16, 0.03, 0.03), Vector3(0, 0.0, 0), Color(0.35, 0.32, 0.3))    # guard
 	_mk_view_box(Vector3(0.05, 0.55, 0.02), Vector3(0, 0.32, 0), color)                    # blade -- held vertical, not pointing forward
+
+
+func _build_held_pistol(color: Color) -> void:
+	_mk_view_box(Vector3(0.08, 0.16, 0.1), Vector3(0, -0.14, 0.02), Color(0.2, 0.2, 0.22))  # grip
+	_mk_view_box(Vector3(0.1, 0.09, 0.3), Vector3(0, 0, -0.08), Color(0.28, 0.28, 0.3))     # body
+	_mk_view_box(Vector3(0.05, 0.05, 0.14), Vector3(0, 0.01, -0.28), color)                  # barrel/emitter
 
 
 func _build_held_drill(color: Color) -> void:

@@ -110,7 +110,7 @@ const DRILL := 51            # mining tool; its power (from its material) sets m
 const O2_TANK := 55          # worn gear: raises max oxygen (capacity from Reactivity)
 const SUIT := 56             # worn gear: reduces hazard damage (insulation from Density)
 const WEAPON := 59           # melee weapon: its damage (from its material) beats bare hands
-const TOOL_IDS := [DRILL, O2_TANK, SUIT, WEAPON]
+const TOOL_IDS := [DRILL, O2_TANK, SUIT, WEAPON, PULSE_PISTOL]
 
 const LIFE_SUPPORT := 53     # ship block: with a sealed interior it makes the ship habitable
 const GLASS := 54            # transparent, solid hull -- windows that still seal a cabin
@@ -129,6 +129,7 @@ const INTERFACE := 65  # placeable trigger block: surround it with a recognized 
 const ROOF_SLAB := 66   # half-height roof block (real partial-height geometry, like water)
 const PATH := 67         # worn dirt/gravel walkway generated between settlement buildings
 const WARP_DRIVE := 68   # ship block: with the ship in space, unlocks the star map for warp travel
+const PULSE_PISTOL := 69 # ranged weapon: fires a traveling energy bolt, damage from its material
 
 # A 3x3x3 shell of `shell` around a placed INTERFACE block collapses into a
 # `result` station -- the multiblock alternative to just crafting a plain item.
@@ -206,6 +207,7 @@ const STATION_CRAFTS := {
 		{"label": "O2 Tank", "out": O2_TANK, "n": 1, "cost": 3},
 		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 3},
 		{"label": "Melee Weapon", "out": WEAPON, "n": 1, "cost": 3},
+		{"label": "Pulse Pistol", "out": PULSE_PISTOL, "n": 1, "cost": 4},
 	],
 	SHIPWORKS: [
 		{"label": "Thruster", "out": THRUSTER, "n": 1, "cost": 3},
@@ -287,6 +289,7 @@ const NAMES := {
 	O2_TANK: "O2 Tank",
 	SUIT: "Insulated Suit",
 	WEAPON: "Melee Weapon",
+	PULSE_PISTOL: "Pulse Pistol",
 }
 
 # What each ore is (eventually) used for -- shown when you aim at it.
@@ -372,6 +375,7 @@ const COLORS := {
 	O2_TANK: Color(0.45, 0.7, 0.9),
 	SUIT: Color(0.8, 0.7, 0.4),
 	WEAPON: Color(0.75, 0.78, 0.82),
+	PULSE_PISTOL: Color(0.3, 0.75, 0.85),
 }
 
 static func is_solid(id: int) -> bool:
@@ -421,6 +425,32 @@ static func suit_resist(props: Dictionary) -> float:
 # hit for UNARMED_DAMAGE (see player.gd); any crafted weapon beats that.
 static func weapon_damage(props: Dictionary) -> float:
 	return 8.0 + float(props.get("h", 0)) / 100.0 * 16.0 + float(props.get("e", 0)) / 100.0 * 8.0
+
+# Ranged weapon damage per shot -- an energy weapon, so it leans on Energy more
+# than Hardness (the opposite weighting from the melee blade).
+static func ranged_weapon_damage(props: Dictionary) -> float:
+	return 6.0 + float(props.get("e", 0)) / 100.0 * 18.0 + float(props.get("h", 0)) / 100.0 * 4.0
+
+# Per-shape combat stats, keyed by the weapon's block id. This is the one place
+# new weapon shapes get added -- a new melee shape just needs hit_style/range/
+# cooldown entries, a new ranged shape just needs hit_style "hitscan" or
+# "projectile" (see player.gd's ranged-fire dispatch and Projectile). The
+# per-shot/per-hit damage magnitude itself comes from a separate derived-stat
+# function per id (weapon_damage/ranged_weapon_damage, computed once at craft
+# time in station.gd -- see the "cmat" pattern there), matching "the shape
+# decides the role, the material decides the stats" used everywhere else in
+# this game's crafting.
+const WEAPON_SHAPES := {
+	WEAPON: {
+		"category": "melee", "hit_style": "single", "range": 3.0,
+		"light_cooldown": 0.35, "heavy_charge": 0.5, "heavy_mult": 2.2, "heavy_stagger": 1.0,
+		"light_stagger": 0.35,
+	},
+	PULSE_PISTOL: {
+		"category": "ranged", "hit_style": "projectile", "range": 30.0,
+		"cooldown": 0.35, "projectile_speed": 40.0, "stagger": 0.4,
+	},
+}
 
 # Highest ore tier a given mining power can break (via TIER_MIN_POWER).
 static func max_tier_for_power(power: float) -> int:

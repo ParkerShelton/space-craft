@@ -197,7 +197,7 @@ func configure(cfg: Dictionary) -> void:
 	_derive_ores()
 	_derive_caves(cfg.get("cave_amount", -1.0))
 	_derive_water(cfg)
-	_derive_fauna()  # after water: fish generation depends on water_style
+	_derive_fauna(cfg.get("force_hostile_enemy", false))  # after water: fish generation depends on water_style
 	# after flora/water: siting depends on both. A system's civilization tier
 	# (see galaxy.gd) decides whether THIS planet is allowed settlements at all,
 	# how big they're allowed to get, and whether one is force-guaranteed.
@@ -238,12 +238,17 @@ func _water_block() -> int:
 
 # --- fauna: invent this planet's creatures from its seed, exactly like ores ----
 
-func _derive_fauna() -> void:
+func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _seed + 6060
 	var n_land := rng.randi_range(2, 4)
 	for i in n_land:
 		fauna_land.append(_make_species(rng, "land"))
+	if force_hostile_enemy:
+		# Guaranteed on top of the normal roll (not instead of it) -- for combat
+		# testing on the home planet regardless of what the random wildlife mix
+		# would otherwise be. Independent of settlements/civ tier.
+		fauna_land.append(_make_species(rng, "enemy"))
 	if water_style == WATER_LIQUID:
 		var rng2 := RandomNumberGenerator.new()
 		rng2.seed = _seed + 7070
@@ -356,11 +361,16 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		"fish": body = "fish"
 		"air": body = "flyer"
 		"npc": body = "biped"  # settlement residents always stand upright
+		"enemy": body = "biped"  # hostile humanoid -- see _make_species's "enemy" branch below
 		"cave": body = ["serpent", "serpent", "quad", "biped"][rng.randi() % 4]
 		_: body = ["quad", "quad", "biped", "serpent"][rng.randi() % 4]  # land
-	var scale: float = rng.randf_range(0.85, 1.15) if kind == "npc" \
+	var scale: float = rng.randf_range(0.85, 1.15) if kind in ["npc", "enemy"] \
 		else (rng.randf_range(0.5, 2.0) if kind in ["land", "cave"] else rng.randf_range(0.4, 1.6))
-	var hue := rng.randf()
+	# an enemy's hue is biased toward red/purple -- a "this is dangerous" read at
+	# a glance, distinct from an NPC's muted clothing tones or wildlife's full range
+	var hue := rng.randf_range(-0.06, 0.08) if kind == "enemy" else rng.randf()
+	if hue < 0.0:
+		hue += 1.0
 	# NPCs read as clothing (muted, everyday colors), not animal hide/plumage
 	var sat := rng.randf_range(0.25, 0.55) if kind == "npc" else rng.randf_range(0.35, 0.85)
 	# cave dwellers are dim/dark (no sun down there); everything else reads bright
@@ -379,6 +389,8 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		# civilians" would just read as a bug. Mostly neutral (going about their
 		# day), a modest passive slice (shy around a stranger).
 		temperament = "passive" if roll < 0.25 else "neutral"
+	elif kind == "enemy":
+		temperament = "hostile"  # that's the whole point of this kind
 	else:
 		# Most non-hostile wildlife just ignores you (neutral) -- only a small
 		# slice is actually skittish enough to run (passive). Neutral gets the
@@ -398,12 +410,21 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 	var damage := rng.randf_range(4.0, 14.0) if temperament == "hostile" else 0.0
 	var aggro := rng.randf_range(9.0, 17.0) if temperament == "hostile" else 0.0
 	var flee := rng.randf_range(8.0, 14.0) if temperament == "passive" else 0.0
-	return {
+	var sp := {
 		"name": sname, "kind": kind, "body": body, "scale": scale,
 		"color": color, "accent": accent, "temperament": temperament,
 		"speed": speed, "health": health, "damage": damage,
 		"aggro_range": aggro, "flee_range": flee,
+		"arm_count": 2, "leg_count": 2,  # data-driven for future limb variety; unused past 2/2 today
 	}
+	if kind == "enemy":
+		# "lunger" is the only attack pattern today: chase -> telegraph (real
+		# dodge window) -> dash-and-hit -> recover. See Creature's state machine.
+		sp["pattern"] = "lunger"
+		sp["telegraph_time"] = rng.randf_range(0.35, 0.55)
+		sp["attack_range"] = rng.randf_range(2.2, 2.6)
+		sp["stagger_max"] = rng.randf_range(2.0, 3.5)
+	return sp
 
 
 # A point at `d_target` distance-from-center along `dir`, shape-aware (mirrors
