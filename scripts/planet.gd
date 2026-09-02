@@ -238,6 +238,8 @@ func _water_block() -> int:
 
 # --- fauna: invent this planet's creatures from its seed, exactly like ores ----
 
+var _forced_enemy_species: Dictionary = {}  # set by _derive_fauna when force_hostile_enemy is true
+
 func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _seed + 6060
@@ -248,7 +250,9 @@ func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 		# Guaranteed on top of the normal roll (not instead of it) -- for combat
 		# testing on the home planet regardless of what the random wildlife mix
 		# would otherwise be. Independent of settlements/civ tier.
-		fauna_land.append(_make_species(rng, "enemy"))
+		var enemy_sp := _make_species(rng, "enemy")
+		fauna_land.append(enemy_sp)
+		_forced_enemy_species = enemy_sp
 	if water_style == WATER_LIQUID:
 		var rng2 := RandomNumberGenerator.new()
 		rng2.seed = _seed + 7070
@@ -460,6 +464,49 @@ func clear_fauna() -> void:
 		if is_instance_valid(c):
 			c.queue_free()
 	_creatures.clear()
+
+
+## Directly spawns the forced enemy species (see _derive_fauna's
+## force_hostile_enemy) close enough to actually be seen right away, instead
+## of leaving it to the normal random spawner -- that only guarantees the
+## species EXISTS in the pool, and measured up to a minute+ (sometimes a full
+## miss within a minute) before the random roll happened to land on it, which
+## defeats the purpose of a "guaranteed enemy for testing" flag. Safe to call
+## even with no forced species (no-op) or multiple times (only ever spawns
+## the one).
+func spawn_hostile_enemy_near(player_pos: Vector3, world: WorldManager) -> void:
+	if _forced_enemy_species.is_empty():
+		return
+	for c in _creatures:
+		if is_instance_valid(c) and c.species.get("pattern", "") == "lunger":
+			return  # already out there
+	var local_player := to_local(player_pos)
+	var player_d := local_player.length()
+	if player_d < 1.0:
+		return
+	var base_dir := local_player / player_d
+	var t1 := base_dir.cross(Vector3.UP)
+	if t1.length() < 0.1:
+		t1 = base_dir.cross(Vector3.RIGHT)
+	t1 = t1.normalized()
+	var t2 := base_dir.cross(t1).normalized()
+	for attempt in 24:
+		var ang := randf() * TAU
+		var r := randf_range(12.0, 30.0)  # close enough to be immediately visible
+		var offset := (t1 * cos(ang) + t2 * sin(ang)) * r
+		var dir := (base_dir * player_d + offset).normalized()
+		var surface_pt := _surface_point(dir)
+		var up := _axis_of(dir) if shape_cube else dir
+		var ground_v := world_to_voxel(to_global(surface_pt - up * 0.5))
+		var stand_v := world_to_voxel(to_global(surface_pt + up * 0.3))
+		var head_v := world_to_voxel(to_global(surface_pt + up * 1.3))
+		var gid := get_id(ground_v)
+		if gid == Blocks.AIR or gid == Blocks.WATER:
+			continue
+		if get_id(stand_v) != Blocks.AIR or get_id(head_v) != Blocks.AIR:
+			continue
+		_spawn_at(to_global(surface_pt + up * 0.05), _forced_enemy_species, world)
+		return
 
 
 func _try_spawn_creature(player_pos: Vector3, world: WorldManager) -> void:

@@ -194,6 +194,10 @@ func _start_world(load_existing: bool) -> void:
 	await _wait_for_world_ready(ground, player)
 	ground.set_fast_loading(false)
 	_hide_loading_screen()
+	# Combat testing: don't leave the guaranteed home-planet enemy (see
+	# force_hostile_enemy) to the normal random wildlife spawner -- that only
+	# guarantees it EXISTS, not that you'll actually see it soon.
+	ground.spawn_hostile_enemy_near(player.global_position, world)
 
 
 # --- loading screen -------------------------------------------------------------
