@@ -133,10 +133,26 @@ var _edits_by_chunk := {}
 var loaded_chunks := {}
 # chunks waiting to be dispatched to a worker thread
 var _load_queue: Array[Vector3i] = []
+var _load_queue_set := {}  # mirrors _load_queue's contents for O(1) membership checks
 
 # --- threaded meshing state ---
-const MAX_INFLIGHT := 24     # concurrent worker tasks in flight
-const APPLY_PER_FRAME := 6   # results turned into meshes per frame (main-thread cost)
+# Variables, not consts: main.gd's loading screen temporarily raises these
+# while it's shown -- frame smoothness doesn't matter behind an opaque
+# loading screen, so we can push far more chunks through at once to shorten
+# the wait, then drop back to the normal pacing once gameplay is visible.
+var MAX_INFLIGHT := 24        # concurrent worker tasks in flight
+var APPLY_PER_FRAME := 6      # results turned into meshes per frame (main-thread cost)
+const MAX_INFLIGHT_NORMAL := 24
+const APPLY_PER_FRAME_NORMAL := 6
+const MAX_INFLIGHT_FAST_LOAD := 64
+const APPLY_PER_FRAME_FAST_LOAD := 24
+
+## Called by main.gd's loading screen: push far more chunks through per frame
+## while the screen hides any jank, then restore normal pacing once the world
+## is revealed.
+func set_fast_loading(enabled: bool) -> void:
+	MAX_INFLIGHT = MAX_INFLIGHT_FAST_LOAD if enabled else MAX_INFLIGHT_NORMAL
+	APPLY_PER_FRAME = APPLY_PER_FRAME_FAST_LOAD if enabled else APPLY_PER_FRAME_NORMAL
 var _inflight := {}          # cc -> WorkerThreadPool task id
 var _ready_data := {}        # cc -> mesh data dict (filled by workers)
 var _ready_mutex := Mutex.new()
@@ -309,10 +325,13 @@ func _try_spawn_npc(player_pos: Vector3, world: WorldManager) -> void:
 		return  # no solid ground here
 	if get_id(stand_v) != Blocks.AIR:
 		return  # no headroom
+	var spawn_pos := to_global(door_local + up * 0.05)
+	if not _chunk_ready_at(spawn_pos):
+		return  # ground is correct in theory but no real collision here yet
 	var sp: Dictionary = npc_species[randi() % npc_species.size()]
 	var c := Creature.new()
 	add_child(c)
-	c.global_position = to_global(door_local + up * 0.05)
+	c.global_position = spawn_pos
 	c.configure(sp, self, world, to_global(anchor), float(st["radius"]))
 	_npcs.append(c)
 
@@ -514,7 +533,21 @@ func _find_cave_spawn(dir: Vector3) -> Dictionary:
 	return {}
 
 
+## Is the chunk at this world point actually streamed in (real collision mesh
+## applied), not just "generation_sample says solid ground here"? Terrain is a
+## pure function so get_id/generation_sample answer instantly everywhere on the
+## planet regardless of streaming state -- but there's nothing to physically
+## stand on until the chunk's mesh/collision has actually been built and
+## applied on the main thread. Spawning without this check let creatures/NPCs
+## land on ground that was correct in theory but not yet solid in practice,
+## and they'd fall straight through into the void until it eventually streamed in.
+func _chunk_ready_at(world_pos: Vector3) -> bool:
+	return loaded_chunks.has(chunk_of(world_to_voxel(world_pos)))
+
+
 func _spawn_at(world_pos: Vector3, sp: Dictionary, world: WorldManager) -> void:
+	if not _chunk_ready_at(world_pos):
+		return
 	var c := Creature.new()
 	add_child(c)
 	c.global_position = world_pos
@@ -900,19 +933,26 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 	# settlement), blending smoothly back to the natural surface just past its
 	# walls -- otherwise a building the noisy terrain didn't happen to match ends
 	# up half-buried on one side and floating on the other.
-	if not settlements.is_empty():
-		var padded := _settlement_pad_surf(p, surf)
-		if padded >= 0.0:
-			surf = padded
+	#
+	# The vertical guard below is a real perf fix, not just tidiness: without it,
+	# EVERY voxel query anywhere on the planet -- the core, bedrock on the far
+	# side, anywhere -- paid for a full settlement/building lookup the instant
+	# any settlement existed at all, since this ran unconditionally before even
+	# checking how far the voxel was from the surface. Grading only ever affects
+	# a thin band near the surface (a little below it, up to a building's own
+	# height above it), so anything outside that band can never be touched by it.
+	var settle: Dictionary = {}
+	if not settlements.is_empty() and d > surf - 20.0 and d < surf + settlement_reach + 10.0:
+		settle = _settlement_at(p, surf)
+		if float(settle.get("surf", -1.0)) >= 0.0:
+			surf = settle["surf"]
 
 	if d > surf:
 		# above the terrain: a building takes priority (so trees don't grow through
 		# houses), then water fills anything up to the water level, otherwise maybe
 		# a tree, otherwise air
-		if not settlements.is_empty() and d <= surf + settlement_reach + 2.0:
-			var sid := _settlement_id_at(p)
-			if sid != Blocks.AIR:
-				return sid
+		if not settle.is_empty() and int(settle.get("block", Blocks.AIR)) != Blocks.AIR:
+			return int(settle["block"])
 		if water_style != WATER_NONE and d <= water_level:
 			return _water_block()
 		if tree_density > 0.0 and d <= surf + tree_reach:
@@ -1219,10 +1259,11 @@ const SETTLEMENT_PAD := 3.0  # how far past a building's walls the ground gradin
 ## spire's fixed cell) at world point `p` -- -1.0 if `p` is out of its range.
 ## Pulled out so the landmark doesn't need its own slightly-different copy of
 ## this math (the exact divergence-between-copies bug class logged earlier).
-func _building_pad(p: Vector3, anchor: Vector3, u: Vector3, v: Vector3,
-		cx: int, cy: int, cu: float, cv: float, st: Dictionary, natural_surf: float) -> float:
-	var plan := _building_plan(cx, cy, st)
-	var base := _building_base(anchor, u, v, cu, cv)
+## Takes an already-computed plan/base (see _settlement_at) instead of
+## recomputing them -- _building_plan does several _hash01 calls and
+## _building_base does a real noise sample (_surf), so calling this and
+## _building_block separately for the same cell used to pay for both twice.
+func _building_pad(p: Vector3, u: Vector3, v: Vector3, base: Vector3, plan: Dictionary, natural_surf: float) -> float:
 	var brel := p - base
 	var lu := brel.dot(u)
 	var lv := brel.dot(v)
@@ -1234,25 +1275,18 @@ func _building_pad(p: Vector3, anchor: Vector3, u: Vector3, v: Vector3,
 	return lerpf(_norm(base), natural_surf, smoothstep(0.0, 1.0, t))
 
 
-func _settlement_pad_surf(p: Vector3, natural_surf: float) -> float:
-	var best := -1.0
-	for st in settlements:
-		var anchor: Vector3 = st["anchor"]
-		var u: Vector3 = st["u"]
-		var v: Vector3 = st["v"]
-		if bool(st.get("advanced", false)):
-			var lb := _building_pad(p, anchor, u, v, LANDMARK_CELL_X, LANDMARK_CELL_Y, 0.0, 0.0, st, natural_surf)
-			if lb >= 0.0:
-				best = lb if best < 0.0 else maxf(best, lb)
-		for b in _nearby_buildings(p, st, 20.0):
-			var bl := _building_pad(p, anchor, u, v, b["cx"], b["cy"], b["cu"], b["cv"], st, natural_surf)
-			if bl >= 0.0:
-				best = bl if best < 0.0 else maxf(best, bl)
-	return best
-
-
-## Is `p` inside a settlement building? Returns the block id, or AIR.
-func _settlement_id_at(p: Vector3) -> int:
+## Combined ground-grading + block-id lookup for one voxel. Originally these
+## were two completely separate scans (_settlement_pad_surf / _settlement_id_at),
+## each independently re-discovering the same nearby buildings and recomputing
+## _building_plan for them -- a real, measured performance bug: it roughly
+## doubled the cost of every above-ground voxel near a settlement, and a big
+## Advanced-tier city (150-unit plaza, multi-story towers with lots of above-
+## ground air-space to query) could take ~500ms to mesh a single chunk as a
+## result. One pass over the candidate buildings now does both jobs at once.
+## Returns {"surf": graded height or -1.0, "block": building's id or AIR}.
+func _settlement_at(p: Vector3, natural_surf: float) -> Dictionary:
+	var graded := -1.0
+	var block := Blocks.AIR
 	for st in settlements:
 		var anchor: Vector3 = st["anchor"]
 		var up: Vector3 = st["up"]
@@ -1261,14 +1295,26 @@ func _settlement_id_at(p: Vector3) -> int:
 		if bool(st.get("advanced", false)):
 			var rel0 := p - anchor
 			if Vector2(rel0.dot(u), rel0.dot(v)).length() <= 20.0:
-				var lid := _building_block(p, anchor, up, u, v, 0.0, 0.0, LANDMARK_CELL_X, LANDMARK_CELL_Y, st)
-				if lid != Blocks.AIR:
-					return lid
-		for b in _nearby_buildings(p, st, 12.0):
-			var id := _building_block(p, anchor, up, u, v, b["cu"], b["cv"], b["cx"], b["cy"], st)
-			if id != Blocks.AIR:
-				return id
-	return Blocks.AIR
+				var lplan := _building_plan(LANDMARK_CELL_X, LANDMARK_CELL_Y, st)
+				var lbase := _building_base(anchor, u, v, 0.0, 0.0)
+				var lb := _building_pad(p, u, v, lbase, lplan, natural_surf)
+				if lb >= 0.0:
+					graded = lb if graded < 0.0 else maxf(graded, lb)
+				if block == Blocks.AIR:
+					var lid := _building_block(p, up, u, v, lbase, lplan, 0.0, 0.0, st)
+					if lid != Blocks.AIR:
+						block = lid
+		for b in _nearby_buildings(p, st, 20.0):
+			var plan := _building_plan(b["cx"], b["cy"], st)
+			var base := _building_base(anchor, u, v, b["cu"], b["cv"])
+			var bl := _building_pad(p, u, v, base, plan, natural_surf)
+			if bl >= 0.0:
+				graded = bl if graded < 0.0 else maxf(graded, bl)
+			if block == Blocks.AIR:
+				var id := _building_block(p, up, u, v, base, plan, b["cu"], b["cv"], st)
+				if id != Blocks.AIR:
+					block = id
+	return {"surf": graded, "block": block}
 
 
 ## Would a tree rooted at world point `base` collide with a settlement? Trees
@@ -1326,17 +1372,17 @@ func _building_door_point(cu: float, cv: float, plan: Dictionary) -> Vector2:
 
 
 ## One building's voxel at `p`. All comparisons are exact integer tests against
-## the building's plan, so walls/roofs are always complete.
-func _building_block(p: Vector3, anchor: Vector3, up: Vector3, u: Vector3, v: Vector3,
-		cu: float, cv: float, cx: int, cy: int, st: Dictionary) -> int:
-	var plan := _building_plan(cx, cy, st)
+## the building's plan, so walls/roofs are always complete. Takes an already-
+## computed plan/base (see _building_pad's comment on why -- calling this and
+## _building_pad separately for the same cell used to pay for both twice).
+func _building_block(p: Vector3, up: Vector3, u: Vector3, v: Vector3, base: Vector3, plan: Dictionary,
+		cu: float, cv: float, st: Dictionary) -> int:
 	var hw: int = plan["hw"]
 	var hd: int = plan["hd"]
 	var h: int = plan["h"]
 	var style: int = plan["style"]
 	var floors: int = plan["floors"]
 
-	var base := _building_base(anchor, u, v, cu, cv)
 	var rel := p - base
 	var iu := roundi(rel.dot(u))
 	var iv := roundi(rel.dot(v))
@@ -1531,9 +1577,27 @@ func chunk_of(v: Vector3i) -> Vector3i:
 
 # --- streaming ----------------------------------------------------------------
 
+var _stream_last_cc0 := Vector3i(0x7fffffff, 0, 0)  # sentinel: never a real chunk coord
+var _stream_last_rd := -1
+
 ## Keep chunks within `rd` (chunk radius) of `center_voxel` loaded; unload the rest.
+##
+## This used to rebuild its whole "wanted" set (up to (2*rd+1)^3 candidates,
+## e.g. 1331 at rd=5) AND fully re-sort the load queue with a GDScript lambda
+## comparator, on EVERY call -- and it's called every single physics frame
+## from WorldManager, whether or not the player has actually moved. That
+## dwarfed the actual per-chunk meshing cost during a fresh world load: at
+## rd=5 with a large queue, this alone measured as the dominant real-world
+## bottleneck, far more than settlement lookups or cave noise. The "wanted"
+## set and queue order only change when the player crosses into a new chunk,
+## so skip all of this when cc0/rd haven't changed since last call -- queued
+## chunks still get dispatched every frame via process_load_queue regardless.
 func stream(center_voxel: Vector3i, rd: int) -> void:
 	var cc0 := chunk_of(center_voxel)
+	if cc0 == _stream_last_cc0 and rd == _stream_last_rd:
+		return
+	_stream_last_cc0 = cc0
+	_stream_last_rd = rd
 	var wanted := {}
 	for dx in range(-rd, rd + 1):
 		for dy in range(-rd, rd + 1):
@@ -1541,8 +1605,9 @@ func stream(center_voxel: Vector3i, rd: int) -> void:
 				var cc := cc0 + Vector3i(dx, dy, dz)
 				if _chunk_possibly_solid(cc):
 					wanted[cc] = true
-					if not loaded_chunks.has(cc) and not _load_queue.has(cc):
+					if not loaded_chunks.has(cc) and not _load_queue_set.has(cc):
 						_load_queue.append(cc)
+						_load_queue_set[cc] = true
 	# unload chunks we no longer want (but let in-flight builds finish first)
 	for cc in loaded_chunks.keys():
 		if not wanted.has(cc) and not _inflight.has(cc):
@@ -1551,6 +1616,9 @@ func stream(center_voxel: Vector3i, rd: int) -> void:
 			node.queue_free()
 	# drop queued loads that are no longer wanted
 	_load_queue = _load_queue.filter(func(cc): return wanted.has(cc))
+	_load_queue_set.clear()
+	for cc in _load_queue:
+		_load_queue_set[cc] = true
 	# nearest-first so the world fills outward from the player
 	_load_queue.sort_custom(func(a, b): return (a - cc0).length_squared() < (b - cc0).length_squared())
 
@@ -1595,6 +1663,7 @@ func process_load_queue(_budget: int) -> int:
 	# 3) dispatch new chunk loads with whatever capacity remains
 	while _inflight.size() < MAX_INFLIGHT and not _load_queue.is_empty():
 		var cc: Vector3i = _load_queue.pop_front()
+		_load_queue_set.erase(cc)
 		if loaded_chunks.has(cc):
 			continue
 		_spawn_chunk_node(cc)

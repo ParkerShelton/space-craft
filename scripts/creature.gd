@@ -506,7 +506,20 @@ func _fly_physics(delta: float) -> void:
 		wish = wish.normalized()
 	velocity = velocity.lerp(wish * moving_speed, clampf(delta * 2.0, 0.0, 1.0))
 	if velocity.length() > 0.1:
-		look_at(global_position + velocity.normalized(), Vector3.UP)
+		# World UP goes colinear with the flight direction whenever a creature
+		# climbs/dives near a pole (this planet's local "up" isn't world Y) --
+		# that spammed a "Target and up vectors are colinear" warning (with a
+		# full backtrace) every physics tick for any such creature, which is
+		# expensive enough on its own to noticeably slow the whole game down.
+		# Use the planet-relative up instead, with a perpendicular fallback for
+		# the rare case flight direction and even that are still colinear.
+		var fwd := velocity.normalized()
+		var up_dir := -_inward_dir(global_position)
+		if up_dir == Vector3.ZERO:
+			up_dir = Vector3.UP
+		if absf(fwd.dot(up_dir)) > 0.999:
+			up_dir = Vector3.RIGHT if absf(fwd.dot(Vector3.RIGHT)) < 0.9 else Vector3.FORWARD
+		look_at(global_position + fwd, up_dir)
 	move_and_slide()
 
 

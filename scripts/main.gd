@@ -141,6 +141,7 @@ func _start_world(load_existing: bool) -> void:
 	if _menu_layer != null:
 		_menu_layer.queue_free()
 		_menu_layer = null
+	_show_loading_screen()
 
 	var world := _world
 	var wseed := world.saved_world_seed() if load_existing else _rand_seed()
@@ -184,6 +185,96 @@ func _start_world(load_existing: bool) -> void:
 		var pcc := ground.chunk_of(ground.world_to_voxel(player.global_position))
 		for dy in range(1, -4, -1):
 			ground.build_chunk_sync(pcc + Vector3i(0, dy, 0))
+
+	# Frame smoothness doesn't matter behind an opaque loading screen, so push
+	# far more chunks through the worker pool than we'd ever allow once the
+	# world is visible -- this is the single biggest lever for shortening the
+	# wait, on top of the generation_sample optimizations.
+	ground.set_fast_loading(true)
+	await _wait_for_world_ready(ground, player)
+	ground.set_fast_loading(false)
+	_hide_loading_screen()
+
+
+# --- loading screen -------------------------------------------------------------
+
+const LOAD_READY_RADIUS := 1    # chunk radius that must have real collision before we reveal the world
+const LOAD_TIMEOUT_SEC := 25.0  # safety cap so a bug elsewhere can't hang the screen forever
+var _loading_layer: CanvasLayer
+var _loading_root: Control  # fades out on hide -- CanvasLayer itself has no modulate
+var _loading_label: Label
+
+func _show_loading_screen() -> void:
+	_loading_layer = CanvasLayer.new()
+	_loading_layer.layer = 20
+	add_child(_loading_layer)
+	_loading_root = Control.new()
+	_loading_root.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_loading_layer.add_child(_loading_root)
+	var bg := ColorRect.new()
+	bg.color = Color(0.02, 0.03, 0.06, 1.0)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_loading_root.add_child(bg)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_loading_root.add_child(center)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	vb.alignment = BoxContainer.ALIGNMENT_CENTER
+	center.add_child(vb)
+	var title := Label.new()
+	title.text = "SPACECRAFT"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 40)
+	vb.add_child(title)
+	_loading_label = Label.new()
+	_loading_label.text = "Generating world…"
+	_loading_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_loading_label.modulate = Color(1, 1, 1, 0.7)
+	vb.add_child(_loading_label)
+
+
+func _hide_loading_screen() -> void:
+	if _loading_layer == null:
+		return
+	var layer := _loading_layer
+	var root := _loading_root
+	_loading_layer = null
+	_loading_root = null
+	var tw := create_tween()
+	tw.tween_property(root, "modulate:a", 0.0, 0.5)
+	tw.tween_callback(layer.queue_free)
+
+
+## Waits until a safe radius of chunks around the player has REAL collision --
+## not just "generation_sample says solid ground here" (see
+## Planet._chunk_ready_at for why that distinction matters: terrain is a pure
+## function that answers instantly everywhere, but there's nothing to actually
+## stand on until a chunk's mesh has been built and applied on the main
+## thread). Updates the loading label with progress; capped by LOAD_TIMEOUT_SEC
+## so a bug elsewhere can't hang the loading screen forever -- worst case you
+## just see an incomplete world, same as before this existed.
+func _wait_for_world_ready(ground: Planet, player: Player) -> void:
+	var elapsed := 0.0
+	while elapsed < LOAD_TIMEOUT_SEC:
+		var cc0 := ground.chunk_of(ground.world_to_voxel(player.global_position))
+		var total := 0
+		var have := 0
+		for dx in range(-LOAD_READY_RADIUS, LOAD_READY_RADIUS + 1):
+			for dy in range(-LOAD_READY_RADIUS, LOAD_READY_RADIUS + 1):
+				for dz in range(-LOAD_READY_RADIUS, LOAD_READY_RADIUS + 1):
+					var cc := cc0 + Vector3i(dx, dy, dz)
+					if not ground._chunk_possibly_solid(cc):
+						continue
+					total += 1
+					if ground.loaded_chunks.has(cc):
+						have += 1
+		if _loading_label != null:
+			_loading_label.text = "Generating world… (%d / %d chunks)" % [have, maxi(total, 1)]
+		if total == 0 or have >= total:
+			return
+		await get_tree().process_frame
+		elapsed += get_process_delta_time()
 
 
 # Deterministically create a system's planets from its seed. Planet 0 is the
