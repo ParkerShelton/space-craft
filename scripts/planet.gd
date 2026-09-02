@@ -425,7 +425,10 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		# "lunger" is the only attack pattern today: chase -> telegraph (real
 		# dodge window) -> dash-and-hit -> recover. See Creature's state machine.
 		sp["pattern"] = "lunger"
-		sp["telegraph_time"] = rng.randf_range(0.35, 0.55)
+		# A real, readable windup -- was 0.35-0.55s, which barely gave a
+		# player time to register the pose let alone react to it. Dark
+		# Souls-style enemies telegraph for the better part of a second.
+		sp["telegraph_time"] = rng.randf_range(0.7, 1.1)
 		sp["attack_range"] = rng.randf_range(2.2, 2.6)
 		sp["stagger_max"] = rng.randf_range(2.0, 3.5)
 		# Every block/feint/timing probability in Creature's lunger AI derives

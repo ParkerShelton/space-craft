@@ -29,17 +29,24 @@ const ALIGN_SPEED := 3.0
 # Blocking can preempt chase/circle (never an already-committed telegraph/
 # attack) if the player visibly winds up a heavy swing. Getting staggered
 # force-jumps straight to recover + a brief knockback, from any state.
-const LUNGE_DURATION := 0.6      # safety cap; the real exit is closing to attack_range (see _lunger_ai)
+const LUNGE_DURATION := 0.9      # safety cap; the real exit is closing to attack_range (see _lunger_ai)
 const LUNGE_SPEED_MULT := 1.6    # a committed step, not a blink -- was 3.0, which blew straight through the player
-const RECOVER_TIME := 0.6
+const RECOVER_TIME := 0.9        # a real cooldown window -- this is the player's actual punish opportunity, Souls-style
 const KNOCKBACK_TIME := 0.25
 const KNOCKBACK_MULT := 3.0
-const CIRCLE_MIN := 0.2
-const CIRCLE_MAX := 0.5
-const FEINT_RESET_TIME := 0.35
+const CIRCLE_MIN := 0.4
+const CIRCLE_MAX := 0.8
+const FEINT_RESET_TIME := 0.5
 const BLOCK_MAX_TIME := 1.5      # safety cap in case is_heavy_telegraphed() gets stuck true
 const BLOCK_DAMAGE_MULT := 0.2
-const SWORD_SWING_DURATION := 0.3  # a smooth sin(t*PI) arc, same technique as the fish tail / player's own swing
+const SWORD_SWING_DURATION := 0.55  # a smooth sin(t*PI) arc, same technique as the fish tail / player's own swing
+# Everything above was originally tuned much faster (telegraph ~0.35-0.55s,
+# a 0.3s swing) -- readable in isolated testing, but the user's actual
+# complaint was that the whole exchange felt "too quick and jerky," nothing
+# like a deliberate Souls-style read-and-punish fight. Slowed down across
+# the board: a real windup you have time to actually see, a swing with some
+# weight to it, and a recovery window worth punishing.
+const ACCEL_RATE := 7.0  # how fast horizontal velocity eases toward its target -- see _land_physics
 
 var _wander_dir := Vector3.ZERO
 var _wander_timer := 0.0
@@ -180,9 +187,19 @@ func _build_biped(s: float, color: Color, accent: Color) -> void:
 	var fore_len := 0.28 * s
 	var arm_count: int = int(species.get("arm_count", 2))
 	var shoulder_y := torso_y + torso.y * 0.32
+	var is_lunger_body: bool = species.get("pattern", "") == "lunger"
 	for i in arm_count:
 		var sx := -1.0 if i % 2 == 0 else 1.0
-		var shoulder := _mk_pivot(_model, Vector3(sx * (torso.x * 0.5 + 0.06 * s), shoulder_y, 0))
+		var shoulder := _mk_pivot(_model, Vector3(sx * (torso.x * 0.5 + 0.1 * s), shoulder_y, 0))
+		# A "lunger"'s arms angle out from the body a bit at rest -- otherwise
+		# a held sword/shield hangs flush against the torso/leg silhouette
+		# and all but disappears into it from most viewing angles.
+		if is_lunger_body:
+			# +sx (not -sx) swings a hanging arm OUTWARD, away from center --
+			# the sign I originally picked here was backwards, which actually
+			# pulled the arm INWARD into the torso, making the clipping/
+			# occlusion problem worse instead of better.
+			shoulder.rotation.z = sx * 0.4
 		_mk_box(shoulder, Vector3(0.16, upper_len, 0.16) * s, Vector3(0, -upper_len * 0.5, 0), color)
 		var elbow := _mk_pivot(shoulder, Vector3(0, -upper_len, 0))
 		_mk_box(elbow, Vector3(0.14, fore_len, 0.14) * s, Vector3(0, -fore_len * 0.5, 0), color)
@@ -198,6 +215,19 @@ func _build_biped(s: float, color: Color, accent: Color) -> void:
 		_build_shield(_elbows[0], s, fore_len)
 
 
+# An emissive variant of _mk_box -- glows regardless of scene lighting/ambient
+# tint, unlike a plain albedo color which a near-white blade turned out to
+# pick up a strong blue cast from the space-ambient light in practice.
+func _mk_glow_box(parent: Node3D, size: Vector3, pos: Vector3, color: Color, energy: float) -> void:
+	var mi := _mk_box(parent, size, pos, color)
+	var mat := mi.material_override as StandardMaterial3D
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = energy
+
+
+const BLADE_GLOW := Color(1.0, 0.45, 0.15)  # a hot energy-blade orange, distinct from the pistol's cyan
+
 func _build_sword(hand: Node3D, s: float, reach: float) -> void:
 	_sword = Node3D.new()
 	hand.add_child(_sword)
@@ -206,19 +236,22 @@ func _build_sword(hand: Node3D, s: float, reach: float) -> void:
 	# hand (i.e. continuing past the fist, away from the elbow). Getting this
 	# sign backwards was the original bug: a +Y blade offset put it back UP
 	# the forearm, overlapping the arm itself instead of extending past the
-	# hand -- which is why it barely read as a sword at all.
-	_mk_box(_sword, Vector3(0.07, 0.16, 0.07) * s, Vector3(0, -0.08 * s, 0), Color(0.35, 0.25, 0.15))       # grip
-	_mk_box(_sword, Vector3(0.26, 0.045, 0.045) * s, Vector3(0, -0.16 * s, 0), Color(0.55, 0.45, 0.3))      # crossguard
-	_mk_box(_sword, Vector3(0.08, 0.65, 0.035) * s, Vector3(0, -0.485 * s, 0), Color(0.88, 0.9, 0.93))      # blade -- long, bright, unmistakable
+	# hand -- which is why it barely read as a sword at all. Sized boldly (not
+	# realistically) and made a glowing energy blade -- a thin "realistic"
+	# steel-colored blade turned out to be nearly invisible at normal
+	# gameplay camera distance, especially once ambient lighting tinted it.
+	_mk_box(_sword, Vector3(0.1, 0.22, 0.1) * s, Vector3(0, -0.1 * s, 0), Color(0.25, 0.2, 0.15))          # grip
+	_mk_box(_sword, Vector3(0.36, 0.06, 0.06) * s, Vector3(0, -0.21 * s, 0), Color(0.5, 0.42, 0.3))        # crossguard -- wider than the blade, so it actually registers as a hilt
+	_mk_glow_box(_sword, Vector3(0.13, 0.8, 0.05) * s, Vector3(0, -0.61 * s, 0), BLADE_GLOW, 1.8)          # blade
 
 
 func _build_shield(hand: Node3D, s: float, reach: float) -> void:
 	_shield = Node3D.new()
 	hand.add_child(_shield)
 	# Offset outward from the arm (not straight down) so the body doesn't hide it.
-	_shield.position = Vector3(0.16 * s, -reach * 0.5, 0.05 * s)
-	_mk_box(_shield, Vector3(0.06, 0.75, 0.55) * s, Vector3(0, 0, 0), Color(0.45, 0.34, 0.2))               # board
-	_mk_box(_shield, Vector3(0.1, 0.16, 0.16) * s, Vector3(0.05 * s, 0, 0), Color(0.6, 0.6, 0.63))          # metal boss
+	_shield.position = Vector3(0.2 * s, -reach * 0.5, 0.07 * s)
+	_mk_box(_shield, Vector3(0.09, 0.9, 0.65) * s, Vector3(0, 0, 0), Color(0.58, 0.6, 0.64))                # board -- cool steel-gray, deliberately distinct from the warm torso/accent colors so it doesn't just blend into the body's silhouette
+	_mk_glow_box(_shield, Vector3(0.13, 0.22, 0.22) * s, Vector3(0.07 * s, 0, 0), BLADE_GLOW, 1.2)         # boss -- same glow color as the blade, reads as "this enemy's kit"
 
 
 func _build_serpent(s: float, color: Color, accent: Color) -> void:
@@ -371,7 +404,16 @@ func _land_physics(delta: float) -> void:
 		v_up = maxf(v_up, 0.0)
 	if wish.length() > 0.001 and _step_up_needed(wish, up):
 		v_up = STEP_UP_SPEED
-	velocity = wish * moving_speed + up * v_up
+	# Ease horizontal velocity toward its target instead of snapping straight
+	# to it -- real weight/momentum, and the biggest single fix for movement
+	# reading as "jerky": every state change (chase -> circle -> telegraph ->
+	# attack -> recover) used to instantly SET velocity to a brand new value
+	# every single frame with zero transition. Vertical (gravity/step-up)
+	# stays instant on purpose -- falling and hopping a ledge shouldn't ease.
+	var cur_h := velocity - up * velocity.dot(up)
+	var target_h := wish * moving_speed
+	var new_h := cur_h.lerp(target_h, clampf(delta * ACCEL_RATE, 0.0, 1.0))
+	velocity = new_h + up * v_up
 	up_direction = up
 	move_and_slide()
 
@@ -740,7 +782,10 @@ func _animate(delta: float) -> void:
 		_arms[i].rotation.x = sin(_phase * asgn) * 0.35 * moving
 	for i in _elbows.size():
 		var esgn := -1.0 if i % 2 == 0 else 1.0
-		_elbows[i].rotation.x = maxf(0.0, sin(_phase * esgn - 0.6)) * 0.4 * moving
+		# a slight permanent bend at rest (0.5 rad) -- a straight-hanging arm
+		# reads as a stiff mannequin, and holds a sword/shield flat against
+		# the leg where it's hard to make out
+		_elbows[i].rotation.x = 0.5 + maxf(0.0, sin(_phase * esgn - 0.6)) * 0.4 * moving
 	# "lunger" wind-up/dash visual: lean back during telegraph (a readable cue
 	# to dodge -- identical whether it's a real attack or a feint, on purpose),
 	# snap forward into the dash, ease back to neutral otherwise.
