@@ -429,11 +429,14 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		sp["attack_range"] = rng.randf_range(2.2, 2.6)
 		sp["stagger_max"] = rng.randf_range(2.0, 3.5)
 		# Every block/feint/timing probability in Creature's lunger AI derives
-		# from this single 0..1 dial (see _lunger_ai) -- fixed at a middling
-		# value for now. Real skill TIERS (some enemies bad at this, some
-		# good) are deliberately future work; when that lands it's "roll this
-		# per spawn instead of a constant," not a rewrite of the mechanics.
-		sp["skill"] = 0.5
+		# from this single 0..1 dial (see _lunger_ai). Pinned to the MAX for
+		# now (2026-09-01, user request) so testing always sees the hardest
+		# version of the AI -- that's what you need in front of you to judge
+		# where the actual difficulty limits should be. Real skill TIERS
+		# (some enemies bad at this, some good) are deliberately future work;
+		# when that lands it's "roll this per spawn instead of a constant,"
+		# not a rewrite of the mechanics.
+		sp["skill"] = 1.0
 	return sp
 
 

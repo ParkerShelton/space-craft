@@ -39,6 +39,7 @@ const CIRCLE_MAX := 0.5
 const FEINT_RESET_TIME := 0.35
 const BLOCK_MAX_TIME := 1.5      # safety cap in case is_heavy_telegraphed() gets stuck true
 const BLOCK_DAMAGE_MULT := 0.2
+const SWORD_SWING_DURATION := 0.3  # a smooth sin(t*PI) arc, same technique as the fish tail / player's own swing
 
 var _wander_dir := Vector3.ZERO
 var _wander_timer := 0.0
@@ -46,8 +47,10 @@ var _attack_cd := 0.0
 var _landing := false     # flyer: currently descending to perch on the ground
 var _perched := false     # flyer: sitting on the ground, wings folded, will take off again
 var _phase := 0.0
-var _legs: Array = []       # leg pivots (Node3D), animated for a walk cycle
-var _arms: Array = []       # arm pivots (bipeds only), light counter-swing
+var _legs: Array = []       # hip pivots (Node3D), animated for a walk cycle
+var _knees: Array = []      # secondary leg joint (calf), forward-only bend layered on the hip swing
+var _arms: Array = []       # shoulder pivots (bipeds only), light counter-swing
+var _elbows: Array = []     # secondary arm joint (forearm), same idea as _knees
 var _tail_pivot: Node3D     # tail or fish tail-fin pivot, animated as a wag
 var _segments: Array = []   # serpent body segments, animated as a wiggle
 var _wings: Array = []      # flyer wing pivots, animated as a flap
@@ -67,6 +70,7 @@ var _was_blockable := false     # edge-tracks player.is_heavy_telegraphed() so t
 var _sword: Node3D              # held-weapon visuals (pattern == "lunger" only)
 var _shield: Node3D
 var _telegraph_total := 0.45    # the actual (jittered) duration chosen for the current telegraph
+var _swing_t := 999.0           # counts up from 0 during the sword-arm swing animation (see _animate)
 
 
 func configure(sp: Dictionary, p: Planet, w: WorldManager, home_center := Vector3.ZERO, home_radius := 0.0) -> void:
@@ -156,46 +160,59 @@ func _build_biped(s: float, color: Color, accent: Color) -> void:
 	var torso_y := leg_len + torso.y * 0.5
 	_mk_box(_model, torso, Vector3(0, torso_y, 0), color)
 	_mk_box(_model, Vector3(0.45, 0.45, 0.45) * s, Vector3(0, torso_y + torso.y * 0.65, 0), accent)
+	# Legs -- thigh + shin as two cubes joined at a knee pivot that gets its own
+	# small forward-only bend layered on top of the hip swing in _animate, for
+	# a less stiff, more "alive" walk than one rigid box per leg.
+	var thigh_len := leg_len * 0.55
+	var shin_len := leg_len * 0.5
 	for sx in [-1, 1]:
-		var pivot := _mk_pivot(_model, Vector3(sx * 0.18 * s, leg_len, 0))
-		_mk_box(pivot, Vector3(0.2, leg_len, 0.24) * s, Vector3(0, -leg_len * 0.5, 0), accent)
-		_legs.append(pivot)
-	# Arms -- makes a biped actually read as humanoid instead of a legged torso.
-	# arm_count is data-driven (species dict) for future extra-limb variety, but
-	# only 2 is used today. Attached at shoulder height, animated as a light
-	# counter-swing to the legs in _animate.
-	var arm_len := 0.55 * s
+		var hip := _mk_pivot(_model, Vector3(sx * 0.18 * s, leg_len, 0))
+		_mk_box(hip, Vector3(0.2, thigh_len, 0.22) * s, Vector3(0, -thigh_len * 0.5, 0), accent)
+		var knee := _mk_pivot(hip, Vector3(0, -thigh_len, 0))
+		_mk_box(knee, Vector3(0.17, shin_len, 0.19) * s, Vector3(0, -shin_len * 0.5, 0), accent)
+		_legs.append(hip)
+		_knees.append(knee)
+	# Arms -- same two-segment idea (upper arm + forearm via an elbow pivot).
+	# Makes a biped actually read as humanoid instead of a legged torso.
+	# arm_count is data-driven (species dict) for future extra-limb variety,
+	# but only 2 is used today.
+	var upper_len := 0.3 * s
+	var fore_len := 0.28 * s
 	var arm_count: int = int(species.get("arm_count", 2))
 	var shoulder_y := torso_y + torso.y * 0.32
 	for i in arm_count:
 		var sx := -1.0 if i % 2 == 0 else 1.0
-		var pivot := _mk_pivot(_model, Vector3(sx * (torso.x * 0.5 + 0.06 * s), shoulder_y, 0))
-		_mk_box(pivot, Vector3(0.16, arm_len, 0.16) * s, Vector3(0, -arm_len * 0.5, 0), color)
-		_arms.append(pivot)
+		var shoulder := _mk_pivot(_model, Vector3(sx * (torso.x * 0.5 + 0.06 * s), shoulder_y, 0))
+		_mk_box(shoulder, Vector3(0.16, upper_len, 0.16) * s, Vector3(0, -upper_len * 0.5, 0), color)
+		var elbow := _mk_pivot(shoulder, Vector3(0, -upper_len, 0))
+		_mk_box(elbow, Vector3(0.14, fore_len, 0.14) * s, Vector3(0, -fore_len * 0.5, 0), color)
+		_arms.append(shoulder)
+		_elbows.append(elbow)
 	# A "lunger" gets a visible sword (right hand) + shield (left hand) -- the
 	# whole point of the user's ask ("actually feel like a real player"), and
 	# reuses the same box-mesh view-model style as the player's held weapon
-	# (see player.gd:_build_held_weapon). Held via the arm pivots so they
-	# naturally follow the existing arm-swing animation.
-	if species.get("pattern", "") == "lunger" and _arms.size() >= 2:
-		_build_sword(_arms[1], s)
-		_build_shield(_arms[0], s)
+	# (see player.gd:_build_held_weapon). Held at the forearm's end (the
+	# hand), so they follow the arm/elbow swing animation naturally.
+	if species.get("pattern", "") == "lunger" and _elbows.size() >= 2:
+		_build_sword(_elbows[1], s, fore_len)
+		_build_shield(_elbows[0], s, fore_len)
 
 
-func _build_sword(hand: Node3D, s: float) -> void:
+func _build_sword(hand: Node3D, s: float, reach: float) -> void:
 	_sword = Node3D.new()
 	hand.add_child(_sword)
-	_sword.position = Vector3(0, -0.5 * s, 0.05 * s)
-	_mk_box(_sword, Vector3(0.05, 0.22, 0.05) * s, Vector3(0, -0.11 * s, 0), Color(0.3, 0.25, 0.2))    # hilt
-	_mk_box(_sword, Vector3(0.18, 0.03, 0.03) * s, Vector3(0, 0, 0), Color(0.4, 0.38, 0.35))           # guard
-	_mk_box(_sword, Vector3(0.05, 0.5, 0.02) * s, Vector3(0, 0.28 * s, 0), Color(0.75, 0.78, 0.82))    # blade
+	_sword.position = Vector3(0, -reach, 0.02 * s)
+	_mk_box(_sword, Vector3(0.06, 0.16, 0.06) * s, Vector3(0, -0.05 * s, 0), Color(0.3, 0.25, 0.2))    # hilt
+	_mk_box(_sword, Vector3(0.22, 0.04, 0.04) * s, Vector3(0, 0.03 * s, 0), Color(0.55, 0.5, 0.45))    # guard
+	_mk_box(_sword, Vector3(0.07, 0.7, 0.03) * s, Vector3(0, 0.38 * s, 0), Color(0.85, 0.87, 0.9))     # blade -- long + thick enough to actually see
 
 
-func _build_shield(hand: Node3D, s: float) -> void:
+func _build_shield(hand: Node3D, s: float, reach: float) -> void:
 	_shield = Node3D.new()
 	hand.add_child(_shield)
-	_shield.position = Vector3(0, -0.4 * s, 0.05 * s)
-	_mk_box(_shield, Vector3(0.05, 0.5, 0.35) * s, Vector3(0, 0, 0), Color(0.35, 0.3, 0.25))
+	# Offset outward from the arm (not straight down) so the body doesn't hide it.
+	_shield.position = Vector3(0.12 * s, -reach * 0.6, 0.04 * s)
+	_mk_box(_shield, Vector3(0.06, 0.7, 0.5) * s, Vector3(0, 0, 0), Color(0.45, 0.34, 0.2))
 
 
 func _build_serpent(s: float, color: Color, accent: Color) -> void:
@@ -412,6 +429,7 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 				else:
 					_state = "attack"
 					_state_t = LUNGE_DURATION
+					_swing_t = 0.0
 					_lunge_target = ppos  # captured NOW, not re-tracked -- see doc comment above
 			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 		"attack":
@@ -686,9 +704,17 @@ func _animate(delta: float) -> void:
 	for i in _legs.size():
 		var sgn := 1.0 if i % 2 == 0 else -1.0
 		_legs[i].rotation.x = sin(_phase * sgn + (PI if i >= 2 else 0.0)) * 0.5 * moving
+	for i in _knees.size():
+		var ksgn := 1.0 if i % 2 == 0 else -1.0
+		# forward-only (a knee doesn't bend backward), phase-lagged behind the
+		# hip so it reads as the shin catching up rather than moving in lockstep
+		_knees[i].rotation.x = maxf(0.0, sin(_phase * ksgn - 0.6)) * 0.7 * moving
 	for i in _arms.size():
 		var asgn := -1.0 if i % 2 == 0 else 1.0  # opposite leg on the same side
 		_arms[i].rotation.x = sin(_phase * asgn) * 0.35 * moving
+	for i in _elbows.size():
+		var esgn := -1.0 if i % 2 == 0 else 1.0
+		_elbows[i].rotation.x = maxf(0.0, sin(_phase * esgn - 0.6)) * 0.4 * moving
 	# "lunger" wind-up/dash visual: lean back during telegraph (a readable cue
 	# to dodge -- identical whether it's a real attack or a feint, on purpose),
 	# snap forward into the dash, ease back to neutral otherwise.
@@ -701,10 +727,34 @@ func _animate(delta: float) -> void:
 			_model.position.z = lerpf(_model.position.z, -0.15 * scale_f, clampf(delta * 14.0, 0.0, 1.0))
 		else:
 			_model.position.z = lerpf(_model.position.z, 0.0, clampf(delta * 8.0, 0.0, 1.0))
+	# Sword-arm swing + shield-raise: overrides the generic walk-swing above
+	# for the weapon arms specifically, so an attack reads as a deliberate
+	# slash rather than a running arm-pump. Same smooth sin(t*PI) technique
+	# as the fish tail / player's own swing (_update_swing in player.gd) --
+	# eases in and back out rather than snapping between poses.
+	if species.get("pattern", "") == "lunger" and _arms.size() >= 2 and _elbows.size() >= 2:
+		match _state:
+			"telegraph":
+				# raised, cocked-back "ready to swing" pose -- identical for a
+				# real attack and a feint, since that's the whole point
+				var wt := clampf(1.0 - _state_t / maxf(_telegraph_total, 0.05), 0.0, 1.0)
+				_arms[1].rotation.x = lerpf(_arms[1].rotation.x, -1.1 * wt, clampf(delta * 10.0, 0.0, 1.0))
+				_elbows[1].rotation.x = lerpf(_elbows[1].rotation.x, 0.6 * wt, clampf(delta * 10.0, 0.0, 1.0))
+			"attack":
+				_swing_t += delta
+				var st := clampf(_swing_t / SWORD_SWING_DURATION, 0.0, 1.0)
+				var swing := sin(st * PI)
+				_arms[1].rotation.x = -1.1 + swing * 1.6
+				_elbows[1].rotation.x = 0.6 - swing * 0.5
+			_:
+				_swing_t = 999.0  # arms[1]/elbows[1] just keep the generic walk-swing set above
+		if _state == "block":
+			_arms[0].rotation.x = lerpf(_arms[0].rotation.x, -1.4, clampf(delta * 10.0, 0.0, 1.0))
+			_elbows[0].rotation.x = lerpf(_elbows[0].rotation.x, 0.8, clampf(delta * 10.0, 0.0, 1.0))
 	# Shield raises while actively blocking -- the visual payoff for the
 	# player's heavy-swing tell actually meaning something to the enemy.
 	if _shield != null:
-		var target_rot := -0.9 if _state == "block" else 0.0
+		var target_rot := -1.1 if _state == "block" else 0.0
 		_shield.rotation.x = lerpf(_shield.rotation.x, target_rot, clampf(delta * 10.0, 0.0, 1.0))
 	if _tail_pivot != null:
 		var amp := 0.5 if species.get("kind") == "fish" else 0.25
