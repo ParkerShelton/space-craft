@@ -129,6 +129,7 @@ func apply_mesh_data(data: Dictionary) -> void:
 		arr[Mesh.ARRAY_NORMAL] = data["normals"]
 		arr[Mesh.ARRAY_COLOR] = data["colors"]
 		arr[Mesh.ARRAY_TEX_UV] = data["uvs"]
+		arr[Mesh.ARRAY_TEX_UV2] = data["uv2s"]
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 		m.surface_set_material(m.get_surface_count() - 1, _get_material(planet))
 	if not wverts.is_empty():
@@ -196,9 +197,11 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 	var wcolors := PackedColorArray()
 	var uvs := PackedVector2Array()
 	var wuvs := PackedVector2Array()
+	var uv2s := PackedVector2Array()
+	var wuv2s := PackedVector2Array()
 	var cverts := PackedVector3Array()  # collidable subset of `verts` (no leaves)
 	if not any_solid:
-		return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs,
+		return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s,
 			"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
 	# opaque terrain via greedy meshing (water is skipped here, handled below)
@@ -208,7 +211,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 		var v := (d + 2) % 3
 		for dir in [1, -1]:
 			_greedy_pass(planet, snap, d, u, v, dir, base, ids, strides,
-				verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, cverts)
+				verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, uv2s, wuv2s, cverts)
 
 	# water: one box per cell, its height set by the water level (shallow water
 	# renders lower). Fill is along the cell's outward axis (radial-snapped).
@@ -230,7 +233,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 					elif up.y < -0.5: lo.y = hi.y - h
 					elif up.z > 0.5: hi.z = lo.z + h
 					elif up.z < -0.5: lo.z = hi.z - h
-					_emit_water_cell(lo, hi, gv, planet, snap, wverts, wnormals, wcolors, wuvs)
+					_emit_water_cell(lo, hi, gv, planet, snap, wverts, wnormals, wcolors, wuvs, wuv2s)
 				idx += 1
 
 	# roof slabs: a half-height OPAQUE box per cell (real geometry, not just a
@@ -248,7 +251,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 				if Blocks.is_stair(Blocks.bottom_of(hid)):
 					_emit_stair(Vector3(x, y, z),
 						Vector3i(base.x + x, base.y + y, base.z + z), hid,
-						planet, snap, verts, normals, colors, uvs, cverts)
+						planet, snap, verts, normals, colors, uvs, uv2s, cverts)
 				elif hid == Blocks.ROOF_SLAB or Blocks.is_slab(hid) or Blocks.is_stacked_slab(hid):
 					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
 					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
@@ -279,13 +282,13 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 						elif up.z < -0.5: t_hi.z = lo.z; t_lo.z = hi.z - 1.0
 						_emit_solid_box_cell(lo, hi, gv,
 							Blocks.base_material_of(Blocks.bottom_of(hid)),
-							planet, snap, verts, normals, colors, uvs, cverts)
+							planet, snap, verts, normals, colors, uvs, uv2s, cverts)
 						_emit_solid_box_cell(t_lo, t_hi, gv,
 							Blocks.base_material_of(Blocks.top_slab_of(hid)),
-							planet, snap, verts, normals, colors, uvs, cverts)
+							planet, snap, verts, normals, colors, uvs, uv2s, cverts)
 					else:
 						_emit_solid_box_cell(lo, hi, gv, Blocks.base_material_of(hid),
-							planet, snap, verts, normals, colors, uvs, cverts)
+							planet, snap, verts, normals, colors, uvs, uv2s, cverts)
 				idx += 1
 
 	# ore lumps: decorative geometry on exposed ore faces (see _emit_ore_chunks)
@@ -296,10 +299,10 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 				if Blocks.is_ore(ids[idx]):
 					_emit_ore_chunks(Vector3(x, y, z),
 						Vector3i(base.x + x, base.y + y, base.z + z),
-						ids[idx], planet, snap, verts, normals, colors, uvs)
+						ids[idx], planet, snap, verts, normals, colors, uvs, uv2s)
 				idx += 1
 
-	return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs,
+	return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s,
 		"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
 
@@ -319,13 +322,13 @@ static func _hash3(v: Vector3i, k: int) -> float:
 ## surface the player snags on.
 static func _emit_free_box(lo: Vector3, hi: Vector3, base_col: Color, bid: int,
 		verts: PackedVector3Array, normals: PackedVector3Array,
-		colors: PackedColorArray, uvs: PackedVector2Array) -> void:
+		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array) -> void:
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
 		var sh := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
 		var col := Color(base_col.r * sh, base_col.g * sh, base_col.b * sh, base_col.a)
 		var q := _box_face(lo, hi, fi)
-		_quad(q[0], q[1], q[2], q[3], Vector3(n), col, verts, normals, colors, uvs, bid, sh)
+		_quad(q[0], q[1], q[2], q[3], Vector3(n), col, verts, normals, colors, uvs, uv2s, bid, sh)
 
 
 ## Ore lumps standing proud of an ore block's exposed faces, so a vein reads as
@@ -335,7 +338,7 @@ static func _emit_free_box(lo: Vector3, hi: Vector3, base_col: Color, bid: int,
 ## actually on screen.
 static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 		snap: Dictionary, verts: PackedVector3Array, normals: PackedVector3Array,
-		colors: PackedColorArray, uvs: PackedVector2Array) -> void:
+		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array) -> void:
 	var ore_col := planet.ore_color(id)
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
@@ -357,7 +360,7 @@ static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 				                     # so it grows OUT of the rock rather than
 				                     # sitting on top of it like a dropped cube
 			_emit_free_box(c - Vector3.ONE * sz, c + Vector3.ONE * sz,
-				ore_col, ORE_CHUNK_ID, verts, normals, colors, uvs)
+				ore_col, ORE_CHUNK_ID, verts, normals, colors, uvs, uv2s)
 
 
 ## A stair: the lower half of the cell, plus a step on the upper half.
@@ -369,13 +372,13 @@ static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 ## makes a staircase walkable.
 static func _emit_stair(lo0: Vector3, gv: Vector3i, raw: int, planet: Planet,
 		snap: Dictionary, verts: PackedVector3Array, normals: PackedVector3Array,
-		colors: PackedColorArray, uvs: PackedVector2Array,
+		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array,
 		cverts: PackedVector3Array) -> void:
 	var mat := Blocks.base_material_of(Blocks.bottom_of(raw))
 	var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
 	for b in shape_boxes(raw, up):
 		_emit_solid_box_cell(lo0 + b[0], lo0 + b[1], gv, mat,
-			planet, snap, verts, normals, colors, uvs, cverts)
+			planet, snap, verts, normals, colors, uvs, uv2s, cverts)
 
 
 ## Every solid box a block occupies inside its own cell, as [[lo, hi], ...] in
@@ -429,7 +432,7 @@ static func _half_toward(lo: Vector3, hi: Vector3, dir: Vector3) -> Array:
 
 static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Planet,
 		snap: Dictionary, wverts: PackedVector3Array, wnormals: PackedVector3Array,
-		wcolors: PackedColorArray, wuvs: PackedVector2Array) -> void:
+		wcolors: PackedColorArray, wuvs: PackedVector2Array, wuv2s: PackedVector2Array) -> void:
 	var base := Blocks.color_of(Blocks.WATER)
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
@@ -439,12 +442,13 @@ static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Pla
 		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
 		var nrm := Vector3(n)
 		var q := _box_face(lo, hi, fi)
-		_quad(q[0], q[1], q[2], q[3], nrm, col, wverts, wnormals, wcolors, wuvs, Blocks.WATER, s)
+		_quad(q[0], q[1], q[2], q[3], nrm, col, wverts, wnormals, wcolors, wuvs, wuv2s, Blocks.WATER, s)
 
 
 static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int, planet: Planet,
 		snap: Dictionary, verts: PackedVector3Array, normals: PackedVector3Array,
-		colors: PackedColorArray, uvs: PackedVector2Array, cverts: PackedVector3Array) -> void:
+		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array,
+		cverts: PackedVector3Array) -> void:
 	var base := _block_color(planet, id)
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
@@ -457,7 +461,7 @@ static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int
 		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
 		var nrm := Vector3(n)
 		var q := _box_face(lo, hi, fi)
-		_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors, uvs, id, s, cverts)
+		_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors, uvs, uv2s, id, s, cverts)
 
 
 static func _box_face(lo: Vector3, hi: Vector3, fi: int) -> Array:
@@ -474,7 +478,8 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 		base: Vector3i, ids: PackedInt32Array, strides: Array,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray,
-		uvs: PackedVector2Array, wuvs: PackedVector2Array, cverts: PackedVector3Array) -> void:
+		uvs: PackedVector2Array, wuvs: PackedVector2Array, uv2s: PackedVector2Array,
+		wuv2s: PackedVector2Array, cverts: PackedVector3Array) -> void:
 	var sd: int = strides[d]
 	var su: int = strides[u]
 	var sv: int = strides[v]
@@ -511,7 +516,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 
 		var w_coord := a + (1 if dir > 0 else 0)
 		_emit_mask(planet, mask, d, u, v, dir, w_coord, normal,
-			verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, cverts)
+			verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, uv2s, wuv2s, cverts)
 
 
 # Opaque blocks use their registry colour, except procedural ores, whose colour is
@@ -529,7 +534,8 @@ static func _emit_mask(planet: Planet, mask: PackedInt32Array, d: int, u: int, v
 		normal: Vector3,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray,
-		uvs: PackedVector2Array, wuvs: PackedVector2Array, cverts: PackedVector3Array) -> void:
+		uvs: PackedVector2Array, wuvs: PackedVector2Array, uv2s: PackedVector2Array,
+		wuv2s: PackedVector2Array, cverts: PackedVector3Array) -> void:
 	for j in CS:
 		var k := 0
 		while k < CS:
@@ -564,20 +570,21 @@ static func _emit_mask(planet: Planet, mask: PackedInt32Array, d: int, u: int, v
 			var p01 := _corner(d, u, v, w_coord, k, j + hgt)
 			if val == Blocks.WATER:
 				if dir > 0:
-					_quad(p00, p10, p11, p01, normal, col, wverts, wnormals, wcolors, wuvs, val, s)
+					_quad(p00, p10, p11, p01, normal, col, wverts, wnormals, wcolors, wuvs, wuv2s, val, s)
 				else:
-					_quad(p00, p01, p11, p10, normal, col, wverts, wnormals, wcolors, wuvs, val, s)
+					_quad(p00, p01, p11, p10, normal, col, wverts, wnormals, wcolors, wuvs, wuv2s, val, s)
 			else:
 				if dir > 0:
-					_quad(p00, p10, p11, p01, normal, col, verts, normals, colors, uvs, val, s, cverts)
+					_quad(p00, p10, p11, p01, normal, col, verts, normals, colors, uvs, uv2s, val, s, cverts)
 				else:
-					_quad(p00, p01, p11, p10, normal, col, verts, normals, colors, uvs, val, s, cverts)
+					_quad(p00, p01, p11, p10, normal, col, verts, normals, colors, uvs, uv2s, val, s, cverts)
 			k += wdt
 
 
 static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector3, col: Color,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
-		uvs: PackedVector2Array, bid: int, shade: float, cverts: PackedVector3Array = PackedVector3Array()) -> void:
+		uvs: PackedVector2Array, uv2s: PackedVector2Array, bid: int, shade: float,
+		cverts: PackedVector3Array = PackedVector3Array()) -> void:
 	verts.append(a); verts.append(b); verts.append(c)
 	verts.append(a); verts.append(c); verts.append(e)
 	# Leaves render but do not collide, so a canopy feels like foliage you brush
@@ -603,7 +610,13 @@ static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector
 		# UV.y carries the face's baked shade. Ore blocks draw their chunks
 		# from a uniform colour rather than the vertex colour, so they need the
 		# same directional shading applied to stay consistent with the face.
-		uvs.append(Vector2(float(bid) / ID_SCALE, shade))
+		# Packed orientation bits are stripped here: UV.x is only ever the plain
+		# block id the shader keys its material off.
+		uvs.append(Vector2(float(Blocks.bottom_of(bid)) / ID_SCALE, shade))
+		# UV2.x carries a log's trunk axis, so the shader knows which two faces
+		# are cut ends instead of guessing from the planet's up (only right for
+		# an upright trunk). 3 = "not a log".
+		uv2s.append(Vector2(float(Blocks.log_axis_of(bid)) if Blocks.is_wood(Blocks.bottom_of(bid)) else 3.0, 0.0))
 
 
 ## Fake sky/directional shading by face orientation (world axes): up faces catch

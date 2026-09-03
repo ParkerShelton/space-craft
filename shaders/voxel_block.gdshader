@@ -44,6 +44,7 @@ varying vec3 v_world;
 varying float v_block;
 varying vec3 v_normal;
 varying float v_shade;   // baked face shading, so ore chunks light like the face
+varying float v_log_axis; // a log's trunk axis (0=X,1=Y,2=Z); 3 = not a log
 
 float hash21(vec2 p) {
 	vec3 q = fract(vec3(p.xyx) * 0.1031);
@@ -73,6 +74,7 @@ void vertex() {
 	v_block = floor(UV.x * 64.0 + 0.5);
 	v_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	v_shade = UV.y;
+	v_log_axis = UV2.x;
 }
 
 void fragment() {
@@ -106,7 +108,16 @@ void fragment() {
 		// slight variation inside a stripe, so it reads as grain rather than
 		// noise. Trunks grow along the LOCAL up, which on a sphere is not
 		// world Y -- hence planet_center.
+		// The trunk axis is recorded when the log is PLACED, so a log lying on
+		// its side puts its cut ends on the correct two faces. Deriving it from
+		// the planet's up (the old behaviour) is only right for a standing
+		// trunk. Falls back to local up for logs from world generation, which
+		// carry no axis.
 		vec3 up = normalize(v_world - planet_center);
+		if (v_log_axis < 2.5) {
+			up = (v_log_axis < 0.5) ? vec3(1.0, 0.0, 0.0)
+				: ((v_log_axis < 1.5) ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0));
+		}
 		float along = dot(v_world, up);
 		vec3 perp = v_world - up * along;
 		// Stripe count varies per planet, so worlds get different timber.

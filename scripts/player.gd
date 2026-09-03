@@ -103,6 +103,9 @@ var _outline: MeshInstance3D       # wireframe box around the block under the cr
 var _stair_variant := 0            # R cycles the stair shape before placing
 var _ghost: MeshInstance3D         # translucent preview of the block about to be placed
 var _ghost_sig := ""               # shape key, so the mesh is only rebuilt when it changes
+var _crack: MeshInstance3D         # progressive break-up drawn over the block being mined
+var _crack_mat: ShaderMaterial
+var _crack_sig := ""
 var _pitch := 0.0
 var _look := Vector2.ZERO          # accumulated mouse delta, consumed in physics
 
@@ -208,12 +211,21 @@ func _ready() -> void:
 	gm.no_depth_test = true
 	_ghost.material_override = gm
 	_ghost.visible = false
+
+	_crack = MeshInstance3D.new()
+	_crack.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_crack_mat = ShaderMaterial.new()
+	_crack_mat.shader = load("res://shaders/block_crack.gdshader")
+	_crack.material_override = _crack_mat
+	_crack.visible = false
 	if world != null:
 		world.add_child(_outline)
 		world.add_child(_ghost)
+		world.add_child(_crack)
 	else:
 		get_parent().add_child(_outline)
 		get_parent().add_child(_ghost)
+		get_parent().add_child(_crack)
 
 	_init_inventory()
 	_build_ui()
@@ -567,6 +579,8 @@ func _physics_process(delta: float) -> void:
 			_outline.visible = false
 		if _ghost != null:
 			_ghost.visible = false
+		if _crack != null:
+			_crack.visible = false
 		_pilot_physics(delta)
 		_update_ui()
 		return
@@ -1368,6 +1382,8 @@ func _update_outline(tgt: Dictionary) -> void:
 		_outline.visible = false
 		if _ghost != null:
 			_ghost.visible = false
+		if _crack != null:
+			_crack.visible = false
 		return
 	var obj = tgt["obj"]
 	var v: Vector3i = tgt["voxel"]
@@ -1421,6 +1437,61 @@ func _update_ghost(tgt: Dictionary) -> void:
 		_ghost.mesh = _make_ghost_mesh(boxes)
 	_ghost.global_transform = Transform3D(obj.global_transform.basis, obj.to_global(Vector3(v)))
 	_ghost.visible = true
+
+
+## Draws the break-up overlay on the block being mined, in that block's real
+## shape, and hides it when nothing is being mined.
+func _update_crack(obj: Object, v: Vector3i, raw: int, progress: float) -> void:
+	if _crack == null:
+		return
+	if progress <= 0.001:
+		_crack.visible = false
+		return
+	var up := Vector3.UP
+	if obj is Planet:
+		up = (obj as Planet)._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+	var boxes := Chunk.shape_boxes(raw, up)
+	var sig := "%d|%s" % [raw, up]
+	if sig != _crack_sig:
+		_crack_sig = sig
+		# Slightly inflated so the shell sits just proud of the block instead of
+		# fighting it for depth.
+		_crack.mesh = _make_ghost_mesh(boxes)
+	_crack_mat.set_shader_parameter("progress", clampf(progress, 0.0, 1.0))
+	_crack.global_transform = Transform3D(obj.global_transform.basis, obj.to_global(Vector3(v)))
+	_crack.visible = true
+
+
+## A short burst of block-coloured debris where a block just broke, so it pops
+## rather than silently vanishing.
+func _break_burst(where: Vector3, col: Color) -> void:
+	var ps := CPUParticles3D.new()
+	# CPU rather than GPU particles: this project runs the GL Compatibility
+	# renderer, where CPU particles are the dependable option.
+	var box := BoxMesh.new()
+	box.size = Vector3.ONE * 0.12
+	ps.mesh = box
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ps.material_override = mat
+	ps.amount = 14
+	ps.lifetime = 0.55
+	ps.one_shot = true
+	ps.explosiveness = 1.0
+	ps.direction = Vector3.UP
+	ps.spread = 75.0
+	ps.initial_velocity_min = 1.5
+	ps.initial_velocity_max = 3.5
+	ps.gravity = Vector3.DOWN * 9.0
+	ps.scale_amount_min = 0.6
+	ps.scale_amount_max = 1.3
+	var parent: Node = world if world != null else get_parent()
+	parent.add_child(ps)
+	ps.global_position = where
+	ps.emitting = true
+	# Clean itself up once the last particle has died.
+	get_tree().create_timer(ps.lifetime + 0.3).timeout.connect(ps.queue_free)
 
 
 func _make_ghost_mesh(boxes: Array) -> ArrayMesh:
@@ -1518,6 +1589,16 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 	if Blocks.is_stair(place_id):
 		return {"voxel": pv, "value": Blocks.make_stair(place_id,
 			_stair_facing_for(obj as Planet, pv), _stair_variant)}
+	if Blocks.is_wood(place_id):
+		# A log lies along the face you placed it against, the way stacking logs
+		# up a wall lays them sideways rather than standing them all upright.
+		var n: Vector3i = tgt.get("normal", Vector3i(0, 1, 0))
+		var axis := Blocks.AXIS_Y
+		if absi(n.x) >= absi(n.y) and absi(n.x) >= absi(n.z):
+			axis = Blocks.AXIS_X
+		elif absi(n.z) >= absi(n.y):
+			axis = Blocks.AXIS_Z
+		return {"voxel": pv, "value": Blocks.make_log(place_id, axis)}
 	return {"voxel": pv, "value": place_id}
 
 
@@ -1685,12 +1766,15 @@ func _process_mining(delta: float) -> void:
 	if not holding:
 		_mine_key = ""
 		_mine_time = 0.0
+		if _crack != null:
+			_crack.visible = false
 		return
 	if key != _mine_key:
 		_mine_key = key
 		_mine_time = 0.0
 		_mine_total = hardness * BARE_MINE_MULT / mine_power
 	_mine_time += delta
+	_update_crack(obj, v, id, _mine_time / maxf(_mine_total, 0.001))
 	if _mine_time >= _mine_total:
 		if planet != null:
 			planet.set_block(v, Blocks.AIR)
@@ -1709,6 +1793,10 @@ func _process_mining(delta: float) -> void:
 		elif ship != null:
 			ship.set_block(v, Blocks.AIR)
 			_add_item(id, 1)
+		_break_burst(obj.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)),
+			Blocks.color_of(id))
+		if _crack != null:
+			_crack.visible = false
 		_refresh_slots()
 		_mine_key = ""
 		_mine_time = 0.0
@@ -1725,6 +1813,8 @@ func _process_station_mining(delta: float, st: Station) -> void:
 	if not holding:
 		_mine_key = ""
 		_mine_time = 0.0
+		if _crack != null:
+			_crack.visible = false
 		return
 	var key := "st%d" % st.get_instance_id()
 	if key != _mine_key:
@@ -3094,11 +3184,9 @@ func _update_ui() -> void:
 		if piloting != null:
 			_target_label.text = ""
 		else:
-			var t := _look_name
-			if _mine_key != "" and _mine_total > 0.0:
-				var filled := int(clampf(_mine_time / _mine_total, 0.0, 1.0) * 10.0)
-				t += "  [" + "#".repeat(filled) + "-".repeat(10 - filled) + "]"
-			_target_label.text = t
+			# Mining progress is shown ON the block (see _update_crack) rather
+			# than as a text bar, so this is just what you're looking at.
+			_target_label.text = _look_name
 
 	if eva:
 		_hotbar_label.text = "EVA  (T to climb back in  |  aim + click to repair)"

@@ -234,6 +234,26 @@ static func stair_variant_name(variant: int) -> String:
 	return STAIR_VARIANTS[variant % STAIR_VARIANTS.size()]
 
 
+# --- log orientation ---------------------------------------------------------
+# A log records which way its trunk runs, so the cut ends land on the right two
+# faces. Without it, "which face is the cut end" has to be guessed from the
+# planet's up, which is only right for an upright trunk. Packed in the same
+# bits stairs use for facing -- a block is one or the other, never both.
+const LOG_AXIS_SHIFT := 16
+const LOG_AXIS_MASK := 0x3
+const AXIS_X := 0
+const AXIS_Y := 1
+const AXIS_Z := 2
+
+
+static func make_log(wood_id: int, axis: int) -> int:
+	return (wood_id & ID_MASK) | ((axis & LOG_AXIS_MASK) << LOG_AXIS_SHIFT)
+
+
+static func log_axis_of(v: int) -> int:
+	return (v >> LOG_AXIS_SHIFT) & LOG_AXIS_MASK
+
+
 # --- stacked slabs -----------------------------------------------------------
 # Two DIFFERENT slabs can share one voxel (a rock slab with a wood slab on top).
 # Rather than inventing an id for every pair -- 10 materials would need 45 --
