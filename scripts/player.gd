@@ -925,6 +925,41 @@ func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -
 	velocity = horiz + up * v_up
 	up_direction = up
 	move_and_slide()
+	_auto_step_up(up, horiz, delta)
+
+
+## Walk up a half-height ledge (slabs, and later stairs) without jumping.
+##
+## CharacterBody3D has no built-in step handling, so a 0.5-high slab stops you
+## dead the same way a wall does. This looks for exactly that case -- blocked at
+## foot height, but clear one step higher -- and lifts the body onto the ledge,
+## which is what makes slabs feel like stairs instead of obstacles.
+const STEP_HEIGHT := 0.6      # a slab is 0.5; the margin covers uneven ground
+const STEP_PROBE := 0.3       # how far ahead to test for the obstruction
+
+func _auto_step_up(up: Vector3, horiz: Vector3, delta: float) -> void:
+	if not is_on_floor() or horiz.length() < 0.05:
+		return
+	var dir := horiz.normalized() * STEP_PROBE
+	var xf := global_transform
+	# Nothing in the way? Then there is nothing to step onto.
+	if not test_move(xf, dir):
+		return
+	# Blocked down here but clear a step up means a ledge, not a wall.
+	var raised := xf
+	raised.origin += up * STEP_HEIGHT
+	if test_move(raised, dir):
+		return
+	# Rise only as far as the ledge actually needs: probe down from the raised
+	# position so a 0.5 slab lifts 0.5, not the full STEP_HEIGHT (which would
+	# read as a hop). floor snapping settles any remainder.
+	var ahead := raised
+	ahead.origin += dir
+	var drop := KinematicCollision3D.new()
+	var lift := STEP_HEIGHT
+	if test_move(ahead, -up * STEP_HEIGHT, drop):
+		lift = maxf(STEP_HEIGHT - drop.get_travel().length(), 0.0)
+	global_position += up * lift
 
 
 # --- SURVIVAL -----------------------------------------------------------------
@@ -2445,6 +2480,12 @@ func _open_station(st: Station) -> void:
 		b.queue_free()
 	_craft_buttons.clear()
 	var crafts: Array = Blocks.STATION_CRAFTS.get(Blocks.SMELTER if is_smelter else st.kind, [])
+	if st.kind == Blocks.SHAPER:
+		# The Shaper has no fixed recipe list: it offers whatever shapes the
+		# BLOCK CURRENTLY LOADED can become. That way a new shape is one entry
+		# in Blocks.shapes_for() and instantly works for every material, rather
+		# than needing a recipe per material per shape cluttering a bench.
+		crafts = _shaper_crafts(st)
 	var craft_top := 62.0 + (34.0 if is_smelter else 0.0)
 	_craft_row.position = Vector2(12, craft_top)
 	var by := 0.0
@@ -2678,7 +2719,7 @@ func _refresh_station_ui() -> void:
 	for i in _pinv_cells.size():
 		_paint_cell(_pinv_cells[i], inv[i], false)
 	var craft_key: int = Blocks.SMELTER if Blocks.is_smelter_kind(_station_open.kind) else _station_open.kind
-	var has_crafts: bool = Blocks.STATION_CRAFTS.has(craft_key)
+	var has_crafts: bool = Blocks.STATION_CRAFTS.has(craft_key) or _station_open.kind == Blocks.SHAPER
 	if has_crafts:
 		_preview_label.text = _craft_preview_text(_station_open.kind)
 	# show job progress while working; hide the idle preview during a job
@@ -2707,6 +2748,24 @@ func _on_refine() -> void:
 # The material a station will build from (first slot loaded matching its primary
 # material type -- refined for the Smelter/Forge, Circuitry for the Fabricator,
 # Alloy Plating for Shipworks).
+## Shapes available for whatever shapeable block is loaded in a Shaper.
+func _shaper_crafts(st) -> Array:
+	var out: Array = []
+	var seen: Dictionary = {}
+	for slot in st.storage:
+		var sid: int = int(slot.get("id", Blocks.AIR))
+		if int(slot.get("count", 0)) <= 0 or seen.has(sid):
+			continue
+		seen[sid] = true
+		for sh in Blocks.shapes_for(sid):
+			out.append({
+				"label": "%s %s x%d" % [Blocks.name_of(sid), sh["shape"], int(sh["n"])],
+				"out": int(sh["out"]), "n": int(sh["n"]),
+				"reqs": [{"id": sid, "n": int(sh["cost_n"])}],
+			})
+	return out
+
+
 func _station_primary_material(mtype: String) -> Dictionary:
 	if _station_open == null:
 		return {}
@@ -2719,6 +2778,11 @@ func _station_primary_material(mtype: String) -> Dictionary:
 func _craft_preview_text(kind: int) -> String:
 	if kind == Blocks.CARPENTER:
 		return "Load Wood, Rock, and Metal to build →"
+	if kind == Blocks.SHAPER:
+		if _station_open != null and not _shaper_crafts(_station_open).is_empty():
+			return "Pick a shape to cut →"
+		return "Load a plain block (rock, dirt, wood…)
+to see what it can become →"
 	var mtype := Blocks.primary_material_for(kind)
 	var m := _station_primary_material(mtype)
 	if m.is_empty():

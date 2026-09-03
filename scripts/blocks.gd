@@ -59,7 +59,7 @@ const CHEST := 52     # pure storage (bigger than a machine)
 const CARPENTER := 62 # base-building bench: structural blocks from plain resources
 const FORGE := 63     # multiblock-built smelter upgrade: bigger + faster
 const CLIMATE_UNIT := 64  # planet base shelter: negates hazard damage nearby
-const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT]
+const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER]
 
 # --- procedural ore slots ---------------------------------------------------
 # Each planet invents its own ores (unique name + color) and assigns each to a
@@ -131,6 +131,60 @@ const PATH := 67         # worn dirt/gravel walkway generated between settlement
 const WARP_DRIVE := 68   # ship block: with the ship in space, unlocks the star map for warp travel
 const PULSE_PISTOL := 69 # ranged weapon: fires a traveling energy bolt, damage from its material
 
+# --- block shaping -----------------------------------------------------------
+# SHAPER is a bench that reshapes a plain block into other FORMS of the same
+# material. It deliberately has no fixed recipe list: you load a block and it
+# offers whatever shapes that material supports, so adding a new shape later
+# (stairs, pillars) costs one entry here and works for every material at once,
+# instead of one recipe per material per shape.
+const SHAPER := 70       # "Block Shaper" bench: reshape a block into slabs etc.
+
+# Half-height version of each shapeable material. One id per material is still
+# needed because slabs are real inventory items you carry and place; the SHAPE
+# side of the matrix is what stays open-ended.
+const ROCK_SLAB := 71
+const DIRT_SLAB := 72
+const GRASS_SLAB := 73
+const REGOLITH_SLAB := 74
+const ICE_SLAB := 75
+const SNOW_SLAB := 76
+const CRYSTAL_SLAB := 77
+const METAL_SLAB := 78
+const WOOD_SLAB := 79
+const GLASS_SLAB := 80
+
+## material -> its slab. Drives both the Shaper's offered shapes and meshing.
+const SLAB_OF := {
+	ROCK: ROCK_SLAB, DIRT: DIRT_SLAB, GRASS: GRASS_SLAB, REGOLITH: REGOLITH_SLAB,
+	ICE: ICE_SLAB, SNOW: SNOW_SLAB, CRYSTAL: CRYSTAL_SLAB, METAL: METAL_SLAB,
+	WOOD: WOOD_SLAB, WOOD_PALE: WOOD_SLAB, WOOD_DARK: WOOD_SLAB, GLASS: GLASS_SLAB,
+}
+## slab -> the material it is made of. Colour, name and surface texturing all
+## come from the material, so a slab never needs its own palette entry.
+const SLAB_MATERIAL := {
+	ROCK_SLAB: ROCK, DIRT_SLAB: DIRT, GRASS_SLAB: GRASS, REGOLITH_SLAB: REGOLITH,
+	ICE_SLAB: ICE, SNOW_SLAB: SNOW, CRYSTAL_SLAB: CRYSTAL, METAL_SLAB: METAL,
+	WOOD_SLAB: WOOD, GLASS_SLAB: GLASS,
+}
+
+
+static func is_slab(id: int) -> bool:
+	return SLAB_MATERIAL.has(id)
+
+
+## The material a shaped block is made of -- itself, if it isn't shaped.
+static func base_material_of(id: int) -> int:
+	return SLAB_MATERIAL.get(id, id)
+
+
+## Every shape `mat` can be turned into at a Shaper, as
+## {"label", "out", "n", "cost_n"}. One entry per SHAPE, not per material.
+static func shapes_for(mat: int) -> Array:
+	var out: Array = []
+	if SLAB_OF.has(mat):
+		out.append({"shape": "Slab", "out": int(SLAB_OF[mat]), "n": 2, "cost_n": 1})
+	return out
+
 # A 3x3x3 shell of `shell` around a placed INTERFACE block collapses into a
 # `result` station -- the multiblock alternative to just crafting a plain item.
 const MULTIBLOCK_RECIPES := [
@@ -153,6 +207,7 @@ const HAND_RECIPES := [
 	{"out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 	{"out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 	{"out": CARPENTER, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 12, "label": "Wood"}]},
+	{"out": SHAPER, "n": 1, "reqs": [{"id": ROCK, "n": 10}, {"id": METAL, "n": 2}]},
 ]
 
 # Which material TYPE a station builds from (see Blocks.id_matches_material).
@@ -228,7 +283,9 @@ const STATION_CRAFTS := {
 const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	WOOD, WOOD_PALE, WOOD_DARK,
 	16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
-	COCKPIT, THRUSTER, LIFE_SUPPORT, GLASS, DOOR, INTERFACE, WARP_DRIVE]
+	COCKPIT, THRUSTER, LIFE_SUPPORT, GLASS, DOOR, INTERFACE, WARP_DRIVE,
+	ROCK_SLAB, DIRT_SLAB, GRASS_SLAB, REGOLITH_SLAB, ICE_SLAB, SNOW_SLAB,
+	CRYSTAL_SLAB, METAL_SLAB, WOOD_SLAB, GLASS_SLAB]
 
 const NAMES := {
 	AIR: "Air",
@@ -270,6 +327,7 @@ const NAMES := {
 	SHIPWORKS: "Shipworks",
 	CHEST: "Wooden Chest",
 	CARPENTER: "Carpenter's Bench",
+	SHAPER: "Block Shaper",
 	FORGE: "Forge",
 	CLIMATE_UNIT: "Climate Unit",
 	LIFE_SUPPORT: "Life Support",
@@ -354,6 +412,7 @@ const COLORS := {
 	SHIPWORKS: Color(0.40, 0.42, 0.30),
 	CHEST: Color(0.45, 0.31, 0.17),
 	CARPENTER: Color(0.48, 0.34, 0.20),
+	SHAPER: Color(0.52, 0.52, 0.56),
 	FORGE: Color(0.55, 0.22, 0.16),
 	CLIMATE_UNIT: Color(0.35, 0.62, 0.55),
 	LIFE_SUPPORT: Color(0.30, 0.78, 0.68),
@@ -479,7 +538,13 @@ static func refined_of(ore_id: int) -> int:
 	return REFINED_SLOT_IDS[i] if i >= 0 else AIR
 
 static func color_of(id: int) -> Color:
+	# A slab is the same stuff as its parent block, so it never carries its own
+	# palette entry -- one less thing to keep in sync per material.
+	if SLAB_MATERIAL.has(id):
+		return COLORS.get(SLAB_MATERIAL[id], Color.MAGENTA)
 	return COLORS.get(id, Color.MAGENTA)
 
 static func name_of(id: int) -> String:
+	if SLAB_MATERIAL.has(id):
+		return "%s Slab" % NAMES.get(SLAB_MATERIAL[id], "Unknown")
 	return NAMES.get(id, "Unknown")
