@@ -37,35 +37,38 @@ void vertex() {
 
 void fragment() {
 	vec2 fc = face_coord(v_world, normalize(v_normal));
+
+	// Cells, so damage stays blocky and on-style.
 	vec2 cell = floor(fc * texels);
-	float h = hash21(cell);
+	// The cell's own centre, in block units -- everything below is decided per
+	// CELL rather than per pixel, which is what keeps the edges hard.
+	vec2 cpos = (cell + 0.5) / texels;
+	vec2 lp = fract(cpos) - 0.5;
 
-	// Cells break in a fixed order, so damage only ever grows -- it never
-	// re-shuffles as progress climbs, which would read as static.
-	// Bias slightly toward the cell centre so damage starts in the middle of a
-	// face and spreads outward, the way a struck block gives way.
-	vec2 local = fract(fc) - 0.5;
-	float centre = 1.0 - clamp(length(local) * 1.6, 0.0, 1.0);
-	float threshold = h * 0.85 - centre * 0.15;
+	// Cracks radiate from the middle of the face and grow outward, rather than
+	// cells lighting up at random. Scattered cells read as the block
+	// dissolving; a few arms spreading from a point read as it splitting.
+	float r = length(lp) * 2.0;                 // 0 centre .. ~1 corner
+	float ang = atan(lp.y, lp.x);
+	float seed = hash21(floor(fc) + 0.5);       // one pattern per block face
+	float arms = 3.0 + floor(seed * 3.0);       // 3-5 arms
+	float k = (ang / 6.28318 + 0.5) * arms + seed;
+	// Distance to the nearest arm, 0 on an arm and 0.5 between arms.
+	float da = abs(fract(k) - 0.5);
+	// Arms wander slightly instead of being perfectly straight spokes.
+	da += (hash21(cell + 11.0) - 0.5) * 0.10;
 
-	float broken = step(threshold, progress);
+	// An arm reaches further as mining progresses, so the crack visibly grows.
+	float reach = progress * 1.25;
+	float on_arm = step(da, 0.16);
+	float within = step(r, reach);
+	// The centre gives way first, whatever the arms are doing.
+	float core = step(r, progress * 0.45);
 
-	// Draw a FRACTURE inside each broken cell rather than filling it in. Solid
-	// dark squares read as the block dissolving; short dark segments at varied
-	// angles join up across cells into something that reads as cracking.
-	vec2 lp = fract(fc * texels) - 0.5;
-	float ang = hash21(cell + 3.7) * 3.14159;
-	vec2 nrm = vec2(-sin(ang), cos(ang));       // perpendicular to the segment
-	float d = abs(dot(lp, nrm));
-	float line = 1.0 - smoothstep(0.05, 0.16, d);
-	// A second segment across the first, appearing later, so damage visibly
-	// deepens rather than just spreading.
-	float d2 = abs(dot(lp, vec2(nrm.y, -nrm.x)));
-	float line2 = (1.0 - smoothstep(0.04, 0.13, d2)) * smoothstep(0.55, 0.95, progress);
+	float broken = clamp(on_arm * within + core, 0.0, 1.0);
 
-	float crack = clamp(line + line2, 0.0, 1.0) * broken;
 	ALBEDO = vec3(0.02);
-	// A faint overall darkening on top, so a nearly-broken block reads as
-	// damaged even between the fractures.
-	ALPHA = crack * 0.85 + broken * progress * 0.12;
+	// Fully-formed cracks are near-opaque; a faint wash over the rest of the
+	// face late on reads as the whole block being strained.
+	ALPHA = broken * 0.8 + smoothstep(0.7, 1.0, progress) * 0.12;
 }
