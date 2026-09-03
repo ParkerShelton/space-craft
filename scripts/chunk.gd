@@ -322,10 +322,10 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 		for y in CS:
 			for x in CS:
 				var lid := ids[idx]
-				if Blocks.is_light(lid):
+				if Blocks.is_light(Blocks.bottom_of(lid)):
 					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
 					var lo := Vector3(x, y, z)
-					if lid == Blocks.TORCH:
+					if Blocks.bottom_of(lid) != Blocks.GLOW_LAMP:
 						var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
 						var a := _half_toward(lo, lo + Vector3.ONE, -up)
 						var a0: Vector3 = a[0]
@@ -550,7 +550,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				# opaque blocks only; WATER and ROOF_SLAB are meshed separately as
 				# partial-height boxes, and an OPEN door draws as an empty gap (no
 				# face, no collision) so you can actually walk through it once opened
-				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN 						and oid != Blocks.ROOF_SLAB and not Blocks.is_slab(oid) 						and not Blocks.is_stacked_slab(oid) 						and not Blocks.is_stair(Blocks.bottom_of(oid)) 						and not Blocks.is_light(oid):
+				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN 						and oid != Blocks.ROOF_SLAB and not Blocks.is_slab(oid) 						and not Blocks.is_stacked_slab(oid) 						and not Blocks.is_stair(Blocks.bottom_of(oid)) 						and not Blocks.is_light(Blocks.bottom_of(oid)):
 					var na := a + dir
 					var nid: int
 					if na >= 0 and na < CS:
@@ -560,7 +560,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 					# draw a face if the neighbor is air, water, an open doorway, or a
 					# roof slab (so the seabed shows under water, a room shows through
 					# an open door, and a wall/ridge shows past a half-height slab)
-					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN 							or nid == Blocks.ROOF_SLAB or Blocks.is_slab(nid) 							or Blocks.is_stacked_slab(nid) 							or Blocks.is_stair(Blocks.bottom_of(nid)) 							or Blocks.is_light(nid):
+					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN 							or nid == Blocks.ROOF_SLAB or Blocks.is_slab(nid) 							or Blocks.is_stacked_slab(nid) 							or Blocks.is_stair(Blocks.bottom_of(nid)) 							or Blocks.is_light(Blocks.bottom_of(nid)):
 						val = oid
 				mask[k + j * CS] = val
 

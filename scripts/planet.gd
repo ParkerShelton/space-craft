@@ -732,6 +732,15 @@ func _make_ore(orng: RandomNumberGenerator, slot: int, tier: int) -> Dictionary:
 	var props := {}
 	for k in Blocks.PROP_KEYS:
 		props[k] = clampi(int(round(float(base[k]) * orng.randf_range(0.85, 1.15))), 1, 100)
+	# Combustion swings far wider than the other properties, and deliberately
+	# ignores tier: roughly a third of ores come out volatile. That means a
+	# common surface ore can be the best fuel on the planet, which gives an
+	# early world something worth mining and makes "which ore burns best here"
+	# a real question rather than "whichever is rarest".
+	if orng.randf() < 0.34:
+		props["c"] = clampi(int(round(orng.randf_range(62.0, 100.0))), 1, 100)
+	else:
+		props["c"] = clampi(int(round(orng.randf_range(4.0, 40.0))), 1, 100)
 	var hardness: float = Blocks.TIER_HARDNESS[tier] * orng.randf_range(0.9, 1.1)
 	var deep := tier >= 2 or orng.randf() < 0.4   # rarer ores tend to sit deeper
 	var mind := maxf(radius * 0.25, 8.0) if deep else 4.0

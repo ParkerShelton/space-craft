@@ -83,10 +83,10 @@ const REFINED_SLOT_IDS := [REFINED_0, REFINED_1, REFINED_2, REFINED_3]
 const TIER_NAMES := ["Common", "Uncommon", "Rare", "Exotic"]
 # base material properties per tier (h/d/e/r, 0..100); planet adds per-ore variance
 const TIER_PROPS := [
-	{"h": 40, "d": 40, "e": 30, "r": 15},
-	{"h": 55, "d": 50, "e": 50, "r": 30},
-	{"h": 72, "d": 62, "e": 68, "r": 55},
-	{"h": 88, "d": 82, "e": 85, "r": 85},
+	{"h": 40, "d": 40, "e": 30, "r": 15, "c": 30},
+	{"h": 55, "d": 50, "e": 50, "r": 30, "c": 35},
+	{"h": 72, "d": 62, "e": 68, "r": 55, "c": 40},
+	{"h": 88, "d": 82, "e": 85, "r": 85, "c": 45},
 ]
 const TIER_HARDNESS := [1.0, 1.4, 2.0, 2.8]   # base mining seconds (before hand penalty / tool)
 const TIER_MIN_POWER := [1.0, 1.0, 1.6, 2.4]  # mine_power needed to break at all (hands=1.0)
@@ -102,8 +102,26 @@ const FAUNA_NAME_PRE := ["Grum", "Ska", "Bri", "Lox", "Fen", "Wob", "Thal", "Kre
 const FAUNA_NAME_SUF := ["ling", "back", "hide", "fang", "snout", "wing", "tail",
 	"claw", "hopper", "crawler", "gill", "fin", "runt", "beast"]
 
-const PROP_KEYS := ["h", "d", "e", "r"]
-const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy", "r": "Reactivity"}
+const PROP_KEYS := ["h", "d", "e", "r", "c"]
+const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy",
+	"r": "Reactivity", "c": "Combustion"}
+
+## Combustion turns an ore into fuel. It drives how far and how bright a torch
+## made from it burns, and is the same figure that will decide how far a unit of
+## warp fuel gets you -- so a volatile ore is worth hauling home whatever its
+## tier. Unlike the other properties it is NOT tied to tier: a common surface
+## ore can burn ferociously while a deep exotic one barely smoulders, which
+## gives low-tier worlds something worth mining.
+const TORCH_TIERS := 4
+
+
+static func combustion_of(props: Dictionary) -> int:
+	return int(props.get("c", 0))
+
+
+## 0..3, the brightness step a torch made from this material burns at.
+static func torch_tier_for(props: Dictionary) -> int:
+	return clampi(int(floor(float(combustion_of(props)) / 26.0)), 0, TORCH_TIERS - 1)
 
 # --- crafted gear (inventory-only tools produced at stations) ---
 const DRILL := 51            # mining tool; its power (from its material) sets mine speed & max tier
@@ -144,7 +162,22 @@ const SHAPER := 70       # "Block Shaper" bench: reshape a block into slabs etc.
 ## rather than a wall of black.
 const TORCH := 91        # small standing flame: cheap, bright, warm
 const GLOW_LAMP := 92     # full block of steady light, for finished builds
-const LIGHT_IDS := [TORCH, GLOW_LAMP]
+const EMBER_TORCH := 93   # torch burning a combustible ore -- brightness from its Combustion
+const LIGHT_IDS := [TORCH, GLOW_LAMP, EMBER_TORCH]
+
+## Brightness step baked into a placed ember torch. Packed above the id (the
+## bits stairs use for facing -- a block is one or the other, never both)
+## because a placed voxel is a bare int and cannot carry the item's properties.
+const TORCH_TIER_SHIFT := 16
+const TORCH_TIER_MASK := 0x3
+
+
+static func make_torch(id: int, tier: int) -> int:
+	return (id & ID_MASK) | ((tier & TORCH_TIER_MASK) << TORCH_TIER_SHIFT)
+
+
+static func torch_tier_of(v: int) -> int:
+	return (v >> TORCH_TIER_SHIFT) & TORCH_TIER_MASK
 
 
 static func is_light(id: int) -> bool:
@@ -152,7 +185,15 @@ static func is_light(id: int) -> bool:
 
 
 ## Light radius and colour per light block.
-static func light_def(id: int) -> Dictionary:
+static func light_def(raw: int) -> Dictionary:
+	var id := bottom_of(raw)
+	if id == EMBER_TORCH:
+		# The whole point of a combustible ore: a fiercely burning one throws
+		# light most of the way across a cavern, a dull one barely beats a
+		# plain torch.
+		var t := float(torch_tier_of(raw))
+		return {"range": 13.0 + t * 4.5, "energy": 1.6 + t * 0.45,
+			"color": Color(1.0, 0.66, 0.30).lerp(Color(1.0, 0.93, 0.72), t / 3.0)}
 	if id == TORCH:
 		return {"range": 11.0, "energy": 1.5, "color": Color(1.0, 0.72, 0.38)}
 	return {"range": 15.0, "energy": 1.8, "color": Color(0.92, 0.95, 1.0)}
@@ -383,6 +424,10 @@ const HAND_RECIPES := [
 	# putting it behind rare drops would just make the early game dark.
 	{"out": TORCH, "n": 4, "reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
 	{"out": GLOW_LAMP, "n": 2, "reqs": [{"id": CRYSTAL, "n": 1}, {"id": METAL, "n": 1}]},
+	# Burns the ore itself: how bright and how far comes from that ore's
+	# Combustion, so which ore you feed it actually matters.
+	{"out": EMBER_TORCH, "n": 6, "carry_props": true,
+		"reqs": [{"refined": true, "n": 1}, {"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
 ]
 
 # Which material TYPE a station builds from (see Blocks.id_matches_material).
@@ -463,7 +508,7 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	CRYSTAL_SLAB, METAL_SLAB, WOOD_SLAB, GLASS_SLAB,
 	ROCK_STAIR, DIRT_STAIR, GRASS_STAIR, REGOLITH_STAIR, ICE_STAIR, SNOW_STAIR,
 	CRYSTAL_STAIR, METAL_STAIR, WOOD_STAIR, GLASS_STAIR,
-	TORCH, GLOW_LAMP]
+	TORCH, GLOW_LAMP, EMBER_TORCH]
 
 const NAMES := {
 	AIR: "Air",
@@ -507,6 +552,7 @@ const NAMES := {
 	CARPENTER: "Carpenter's Bench",
 	SHAPER: "Block Shaper",
 	TORCH: "Torch",
+	EMBER_TORCH: "Ember Torch",
 	GLOW_LAMP: "Glow Lamp",
 	FORGE: "Forge",
 	CLIMATE_UNIT: "Climate Unit",
@@ -546,7 +592,7 @@ const HARDNESS := {
 	LEAF_0: 0.2, LEAF_1: 0.2, LEAF_2: 0.2, LEAF_3: 0.2, LEAF_4: 0.2, LEAF_5: 0.2,
 	LEAF_6: 0.2, LEAF_7: 0.2, LEAF_8: 0.2, LEAF_9: 0.2, LEAF_10: 0.2, LEAF_11: 0.2,
 	WOOD: 0.6, WOOD_PALE: 0.6, WOOD_DARK: 0.6,
-	TORCH: 0.1, GLOW_LAMP: 0.3,
+	TORCH: 0.1, GLOW_LAMP: 0.3, EMBER_TORCH: 0.1,
 	ICE: 0.7, ROCK: 0.9, CRYSTAL: 1.2, CORE: 1.6,
 	IRON_ORE: 1.3, COPPER_ORE: 1.3, GOLD_ORE: 1.6,
 	TITANIUM_ORE: 1.9, SILICON_ORE: 1.2, URANIUM_ORE: 2.1,
@@ -595,6 +641,7 @@ const COLORS := {
 	CARPENTER: Color(0.48, 0.34, 0.20),
 	SHAPER: Color(0.52, 0.52, 0.56),
 	TORCH: Color(1.0, 0.74, 0.40),
+	EMBER_TORCH: Color(1.0, 0.62, 0.26),
 	GLOW_LAMP: Color(0.95, 0.97, 1.0),
 	FORGE: Color(0.55, 0.22, 0.16),
 	CLIMATE_UNIT: Color(0.35, 0.62, 0.55),

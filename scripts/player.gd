@@ -1596,6 +1596,11 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 		return {"voxel": pv, "value": Blocks.make_stair(place_id,
 			Blocks.stair_state_facing(_stair_state),
 			Blocks.stair_state_variant(_stair_state))}
+	if place_id == Blocks.EMBER_TORCH:
+		# A placed voxel is a bare int and can't carry item properties, so the
+		# brightness step is baked in here from the ore it was crafted with.
+		var pr: Dictionary = inv[active_slot].get("props", {}) if active_slot < inv.size() else {}
+		return {"voxel": pv, "value": Blocks.make_torch(place_id, Blocks.torch_tier_for(pr))}
 	if Blocks.is_wood(place_id):
 		# A log lies along the face you placed it against, the way stacking logs
 		# up a wall lays them sideways rather than standing them all upright.
@@ -2622,8 +2627,21 @@ func _recipe_afford(reqs: Array) -> bool:
 	return true
 
 
+## Properties of the material consumed by the last recipe, so an output can
+## inherit them (an Ember Torch burns the ore it was made from).
+var _consumed_props: Dictionary = {}
+var _consumed_mat: Dictionary = {}
+
 func _recipe_consume(reqs: Array) -> void:
+	_consumed_props = {}
+	_consumed_mat = {}
 	for r in reqs:
+		if r.has("refined"):
+			for sl in inv:
+				if int(sl.get("count", 0)) > 0 and Blocks.is_refined(int(sl.get("id", 0))):
+					_consumed_props = sl.get("props", {}).duplicate()
+					_consumed_mat = sl.get("mat", {}).duplicate()
+					break
 		if r.has("refined"):
 			_remove_refined(int(r["n"]))
 		elif r.has("any"):
@@ -2661,7 +2679,13 @@ func _do_recipe(idx: int) -> void:
 		_toast("Missing materials")
 		return
 	_recipe_consume(recipe["reqs"])
-	_add_item(int(recipe["out"]), int(recipe.get("n", 1)))
+	if recipe.get("carry_props", false):
+		# The output IS the material: an Ember Torch burns whatever ore made it,
+		# so it has to carry that ore's Combustion into the world with it.
+		_add_item(int(recipe["out"]), int(recipe.get("n", 1)),
+			_consumed_props, "", _consumed_mat)
+	else:
+		_add_item(int(recipe["out"]), int(recipe.get("n", 1)))
 	_toast("Crafted " + Blocks.name_of(int(recipe["out"])))
 	_refresh_slots()
 
@@ -3122,8 +3146,9 @@ to see what it can become →"
 		var extra_hint := "\n(plus some Metal, loaded here too)" if Blocks.is_smelter_kind(kind) else ""
 		return "Load %s to build from →%s" % [label, extra_hint]
 	var p: Dictionary = m["props"]
-	var s := "%s   H%d D%d E%d R%d" % [m["mat"].get("name", "material"),
-		int(p.get("h", 0)), int(p.get("d", 0)), int(p.get("e", 0)), int(p.get("r", 0))]
+	var s := "%s   H%d D%d E%d R%d C%d" % [m["mat"].get("name", "material"),
+		int(p.get("h", 0)), int(p.get("d", 0)), int(p.get("e", 0)),
+		int(p.get("r", 0)), int(p.get("c", 0))]
 	if kind == Blocks.FABRICATOR:
 		var power := Blocks.drill_power(p)
 		s += "\nDrill: power %.1f — up to Tier %d" % [power, Blocks.max_tier_for_power(power)]
