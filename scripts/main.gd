@@ -504,8 +504,20 @@ func _process(delta: float) -> void:
 	# damage, and being unable to see on top of that is punishing before you
 	# have any light source.
 	_env.ambient_light_energy = lerpf(0.27, 0.6, _atmo) * lerpf(0.20, 1.0, _day)
-	_env.ambient_light_color = SPACE_AMBIENT.lerp(acol, _atmo * 0.8)
-	_sun.rotation = Transform3D().looking_at(sun_dir, Vector3.UP).basis.get_euler()
+	# Only follow the sky's colour while it IS coloured. At night the sky is
+	# almost black and strongly blue-weighted, and tinting ambient toward it
+	# washed the whole world blue-purple.
+	_env.ambient_light_color = SPACE_AMBIENT.lerp(acol, _atmo * 0.8 * _day)
+	# looking_at() is DEGENERATE when the direction is parallel to the up
+	# reference, which happens exactly at noon and midnight (the sun sits along
+	# the planet's up axis). That produced an invalid basis, and with it the
+	# washed-out tint and vanishing surfaces. Pick a reference that can't be
+	# parallel.
+	var ref_up := Vector3.UP
+	if absf(sun_dir.dot(ref_up)) > 0.98:
+		ref_up = Vector3.RIGHT
+	_sun.global_transform = Transform3D(Basis.looking_at(sun_dir, ref_up),
+		_sun.global_position)
 	_sun.light_energy = lerpf(1.2, 1.5, _atmo) * _day
 	# Warm the sunlight as it sits low, the way real low sun reddens.
 	_sun.light_color = Color(1, 1, 1).lerp(Color(1.0, 0.62, 0.35), dusk * 0.7 * _atmo)

@@ -141,9 +141,13 @@ func save_game() -> bool:
 			"active_slot": pl.active_slot,
 			"suit_slot": pl.suit_slot,
 		}
+	# Time of day travels with the save, so stepping away and coming back does
+	# not snap the world to a different hour.
+	data["day_phase"] = {}
 	for p in planets:
 		if not p._edits_by_chunk.is_empty():
 			data["planets"][p.planet_name] = p._edits_by_chunk
+		data["day_phase"][p.planet_name] = p.day_phase
 	var ship_index := {}
 	for s in _ships:
 		if is_instance_valid(s) and not s.blocks.is_empty():
@@ -198,8 +202,10 @@ func load_game() -> bool:
 
 	# planets: swap in the saved edits and re-mesh anything already loaded
 	var pedits: Dictionary = data.get("planets", {})
+	var pphase: Dictionary = data.get("day_phase", {})
 	for p in planets:
 		p.load_edits(pedits.get(p.planet_name, {}))
+		p.day_phase = float(pphase.get(p.planet_name, p.day_phase))
 
 	# ships: rebuild from scratch
 	for s in _ships:
