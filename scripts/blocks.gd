@@ -207,20 +207,31 @@ static func is_stair(id: int) -> bool:
 # eight placements instead of needing an id each.
 const FACING_SHIFT := 16
 const FACING_MASK := 0x3
-const CORNER_BIT := 1 << 18
+const VARIANT_SHIFT := 18
+const VARIANT_MASK := 0x3
+
+## Stair shapes, cycled with R before placing. Stored as an index rather than a
+## flag so more can be added without changing the packing or the key handling.
+const STAIR_VARIANTS := ["Straight", "Corner Left", "Corner Right"]
+const STAIR_STRAIGHT := 0
+const STAIR_CORNER_L := 1
+const STAIR_CORNER_R := 2
 
 
-static func make_stair(stair_id: int, facing: int, corner: bool) -> int:
-	var v := (stair_id & ID_MASK) | ((facing & FACING_MASK) << FACING_SHIFT)
-	return v | CORNER_BIT if corner else v
+static func make_stair(stair_id: int, facing: int, variant: int) -> int:
+	return (stair_id & ID_MASK) 		| ((facing & FACING_MASK) << FACING_SHIFT) 		| ((variant & VARIANT_MASK) << VARIANT_SHIFT)
 
 
 static func stair_facing_of(v: int) -> int:
 	return (v >> FACING_SHIFT) & FACING_MASK
 
 
-static func stair_is_corner(v: int) -> bool:
-	return (v & CORNER_BIT) != 0
+static func stair_variant_of(v: int) -> int:
+	return (v >> VARIANT_SHIFT) & VARIANT_MASK
+
+
+static func stair_variant_name(variant: int) -> String:
+	return STAIR_VARIANTS[variant % STAIR_VARIANTS.size()]
 
 
 # --- stacked slabs -----------------------------------------------------------
@@ -659,6 +670,7 @@ static func name_of(raw: int) -> String:
 	if SLAB_MATERIAL.has(id):
 		return "%s Slab" % NAMES.get(SLAB_MATERIAL[id], "Unknown")
 	if STAIR_MATERIAL.has(id):
-		var t := " Corner Stairs" if stair_is_corner(raw) else " Stairs"
+		var v := stair_variant_of(raw)
+		var t := " Stairs" if v == STAIR_STRAIGHT else " %s Stairs" % stair_variant_name(v)
 		return NAMES.get(STAIR_MATERIAL[id], "Unknown") + t
 	return NAMES.get(id, "Unknown")

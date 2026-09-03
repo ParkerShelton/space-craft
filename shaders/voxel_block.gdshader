@@ -112,12 +112,30 @@ void fragment() {
 		// Stripe count varies per planet, so worlds get different timber.
 		float bands = 3.0 + floor(fract(world_seed * 0.37) * 4.0);
 		if (abs(dot(n, up)) > 0.5) {
-			// Cut end: concentric rings about each trunk cell's centre.
+			// Cut end: concentric rings about each trunk cell's centre, with
+			// the exposed inner wood PALER and warmer than the bark.
 			float r = length(fract(perp) - 0.5);
 			shade = 0.82 + quantize(fract(r * bands * 1.6), 3.0) * 0.26;
+			// A RIM of bark is left around the pale core, rather than the whole
+			// top going pale -- that border is what gives a cut log depth and
+			// reads as the trunk's outside wrapping its inside. Measured in
+			// texels off the cell edge, so it scales with the art style.
+			vec2 ti = floor(fract(fc) * texels);
+			float edge = min(min(ti.x, ti.y),
+				min(texels - 1.0 - ti.x, texels - 1.0 - ti.y));
+			if (edge < 1.0) {
+				base *= 0.90;   // bark, same as the sides
+			} else {
+				base = clamp(base * vec3(1.75, 1.58, 1.18), 0.0, 1.0);
+			}
 		} else {
+			// Bark: darker than the core, with the grain running lengthways.
 			float band = floor(dot(perp, vec3(0.7, 0.0, 0.7)) * bands * 2.0);
 			shade = 0.82 + quantize(fract(band * 0.37), 3.0) * 0.24;
+			// Only a light darkening: the faces already carry baked
+			// directional shading, and doubling down on it crushed the
+			// bark to near-black in anything but full sun.
+			base *= 0.90;
 		}
 		shade *= 0.97 + h * 0.06;   // faint per-cell break-up on top
 

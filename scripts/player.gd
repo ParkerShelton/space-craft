@@ -100,7 +100,7 @@ const TETHER_LEN := 18.0          # max EVA tether distance
 var _camera: Camera3D
 var _ray: RayCast3D
 var _outline: MeshInstance3D       # wireframe box around the block under the crosshair
-var _stair_corner := false         # R toggles straight vs corner stairs before placing
+var _stair_variant := 0            # R cycles the stair shape before placing
 var _ghost: MeshInstance3D         # translucent preview of the block about to be placed
 var _ghost_sig := ""               # shape key, so the mesh is only rebuilt when it changes
 var _pitch := 0.0
@@ -397,11 +397,11 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif piloting:
 			return  # while flying, only F/M/Esc/mouse-look do anything
 		elif event.keycode == KEY_R:
-			# Stairs only: flip between a straight run and a corner piece. The
-			# FACING comes from where you're looking when you place, so turning
-			# your body is the rotation -- R only picks the shape.
-			_stair_corner = not _stair_corner
-			_toast("Stairs: %s" % ("corner" if _stair_corner else "straight"))
+			# Step to the next stair shape. A cycle rather than a toggle so more
+			# shapes can be added without changing this. FACING still comes from
+			# where you're looking, so turning your body is the rotation.
+			_stair_variant = (_stair_variant + 1) % Blocks.STAIR_VARIANTS.size()
+			_toast("Stairs: %s" % Blocks.stair_variant_name(_stair_variant))
 		elif event.keycode == KEY_G:
 			if aboard == null and not eva:
 				_start_ship()
@@ -1517,7 +1517,7 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 				return {"voxel": hit_v, "value": combined}
 	if Blocks.is_stair(place_id):
 		return {"voxel": pv, "value": Blocks.make_stair(place_id,
-			_stair_facing_for(obj as Planet, pv), _stair_corner)}
+			_stair_facing_for(obj as Planet, pv), _stair_variant)}
 	return {"voxel": pv, "value": place_id}
 
 

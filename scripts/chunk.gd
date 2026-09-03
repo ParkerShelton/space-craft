@@ -397,8 +397,13 @@ static func shape_boxes(raw: int, up: Vector3) -> Array:
 		var side: Vector3 = [bx, -ax, -bx, ax][Blocks.stair_facing_of(raw)]
 		var step := _half_toward(lo, hi, up)
 		step = _half_toward(step[0], step[1], f)
-		if Blocks.stair_is_corner(raw):
+		# A corner keeps only a quarter of the upper step, on one side or the
+		# other, so a staircase can turn either way.
+		var variant := Blocks.stair_variant_of(raw)
+		if variant == Blocks.STAIR_CORNER_L:
 			step = _half_toward(step[0], step[1], side)
+		elif variant == Blocks.STAIR_CORNER_R:
+			step = _half_toward(step[0], step[1], -side)
 		return [_half_toward(lo, hi, -up), step]
 	if Blocks.is_stacked_slab(raw):
 		return [_half_toward(lo, hi, -up), _half_toward(lo, hi, up)]
