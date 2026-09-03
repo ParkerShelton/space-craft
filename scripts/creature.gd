@@ -75,7 +75,9 @@ var _is_feint := false          # set when telegraph starts, read only when it e
 var _circle_dir := 1.0          # +-1, which way to strafe during "circle"
 var _was_blockable := false     # edge-tracks player.is_heavy_telegraphed() so the block roll fires once per charge
 var _sword: Node3D              # held-weapon visuals (pattern == "lunger" only)
-var _shield: Node3D
+var _shield: Node3D             # null on a dual-wielder -- always null-check before use
+var _offhand: Node3D            # second sword instead of a shield, when _dual_wield
+var _dual_wield := false        # rolled per creature in _build_body, not per species
 var _shield_rest_x := 0.0       # non-block target for _shield.rotation.x -- 0 for the pivot body, ARM_REST_FIX's counter-angle for the skeleton body
 var _telegraph_total := 0.45    # the actual (jittered) duration chosen for the current telegraph
 var _swing_t := 999.0           # counts up from 0 during "attack" (real clip duration or the pivot-fallback swing)
@@ -158,9 +160,20 @@ func _build_collision() -> void:
 
 # --- body assembly (boxes only, per body plan) ---------------------------------
 
+## Fraction of lungers that fight with two swords instead of sword+shield.
+## Rolled PER CREATURE (not per species) so a single planet's enemies are a
+## visible mix rather than all-or-nothing -- there's typically only one enemy
+## species per planet, so rolling it in Planet._make_species would make every
+## enemy you meet there identical.
+const DUAL_WIELD_CHANCE := 0.35
+
 func _build_body() -> void:
 	_model = Node3D.new()
 	add_child(_model)
+	# Note: a plain randf() means the roll is re-made if this creature is ever
+	# rebuilt (e.g. respawned after a reload) -- fine while fauna are transient,
+	# but derive it from a stable per-creature id if enemies ever persist.
+	_dual_wield = species.get("pattern", "") == "lunger" and randf() < DUAL_WIELD_CHANCE
 	var s: float = species.get("scale", 1.0)
 	var color: Color = species.get("color", Color.WHITE)
 	var accent: Color = species.get("accent", color)
@@ -265,8 +278,11 @@ func _build_biped(s: float, color: Color, accent: Color) -> void:
 	# (see player.gd:_build_held_weapon). Held at the forearm's end (the
 	# hand), so they follow the arm/elbow swing animation naturally.
 	if species.get("pattern", "") == "lunger" and _elbows.size() >= 2:
-		_build_sword(_elbows[1], s, fore_len)
-		_build_shield(_elbows[0], s, fore_len)
+		_sword = _build_sword(_elbows[1], s, fore_len)
+		if _dual_wield:
+			_offhand = _build_sword(_elbows[0], s, fore_len)
+		else:
+			_shield = _build_shield(_elbows[0], s, fore_len)
 
 
 ## Applies an animation delta ON TOP of ARM_REST_FIX rather than replacing it
@@ -421,25 +437,39 @@ func _build_biped_skeleton(s: float, color: Color, accent: Color) -> bool:
 	# needed to reach past the whole forearm length -- pass reach=0.
 	var r_hand_att := _mk_bone_attachment(bi_r_hand) if bi_r_hand >= 0 else _mk_bone_attachment(_bi_r_forearm)
 	var l_hand_att := _mk_bone_attachment(bi_l_hand) if bi_l_hand >= 0 else _mk_bone_attachment(_bi_l_forearm)
-	_build_sword(r_hand_att, s, 0.0)
-	_build_shield(l_hand_att, s, 0.0)
+	_sword = _build_sword(r_hand_att, s, 0.0)
 	# The hand bones inherit ARM_REST_FIX's rotation through the parent chain
 	# (nothing else in the forearm/hand rest orientation adds further net
 	# rotation), which the sword/shield geometry -- designed assuming an
 	# unrotated hand, matching the pivot-fallback body -- doesn't account for.
 	# Counter-rotate by the same amount to bring them back level.
 	_sword.rotation.x = -1.4
-	# The hand bone attachment's rest basis isn't a simple hang-down frame like
-	# the old pivot system's -- measured its actual world-space axes directly
-	# (global_transform.basis) rather than guessing signs: the shield's own
-	# "normal" axis (local X) already points forward correctly, but its
-	# "height" axis (local Y, the board's long 0.9-unit dimension) was pointing
-	# ~70 degrees off vertical, into the horizontal plane, which is what read
-	# as a tilted diamond instead of a flat upright board. Solved for the
-	# exact roll needed to bring that axis to true up: 1.4 (the old guess) +
-	# 1.2266 rad of additional roll around the shared axis.
-	_shield.rotation.x = 2.6266
-	_shield_rest_x = 2.6266  # _animate's shield-raise lerp must target this, not 0.0, or it erases the correction every frame
+	if _dual_wield:
+		# Offhand sword takes the SAME -1.4 as the main hand. Not assumed --
+		# solved for: took the right sword's achieved blade direction in the
+		# creature's local frame, mirrored it across the sagittal plane, and
+		# computed the rotation carrying the blade axis (local -Y) onto that
+		# target in the left hand's own frame. The answer came back as
+		# (-1.4, ~0, ~0), i.e. both arms' bone bases share an orientation
+		# convention here rather than being mirrored. (A single-axis sweep is
+		# NOT a valid way to check this -- one run appeared to show a 46 degree
+		# residual purely because the creature kept animating between samples,
+		# so each sample used a different reference frame.)
+		_offhand = _build_sword(l_hand_att, s, 0.0)
+		_offhand.rotation.x = -1.4
+	else:
+		_shield = _build_shield(l_hand_att, s, 0.0)
+		# The hand bone attachment's rest basis isn't a simple hang-down frame like
+		# the old pivot system's -- measured its actual world-space axes directly
+		# (global_transform.basis) rather than guessing signs: the shield's own
+		# "normal" axis (local X) already points forward correctly, but its
+		# "height" axis (local Y, the board's long 0.9-unit dimension) was pointing
+		# ~70 degrees off vertical, into the horizontal plane, which is what read
+		# as a tilted diamond instead of a flat upright board. Solved for the
+		# exact roll needed to bring that axis to true up: 1.4 (the old guess) +
+		# 1.2266 rad of additional roll around the shared axis.
+		_shield.rotation.x = 2.6266
+		_shield_rest_x = 2.6266  # _animate's shield-raise lerp must target this, not 0.0, or it erases the correction every frame
 
 	# Merge in a second real clip (a run cycle) for actual movement, replacing
 	# the hand-posed sin-wave walk cycle entirely -- a real authored clip
@@ -488,8 +518,8 @@ func _mk_glow_box(parent: Node3D, size: Vector3, pos: Vector3, color: Color, ene
 
 const BLADE_GLOW := Color(1.0, 0.45, 0.15)  # a hot energy-blade orange, distinct from the pistol's cyan
 
-func _build_sword(hand: Node3D, s: float, reach: float) -> void:
-	_sword = Node3D.new()
+func _build_sword(hand: Node3D, s: float, reach: float) -> Node3D:
+	var _sword := Node3D.new()
 	hand.add_child(_sword)
 	_sword.position = Vector3(0, -reach, 0.03 * s)
 	# Grip, crossguard, then blade -- each stacked further NEGATIVE-Y from the
@@ -503,10 +533,11 @@ func _build_sword(hand: Node3D, s: float, reach: float) -> void:
 	_mk_box(_sword, Vector3(0.1, 0.22, 0.1) * s, Vector3(0, -0.1 * s, 0), Color(0.25, 0.2, 0.15))          # grip
 	_mk_box(_sword, Vector3(0.36, 0.06, 0.06) * s, Vector3(0, -0.21 * s, 0), Color(0.5, 0.42, 0.3))        # crossguard -- wider than the blade, so it actually registers as a hilt
 	_mk_glow_box(_sword, Vector3(0.13, 0.8, 0.05) * s, Vector3(0, -0.61 * s, 0), BLADE_GLOW, 1.8)          # blade
+	return _sword
 
 
-func _build_shield(hand: Node3D, s: float, reach: float) -> void:
-	_shield = Node3D.new()
+func _build_shield(hand: Node3D, s: float, reach: float) -> Node3D:
+	var _shield := Node3D.new()
 	hand.add_child(_shield)
 	# Offset outward from the arm (not straight down) so the body doesn't hide it.
 	_shield.position = Vector3(0.2 * s, -reach * 0.5, 0.07 * s)
@@ -516,6 +547,7 @@ func _build_shield(hand: Node3D, s: float, reach: float) -> void:
 	# is broken" rather than "a shield is swinging with the arm."
 	_mk_box(_shield, Vector3(0.09, 0.7, 0.5) * s, Vector3(0, 0, 0), Color(0.58, 0.6, 0.64))                # board -- cool steel-gray, deliberately distinct from the warm torso/accent colors so it doesn't just blend into the body's silhouette
 	_mk_glow_box(_shield, Vector3(0.11, 0.18, 0.18) * s, Vector3(0.07 * s, 0, 0), BLADE_GLOW, 1.2)         # boss -- same glow color as the blade, reads as "this enemy's kit"
+	return _shield
 
 
 func _build_serpent(s: float, color: Color, accent: Color) -> void:
