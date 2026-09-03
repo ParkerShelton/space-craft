@@ -26,8 +26,25 @@ var _job_craft := {}
 var _mi: MeshInstance3D
 var _col: CollisionShape3D
 
+# --- built machines ----------------------------------------------------------
+# A machine assembled from blocks reuses this class for its storage, jobs and
+# UI, but must NOT put a body inside the structure the player built -- the
+# blocks are the machine. Headless stations skip the mesh and collision and are
+# reached by right-clicking their Machine Core instead of by looking at them.
+var headless := false
+## Set from the machine registry: false while the structure is missing a block.
+var active := true
+
+# --- power ---
+const POWER_MAX := 1000.0
+var power := 0.0
+var burn_t := 0.0          # seconds left on the current unit of fuel
+var burn_rate := 0.0       # power/sec it is producing while that burns
+
 
 static func capacity_of(k: int) -> int:
+	if k == Blocks.GENERATOR:
+		return 6   # a fuel bunker: feed it ore and let it run
 	if k == Blocks.CHEST:
 		return CHEST_SLOTS
 	if k == Blocks.FORGE:
@@ -61,7 +78,8 @@ func configure(k: int, w: WorldManager) -> void:
 	kind = k
 	world = w
 	_ensure_storage()
-	_build_visual()
+	if not headless:
+		_build_visual()
 
 
 func title() -> String:
@@ -69,7 +87,7 @@ func title() -> String:
 
 
 func _ready() -> void:
-	if _mi == null:
+	if _mi == null and not headless:
 		_build_visual()
 
 
@@ -249,7 +267,43 @@ func start_craft(craft: Dictionary) -> int:
 	return 1
 
 
+## Burns ore for power. Duration and output both scale with the ore's
+## Combustion, so which ore you shovel in genuinely matters -- and a damaged
+## structure produces nothing until its missing block is replaced.
+func _tick_generator(delta: float) -> void:
+	if kind != Blocks.GENERATOR:
+		return
+	if not active:
+		burn_t = 0.0
+		burn_rate = 0.0
+		return
+	if burn_t > 0.0:
+		burn_t -= delta
+		power = minf(power + burn_rate * delta, POWER_MAX)
+		if burn_t > 0.0:
+			return
+		burn_rate = 0.0
+	if power >= POWER_MAX:
+		return   # full: don't waste fuel
+	for s in storage:
+		if int(s.get("count", 0)) <= 0:
+			continue
+		var props: Dictionary = s.get("props", {})
+		if not Blocks.is_fuel(int(s["id"]), props):
+			continue
+		s["count"] = int(s["count"]) - 1
+		if int(s["count"]) <= 0:
+			s["id"] = Blocks.AIR
+			s["props"] = {}
+			s["src"] = ""
+			s["mat"] = {}
+		burn_t = Blocks.fuel_burn_time(props)
+		burn_rate = Blocks.fuel_power_rate(props)
+		return
+
+
 func _process(delta: float) -> void:
+	_tick_generator(delta)
 	if _job == "":
 		return
 	_job_t += delta

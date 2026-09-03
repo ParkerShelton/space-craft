@@ -1714,9 +1714,20 @@ func _try_assemble_machine() -> bool:
 		return false
 	var planet := tgt["obj"] as Planet
 	var v: Vector3i = tgt["voxel"]
+	# Already built? Right-clicking the core opens it -- that is how you reach a
+	# machine made of blocks, since there is no body to look at.
+	var existing := planet.machine_station_at(v)
+	if existing != null:
+		if not planet.machine_online_at(v):
+			_toast("%s is damaged -- replace the missing block" % existing.title())
+		_open_station(existing)
+		return true
 	var res := planet.assemble_machine(v)
 	if res.get("ok", false):
 		_toast("%s assembled" % res.get("name", "Machine"))
+		var st := planet.machine_station_at(v)
+		if st != null:
+			_open_station(st)
 	else:
 		_toast(str(res.get("reason", "Cannot assemble")))
 	return true
@@ -3353,6 +3364,19 @@ func _station_primary_material(mtype: String) -> Dictionary:
 
 
 func _craft_preview_text(kind: int) -> String:
+	if kind == Blocks.GENERATOR:
+		var st := _station_open
+		if st == null:
+			return ""
+		if not st.active:
+			return "DAMAGED — replace the missing block to restart"
+		var pct := 100.0 * st.power / Station.POWER_MAX
+		if st.burn_t > 0.0:
+			return "Power %d%%   burning: +%.1f/s   %.0fs left
+Feed it combustible ore — the higher its Combustion, the longer and harder it burns." % [
+				int(pct), st.burn_rate, st.burn_t]
+		return "Power %d%%   idle
+Load ore with a Combustion rating to start burning." % int(pct)
 	if kind == Blocks.CARPENTER:
 		return "Load Wood, Rock, and Metal to build →"
 	if kind == Blocks.SHAPER:

@@ -50,6 +50,7 @@ var day_phase := 0.0
 # while keeping the world blocks as the single source of truth. Saving the whole
 # footprint instead would be larger and could drift out of sync with the blocks.
 var machine_cores: Array = []              # Array[Vector3i], saved
+var _world_ref: WorldManager               # for headless machine stations
 var _machines: Dictionary = {}             # controller -> {def, rot, online, missing}
 var _machine_at: Dictionary = {}           # voxel -> controller
 var surface_noise := FastNoiseLite.new()
@@ -795,7 +796,19 @@ func assemble_machine(c: Vector3i) -> Dictionary:
 func _register_machine(c: Vector3i, def: Dictionary, rot: int, origin: Vector3i) -> void:
 	var built := Blocks.structure_cells(def, rot)
 	var cells: Dictionary = built["cells"]
-	_machines[c] = {"def": def, "rot": rot, "origin": origin, "online": true}
+	# Reuse Station for storage, jobs and UI, but HEADLESS: the blocks the
+	# player built are the machine, so it must not drop a second body inside
+	# them. Kept across damage so a raid doesn't empty the fuel bunker.
+	var prev: Dictionary = _machines.get(c, {})
+	var st: Station = prev.get("station")
+	if st == null or not is_instance_valid(st):
+		st = Station.new()
+		st.headless = true
+		st.configure(int(def["result"]), _world_ref)
+		add_child(st)
+		st.position = Vector3(c) + Vector3(0.5, 0.5, 0.5)
+	st.active = true
+	_machines[c] = {"def": def, "rot": rot, "origin": origin, "online": true, "station": st}
 	for off in cells:
 		_machine_at[origin + (off as Vector3i)] = c
 	if not machine_cores.has(c):
@@ -822,7 +835,19 @@ func _machine_block_changed(v: Vector3i) -> void:
 			whole = false
 			break
 	m["online"] = whole
+	var st: Station = m.get("station")
+	if st != null and is_instance_valid(st):
+		st.active = whole   # a machine with a hole in it produces nothing
 	_machines[c] = m
+
+
+## The headless Station backing the machine covering `v`, or null.
+func machine_station_at(v: Vector3i) -> Station:
+	var c = _machine_at.get(v)
+	if c == null:
+		return null
+	var st = _machines.get(c, {}).get("station")
+	return st if st != null and is_instance_valid(st) else null
 
 
 ## Is the machine whose footprint covers `v` currently intact?

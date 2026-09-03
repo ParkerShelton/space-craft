@@ -59,7 +59,7 @@ const CHEST := 52     # pure storage (bigger than a machine)
 const CARPENTER := 62 # base-building bench: structural blocks from plain resources
 const FORGE := 63     # multiblock-built smelter upgrade: bigger + faster
 const CLIMATE_UNIT := 64  # planet base shelter: negates hazard damage nearby
-const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER]
+const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER, GENERATOR]
 
 # --- procedural ore slots ---------------------------------------------------
 # Each planet invents its own ores (unique name + color) and assigns each to a
@@ -120,6 +120,21 @@ static func combustion_of(props: Dictionary) -> int:
 
 
 ## 0..3, the brightness step a torch made from this material burns at.
+## How long a unit of ore burns, and how much power it yields -- both scaled by
+## that ore's Combustion. This is what makes a volatile ore worth hauling home
+## rather than being just another rock.
+static func fuel_burn_time(props: Dictionary) -> float:
+	return 2.0 + float(combustion_of(props)) * 0.10      # ~2 .. 12 seconds
+
+
+static func fuel_power_rate(props: Dictionary) -> float:
+	return 1.0 + float(combustion_of(props)) * 0.05      # ~1 .. 6 power/sec
+
+
+static func is_fuel(id: int, props: Dictionary) -> bool:
+	return is_ore(id) and combustion_of(props) > 0
+
+
 static func torch_tier_for(props: Dictionary) -> int:
 	return clampi(int(floor(float(combustion_of(props)) / 26.0)), 0, TORCH_TIERS - 1)
 
@@ -414,6 +429,9 @@ static func shapes_for(mat: int) -> Array:
 ## The block you interact with to assemble and operate a built machine. Placing
 ## one is how you declare "a machine goes here"; it is worthless on its own.
 const MACHINE_CORE := 94
+## Burns combustible ore for power. Deliberately has no single-block version:
+## a generator is the kind of thing whose whole point is that it's big.
+const GENERATOR := 95
 
 ## Machines that can ONLY exist as a structure you physically build -- there is
 ## deliberately no single-block version that does the same job worse. The small
@@ -426,6 +444,20 @@ const MACHINE_CORE := 94
 ## controller, and the pattern is matched in all four rotations about local up,
 ## so orientation never has to be guessed.
 const STRUCTURES := [
+	{
+		"name": "Generator",
+		"result": GENERATOR,
+		"size": Vector3i(3, 3, 3),
+		"legend": {"#": METAL, "R": ROCK, "C": MACHINE_CORE, ".": AIR},
+		# A stone firebox in a metal frame: rock floor and walls around the
+		# burn chamber, metal above, and the core on the front face where you
+		# feed it.
+		"layers": [
+			["RRR", "RRR", "RRR"],
+			["#C#", "R.R", "RRR"],
+			["###", "###", "###"],
+		],
+	},
 	{
 		"name": "Forge",
 		"result": FORGE,
@@ -627,6 +659,7 @@ const NAMES := {
 	CARPENTER: "Carpenter's Bench",
 	SHAPER: "Block Shaper",
 	MACHINE_CORE: "Machine Core",
+	GENERATOR: "Generator",
 	TORCH: "Torch",
 	EMBER_TORCH: "Ember Torch",
 	GLOW_LAMP: "Glow Lamp",
@@ -717,6 +750,7 @@ const COLORS := {
 	CARPENTER: Color(0.48, 0.34, 0.20),
 	SHAPER: Color(0.52, 0.52, 0.56),
 	MACHINE_CORE: Color(0.86, 0.52, 0.18),
+	GENERATOR: Color(0.62, 0.45, 0.28),
 	TORCH: Color(1.0, 0.74, 0.40),
 	EMBER_TORCH: Color(1.0, 0.62, 0.26),
 	GLOW_LAMP: Color(0.95, 0.97, 1.0),

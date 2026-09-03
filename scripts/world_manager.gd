@@ -383,6 +383,7 @@ func add_planet(cfg: Dictionary) -> Planet:
 	p.name = cfg.get("name", "Planet")
 	p.position = cfg.get("position", Vector3.ZERO)
 	add_child(p)
+	p._world_ref = self   # so built machines can create their headless stations
 	p.configure(cfg)
 	planets.append(p)
 	return p
