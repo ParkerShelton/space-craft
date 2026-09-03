@@ -373,29 +373,38 @@ static func _emit_stair(lo0: Vector3, gv: Vector3i, raw: int, planet: Planet,
 		cverts: PackedVector3Array) -> void:
 	var mat := Blocks.base_material_of(Blocks.bottom_of(raw))
 	var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
-	# The two cell axes lying flat against this face of the world.
-	var ax := Vector3(1, 0, 0)
-	var bx := Vector3(0, 0, 1)
-	if absf(up.x) > 0.5:
-		ax = Vector3(0, 1, 0)
-	elif absf(up.z) > 0.5:
-		bx = Vector3(0, 1, 0)
-	var facing: int = Blocks.stair_facing_of(raw)
-	var f: Vector3 = [ax, bx, -ax, -bx][facing]
-	var side: Vector3 = [bx, -ax, -bx, ax][facing]   # 90 degrees from `f`
+	for b in shape_boxes(raw, up):
+		_emit_solid_box_cell(lo0 + b[0], lo0 + b[1], gv, mat,
+			planet, snap, verts, normals, colors, uvs, cverts)
 
-	# Lower half: full footprint, half height on the local-down side.
-	var base_box := _half_toward(lo0, lo0 + Vector3.ONE, -up)
-	_emit_solid_box_cell(base_box[0], base_box[1], gv, mat,
-		planet, snap, verts, normals, colors, uvs, cverts)
 
-	# Upper step: the half on the facing side; a corner keeps a quarter of it.
-	var top := _half_toward(lo0, lo0 + Vector3.ONE, up)
-	top = _half_toward(top[0], top[1], f)
-	if Blocks.stair_is_corner(raw):
-		top = _half_toward(top[0], top[1], side)
-	_emit_solid_box_cell(top[0], top[1], gv, mat,
-		planet, snap, verts, normals, colors, uvs, cverts)
+## Every solid box a block occupies inside its own cell, as [[lo, hi], ...] in
+## 0..1 cell space. ONE definition of each shape, shared by the mesher and the
+## placement ghost -- if these diverged, the preview would lie about what you
+## are about to build.
+static func shape_boxes(raw: int, up: Vector3) -> Array:
+	var lo := Vector3.ZERO
+	var hi := Vector3.ONE
+	var base := Blocks.bottom_of(raw)
+	if Blocks.is_stair(base):
+		var ax := Vector3(1, 0, 0)
+		var bx := Vector3(0, 0, 1)
+		if absf(up.x) > 0.5:
+			ax = Vector3(0, 1, 0)
+		elif absf(up.z) > 0.5:
+			bx = Vector3(0, 1, 0)
+		var f: Vector3 = [ax, bx, -ax, -bx][Blocks.stair_facing_of(raw)]
+		var side: Vector3 = [bx, -ax, -bx, ax][Blocks.stair_facing_of(raw)]
+		var step := _half_toward(lo, hi, up)
+		step = _half_toward(step[0], step[1], f)
+		if Blocks.stair_is_corner(raw):
+			step = _half_toward(step[0], step[1], side)
+		return [_half_toward(lo, hi, -up), step]
+	if Blocks.is_stacked_slab(raw):
+		return [_half_toward(lo, hi, -up), _half_toward(lo, hi, up)]
+	if Blocks.is_slab(base) or base == Blocks.ROOF_SLAB:
+		return [_half_toward(lo, hi, -up)]
+	return [[lo, hi]]
 
 
 ## The half of a box lying toward `dir`, where `dir` is one of the six unit

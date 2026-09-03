@@ -101,6 +101,8 @@ var _camera: Camera3D
 var _ray: RayCast3D
 var _outline: MeshInstance3D       # wireframe box around the block under the crosshair
 var _stair_corner := false         # R toggles straight vs corner stairs before placing
+var _ghost: MeshInstance3D         # translucent preview of the block about to be placed
+var _ghost_sig := ""               # shape key, so the mesh is only rebuilt when it changes
 var _pitch := 0.0
 var _look := Vector2.ZERO          # accumulated mouse delta, consumed in physics
 
@@ -195,10 +197,23 @@ func _ready() -> void:
 	om.no_depth_test = false
 	_outline.material_override = om
 	_outline.visible = false
+	_ghost = MeshInstance3D.new()
+	_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var gm := StandardMaterial3D.new()
+	gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	gm.albedo_color = Color(0.6, 0.9, 1.0, 0.35)
+	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	gm.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# Draw over the world: a preview sunk inside terrain is worse than useless.
+	gm.no_depth_test = true
+	_ghost.material_override = gm
+	_ghost.visible = false
 	if world != null:
 		world.add_child(_outline)
+		world.add_child(_ghost)
 	else:
 		get_parent().add_child(_outline)
+		get_parent().add_child(_ghost)
 
 	_init_inventory()
 	_build_ui()
@@ -550,6 +565,8 @@ func _physics_process(delta: float) -> void:
 	if piloting != null:
 		if _outline != null:
 			_outline.visible = false
+		if _ghost != null:
+			_ghost.visible = false
 		_pilot_physics(delta)
 		_update_ui()
 		return
@@ -1349,6 +1366,8 @@ func _update_outline(tgt: Dictionary) -> void:
 		and not inv_open and _station_open == null and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
 	if not show:
 		_outline.visible = false
+		if _ghost != null:
+			_ghost.visible = false
 		return
 	var obj = tgt["obj"]
 	var v: Vector3i = tgt["voxel"]
@@ -1369,6 +1388,55 @@ func _update_outline(tgt: Dictionary) -> void:
 			origin = obj.to_global(Vector3(v) + axis * 0.5)
 	_outline.global_transform = Transform3D(b, origin)
 	_outline.visible = true
+	_update_ghost(tgt)
+
+
+## Translucent preview of the block about to be placed, in its ACTUAL shape --
+## a slab shows as half a cell, a stair shows its step and which way it climbs.
+## That is what makes choosing a stair's rotation and corner meaningful before
+## committing: you can see the result and turn or press R until it looks right.
+func _update_ghost(tgt: Dictionary) -> void:
+	if _ghost == null:
+		return
+	var place_id := _selected_id()
+	if place_id == Blocks.AIR or not Blocks.is_placeable_block(place_id):
+		_ghost.visible = false
+		return
+	var plan := _placement_plan(tgt, place_id)
+	if plan.is_empty():
+		_ghost.visible = false
+		return
+	var obj = tgt["obj"]
+	var v: Vector3i = plan["voxel"]
+	var value: int = plan["value"]
+	var up := Vector3.UP
+	if obj is Planet:
+		up = (obj as Planet)._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+	var boxes := Chunk.shape_boxes(value, up)
+	# Rebuilding the mesh every frame would be wasteful; the shape only changes
+	# when the block, its orientation, or the face you're on changes.
+	var sig := "%d|%s|%s" % [value, up, boxes.size()]
+	if sig != _ghost_sig:
+		_ghost_sig = sig
+		_ghost.mesh = _make_ghost_mesh(boxes)
+	_ghost.global_transform = Transform3D(obj.global_transform.basis, obj.to_global(Vector3(v)))
+	_ghost.visible = true
+
+
+func _make_ghost_mesh(boxes: Array) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for bx in boxes:
+		var lo: Vector3 = bx[0]
+		var hi: Vector3 = bx[1]
+		# nudge outward so the preview never z-fights the block behind it
+		lo -= Vector3.ONE * 0.004
+		hi += Vector3.ONE * 0.004
+		for fi in 6:
+			var q := Chunk._box_face(lo, hi, fi)
+			st.add_vertex(q[0]); st.add_vertex(q[1]); st.add_vertex(q[2])
+			st.add_vertex(q[0]); st.add_vertex(q[2]); st.add_vertex(q[3])
+	return st.commit()
 
 
 # --- block placing (right-click) ----------------------------------------------
@@ -1394,24 +1462,18 @@ func _edit_block(_break_it: bool) -> void:
 		return
 	var obj = tgt["obj"]
 	var pv: Vector3i = tgt["place"]
-	# Placing a slab onto a slab fills the SAME voxel's upper half rather than
-	# starting a new voxel above it, so there is no gap between the two.
-	if tgt["kind"] == "planet" and Blocks.is_slab(place_id):
-		var hit_v: Vector3i = tgt["voxel"]
-		var hit_id: int = obj.get_id(hit_v)
-		var combined: int = Blocks.stack_result(hit_id, place_id)
-		if combined != Blocks.AIR and pv != hit_v:
-			var up_axis := Vector3i((obj as Planet)._axis_of(Vector3(hit_v) + Vector3(0.5, 0.5, 0.5)))
-			if pv == hit_v + up_axis:
-				obj.set_block(hit_v, combined)
-				_consume_active()
-				return
-	# Stairs record WHICH WAY they were placed, so one stair id per material
-	# covers all eight orientations instead of needing an id for each.
-	var placed_value := place_id
-	if tgt["kind"] == "planet" and Blocks.is_stair(place_id):
-		placed_value = Blocks.make_stair(place_id,
-			_stair_facing_for(obj as Planet, pv), _stair_corner)
+	# Where this lands and what it becomes -- shared with the placement ghost so
+	# the preview can't disagree with the result.
+	var plan := _placement_plan(tgt, place_id)
+	if plan.is_empty():
+		return
+	# Slab-onto-slab lands in the cell you're POINTING AT, not the one beyond
+	# it, so it takes an early exit before the normal adjacent-cell path.
+	if tgt["kind"] == "planet" and plan["voxel"] != pv:
+		obj.set_block(plan["voxel"], plan["value"])
+		_consume_active()
+		return
+	var placed_value: int = plan["value"]
 	if tgt["kind"] == "planet":
 		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
 			if place_id == Blocks.DOOR:
@@ -1432,6 +1494,31 @@ func _edit_block(_break_it: bool) -> void:
 			# crafted ship blocks carry their material stats onto the ship
 			obj.set_block(pv, place_id, inv[active_slot].get("props", {}))
 			_consume_active()
+
+
+## Where a block would land and what value it would take. Both the ghost and
+## the real placement go through this, so the preview cannot disagree with what
+## actually gets built. Returns {} if it wouldn't place.
+func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
+	if tgt.is_empty() or not tgt.get("hit", false):
+		return {}
+	var obj = tgt["obj"]
+	var pv: Vector3i = tgt["place"]
+	if tgt.get("kind", "") != "planet":
+		return {"voxel": pv, "value": place_id}
+	# A slab landing on a slab fills the same cell's upper half instead of
+	# opening a new cell above it.
+	if Blocks.is_slab(place_id):
+		var hit_v: Vector3i = tgt["voxel"]
+		var combined: int = Blocks.stack_result(obj.get_id(hit_v), place_id)
+		if combined != Blocks.AIR and pv != hit_v:
+			var up_axis := Vector3i((obj as Planet)._axis_of(Vector3(hit_v) + Vector3(0.5, 0.5, 0.5)))
+			if pv == hit_v + up_axis:
+				return {"voxel": hit_v, "value": combined}
+	if Blocks.is_stair(place_id):
+		return {"voxel": pv, "value": Blocks.make_stair(place_id,
+			_stair_facing_for(obj as Planet, pv), _stair_corner)}
+	return {"voxel": pv, "value": place_id}
 
 
 ## Which of the four flat directions a stair should climb toward: the one the
