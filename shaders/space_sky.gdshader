@@ -25,11 +25,13 @@ float hash13(vec3 p) {
 void sky() {
 	vec3 d = normalize(EYEDIR);
 
-	// Stars fade out as the atmosphere thickens -- but they come BACK at night,
-	// which is most of what sells a day/night cycle from the ground.
+	// Stars are drawn ON TOP of the sky rather than blended away by it. Mixing
+	// them out by `atmo` meant that standing on a planet (atmo ~= 1) hid them
+	// completely whatever the time of day, so night had no stars at all.
 	float h = hash13(floor(d * star_scale));
-	float star_hide = atmo * day;
-	vec3 space = vec3(step(star_density, h) * (1.0 - star_hide));
+	float stars = step(star_density, h);
+	// Daylight washes them out; the night sky is thin enough to see through.
+	float star_vis = 1.0 - atmo * smoothstep(0.12, 0.7, day);
 
 	// atmosphere: bright overhead (along local up), paler toward the horizon
 	float u = clamp(dot(d, normalize(atmo_up)) * 0.5 + 0.5, 0.0, 1.0);
@@ -44,7 +46,7 @@ void sky() {
 	vec3 sun_col = mix(vec3(1.0, 0.55, 0.25), vec3(1.0, 0.96, 0.88), day);
 
 	vec3 sky_lit = skycol + sun_col * glow * atmo;
-	COLOR = mix(space, sky_lit, atmo);
+	COLOR = sky_lit * atmo + stars * star_vis;
 	// The disc stays visible in space too, where there is no atmosphere.
 	COLOR += sun_col * disc;
 }

@@ -487,9 +487,13 @@ func _process(delta: float) -> void:
 	# Redden the sky near the horizon crossing, then drain it toward night.
 	var dusk := 1.0 - absf(_day * 2.0 - 1.0)          # peaks mid-transition
 	acol = acol.lerp(Color(1.0, 0.45, 0.2), dusk * 0.45 * _atmo)
-	acol = acol.lerp(Color(0.02, 0.03, 0.08), (1.0 - _day) * 0.85)
+	# Drain almost all the way to black at night: leaving 15% of the daytime
+	# blue behind kept the sky milky and drowned the stars.
+	acol = acol.lerp(Color(0.008, 0.011, 0.028), (1.0 - _day) * 0.97)
 
-	var hor := acol.lerp(Color(1, 1, 1), 0.55)
+	# The horizon only pales toward white while the sun is actually up --
+	# otherwise it stayed bright at midnight and lit the skyline from nowhere.
+	var hor := acol.lerp(Color(1, 1, 1), 0.55 * _day)
 	_sky_mat.set_shader_parameter("atmo", _atmo)
 	_sky_mat.set_shader_parameter("atmo_up", up)
 	_sky_mat.set_shader_parameter("sky_color", Vector3(acol.r, acol.g, acol.b))
@@ -499,7 +503,7 @@ func _process(delta: float) -> void:
 	# Never let night reach true black: this game drains O2 and applies hazard
 	# damage, and being unable to see on top of that is punishing before you
 	# have any light source.
-	_env.ambient_light_energy = lerpf(0.27, 0.6, _atmo) * lerpf(0.28, 1.0, _day)
+	_env.ambient_light_energy = lerpf(0.27, 0.6, _atmo) * lerpf(0.20, 1.0, _day)
 	_env.ambient_light_color = SPACE_AMBIENT.lerp(acol, _atmo * 0.8)
 	_sun.rotation = Transform3D().looking_at(sun_dir, Vector3.UP).basis.get_euler()
 	_sun.light_energy = lerpf(1.2, 1.5, _atmo) * _day
