@@ -536,7 +536,7 @@ func rebuild() -> void:
 			arr[Mesh.ARRAY_NORMAL] = normals
 			arr[Mesh.ARRAY_COLOR] = colors
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-			m.surface_set_material(m.get_surface_count() - 1, Chunk._get_material())
+			m.surface_set_material(m.get_surface_count() - 1, Chunk._get_plain_material())
 		if not gverts.is_empty():
 			var garr := []
 			garr.resize(Mesh.ARRAY_MAX)

@@ -7,6 +7,8 @@ extends StaticBody3D
 ## turn the raw arrays into an ArrayMesh + collision shape.
 
 const CS := Blocks.CHUNK_SIZE
+## Block ids are packed into UV as id/ID_SCALE; the shader multiplies back out.
+const ID_SCALE := 64.0
 
 var planet: Planet
 var cc: Vector3i  # chunk coordinate (in chunk units)
@@ -15,33 +17,61 @@ var _mesh_instance: MeshInstance3D
 var _collision: CollisionShape3D
 var _collision_sig := 0  # hash of the opaque verts the current shape was cooked from
 
-static var _material: ShaderMaterial
-## Per-world offset into the procedural block texturing, so two worlds don't
-## share the same grass patterning. Set once from main when a world starts.
+## Block texturing is per PLANET, not shared: each planet seeds its own
+## patterns, so one world's trees are visibly a different species from
+## another's. Cached on the planet itself (see _get_material).
 static var _tex_seed := 0.0
+static var _shader: Shader
 
 
 static var _water_material: StandardMaterial3D
 
-static func _get_material() -> ShaderMaterial:
-	if _material == null:
-		_material = ShaderMaterial.new()
-		_material.shader = load("res://shaders/voxel_block.gdshader")
-		# The shader keeps doing what vertex_color_use_as_albedo did (COLOR is
-		# the base albedo, and already carries the baked per-face shading) and
-		# layers world-space procedural detail on top. cull_disabled and the
-		# roughness/metallic values live in the shader itself now.
-		_material.set_shader_parameter("grass_id", float(Blocks.GRASS))
-		_material.set_shader_parameter("world_seed", _tex_seed)
-	return _material
+## Plain vertex-colour material, for geometry that is not planet terrain --
+## ships are player-built hulls (metal/cockpit/thruster), carry no block-id UVs,
+## and belong to no planet, so they keep the original flat-colour look.
+static var _plain_material: StandardMaterial3D
+
+static func _get_plain_material() -> StandardMaterial3D:
+	if _plain_material == null:
+		_plain_material = StandardMaterial3D.new()
+		_plain_material.vertex_color_use_as_albedo = true
+		_plain_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_plain_material.roughness = 0.85
+		_plain_material.metallic = 0.0
+	return _plain_material
 
 
-## Re-rolls the procedural block texturing for a new world. Safe to call before
-## any chunk exists; the value is applied when the shared material is built.
+static func _get_material(p: Planet) -> ShaderMaterial:
+	if p == null:
+		return null
+	if p.block_material != null:
+		return p.block_material
+	if _shader == null:
+		_shader = load("res://shaders/voxel_block.gdshader")
+	var m := ShaderMaterial.new()
+	m.shader = _shader
+	# The shader keeps doing what vertex_color_use_as_albedo did (COLOR is the
+	# base albedo, and already carries the baked per-face shading) and layers
+	# world-space procedural detail on top. cull_disabled and the
+	# roughness/metallic values live in the shader itself now.
+	m.set_shader_parameter("grass_id", float(Blocks.GRASS))
+	m.set_shader_parameter("dirt_id", float(Blocks.DIRT))
+	m.set_shader_parameter("wood_lo", float(Blocks.WOOD_IDS.min()))
+	m.set_shader_parameter("wood_hi", float(Blocks.WOOD_IDS.max()))
+	m.set_shader_parameter("leaf_lo", float(Blocks.LEAF_IDS.min()))
+	m.set_shader_parameter("leaf_hi", float(Blocks.LEAF_IDS.max()))
+	# Per-planet seed AND centre: the centre is what lets wood grain run along
+	# the local up (i.e. along a trunk), which on a sphere is not world Y.
+	m.set_shader_parameter("world_seed", _tex_seed + float(p._seed % 9973) * 0.017)
+	m.set_shader_parameter("planet_center", p.global_position)
+	p.block_material = m
+	return m
+
+
+## Re-rolls procedural block texturing for a new world. Planets mix this with
+## their own seed, so worlds differ AND planets within a world differ.
 static func set_texture_seed(world_seed: int) -> void:
 	_tex_seed = float(world_seed % 100000) * 0.013
-	if _material != null:
-		_material.set_shader_parameter("world_seed", _tex_seed)
 
 
 static func _get_water_material() -> StandardMaterial3D:
@@ -89,7 +119,7 @@ func apply_mesh_data(data: Dictionary) -> void:
 		arr[Mesh.ARRAY_COLOR] = data["colors"]
 		arr[Mesh.ARRAY_TEX_UV] = data["uvs"]
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-		m.surface_set_material(m.get_surface_count() - 1, _get_material())
+		m.surface_set_material(m.get_surface_count() - 1, _get_material(planet))
 	if not wverts.is_empty():
 		var warr := []
 		warr.resize(Mesh.ARRAY_MAX)
@@ -101,18 +131,20 @@ func apply_mesh_data(data: Dictionary) -> void:
 	_mesh_instance.mesh = m
 	_mesh_instance.material_override = null
 
-	# Collision uses only the opaque geometry -- you pass through water. Cooking a
-	# ConcavePolygonShape3D is expensive, so skip it when the solid geometry is
+	# Collision uses the COLLIDABLE opaque geometry: you pass through water, and
+	# through leaves (which render but are deliberately non-solid). Cooking a
+	# ConcavePolygonShape3D is expensive, so skip it when that geometry is
 	# unchanged (e.g. a water-only remesh while a nearby lake is flowing).
-	if verts.is_empty():
+	var cverts: PackedVector3Array = data.get("cverts", verts)
+	if cverts.is_empty():
 		_collision.shape = null
 		_collision_sig = 0
 	else:
-		var sig := hash(verts)
+		var sig := hash(cverts)
 		if sig != _collision_sig or _collision.shape == null:
 			var shape := ConcavePolygonShape3D.new()
 			shape.backface_collision = true
-			shape.set_faces(verts)
+			shape.set_faces(cverts)
 			_collision.shape = shape
 			_collision_sig = sig
 
@@ -153,9 +185,10 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 	var wcolors := PackedColorArray()
 	var uvs := PackedVector2Array()
 	var wuvs := PackedVector2Array()
+	var cverts := PackedVector3Array()  # collidable subset of `verts` (no leaves)
 	if not any_solid:
 		return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs,
-			"wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
+			"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
 	# opaque terrain via greedy meshing (water is skipped here, handled below)
 	var strides := [1, CS, CS * CS]
@@ -164,7 +197,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 		var v := (d + 2) % 3
 		for dir in [1, -1]:
 			_greedy_pass(planet, snap, d, u, v, dir, base, ids, strides,
-				verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs)
+				verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, cverts)
 
 	# water: one box per cell, its height set by the water level (shallow water
 	# renders lower). Fill is along the cell's outward axis (radial-snapped).
@@ -209,11 +242,11 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 					elif up.y < -0.5: lo.y = hi.y - h
 					elif up.z > 0.5: hi.z = lo.z + h
 					elif up.z < -0.5: lo.z = hi.z - h
-					_emit_solid_box_cell(lo, hi, gv, Blocks.ROOF_SLAB, planet, snap, verts, normals, colors, uvs)
+					_emit_solid_box_cell(lo, hi, gv, Blocks.ROOF_SLAB, planet, snap, verts, normals, colors, uvs, cverts)
 				idx += 1
 
 	return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs,
-		"wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
+		"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
 
 const _WFACE := [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0),
@@ -236,7 +269,7 @@ static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Pla
 
 static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int, planet: Planet,
 		snap: Dictionary, verts: PackedVector3Array, normals: PackedVector3Array,
-		colors: PackedColorArray, uvs: PackedVector2Array) -> void:
+		colors: PackedColorArray, uvs: PackedVector2Array, cverts: PackedVector3Array) -> void:
 	var base := _block_color(planet, id)
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
@@ -247,7 +280,7 @@ static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int
 		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
 		var nrm := Vector3(n)
 		var q := _box_face(lo, hi, fi)
-		_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors, uvs, id)
+		_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors, uvs, id, cverts)
 
 
 static func _box_face(lo: Vector3, hi: Vector3, fi: int) -> Array:
@@ -264,7 +297,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 		base: Vector3i, ids: PackedInt32Array, strides: Array,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray,
-		uvs: PackedVector2Array, wuvs: PackedVector2Array) -> void:
+		uvs: PackedVector2Array, wuvs: PackedVector2Array, cverts: PackedVector3Array) -> void:
 	var sd: int = strides[d]
 	var su: int = strides[u]
 	var sv: int = strides[v]
@@ -301,7 +334,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 
 		var w_coord := a + (1 if dir > 0 else 0)
 		_emit_mask(planet, mask, d, u, v, dir, w_coord, normal,
-			verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs)
+			verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, cverts)
 
 
 # Opaque blocks use their registry colour, except procedural ores, whose colour is
@@ -316,7 +349,7 @@ static func _emit_mask(planet: Planet, mask: PackedInt32Array, d: int, u: int, v
 		normal: Vector3,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray,
-		uvs: PackedVector2Array, wuvs: PackedVector2Array) -> void:
+		uvs: PackedVector2Array, wuvs: PackedVector2Array, cverts: PackedVector3Array) -> void:
 	for j in CS:
 		var k := 0
 		while k < CS:
@@ -356,17 +389,23 @@ static func _emit_mask(planet: Planet, mask: PackedInt32Array, d: int, u: int, v
 					_quad(p00, p01, p11, p10, normal, col, wverts, wnormals, wcolors, wuvs, val)
 			else:
 				if dir > 0:
-					_quad(p00, p10, p11, p01, normal, col, verts, normals, colors, uvs, val)
+					_quad(p00, p10, p11, p01, normal, col, verts, normals, colors, uvs, val, cverts)
 				else:
-					_quad(p00, p01, p11, p10, normal, col, verts, normals, colors, uvs, val)
+					_quad(p00, p01, p11, p10, normal, col, verts, normals, colors, uvs, val, cverts)
 			k += wdt
 
 
 static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector3, col: Color,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
-		uvs: PackedVector2Array, bid: int) -> void:
+		uvs: PackedVector2Array, bid: int, cverts: PackedVector3Array = PackedVector3Array()) -> void:
 	verts.append(a); verts.append(b); verts.append(c)
 	verts.append(a); verts.append(c); verts.append(e)
+	# Leaves render but do not collide, so a canopy feels like foliage you brush
+	# through. Collision therefore gets its OWN vertex list rather than reusing
+	# the render mesh.
+	if not Blocks.is_leaf(bid):
+		cverts.append(a); cverts.append(b); cverts.append(c)
+		cverts.append(a); cverts.append(c); cverts.append(e)
 	for _n in 6:
 		normals.append(normal)
 		colors.append(col)
@@ -375,7 +414,13 @@ static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector
 		# to hand the shader. The pattern itself comes from world position (see
 		# shaders/voxel_block.gdshader); this is only how the shader knows which
 		# kind of block it is drawing.
-		uvs.append(Vector2(float(bid), 0.0))
+		#
+		# Scaled into 0..1 rather than stored raw. Godot compresses vertex
+		# attributes, and a raw id like 16.0 came back mangled -- terrain was
+		# landing inside the leaf id range and getting alpha-scissored, which
+		# showed up as sky speckling through solid rock. Keeping it normalised
+		# leaves plenty of resolution (ids are well under ID_SCALE).
+		uvs.append(Vector2(float(bid) / ID_SCALE, 0.0))
 
 
 ## Fake sky/directional shading by face orientation (world axes): up faces catch

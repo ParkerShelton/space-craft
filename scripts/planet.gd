@@ -31,6 +31,9 @@ var pal_ore := Blocks.IRON_ORE
 var pal_core := Blocks.CORE
 
 var _seed := 0
+## Procedural block-texturing material for this planet (see Chunk._get_material).
+## Per planet so no two worlds' trees share a grain pattern.
+var block_material: ShaderMaterial
 var surface_noise := FastNoiseLite.new()
 var ore_noise := FastNoiseLite.new()
 

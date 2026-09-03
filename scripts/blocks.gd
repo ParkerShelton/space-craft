@@ -387,6 +387,16 @@ static func hardness(id: int) -> float:
 static func use_of(id: int) -> String:
 	return USES.get(id, "")
 
+## Leaves render with alpha cutouts and are deliberately NON-COLLIDABLE, so a
+## canopy feels like foliage you brush through rather than a solid box.
+static func is_leaf(id: int) -> bool:
+	return id in LEAF_IDS
+
+
+static func is_wood(id: int) -> bool:
+	return id in WOOD_IDS
+
+
 static func is_ore(id: int) -> bool:
 	return id in ORE_SLOT_IDS
 
