@@ -1235,7 +1235,21 @@ func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: 
 	for i in steps:
 		var id: int = obj.get_id(v)
 		if id != Blocks.AIR and id != Blocks.WATER:
-			return {"hit": true, "kind": kind, "obj": obj, "voxel": v, "place": prev, "normal": normal, "id": id}
+			# Partial-height blocks only fill part of their cell, so marching
+			# whole cubes reports a hit (and an entry FACE) that doesn't match
+			# what you can see. Aiming just over a slab's top surface used to
+			# register as entering the cube's SIDE, which put the next slab
+			# beside it instead of on top. Test the real box instead.
+			var box := _partial_box(obj, v, id, kind)
+			if box.is_empty():
+				return {"hit": true, "kind": kind, "obj": obj, "voxel": v,
+					"place": prev, "normal": normal, "id": id}
+			var bx := _ray_box(start, ld, box["lo"], box["hi"])
+			if bx["hit"]:
+				var n: Vector3i = bx["normal"]
+				return {"hit": true, "kind": kind, "obj": obj, "voxel": v,
+					"place": v + n, "normal": n, "id": id}
+			# Ray passed through the empty part of the cell -- keep marching.
 		prev = v
 		if tmax.x <= tmax.y and tmax.x <= tmax.z:
 			v.x += step.x
@@ -1250,6 +1264,64 @@ func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: 
 			tmax.z += tdelta.z
 			normal = Vector3i(0, 0, -step.z)
 	return {}
+
+
+## The solid box of a partial-height block, in the object's local space.
+## Returns {} for anything that fills its whole cell (so the caller keeps the
+## cheap whole-cube path).
+func _partial_box(obj: Object, v: Vector3i, id: int, kind: String) -> Dictionary:
+	if kind != "planet":
+		return {}
+	# A stacked pair fills the cell between them, so it behaves as a full block.
+	if Blocks.is_stacked_slab(id):
+		return {}
+	if not Blocks.is_slab(id) and id != Blocks.ROOF_SLAB:
+		return {}
+	var up: Vector3 = (obj as Planet)._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+	var lo := Vector3(v)
+	var hi := lo + Vector3.ONE
+	var h := 0.5
+	if up.x > 0.5: hi.x = lo.x + h
+	elif up.x < -0.5: lo.x = hi.x - h
+	elif up.y > 0.5: hi.y = lo.y + h
+	elif up.y < -0.5: lo.y = hi.y - h
+	elif up.z > 0.5: hi.z = lo.z + h
+	elif up.z < -0.5: lo.z = hi.z - h
+	return {"lo": lo, "hi": hi}
+
+
+## Slab-method ray/AABB test. Returns {hit, normal}, where normal points back
+## along the face the ray entered through -- the same convention the DDA uses,
+## so `voxel + normal` is the cell a new block should go into.
+func _ray_box(o: Vector3, d: Vector3, lo: Vector3, hi: Vector3) -> Dictionary:
+	var tmin := -INF
+	var tmax := INF
+	var axis := 0
+	for i in 3:
+		var di: float = d[i]
+		var l: float = lo[i]
+		var h: float = hi[i]
+		if absf(di) < 1e-9:
+			if o[i] < l or o[i] > h:
+				return {"hit": false, "normal": Vector3i.ZERO}
+			continue
+		var t1: float = (l - o[i]) / di
+		var t2: float = (h - o[i]) / di
+		if t1 > t2:
+			var tmp := t1
+			t1 = t2
+			t2 = tmp
+		if t1 > tmin:
+			tmin = t1
+			axis = i
+		tmax = minf(tmax, t2)
+		if tmin > tmax:
+			return {"hit": false, "normal": Vector3i.ZERO}
+	if tmax < 0.0:
+		return {"hit": false, "normal": Vector3i.ZERO}
+	var n := [0, 0, 0]
+	n[axis] = -1 if d[axis] > 0.0 else 1
+	return {"hit": true, "normal": Vector3i(n[0], n[1], n[2])}
 
 
 func _tmax(s: float, d: float) -> float:
