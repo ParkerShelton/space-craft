@@ -78,13 +78,16 @@ var _sword: Node3D              # held-weapon visuals (pattern == "lunger" only)
 var _shield: Node3D             # null on a dual-wielder -- always null-check before use
 var _offhand: Node3D            # second sword instead of a shield, when _dual_wield
 var _dual_wield := false        # rolled per creature in _build_body, not per species
-var _shield_rest_x := 0.0       # non-block target for _shield.rotation.x -- 0 for the pivot body, ARM_REST_FIX's counter-angle for the skeleton body
+var _shield_rest_basis := Basis()  # build-time orientation of the shield on the hand bone (see _grip_basis)
 var _telegraph_total := 0.45    # the actual (jittered) duration chosen for the current telegraph
 var _swing_t := 999.0           # counts up from 0 during "attack" (real clip duration or the pivot-fallback swing)
 var _attack_clip_len := 0.0     # real clip length once playing, else SWORD_SWING_DURATION (pivot fallback)
 var _hit_applied := false       # guards against applying one swing's damage twice
 var _engaged := false           # aggro hysteresis latch -- see _land_physics
-var _hitbox: CollisionShape3D   # disabled while dying so a corpse isn't solid
+## Corpses move to their own collision layer while the death clip plays: still
+## solid against the world (so they don't sink through the floor) but invisible
+## to the player, who only masks layer 1.
+const CORPSE_LAYER := 4
 
 # --- lunger skeleton rig: a real Skeleton3D (from the imported FBX) instead
 # of the hand-built pivot chain, so real animation clips can drive it. Only
@@ -228,7 +231,6 @@ func _build_collision() -> void:
 	cap.shape = shape
 	cap.position = Vector3(0, 0.75 * scale_f, 0)
 	add_child(cap)
-	_hitbox = cap  # kept so a dying creature can stop blocking the player mid-death-clip
 
 
 # --- body assembly (boxes only, per body plan) ---------------------------------
@@ -401,6 +403,55 @@ func _mk_bone_attachment(bone_idx: int) -> BoneAttachment3D:
 	return att
 
 
+## Orientation for something held in a fist, derived from the hand's own bone
+## layout rather than a hand-tuned angle.
+##
+## A gripped sword's blade runs through the fist along the KNUCKLE LINE, exiting
+## past the index side and the pommel past the pinky -- so the index/pinky
+## knuckle offsets give the blade axis directly, and the middle-finger offset
+## (straight down the hand) orients the crossguard. All three are read from the
+## skeleton's REST pose, so they're constants of the rig and stay correct no
+## matter what a clip does to the hand at runtime.
+##
+## `long_axis_out` is the held object's own local axis that should point away
+## from the fist along the grip (the sword mesh is built down its local -Y).
+## Returns a basis for the item's local transform, or IDENTITY if the finger
+## bones are missing.
+func _grip_basis(hand_bi: int, side: String, long_axis_out: Vector3) -> Basis:
+	var bi_index := _skeleton.find_bone("mixamorig_%sHandIndex1" % side)
+	var bi_pinky := _skeleton.find_bone("mixamorig_%sHandPinky1" % side)
+	var bi_middle := _skeleton.find_bone("mixamorig_%sHandMiddle1" % side)
+	if bi_index < 0 or bi_pinky < 0 or bi_middle < 0:
+		return Basis()
+	var idx := _bone_child_offset(hand_bi, bi_index)
+	var pky := _bone_child_offset(hand_bi, bi_pinky)
+	var mid := _bone_child_offset(hand_bi, bi_middle)
+	var blade := (idx - pky)
+	if blade.length() < 0.0001 or mid.length() < 0.0001:
+		return Basis()
+	blade = blade.normalized()
+	# Map the item's own outward axis onto the blade direction.
+	var y_axis := blade if long_axis_out == Vector3.UP else -blade
+	# Crossguard sits perpendicular to the blade, in the plane of the hand.
+	var ref := mid.normalized()
+	var x_axis := (ref - y_axis * ref.dot(y_axis))
+	if x_axis.length() < 0.0001:
+		return Basis()
+	x_axis = x_axis.normalized()
+	var z_axis := x_axis.cross(y_axis)
+	return Basis(x_axis, y_axis, z_axis)
+
+
+## Where in the fist the grip sits: the centre of the knuckles, so the hilt is
+## inside the hand instead of floating at the wrist joint.
+func _grip_center(hand_bi: int, side: String) -> Vector3:
+	var bi_index := _skeleton.find_bone("mixamorig_%sHandIndex1" % side)
+	var bi_pinky := _skeleton.find_bone("mixamorig_%sHandPinky1" % side)
+	if bi_index < 0 or bi_pinky < 0:
+		return Vector3.ZERO
+	return (_bone_child_offset(hand_bi, bi_index) + _bone_child_offset(hand_bi, bi_pinky)) * 0.5
+
+
 func _has_clips(state: String) -> bool:
 	return _clip_keys.has(state) and not (_clip_keys[state] as Array).is_empty()
 
@@ -557,38 +608,35 @@ func _build_biped_skeleton(s: float, color: Color, accent: Color) -> bool:
 	var r_hand_att := _mk_bone_attachment(bi_r_hand) if bi_r_hand >= 0 else _mk_bone_attachment(_bi_r_forearm)
 	var l_hand_att := _mk_bone_attachment(bi_l_hand) if bi_l_hand >= 0 else _mk_bone_attachment(_bi_l_forearm)
 	_sword = _build_sword(r_hand_att, s, 0.0)
-	# The hand bones inherit ARM_REST_FIX's rotation through the parent chain
-	# (nothing else in the forearm/hand rest orientation adds further net
-	# rotation), which the sword/shield geometry -- designed assuming an
-	# unrotated hand, matching the pivot-fallback body -- doesn't account for.
-	# Counter-rotate by the same amount to bring them back level.
-	_sword.rotation.x = -1.4
+	# Orient held items from the hand's own bone layout (see _grip_basis).
+	# The previous fixed -1.4 / 2.6266 angles were solved against the OLD
+	# hand-posed rest pose; once real sword-and-shield clips drove the hand,
+	# the blade ended up hanging down past the knees like it was stabbing the
+	# ground instead of exiting the fist. Deriving from the knuckles fixes it
+	# for every clip at once, and adapts if the rig is ever swapped.
+	if bi_r_hand >= 0:
+		_sword.transform.basis = _grip_basis(bi_r_hand, "Right", Vector3.DOWN)
+		_sword.position = _grip_center(bi_r_hand, "Right")
 	if _dual_wield:
-		# Offhand sword takes the SAME -1.4 as the main hand. Not assumed --
-		# solved for: took the right sword's achieved blade direction in the
-		# creature's local frame, mirrored it across the sagittal plane, and
-		# computed the rotation carrying the blade axis (local -Y) onto that
-		# target in the left hand's own frame. The answer came back as
-		# (-1.4, ~0, ~0), i.e. both arms' bone bases share an orientation
-		# convention here rather than being mirrored. (A single-axis sweep is
-		# NOT a valid way to check this -- one run appeared to show a 46 degree
-		# residual purely because the creature kept animating between samples,
-		# so each sample used a different reference frame.)
+		# Offhand sword gets the same anatomy-derived grip, just read off the
+		# LEFT hand's own knuckles -- so it works whether or not the two hands'
+		# bone bases happen to mirror each other.
 		_offhand = _build_sword(l_hand_att, s, 0.0)
-		_offhand.rotation.x = -1.4
+		if bi_l_hand >= 0:
+			_offhand.transform.basis = _grip_basis(bi_l_hand, "Left", Vector3.DOWN)
+			_offhand.position = _grip_center(bi_l_hand, "Left")
 	else:
 		_shield = _build_shield(l_hand_att, s, 0.0)
-		# The hand bone attachment's rest basis isn't a simple hang-down frame like
-		# the old pivot system's -- measured its actual world-space axes directly
-		# (global_transform.basis) rather than guessing signs: the shield's own
-		# "normal" axis (local X) already points forward correctly, but its
-		# "height" axis (local Y, the board's long 0.9-unit dimension) was pointing
-		# ~70 degrees off vertical, into the horizontal plane, which is what read
-		# as a tilted diamond instead of a flat upright board. Solved for the
-		# exact roll needed to bring that axis to true up: 1.4 (the old guess) +
-		# 1.2266 rad of additional roll around the shared axis.
-		_shield.rotation.x = 2.6266
-		_shield_rest_x = 2.6266  # _animate's shield-raise lerp must target this, not 0.0, or it erases the correction every frame
+		# A shield is carried across the fist rather than gripped like a blade:
+		# its board (long local Y, thin local X) lies along the forearm with its
+		# face pointing out, so it takes the same knuckle-derived frame with the
+		# opposite outward axis. The old fixed 2.6266 roll was solved against
+		# the previous hand-posed rest and no longer holds now that authored
+		# clips drive the hand.
+		if bi_l_hand >= 0:
+			_shield.transform.basis = _grip_basis(bi_l_hand, "Left", Vector3.UP)
+			_shield.position = _grip_center(bi_l_hand, "Left")
+		_shield_rest_basis = _shield.transform.basis
 
 	# Register every cached clip into THIS rig's animation library. The clips
 	# all come from Mixamo exports that share the literal name "mixamo_com", so
@@ -1399,24 +1447,11 @@ func _animate(delta: float) -> void:
 		if _state == "block":
 			_arms[0].rotation.x = lerpf(_arms[0].rotation.x, -1.4, clampf(delta * 10.0, 0.0, 1.0))
 			_elbows[0].rotation.x = lerpf(_elbows[0].rotation.x, 0.8, clampf(delta * 10.0, 0.0, 1.0))
-	# Shield raises while actively blocking -- the visual payoff for the
-	# player's heavy-swing tell actually meaning something to the enemy. The
-	# lift itself comes from the arm-raise pose above (_set_arm_pose on the
-	# skeleton path, the old pivot lerp on the fallback path); the shield's
-	# OWN rotation always targets _shield_rest_x (not a separate "block"
-	# value) since that's the one roll angle, measured directly off the rig's
-	# actual bone basis, that keeps the board reading as a flat upright
-	# shield rather than a tilted diamond -- any other value (including the
-	# old pivot system's -1.1, tuned for a completely different parent frame)
-	# just rolls it back toward diamond territory. This lerp target must stay
-	# _shield_rest_x either way, or it'll fight/erase the build-time
-	# correction every frame.
-	# EXCEPT while the real skeleton is mid-attack: the imported clip is
-	# driving the whole left arm through a completely different range of
-	# motion then, and this lerp fighting it every frame is exactly what made
-	# the shield look broken/detached during the swing.
-	if _shield != null and not (_skeleton != null and _state == "attack"):
-		_shield.rotation.x = lerpf(_shield.rotation.x, _shield_rest_x, clampf(delta * 10.0, 0.0, 1.0))
+	# The shield used to be re-lerped toward a hand-tuned roll angle every
+	# frame, which had to be suppressed mid-attack so it didn't fight the clip.
+	# Its orientation is now a fixed, anatomy-derived offset on the hand bone
+	# (see _grip_basis), so it simply rides the hand like a real strapped
+	# shield -- nothing per-frame to do, and nothing left to fight.
 	if _tail_pivot != null:
 		var amp := 0.5 if species.get("kind") == "fish" else 0.25
 		_tail_pivot.rotation.y = sin(_phase * 0.6) * amp * maxf(moving, 0.3)
@@ -1462,8 +1497,14 @@ func take_hit(dmg: float, stagger: float = 0.0) -> bool:
 		_state = "dying"
 		_state_t = die_len
 		velocity = Vector3.ZERO
-		if _hitbox != null:
-			_hitbox.set_deferred("disabled", true)
+		# Move the corpse off the layer the player collides with, rather than
+		# disabling its shape outright: everything in this project shares layer
+		# 1, so disabling the shape also removed TERRAIN collision and the body
+		# fell through the floor mid-death-clip. Keeping collision_mask intact
+		# means it still rests on the ground; only its own layer changes, so the
+		# player (mask 1) can neither be blocked by it nor hit it again.
+		set_collision_layer_value(1, false)
+		set_collision_layer_value(CORPSE_LAYER, true)
 		return true
 	# A flinch reads very differently depending on whether it was absorbed on a
 	# shield or landed clean, so pick the matching reaction. Dual-wielders have
