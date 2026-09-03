@@ -212,10 +212,31 @@ const VARIANT_MASK := 0x3
 
 ## Stair shapes, cycled with R before placing. Stored as an index rather than a
 ## flag so more can be added without changing the packing or the key handling.
-const STAIR_VARIANTS := ["Straight", "Corner Left", "Corner Right"]
+## Only two SHAPES exist: a straight run and a corner. A second corner variant
+## would be redundant -- rotating the corner through its four facings already
+## reaches all four corner quarters.
+const STAIR_VARIANTS := ["Straight", "Corner"]
 const STAIR_STRAIGHT := 0
-const STAIR_CORNER_L := 1
-const STAIR_CORNER_R := 2
+const STAIR_CORNER := 1
+
+## Every placeable stair state, cycled in order by R: the straight run turned
+## through all four quarters, then the corner through all four. Facing is part
+## of the cycle rather than taken from the camera, so what you see previewed is
+## exactly what you get.
+const STAIR_STATES := 8
+
+
+static func stair_state_facing(state: int) -> int:
+	return state % 4
+
+
+static func stair_state_variant(state: int) -> int:
+	return STAIR_STRAIGHT if state < 4 else STAIR_CORNER
+
+
+static func stair_state_name(state: int) -> String:
+	return "%s  %d°" % [STAIR_VARIANTS[stair_state_variant(state)],
+		stair_state_facing(state) * 90]
 
 
 static func make_stair(stair_id: int, facing: int, variant: int) -> int:

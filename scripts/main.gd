@@ -36,6 +36,7 @@ var _env: Environment
 var _sky_mat: ShaderMaterial
 var _sun: DirectionalLight3D
 var _atmo := 0.0
+var _day := 1.0                    # 0 = night, 1 = full day (eased, see _process)
 var _menu_layer: CanvasLayer
 var _menu_vb: VBoxContainer
 
@@ -455,14 +456,55 @@ func _process(delta: float) -> void:
 			up = -g.normalized()
 	_atmo = lerpf(_atmo, target, clampf(delta * 2.0, 0.0, 1.0))
 
+	# --- day / night -------------------------------------------------------
+	# The terrain can't rotate -- it's world-axis-aligned voxels, and turning it
+	# would break chunk coords, gravity snapping and the up-axis logic. So the
+	# LIGHT moves instead: the sun swings around the planet's up axis once per
+	# day, which is indistinguishable from the ground turning.
+	for pl in _world.planets:
+		pl.day_phase = fposmod(pl.day_phase + delta / maxf(pl.day_length, 1.0), 1.0)
+	var sun_dir := Vector3(0.3, -0.8, 0.4).normalized()   # fixed light in space
+	var daylight := 1.0
+	if p != null:
+		# A basis on the planet's own up, so the sun tracks across ITS sky.
+		var east := up.cross(Vector3(0, 0, 1))
+		if east.length() < 0.1:
+			east = up.cross(Vector3(1, 0, 0))
+		east = east.normalized()
+		var noon := up
+		var ang := p.day_phase * TAU
+		# sunrise at the horizon, noon overhead, sunset opposite, then below
+		var sun_pos := east * cos(ang) + noon * sin(ang)
+		sun_dir = -sun_pos.normalized()
+		# How high the sun is: 1 overhead, 0 at the horizon, negative at night.
+		var height := sin(ang)
+		# An atmosphere scatters light, so dusk lingers and night keeps a little
+		# blue. Without one it's a hard terminator -- glare or nothing.
+		var soft: float = 0.22 if p.has_atmosphere else 0.04
+		daylight = clampf(smoothstep(-soft, soft, height), 0.0, 1.0)
+	_day = lerpf(_day, daylight, clampf(delta * 3.0, 0.0, 1.0))
+
+	# Redden the sky near the horizon crossing, then drain it toward night.
+	var dusk := 1.0 - absf(_day * 2.0 - 1.0)          # peaks mid-transition
+	acol = acol.lerp(Color(1.0, 0.45, 0.2), dusk * 0.45 * _atmo)
+	acol = acol.lerp(Color(0.02, 0.03, 0.08), (1.0 - _day) * 0.85)
+
 	var hor := acol.lerp(Color(1, 1, 1), 0.55)
 	_sky_mat.set_shader_parameter("atmo", _atmo)
 	_sky_mat.set_shader_parameter("atmo_up", up)
 	_sky_mat.set_shader_parameter("sky_color", Vector3(acol.r, acol.g, acol.b))
 	_sky_mat.set_shader_parameter("horizon_color", Vector3(hor.r, hor.g, hor.b))
-	_env.ambient_light_energy = lerpf(0.27, 0.6, _atmo)
+	_sky_mat.set_shader_parameter("sun_dir", -sun_dir)
+	_sky_mat.set_shader_parameter("day", _day)
+	# Never let night reach true black: this game drains O2 and applies hazard
+	# damage, and being unable to see on top of that is punishing before you
+	# have any light source.
+	_env.ambient_light_energy = lerpf(0.27, 0.6, _atmo) * lerpf(0.28, 1.0, _day)
 	_env.ambient_light_color = SPACE_AMBIENT.lerp(acol, _atmo * 0.8)
-	_sun.light_energy = lerpf(1.2, 1.5, _atmo)
+	_sun.rotation = Transform3D().looking_at(sun_dir, Vector3.UP).basis.get_euler()
+	_sun.light_energy = lerpf(1.2, 1.5, _atmo) * _day
+	# Warm the sunlight as it sits low, the way real low sun reddens.
+	_sun.light_color = Color(1, 1, 1).lerp(Color(1.0, 0.62, 0.35), dusk * 0.7 * _atmo)
 	# fog hides the render-distance edge (and the far LOD sphere) behind haze
 	_env.fog_enabled = _atmo > 0.02
 	_env.fog_light_color = acol

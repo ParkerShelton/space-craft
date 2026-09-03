@@ -402,11 +402,8 @@ static func shape_boxes(raw: int, up: Vector3) -> Array:
 		step = _half_toward(step[0], step[1], f)
 		# A corner keeps only a quarter of the upper step, on one side or the
 		# other, so a staircase can turn either way.
-		var variant := Blocks.stair_variant_of(raw)
-		if variant == Blocks.STAIR_CORNER_L:
+		if Blocks.stair_variant_of(raw) == Blocks.STAIR_CORNER:
 			step = _half_toward(step[0], step[1], side)
-		elif variant == Blocks.STAIR_CORNER_R:
-			step = _half_toward(step[0], step[1], -side)
 		return [_half_toward(lo, hi, -up), step]
 	if Blocks.is_stacked_slab(raw):
 		return [_half_toward(lo, hi, -up), _half_toward(lo, hi, up)]
@@ -620,15 +617,21 @@ static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector
 		uv2s.append(Vector2(float(_la) if _la >= 0 else 3.0, 0.0))
 
 
-## Fake sky/directional shading by face orientation (world axes): up faces catch
-## the most light, side faces less, down faces least. Cheap, greedy-friendly, and
-## it stacks on top of the real directional sun.
+## Per-face shading baked into the vertex colour, by face orientation.
+##
+## This is deliberately SUBTLE. It used to carry the whole sense of direction
+## (up 1.0 down 0.5), which looked right only while the sun never moved -- baked
+## at mesh time, it cannot follow a day/night cycle, so at midnight every
+## surface still read as lit from overhead. It is now a narrow ambient-occlusion
+## style bias that gives faces definition, and the real DirectionalLight3D
+## supplies the actual direction. Widening this range again would re-break
+## night lighting.
 static func _face_shade(d: int, dir: int) -> float:
 	if d == 1:  # Y axis
-		return 1.0 if dir > 0 else 0.5
+		return 1.0 if dir > 0 else 0.86
 	if d == 0:  # X axis
-		return 0.78 if dir > 0 else 0.70
-	return 0.86 if dir > 0 else 0.62  # Z axis
+		return 0.94 if dir > 0 else 0.92
+	return 0.96 if dir > 0 else 0.90  # Z axis
 
 
 static func _corner(d: int, u: int, v: int, wc: int, uu: int, vv: int) -> Vector3:

@@ -34,6 +34,14 @@ var _seed := 0
 ## Procedural block-texturing material for this planet (see Chunk._get_material).
 ## Per planet so no two worlds' trees share a grain pattern.
 var block_material: ShaderMaterial
+## Seconds for one full day. Seeded per planet so worlds don't share a rhythm --
+## a short day makes a planet feel small and frantic, a long one makes it feel
+## vast. Only planets WITH an atmosphere run a visible cycle; an airless rock
+## has no sky to redden, so it just gets hard light and hard shadow.
+var day_length := 240.0
+## How far through the current day, 0..1. Advanced by main's environment update
+## rather than by the planet, so it keeps ticking for planets you aren't on.
+var day_phase := 0.0
 var surface_noise := FastNoiseLite.new()
 var ore_noise := FastNoiseLite.new()
 
@@ -187,6 +195,11 @@ func configure(cfg: Dictionary) -> void:
 	hazard_dps = cfg.get("hazard_dps", 0.0)
 	shape_cube = cfg.get("cube", true)  # cube-planet-test branch: cubes by default
 
+	# 3 to 9 minutes per day, per planet.
+	var dr := RandomNumberGenerator.new()
+	dr.seed = _seed + 4242
+	day_length = dr.randf_range(180.0, 540.0)
+	day_phase = dr.randf()   # so planets aren't all sunrise at world start
 	surface_noise.seed = _seed
 	# Several rolling hills across the surface, regardless of planet size.
 	surface_noise.frequency = 3.0 / maxf(radius, 1.0)

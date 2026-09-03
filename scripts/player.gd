@@ -100,7 +100,7 @@ const TETHER_LEN := 18.0          # max EVA tether distance
 var _camera: Camera3D
 var _ray: RayCast3D
 var _outline: MeshInstance3D       # wireframe box around the block under the crosshair
-var _stair_variant := 0            # R cycles the stair shape before placing
+var _stair_state := 0              # R cycles every stair rotation + shape
 var _ghost: MeshInstance3D         # translucent preview of the block about to be placed
 var _ghost_sig := ""               # shape key, so the mesh is only rebuilt when it changes
 var _crack: MeshInstance3D         # progressive break-up drawn over the block being mined
@@ -409,11 +409,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif piloting:
 			return  # while flying, only F/M/Esc/mouse-look do anything
 		elif event.keycode == KEY_R:
-			# Step to the next stair shape. A cycle rather than a toggle so more
-			# shapes can be added without changing this. FACING still comes from
-			# where you're looking, so turning your body is the rotation.
-			_stair_variant = (_stair_variant + 1) % Blocks.STAIR_VARIANTS.size()
-			_toast("Stairs: %s" % Blocks.stair_variant_name(_stair_variant))
+			# Step through EVERY stair state: the straight run turned through
+			# four quarters, then the corner through four. Facing is part of the
+			# cycle rather than read from the camera, so the ghost always shows
+			# precisely what will be placed.
+			_stair_state = (_stair_state + 1) % Blocks.STAIR_STATES
+			_toast("Stairs: %s" % Blocks.stair_state_name(_stair_state))
 		elif event.keycode == KEY_G:
 			if aboard == null and not eva:
 				_start_ship()
@@ -1593,7 +1594,8 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 				return {"voxel": hit_v, "value": combined}
 	if Blocks.is_stair(place_id):
 		return {"voxel": pv, "value": Blocks.make_stair(place_id,
-			_stair_facing_for(obj as Planet, pv), _stair_variant)}
+			Blocks.stair_state_facing(_stair_state),
+			Blocks.stair_state_variant(_stair_state))}
 	if Blocks.is_wood(place_id):
 		# A log lies along the face you placed it against, the way stacking logs
 		# up a wall lays them sideways rather than standing them all upright.
@@ -1605,32 +1607,6 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 			axis = Blocks.AXIS_Z
 		return {"voxel": pv, "value": Blocks.make_log(place_id, axis)}
 	return {"voxel": pv, "value": place_id}
-
-
-## Which of the four flat directions a stair should climb toward: the one the
-## player is looking along, snapped to the cell axes for this face of the world.
-func _stair_facing_for(planet: Planet, v: Vector3i) -> int:
-	var up: Vector3 = planet._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
-	var ax := Vector3(1, 0, 0)
-	var bx := Vector3(0, 0, 1)
-	if absf(up.x) > 0.5:
-		ax = Vector3(0, 1, 0)
-	elif absf(up.z) > 0.5:
-		bx = Vector3(0, 1, 0)
-	var look := -_camera.global_transform.basis.z
-	look = look - up * look.dot(up)   # flatten onto this face
-	if look.length() < 0.001:
-		return 0
-	look = look.normalized()
-	var dirs := [ax, bx, -ax, -bx]
-	var best := 0
-	var best_d := -2.0
-	for i in 4:
-		var d: float = look.dot(dirs[i])
-		if d > best_d:
-			best_d = d
-			best = i
-	return best
 
 
 const _CUBE26_OFFSETS := [
@@ -1794,10 +1770,13 @@ func _process_mining(delta: float) -> void:
 				_add_item(Blocks.bottom_of(id), 1)
 				_add_item(Blocks.top_slab_of(id), 1)
 			else:
-				_add_item(id, 1)
+				# Strip any packed orientation before it becomes an item: a
+				# rotated stair or an axis-aligned log would otherwise come back
+				# as a packed value that can't be placed again.
+				_add_item(Blocks.bottom_of(id), 1)
 		elif ship != null:
 			ship.set_block(v, Blocks.AIR)
-			_add_item(id, 1)
+			_add_item(Blocks.bottom_of(id), 1)
 		_break_burst(obj.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)),
 			Blocks.color_of(id))
 		if _crack != null:
