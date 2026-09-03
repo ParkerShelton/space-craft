@@ -84,10 +84,15 @@ var _swing_t := 999.0           # counts up from 0 during "attack" (real clip du
 var _attack_clip_len := 0.0     # real clip length once playing, else SWORD_SWING_DURATION (pivot fallback)
 var _hit_applied := false       # guards against applying one swing's damage twice
 var _engaged := false           # aggro hysteresis latch -- see _land_physics
+var _hitbox: CollisionShape3D    # switched off once a corpse has settled
 ## Corpses move to their own collision layer while the death clip plays: still
 ## solid against the world (so they don't sink through the floor) but invisible
 ## to the player, who only masks layer 1.
 const CORPSE_LAYER := 4
+## How long a body lies there after its death clip finishes. Once settled a
+## corpse is inert -- no physics, no collision, no animation -- so this is only
+## the cost of the meshes themselves, and can be long without hurting anything.
+const CORPSE_LINGER := 150.0
 
 # --- lunger skeleton rig: a real Skeleton3D (from the imported FBX) instead
 # of the hand-built pivot chain, so real animation clips can drive it. Only
@@ -182,6 +187,13 @@ static func _build_clip_cache() -> void:
 # as the telegraph timer counts down -- see _animate) instead of a separate
 # hand-posed pose; "attack" only plays the clip forward from that crossover,
 # so what the player sees during "attack" is just the toward-player swing.
+## The strike itself plays faster than authored, but the windup ends with the
+## blade HELD at the top of its arc for a beat before it comes down. The hold is
+## the actual reaction window -- a fast swing with no hold is unreadable, and a
+## slow swing with no hold reads as sluggish rather than dangerous. Splitting
+## them lets the swing look sharp while still being fair to dodge.
+const ATTACK_SPEED_SCALE := 1.6    # playback rate once the strike is released
+const APEX_HOLD_TIME := 0.28       # seconds frozen at the top of the backswing
 const WINDUP_END_FRACTION := 0.4   # telegraph shows clip[0 .. this] -- the real backswing
 const ATTACK_END_FRACTION := 0.85  # attack shows clip[WINDUP_END_FRACTION .. this], then cuts to recover -- skips the away-swinging tail follow-through entirely
 const ATTACK_HIT_FRACTION := 0.65  # absolute fraction of the FULL clip (not the attack sub-range) -- falls well inside the toward-player window above
@@ -231,6 +243,7 @@ func _build_collision() -> void:
 	cap.shape = shape
 	cap.position = Vector3(0, 0.75 * scale_f, 0)
 	add_child(cap)
+	_hitbox = cap
 
 
 # --- body assembly (boxes only, per body plan) ---------------------------------
@@ -784,7 +797,7 @@ func _physics_process(delta: float) -> void:
 		up_direction = upd
 		move_and_slide()
 		if _state_t <= 0.0:
-			queue_free()
+			_become_corpse()
 		return
 	match species.get("kind", "land"):
 		"fish": _swim_physics(delta)
@@ -1058,12 +1071,17 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 					_hit_applied = false
 					_lunge_target = ppos  # captured NOW, not re-tracked -- see doc comment above
 					if _anim_player != null:
-						_anim_player.speed_scale = 1.0  # resume forward from wherever the windup scrub left off
+						# Release the held apex and drive the strike faster than
+						# authored -- the pause at the top of the windup is what
+						# gives the player their read, so the swing itself can be
+						# sharp without becoming unfair.
+						_anim_player.speed_scale = ATTACK_SPEED_SCALE
 						# Safety-cap timeout: the REMAINING portion of the clip
-						# still to play, plus a small margin -- the real exit
-						# condition below is the clip's own playback position,
-						# this only guards against that somehow never being hit.
-						_state_t = (ATTACK_END_FRACTION - WINDUP_END_FRACTION) * _attack_clip_len + 0.2
+						# still to play (shortened by the faster playback), plus a
+						# margin -- the real exit condition below is the clip's own
+						# playback position, this only guards against that somehow
+						# never being hit.
+						_state_t = (ATTACK_END_FRACTION - WINDUP_END_FRACTION) * _attack_clip_len / ATTACK_SPEED_SCALE + 0.2
 					else:
 						_state_t = _attack_clip_len  # pivot-fallback body: matches its own exit condition below
 			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
@@ -1411,7 +1429,15 @@ func _animate(delta: float) -> void:
 			# Scrub through the clip's own first WINDUP_END_FRACTION by hand,
 			# proportional to how far through the (jittered-length) telegraph
 			# window we are -- this IS the windup, not a separate pose.
-			var wt := clampf(1.0 - _state_t / maxf(_telegraph_total, 0.05), 0.0, 1.0)
+			# Reach the top of the backswing EARLY and sit there: the scrub is
+			# compressed into (telegraph - hold), so the last APEX_HOLD_TIME of
+			# the telegraph is a dead stop at the apex. That freeze is the tell
+			# the player actually reads, which is what buys the strike below the
+			# right to play faster than authored.
+			var hold: float = minf(APEX_HOLD_TIME, _telegraph_total * 0.5)
+			var scrub: float = maxf(_telegraph_total - hold, 0.05)
+			var elapsed: float = _telegraph_total - _state_t
+			var wt := clampf(elapsed / scrub, 0.0, 1.0)
 			_anim_player.seek(wt * WINDUP_END_FRACTION * _attack_clip_len, true)
 		elif _state == "attack":
 			pass  # the attack clip started in _lunger_ai just keeps playing
@@ -1474,8 +1500,8 @@ func _animate(delta: float) -> void:
 ## brief knockback + recovery, refilling the meter. Returns true if the
 ## creature died from this hit.
 func take_hit(dmg: float, stagger: float = 0.0) -> bool:
-	if _state == "dying":
-		return true  # already going down; ignore further hits
+	if _state == "dying" or _state == "corpse":
+		return true  # already down; a body can't be killed twice
 	var is_lunger: bool = species.get("pattern", "") == "lunger"
 	var guarded: bool = is_lunger and _state == "block"
 	if guarded:
@@ -1514,6 +1540,30 @@ func take_hit(dmg: float, stagger: float = 0.0) -> bool:
 	elif not guarded:
 		_play_oneshot("hit")
 	return false
+
+
+## The death clip has finished: keep the body lying there, but make it cost
+## essentially nothing. Everything that runs per frame is switched off, and
+## since nothing moves it any more it can't fall, so its collision shape goes
+## too -- what remains is just the meshes and a one-shot timer.
+##
+## The final pose survives because the death clip is LOOP_NONE: it ends holding
+## its last frame, and AnimationPlayer.stop() does NOT revert bone poses (they
+## stay wherever the last-played frame put them), so deactivating the mixer
+## freezes the body exactly as it fell.
+func _become_corpse() -> void:
+	_state = "corpse"
+	velocity = Vector3.ZERO
+	set_physics_process(false)
+	set_process(false)
+	if _anim_player != null:
+		_anim_player.active = false
+	if _hitbox != null:
+		_hitbox.set_deferred("disabled", true)
+	# A SceneTreeTimer rather than a countdown in _physics_process, which is now
+	# off -- this way a lingering corpse burns no per-frame work at all.
+	var t := get_tree().create_timer(CORPSE_LINGER)
+	t.timeout.connect(queue_free)
 
 
 func _apply_stagger_interrupt() -> void:
