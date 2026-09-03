@@ -166,6 +166,7 @@ var _inflight := {}          # cc -> WorkerThreadPool task id
 var _ready_data := {}        # cc -> mesh data dict (filled by workers)
 var _ready_mutex := Mutex.new()
 var _dirty := {}             # loaded chunks needing an (async) re-mesh
+var _edit_priority := {}     # dirty chunks caused by a player edit -- applied first
 
 
 func configure(cfg: Dictionary) -> void:
@@ -1722,6 +1723,17 @@ func process_load_queue(_budget: int) -> int:
 	_ready_mutex.lock()
 	var ready_ccs: Array = _ready_data.keys()
 	_ready_mutex.unlock()
+	# Player edits first: _ready_data is an unordered dict, so without this an
+	# edited chunk waits behind however many streaming chunks finished with it.
+	if not _edit_priority.is_empty():
+		var front: Array = []
+		var rest: Array = []
+		for cc in ready_ccs:
+			if _edit_priority.has(cc):
+				front.append(cc)
+			else:
+				rest.append(cc)
+		ready_ccs = front + rest
 	var applied := 0
 	for cc in ready_ccs:
 		if applied >= APPLY_PER_FRAME:
@@ -1736,6 +1748,7 @@ func process_load_queue(_budget: int) -> int:
 		var node = loaded_chunks.get(cc)
 		if node != null and is_instance_valid(node):
 			node.apply_mesh_data(data)
+		_edit_priority.erase(cc)
 		applied += 1
 
 	# 2) re-mesh dirty (edited / flowed) chunks FIRST -- player edits and flowing
@@ -1900,6 +1913,10 @@ func toggle_door(v: Vector3i) -> bool:
 func _rebuild_if_loaded(cc: Vector3i) -> void:
 	if loaded_chunks.has(cc):
 		_dirty[cc] = true
+		# Remember that this one came from an EDIT, so its finished mesh jumps
+		# the queue below. Without it a broken block could sit visible for a
+		# second or more behind whatever terrain happened to be streaming.
+		_edit_priority[cc] = true
 
 
 const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),

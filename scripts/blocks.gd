@@ -246,12 +246,16 @@ const AXIS_Y := 1
 const AXIS_Z := 2
 
 
+## Stored as axis+1 so that 0 means "no axis recorded". A plain WOOD id from
+## world generation has all-zero high bits, and reading that as axis 0 made
+## every naturally grown trunk render as though it were lying along X.
 static func make_log(wood_id: int, axis: int) -> int:
-	return (wood_id & ID_MASK) | ((axis & LOG_AXIS_MASK) << LOG_AXIS_SHIFT)
+	return (wood_id & ID_MASK) | (((axis + 1) & LOG_AXIS_MASK) << LOG_AXIS_SHIFT)
 
 
+## The trunk axis, or -1 when the log doesn't record one (grown, not placed).
 static func log_axis_of(v: int) -> int:
-	return (v >> LOG_AXIS_SHIFT) & LOG_AXIS_MASK
+	return (((v >> LOG_AXIS_SHIFT) & LOG_AXIS_MASK)) - 1
 
 
 # --- stacked slabs -----------------------------------------------------------

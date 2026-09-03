@@ -1505,7 +1505,12 @@ func _make_ghost_mesh(boxes: Array) -> ArrayMesh:
 		hi += Vector3.ONE * 0.004
 		for fi in 6:
 			var q := Chunk._box_face(lo, hi, fi)
+			# Normals matter here: the crack shader picks which two world axes
+			# to grid by from the face normal, and without one it only resolved
+			# correctly on the faces whose normal happened to default sensibly.
+			st.set_normal(Vector3(Chunk._WFACE[fi]))
 			st.add_vertex(q[0]); st.add_vertex(q[1]); st.add_vertex(q[2])
+			st.set_normal(Vector3(Chunk._WFACE[fi]))
 			st.add_vertex(q[0]); st.add_vertex(q[2]); st.add_vertex(q[3])
 	return st.commit()
 

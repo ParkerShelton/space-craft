@@ -49,10 +49,23 @@ void fragment() {
 	float threshold = h * 0.85 - centre * 0.15;
 
 	float broken = step(threshold, progress);
-	// A late, harder darkening so the last moments before the block pops read
-	// as clearly "about to go".
-	float deep = smoothstep(0.65, 1.0, progress) * 0.35;
 
+	// Draw a FRACTURE inside each broken cell rather than filling it in. Solid
+	// dark squares read as the block dissolving; short dark segments at varied
+	// angles join up across cells into something that reads as cracking.
+	vec2 lp = fract(fc * texels) - 0.5;
+	float ang = hash21(cell + 3.7) * 3.14159;
+	vec2 nrm = vec2(-sin(ang), cos(ang));       // perpendicular to the segment
+	float d = abs(dot(lp, nrm));
+	float line = 1.0 - smoothstep(0.05, 0.16, d);
+	// A second segment across the first, appearing later, so damage visibly
+	// deepens rather than just spreading.
+	float d2 = abs(dot(lp, vec2(nrm.y, -nrm.x)));
+	float line2 = (1.0 - smoothstep(0.04, 0.13, d2)) * smoothstep(0.55, 0.95, progress);
+
+	float crack = clamp(line + line2, 0.0, 1.0) * broken;
 	ALBEDO = vec3(0.02);
-	ALPHA = broken * (0.30 + deep) + progress * 0.10;
+	// A faint overall darkening on top, so a nearly-broken block reads as
+	// damaged even between the fractures.
+	ALPHA = crack * 0.85 + broken * progress * 0.12;
 }

@@ -616,7 +616,8 @@ static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector
 		# UV2.x carries a log's trunk axis, so the shader knows which two faces
 		# are cut ends instead of guessing from the planet's up (only right for
 		# an upright trunk). 3 = "not a log".
-		uv2s.append(Vector2(float(Blocks.log_axis_of(bid)) if Blocks.is_wood(Blocks.bottom_of(bid)) else 3.0, 0.0))
+		var _la := Blocks.log_axis_of(bid) if Blocks.is_wood(Blocks.bottom_of(bid)) else -1
+		uv2s.append(Vector2(float(_la) if _la >= 0 else 3.0, 0.0))
 
 
 ## Fake sky/directional shading by face orientation (world axes): up faces catch
