@@ -42,6 +42,16 @@ var day_length := 240.0
 ## How far through the current day, 0..1. Advanced by main's environment update
 ## rather than by the planet, so it keeps ticking for planets you aren't on.
 var day_phase := 0.0
+
+# --- built machines ----------------------------------------------------------
+# Machines that must be physically constructed. Only the CONTROLLER position is
+# persisted: the blocks themselves already save, so re-validating around each
+# controller on load costs one pattern check per machine you built (a handful),
+# while keeping the world blocks as the single source of truth. Saving the whole
+# footprint instead would be larger and could drift out of sync with the blocks.
+var machine_cores: Array = []              # Array[Vector3i], saved
+var _machines: Dictionary = {}             # controller -> {def, rot, online, missing}
+var _machine_at: Dictionary = {}           # voxel -> controller
 var surface_noise := FastNoiseLite.new()
 var ore_noise := FastNoiseLite.new()
 
@@ -752,6 +762,89 @@ func _make_ore(orng: RandomNumberGenerator, slot: int, tier: int) -> Dictionary:
 
 
 # --- per-planet ore lookups (block id is a generic ORE slot) ------------------
+## Try to assemble a machine whose controller sits at `c`. Returns a result
+## dictionary describing success or exactly what is wrong, so the caller can
+## tell the player rather than failing silently.
+func assemble_machine(c: Vector3i) -> Dictionary:
+	if get_id(c) != Blocks.MACHINE_CORE:
+		return {"ok": false, "reason": "No machine core here"}
+	for i in Blocks.STRUCTURES.size():
+		var def: Dictionary = Blocks.STRUCTURES[i]
+		for rot in 4:
+			var built := Blocks.structure_cells(def, rot)
+			var cells: Dictionary = built["cells"]
+			var origin: Vector3i = c - (built["controller"] as Vector3i)
+			var missing := 0
+			var first_missing := Blocks.AIR
+			for off in cells:
+				var want: int = cells[off]
+				if get_id(origin + (off as Vector3i)) != want:
+					missing += 1
+					if first_missing == Blocks.AIR:
+						first_missing = want
+			if missing == 0:
+				_register_machine(c, def, rot, origin)
+				return {"ok": true, "name": str(def["name"])}
+			# Remember the closest near-miss so the message is useful.
+			if missing <= 3:
+				return {"ok": false, "reason": "%s needs %d more %s" % [
+					str(def["name"]), missing, Blocks.name_of(first_missing)]}
+	return {"ok": false, "reason": "These blocks don't form a machine"}
+
+
+func _register_machine(c: Vector3i, def: Dictionary, rot: int, origin: Vector3i) -> void:
+	var built := Blocks.structure_cells(def, rot)
+	var cells: Dictionary = built["cells"]
+	_machines[c] = {"def": def, "rot": rot, "origin": origin, "online": true}
+	for off in cells:
+		_machine_at[origin + (off as Vector3i)] = c
+	if not machine_cores.has(c):
+		machine_cores.append(c)
+
+
+## A machine is only as whole as its blocks. Breaking any part takes it offline
+## until THAT block is put back -- a brick for a brick, the core for the core --
+## rather than disbanding the structure, so a raid damages your base instead of
+## deleting it.
+func _machine_block_changed(v: Vector3i) -> void:
+	var c = _machine_at.get(v)
+	if c == null:
+		return
+	var m: Dictionary = _machines.get(c, {})
+	if m.is_empty():
+		return
+	var built := Blocks.structure_cells(m["def"], int(m["rot"]))
+	var cells: Dictionary = built["cells"]
+	var origin: Vector3i = m["origin"]
+	var whole := true
+	for off in cells:
+		if get_id(origin + (off as Vector3i)) != int(cells[off]):
+			whole = false
+			break
+	m["online"] = whole
+	_machines[c] = m
+
+
+## Is the machine whose footprint covers `v` currently intact?
+func machine_online_at(v: Vector3i) -> bool:
+	var c = _machine_at.get(v)
+	if c == null:
+		return false
+	return bool(_machines.get(c, {}).get("online", false))
+
+
+## Re-check every saved machine. Called after a load, once blocks are in place.
+func revalidate_machines() -> void:
+	_machines.clear()
+	_machine_at.clear()
+	var keep: Array = []
+	for c in machine_cores:
+		var r := assemble_machine(c)
+		if r.get("ok", false):
+			keep.append(c)
+	machine_cores = keep
+
+
 func ore_def(block_id: int) -> Dictionary:
 	return _ore_by_block.get(block_id, {})
 
@@ -1915,6 +2008,10 @@ func load_edits(e: Dictionary) -> void:
 
 
 func set_block(v: Vector3i, id: int) -> void:
+	# A built machine only works while every one of its blocks is present, so
+	# any edit inside a footprint re-checks it (see _machine_block_changed).
+	if not _machine_at.is_empty() and _machine_at.has(v):
+		call_deferred("_machine_block_changed", v)
 	var cc := chunk_of(v)
 	if not _edits_by_chunk.has(cc):
 		_edits_by_chunk[cc] = {}

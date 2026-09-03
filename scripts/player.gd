@@ -1637,8 +1637,7 @@ func _edit_block(_break_it: bool) -> void:
 			else:
 				obj.set_block(pv, placed_value)
 			_consume_active()
-			if place_id == Blocks.INTERFACE:
-				_check_multiblock(obj, pv)
+
 	elif tgt["kind"] == "ship":
 		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
 			# crafted ship blocks carry their material stats onto the ship
@@ -1703,29 +1702,24 @@ const _CUBE26_OFFSETS := [
 ## 3x3x3 shell (Blocks.MULTIBLOCK_RECIPES) -- if so, the whole cube collapses into
 ## the resulting station. Planets only for now (a ship's small voxel grid rarely
 ## has room for a spare 3x3x3, and it complicates orientation); revisit if wanted.
-func _check_multiblock(obj: Object, center: Vector3i) -> void:
-	if not (obj is Planet):
-		return
-	var planet := obj as Planet
-	for recipe in Blocks.MULTIBLOCK_RECIPES:
-		var shell: int = recipe["shell"]
-		var complete := true
-		for off in _CUBE26_OFFSETS:
-			if planet.get_id(center + off) != shell:
-				complete = false
-				break
-		if not complete:
-			continue
-		for off in _CUBE26_OFFSETS:
-			planet.set_block(center + off, Blocks.AIR)
-		planet.set_block(center, Blocks.AIR)
-		var corner: Vector3 = planet.to_global(Vector3(center))
-		var g := world.gravity_at(corner)
-		var up := (-g).normalized() if g.length() > 0.01 else Vector3.UP
-		world.spawn_station(int(recipe["result"]), corner, up, -global_transform.basis.z)
-		_toast("The %s shell resonates — a %s takes shape!" % [
-			Blocks.name_of(shell), Blocks.name_of(int(recipe["result"]))])
-		return
+## Assembling a built machine is an explicit act: you right-click its Machine
+## Core once the structure is finished. Checking every pattern in four rotations
+## on every block placement would be both wasteful and silent -- this way it
+## costs nothing until asked, and it can say exactly what is still missing.
+func _try_assemble_machine() -> bool:
+	var tgt := _raycast_voxel()
+	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "planet":
+		return false
+	if int(tgt.get("id", Blocks.AIR)) != Blocks.MACHINE_CORE:
+		return false
+	var planet := tgt["obj"] as Planet
+	var v: Vector3i = tgt["voxel"]
+	var res := planet.assemble_machine(v)
+	if res.get("ok", false):
+		_toast("%s assembled" % res.get("name", "Machine"))
+	else:
+		_toast(str(res.get("reason", "Cannot assemble")))
+	return true
 
 
 ## Place a crafting station in the empty cell you're aiming at -- on a planet

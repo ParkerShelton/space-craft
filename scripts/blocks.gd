@@ -411,9 +411,64 @@ static func shapes_for(mat: int) -> Array:
 
 # A 3x3x3 shell of `shell` around a placed INTERFACE block collapses into a
 # `result` station -- the multiblock alternative to just crafting a plain item.
-const MULTIBLOCK_RECIPES := [
-	{"shell": METAL, "result": FORGE},
+## The block you interact with to assemble and operate a built machine. Placing
+## one is how you declare "a machine goes here"; it is worthless on its own.
+const MACHINE_CORE := 94
+
+## Machines that can ONLY exist as a structure you physically build -- there is
+## deliberately no single-block version that does the same job worse. The small
+## benches stay craftable items; these are the things whose whole point is that
+## they are big.
+##
+## `layers` reads bottom-to-top; within a layer each string is a row along the
+## structure's local +Z, and each character a cell along local +X. The legend
+## maps characters to the block that must be there. Exactly one cell is the
+## controller, and the pattern is matched in all four rotations about local up,
+## so orientation never has to be guessed.
+const STRUCTURES := [
+	{
+		"name": "Forge",
+		"result": FORGE,
+		"size": Vector3i(3, 3, 3),
+		"legend": {"#": METAL, "C": MACHINE_CORE, ".": AIR},
+		"layers": [
+			["###", "###", "###"],
+			["#C#", "#.#", "###"],
+			["###", "###", "###"],
+		],
+	},
 ]
+
+
+## Cells of a structure pattern as {offset: block_id}, plus which offset is the
+## controller. Rotation `rot` is a quarter-turn count about local up.
+static func structure_cells(def: Dictionary, rot: int) -> Dictionary:
+	var legend: Dictionary = def["legend"]
+	var size: Vector3i = def["size"]
+	var cells := {}
+	var controller := Vector3i.ZERO
+	var layers: Array = def["layers"]
+	for y in layers.size():
+		var rows: Array = layers[y]
+		for z in rows.size():
+			var row: String = rows[z]
+			for x in row.length():
+				var ch := row[x]
+				var id: int = int(legend.get(ch, AIR))
+				var off := _rotate_offset(Vector3i(x, y, z), size, rot)
+				cells[off] = id
+				if ch == "C":
+					controller = off
+	return {"cells": cells, "controller": controller}
+
+
+## Quarter-turns about the local up (Y) axis, keeping offsets non-negative.
+static func _rotate_offset(o: Vector3i, size: Vector3i, rot: int) -> Vector3i:
+	match posmod(rot, 4):
+		1: return Vector3i(size.z - 1 - o.z, o.y, o.x)
+		2: return Vector3i(size.x - 1 - o.x, o.y, size.z - 1 - o.z)
+		3: return Vector3i(o.z, o.y, size.x - 1 - o.x)
+		_: return o
 
 # Hand recipes: things you can assemble from carried materials with no station
 # (the bootstrap chain). Each: {out, n, reqs}. A requirement is {id, n} for a
@@ -436,6 +491,8 @@ const HAND_RECIPES := [
 	{"cat": "Stations", "out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 	{"cat": "Stations", "out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 	{"cat": "Stations", "out": CARPENTER, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 12, "label": "Wood"}]},
+	{"cat": "Stations", "out": MACHINE_CORE, "n": 1,
+		"reqs": [{"id": METAL, "n": 4}, {"refined": true, "n": 1}]},
 	{"cat": "Stations", "out": SHAPER, "n": 1, "reqs": [{"id": ROCK, "n": 10}, {"id": METAL, "n": 2}]},
 	# Deliberately cheap and made from the most common material there is: a
 	# light source gates cave exploration and surviving the first night, so
@@ -526,7 +583,7 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	CRYSTAL_SLAB, METAL_SLAB, WOOD_SLAB, GLASS_SLAB,
 	ROCK_STAIR, DIRT_STAIR, GRASS_STAIR, REGOLITH_STAIR, ICE_STAIR, SNOW_STAIR,
 	CRYSTAL_STAIR, METAL_STAIR, WOOD_STAIR, GLASS_STAIR,
-	TORCH, GLOW_LAMP, EMBER_TORCH]
+	TORCH, GLOW_LAMP, EMBER_TORCH, MACHINE_CORE]
 
 const NAMES := {
 	AIR: "Air",
@@ -569,6 +626,7 @@ const NAMES := {
 	CHEST: "Wooden Chest",
 	CARPENTER: "Carpenter's Bench",
 	SHAPER: "Block Shaper",
+	MACHINE_CORE: "Machine Core",
 	TORCH: "Torch",
 	EMBER_TORCH: "Ember Torch",
 	GLOW_LAMP: "Glow Lamp",
@@ -610,7 +668,7 @@ const HARDNESS := {
 	LEAF_0: 0.2, LEAF_1: 0.2, LEAF_2: 0.2, LEAF_3: 0.2, LEAF_4: 0.2, LEAF_5: 0.2,
 	LEAF_6: 0.2, LEAF_7: 0.2, LEAF_8: 0.2, LEAF_9: 0.2, LEAF_10: 0.2, LEAF_11: 0.2,
 	WOOD: 0.6, WOOD_PALE: 0.6, WOOD_DARK: 0.6,
-	TORCH: 0.1, GLOW_LAMP: 0.3, EMBER_TORCH: 0.1,
+	TORCH: 0.1, GLOW_LAMP: 0.3, EMBER_TORCH: 0.1, MACHINE_CORE: 1.2,
 	ICE: 0.7, ROCK: 0.9, CRYSTAL: 1.2, CORE: 1.6,
 	IRON_ORE: 1.3, COPPER_ORE: 1.3, GOLD_ORE: 1.6,
 	TITANIUM_ORE: 1.9, SILICON_ORE: 1.2, URANIUM_ORE: 2.1,
@@ -658,6 +716,7 @@ const COLORS := {
 	CHEST: Color(0.45, 0.31, 0.17),
 	CARPENTER: Color(0.48, 0.34, 0.20),
 	SHAPER: Color(0.52, 0.52, 0.56),
+	MACHINE_CORE: Color(0.86, 0.52, 0.18),
 	TORCH: Color(1.0, 0.74, 0.40),
 	EMBER_TORCH: Color(1.0, 0.62, 0.26),
 	GLOW_LAMP: Color(0.95, 0.97, 1.0),

@@ -144,10 +144,15 @@ func save_game() -> bool:
 	# Time of day travels with the save, so stepping away and coming back does
 	# not snap the world to a different hour.
 	data["day_phase"] = {}
+	data["machines"] = {}
 	for p in planets:
 		if not p._edits_by_chunk.is_empty():
 			data["planets"][p.planet_name] = p._edits_by_chunk
 		data["day_phase"][p.planet_name] = p.day_phase
+		# Only the CONTROLLER positions: the blocks already persist, so this
+		# stays tiny and can never disagree with the world it describes.
+		if not p.machine_cores.is_empty():
+			data["machines"][p.planet_name] = p.machine_cores.duplicate()
 	var ship_index := {}
 	for s in _ships:
 		if is_instance_valid(s) and not s.blocks.is_empty():
@@ -206,6 +211,11 @@ func load_game() -> bool:
 	for p in planets:
 		p.load_edits(pedits.get(p.planet_name, {}))
 		p.day_phase = float(pphase.get(p.planet_name, p.day_phase))
+		p.machine_cores = (data.get("machines", {}).get(p.planet_name, []) as Array).duplicate()
+		# Re-check each saved machine against the blocks actually present, so a
+		# structure someone dismantled while it was unloaded comes back damaged
+		# rather than silently still working.
+		p.revalidate_machines()
 
 	# ships: rebuild from scratch
 	for s in _ships:
