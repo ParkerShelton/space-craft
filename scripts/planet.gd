@@ -125,6 +125,8 @@ var fauna_cave: Array = []     # underground species defs; found only inside car
 var fauna_air: Array = []      # flying species defs; wander an altitude band above the surface
 var _creatures: Array = []     # live Creature nodes currently spawned here
 const MAX_CREATURES := 10
+## Extra creatures allowed once it is fully dark, on top of MAX_CREATURES.
+const NIGHT_EXTRA_CREATURES := 8
 const CREATURE_SPAWN_RADIUS := 70.0   # spawn attempts land within this of the player
 const CREATURE_CAVE_MAX_DEPTH := 55.0 # how far down a cave spawn search will probe
 const CREATURE_DESPAWN_RADIUS := 160.0
@@ -479,11 +481,25 @@ func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> voi
 			c.queue_free()
 	_creatures = _creatures.filter(func(c): return is_instance_valid(c))
 
+	# Night is when this world gets dangerous. The cycle was purely cosmetic
+	# until now; tying spawning to it is what gives the player a reason to build
+	# a shelter, light it, and be inside it when the sun goes down.
 	_spawn_timer -= delta
-	if _spawn_timer > 0.0 or _creatures.size() >= MAX_CREATURES:
+	var night := night_factor()
+	var cap: int = MAX_CREATURES + int(round(night * NIGHT_EXTRA_CREATURES))
+	if _spawn_timer > 0.0 or _creatures.size() >= cap:
 		return
-	_spawn_timer = CREATURE_SPAWN_INTERVAL
+	# Things come out faster after dark, not merely in greater numbers.
+	_spawn_timer = CREATURE_SPAWN_INTERVAL * lerpf(1.0, 0.45, night)
 	_try_spawn_creature(player_pos, world)
+
+
+## 0 in broad daylight, 1 in the dead of night. Airless worlds have no dusk to
+## speak of, so their transition is much sharper -- the same rule the sky uses.
+func night_factor() -> float:
+	var height := sin(day_phase * TAU)
+	var soft: float = 0.22 if has_atmosphere else 0.04
+	return 1.0 - clampf(smoothstep(-soft, soft, height), 0.0, 1.0)
 
 
 ## Immediately clears all fauna (called when this planet stops being the active
@@ -613,7 +629,7 @@ func _try_spawn_creature(player_pos: Vector3, world: WorldManager) -> void:
 					continue  # no solid ground here
 				if get_id(stand_v) != Blocks.AIR or get_id(head_v) != Blocks.AIR:
 					continue  # no headroom
-				_spawn_at(to_global(surface_pt + up * 0.05), fauna_land[randi() % fauna_land.size()], world)
+				_spawn_at(to_global(surface_pt + up * 0.05), _pick_land_species(), world)
 				return
 
 
@@ -649,6 +665,21 @@ func _find_cave_spawn(dir: Vector3) -> Dictionary:
 ## and they'd fall straight through into the void until it eventually streamed in.
 func _chunk_ready_at(world_pos: Vector3) -> bool:
 	return loaded_chunks.has(chunk_of(world_to_voxel(world_pos)))
+
+
+## Which land creature to spawn. After dark the roll is weighted hard toward
+## whatever is hostile, so night reads as things coming out rather than simply
+## more of the same animals wandering about.
+func _pick_land_species() -> Dictionary:
+	var night := night_factor()
+	if night > 0.35 and randf() < night * 0.85:
+		var hostiles: Array = []
+		for sp in fauna_land:
+			if sp.get("temperament", "") == "hostile":
+				hostiles.append(sp)
+		if not hostiles.is_empty():
+			return hostiles[randi() % hostiles.size()]
+	return fauna_land[randi() % fauna_land.size()]
 
 
 func _spawn_at(world_pos: Vector3, sp: Dictionary, world: WorldManager) -> void:

@@ -20,6 +20,7 @@ var cc: Vector3i  # chunk coordinate (in chunk units)
 
 var _mesh_instance: MeshInstance3D
 var _collision: CollisionShape3D
+var _lights: Array = []      # OmniLight3D nodes for this chunk's light blocks
 var _collision_sig := 0  # hash of the opaque verts the current shape was cooked from
 
 ## Block texturing is per PLANET, not shared: each planet seeds its own
@@ -105,6 +106,27 @@ func _ensure_children() -> void:
 		add_child(_collision)
 
 
+## Real OmniLight3D nodes for the light blocks in this chunk. Rebuilt whenever
+## the chunk re-meshes, which is also when a torch could have been placed or
+## broken. Kept as children of the chunk so they stream in and out with it.
+func _apply_lights(positions: PackedVector3Array) -> void:
+	for l in _lights:
+		if is_instance_valid(l):
+			l.queue_free()
+	_lights.clear()
+	for p in positions:
+		var om := OmniLight3D.new()
+		var def := Blocks.light_def(planet.get_id(
+			Vector3i(cc * CS) + Vector3i(floori(p.x), floori(p.y), floori(p.z))) if planet != null else Blocks.TORCH)
+		om.omni_range = def["range"]
+		om.light_energy = def["energy"]
+		om.light_color = def["color"]
+		om.shadow_enabled = false   # dozens of shadow-casting lights is not worth it
+		add_child(om)
+		om.position = p
+		_lights.append(om)
+
+
 func _ready() -> void:
 	_ensure_children()
 
@@ -142,6 +164,7 @@ func apply_mesh_data(data: Dictionary) -> void:
 		m.surface_set_material(m.get_surface_count() - 1, _get_water_material())
 	_mesh_instance.mesh = m
 	_mesh_instance.material_override = null
+	_apply_lights(data.get("lights", PackedVector3Array()))
 
 	# Collision uses the COLLIDABLE opaque geometry: you pass through water, and
 	# through leaves (which render but are deliberately non-solid). Cooking a
@@ -201,7 +224,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 	var wuv2s := PackedVector2Array()
 	var cverts := PackedVector3Array()  # collidable subset of `verts` (no leaves)
 	if not any_solid:
-		return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s,
+		return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s, "lights": PackedVector3Array(),
 			"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
 	# opaque terrain via greedy meshing (water is skipped here, handled below)
@@ -291,6 +314,36 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 							planet, snap, verts, normals, colors, uvs, uv2s, cverts)
 				idx += 1
 
+	# light blocks: a torch is a small standing post rather than a full cube, and
+	# both are recorded so the chunk can hang real lights on them below.
+	var lights := PackedVector3Array()
+	idx = 0
+	for z in CS:
+		for y in CS:
+			for x in CS:
+				var lid := ids[idx]
+				if Blocks.is_light(lid):
+					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
+					var lo := Vector3(x, y, z)
+					if lid == Blocks.TORCH:
+						var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
+						var a := _half_toward(lo, lo + Vector3.ONE, -up)
+						var a0: Vector3 = a[0]
+						var a1: Vector3 = a[1]
+						# thin it on both flat axes so it reads as a post
+						var mid: Vector3 = (a0 + a1) * 0.5
+						var thin := Vector3(0.16, 0.16, 0.16)
+						if absf(up.x) > 0.5: thin.x = (a1.x - a0.x) * 0.5
+						elif absf(up.y) > 0.5: thin.y = (a1.y - a0.y) * 0.5
+						else: thin.z = (a1.z - a0.z) * 0.5
+						_emit_free_box(mid - thin, mid + thin, Blocks.color_of(lid),
+							lid, verts, normals, colors, uvs, uv2s)
+					else:
+						_emit_solid_box_cell(lo, lo + Vector3.ONE, gv, lid,
+							planet, snap, verts, normals, colors, uvs, uv2s, cverts)
+					lights.append(Vector3(x, y, z) + Vector3(0.5, 0.5, 0.5))
+				idx += 1
+
 	# ore lumps: decorative geometry on exposed ore faces (see _emit_ore_chunks)
 	idx = 0
 	for z in CS:
@@ -302,7 +355,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 						ids[idx], planet, snap, verts, normals, colors, uvs, uv2s)
 				idx += 1
 
-	return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s,
+	return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s, "lights": lights,
 		"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
 
@@ -497,7 +550,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				# opaque blocks only; WATER and ROOF_SLAB are meshed separately as
 				# partial-height boxes, and an OPEN door draws as an empty gap (no
 				# face, no collision) so you can actually walk through it once opened
-				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN 						and oid != Blocks.ROOF_SLAB and not Blocks.is_slab(oid) 						and not Blocks.is_stacked_slab(oid) 						and not Blocks.is_stair(Blocks.bottom_of(oid)):
+				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN 						and oid != Blocks.ROOF_SLAB and not Blocks.is_slab(oid) 						and not Blocks.is_stacked_slab(oid) 						and not Blocks.is_stair(Blocks.bottom_of(oid)) 						and not Blocks.is_light(oid):
 					var na := a + dir
 					var nid: int
 					if na >= 0 and na < CS:
@@ -507,7 +560,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 					# draw a face if the neighbor is air, water, an open doorway, or a
 					# roof slab (so the seabed shows under water, a room shows through
 					# an open door, and a wall/ridge shows past a half-height slab)
-					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN 							or nid == Blocks.ROOF_SLAB or Blocks.is_slab(nid) 							or Blocks.is_stacked_slab(nid) 							or Blocks.is_stair(Blocks.bottom_of(nid)):
+					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN 							or nid == Blocks.ROOF_SLAB or Blocks.is_slab(nid) 							or Blocks.is_stacked_slab(nid) 							or Blocks.is_stair(Blocks.bottom_of(nid)) 							or Blocks.is_light(nid):
 						val = oid
 				mask[k + j * CS] = val
 

@@ -139,6 +139,24 @@ const PULSE_PISTOL := 69 # ranged weapon: fires a traveling energy bolt, damage 
 # instead of one recipe per material per shape.
 const SHAPER := 70       # "Block Shaper" bench: reshape a block into slabs etc.
 
+## The only blocks that emit light. Nights are genuinely dark and caves are
+## carved deep, so a light source is what makes either of them explorable
+## rather than a wall of black.
+const TORCH := 91        # small standing flame: cheap, bright, warm
+const GLOW_LAMP := 92     # full block of steady light, for finished builds
+const LIGHT_IDS := [TORCH, GLOW_LAMP]
+
+
+static func is_light(id: int) -> bool:
+	return id in LIGHT_IDS
+
+
+## Light radius and colour per light block.
+static func light_def(id: int) -> Dictionary:
+	if id == TORCH:
+		return {"range": 11.0, "energy": 1.5, "color": Color(1.0, 0.72, 0.38)}
+	return {"range": 15.0, "energy": 1.8, "color": Color(0.92, 0.95, 1.0)}
+
 # Half-height version of each shapeable material. One id per material is still
 # needed because slabs are real inventory items you carry and place; the SHAPE
 # side of the matrix is what stays open-ended.
@@ -360,6 +378,11 @@ const HAND_RECIPES := [
 	{"out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 	{"out": CARPENTER, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 12, "label": "Wood"}]},
 	{"out": SHAPER, "n": 1, "reqs": [{"id": ROCK, "n": 10}, {"id": METAL, "n": 2}]},
+	# Deliberately cheap and made from the most common material there is: a
+	# light source gates cave exploration and surviving the first night, so
+	# putting it behind rare drops would just make the early game dark.
+	{"out": TORCH, "n": 4, "reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
+	{"out": GLOW_LAMP, "n": 2, "reqs": [{"id": CRYSTAL, "n": 1}, {"id": METAL, "n": 1}]},
 ]
 
 # Which material TYPE a station builds from (see Blocks.id_matches_material).
@@ -439,7 +462,8 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	ROCK_SLAB, DIRT_SLAB, GRASS_SLAB, REGOLITH_SLAB, ICE_SLAB, SNOW_SLAB,
 	CRYSTAL_SLAB, METAL_SLAB, WOOD_SLAB, GLASS_SLAB,
 	ROCK_STAIR, DIRT_STAIR, GRASS_STAIR, REGOLITH_STAIR, ICE_STAIR, SNOW_STAIR,
-	CRYSTAL_STAIR, METAL_STAIR, WOOD_STAIR, GLASS_STAIR]
+	CRYSTAL_STAIR, METAL_STAIR, WOOD_STAIR, GLASS_STAIR,
+	TORCH, GLOW_LAMP]
 
 const NAMES := {
 	AIR: "Air",
@@ -482,6 +506,8 @@ const NAMES := {
 	CHEST: "Wooden Chest",
 	CARPENTER: "Carpenter's Bench",
 	SHAPER: "Block Shaper",
+	TORCH: "Torch",
+	GLOW_LAMP: "Glow Lamp",
 	FORGE: "Forge",
 	CLIMATE_UNIT: "Climate Unit",
 	LIFE_SUPPORT: "Life Support",
@@ -520,6 +546,7 @@ const HARDNESS := {
 	LEAF_0: 0.2, LEAF_1: 0.2, LEAF_2: 0.2, LEAF_3: 0.2, LEAF_4: 0.2, LEAF_5: 0.2,
 	LEAF_6: 0.2, LEAF_7: 0.2, LEAF_8: 0.2, LEAF_9: 0.2, LEAF_10: 0.2, LEAF_11: 0.2,
 	WOOD: 0.6, WOOD_PALE: 0.6, WOOD_DARK: 0.6,
+	TORCH: 0.1, GLOW_LAMP: 0.3,
 	ICE: 0.7, ROCK: 0.9, CRYSTAL: 1.2, CORE: 1.6,
 	IRON_ORE: 1.3, COPPER_ORE: 1.3, GOLD_ORE: 1.6,
 	TITANIUM_ORE: 1.9, SILICON_ORE: 1.2, URANIUM_ORE: 2.1,
@@ -567,6 +594,8 @@ const COLORS := {
 	CHEST: Color(0.45, 0.31, 0.17),
 	CARPENTER: Color(0.48, 0.34, 0.20),
 	SHAPER: Color(0.52, 0.52, 0.56),
+	TORCH: Color(1.0, 0.74, 0.40),
+	GLOW_LAMP: Color(0.95, 0.97, 1.0),
 	FORGE: Color(0.55, 0.22, 0.16),
 	CLIMATE_UNIT: Color(0.35, 0.62, 0.55),
 	LIFE_SUPPORT: Color(0.30, 0.78, 0.68),
