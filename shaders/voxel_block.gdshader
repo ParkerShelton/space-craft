@@ -39,6 +39,11 @@ uniform float rock_id = 1.0;
 // which carries the ore colour in its own vertex colour.
 uniform float ore_ids[4];
 uniform float ore_chunk_id = 63.0;
+// Light-emitting blocks (torch / lamp / ember torch) occupy a contiguous id
+// range. They must GLOW rather than merely be a bright colour, or in daylight
+// they read as a painted cube and in a dark cave they vanish into the wall.
+uniform float light_lo = 91.0;
+uniform float light_hi = 93.0;
 
 varying vec3 v_world;
 varying float v_block;
@@ -82,7 +87,7 @@ void fragment() {
 	// per-face directional shading, so it stays the base everything modulates.
 	vec3 base = COLOR.rgb;
 	float id = v_block;
-	float alpha = 1.0;
+	float emit = 0.0;
 
 	vec3 n = normalize(v_normal);
 	vec2 fc = face_coord(v_world, n);
@@ -162,7 +167,14 @@ void fragment() {
 		// costs fill rate. Near the camera, where they actually read as
 		// foliage, they stay open.
 		float thr = 0.10 * (1.0 - smoothstep(14.0, 30.0, length(VERTEX)));
-		alpha = mix(1.0, (hole < thr) ? 0.0 : 1.0, texture_strength * leaf_cutout);
+		// discard, NOT ALPHA. Writing ALPHA at all makes Godot treat this
+		// material as transparent, and transparent surfaces get no omni lights
+		// in the Compatibility renderer -- which silently meant torches lit
+		// nothing but themselves. discard punches the same holes and leaves the
+		// material opaque, so block lighting keeps working.
+		if (hole < thr && texture_strength * leaf_cutout > 0.5) {
+			discard;
+		}
 
 	} else if (abs(id - rock_id) < 0.5) {
 		// ROCK: deliberately the smoothest surface in the set. Stone should
@@ -170,6 +182,13 @@ void fragment() {
 		// resolution grid -- broad, calm patches rather than per-texel grit.
 		float rh = hash21(floor(fc * texels * 0.5) + vec2(world_seed * 5.0));
 		shade = 0.965 + quantize(rh, 2.0) * 0.05;
+
+	} else if (id >= light_lo - 0.5 && id <= light_hi + 0.5) {
+		// A light source is the one thing that should NOT be shaded down by the
+		// scene: it makes its own light. Kept flat and emissive so it stays
+		// legible in a black cave and still reads as burning in full daylight.
+		shade = 1.0;
+		emit = 1.0;
 
 	} else {
 		// Everything else: gentle cell break-up so large merged quads stop
@@ -196,8 +215,9 @@ void fragment() {
 	base *= mix(1.0, shade, texture_strength);
 
 	ALBEDO = base;
-	ALPHA = alpha;
-	ALPHA_SCISSOR_THRESHOLD = 0.5;
+	// Push well past 1.0 so the glow survives tonemapping and reads as a flame
+	// rather than a pale cube.
+	EMISSION = base * emit * 2.6;
 	ROUGHNESS = 0.85;
 	METALLIC = 0.0;
 }

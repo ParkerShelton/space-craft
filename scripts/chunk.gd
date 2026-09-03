@@ -73,6 +73,8 @@ static func _get_material(p: Planet) -> ShaderMaterial:
 		oids.append(float(oid))
 	m.set_shader_parameter("ore_ids", oids)
 	m.set_shader_parameter("ore_chunk_id", ORE_CHUNK_ID)
+	m.set_shader_parameter("light_lo", float(Blocks.LIGHT_IDS.min()))
+	m.set_shader_parameter("light_hi", float(Blocks.LIGHT_IDS.max()))
 	m.set_shader_parameter("rock_id", float(Blocks.ROCK))
 	m.set_shader_parameter("world_seed", _tex_seed + float(p._seed % 9973) * 0.017)
 	m.set_shader_parameter("planet_center", p.global_position)
