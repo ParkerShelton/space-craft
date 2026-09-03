@@ -148,6 +148,7 @@ func _start_world(load_existing: bool) -> void:
 	if wseed < 0:
 		wseed = _rand_seed()
 	world.world_seed = wseed
+	Chunk.set_texture_seed(wseed)  # re-roll procedural block texturing per world
 
 	var galaxy := Galaxy.new()
 	galaxy.generate(wseed)
