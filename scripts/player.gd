@@ -290,6 +290,59 @@ func _init_inventory() -> void:
 
 # Add n of an item; fills matching stacks first, then empty slots. Returns leftover.
 # Items with different props/src (e.g. copper from different planets) don't stack.
+# --- tall (multi-cell) inventory items -------------------------------------
+# A suit occupies TWO vertical cells. The lower cell holds a "cover" marker
+# pointing back at its owner rather than an item of its own, so exactly one
+# slot is ever the real thing and everything else keys off that.
+
+## Owner index if this inventory slot is the lower half of a tall item, else -1.
+func _cover_owner(i: int) -> int:
+	if i < 0 or i >= inv.size():
+		return -1
+	return int(inv[i].get("cover", -1))
+
+
+func _slot_free(i: int) -> bool:
+	return i >= 0 and i < inv.size() and int(inv[i].get("count", 0)) <= 0 		and _cover_owner(i) < 0
+
+
+## Can a two-cell item sit here? It needs the cell directly below, which rules
+## out the bottom row. `ignore` lets an item test its own current footprint.
+func _can_place_tall(i: int, ignore := -1) -> bool:
+	var below := i + HOTBAR_SLOTS
+	if below >= inv.size():
+		return false
+	if not (_slot_free(i) or (ignore >= 0 and i == ignore)):
+		return false
+	# Guard the sentinel: with no item to ignore, _cover_owner returning -1 for
+	# "not a cover" would otherwise match ignore's own -1 and wave through a
+	# cell that is genuinely occupied.
+	return _slot_free(below) or (ignore >= 0 and _cover_owner(below) == ignore)
+
+
+func _set_cover(i: int) -> void:
+	var below := i + HOTBAR_SLOTS
+	if below < inv.size():
+		inv[below]["cover"] = i
+
+
+func _free_cover(i: int) -> void:
+	var below := i + HOTBAR_SLOTS
+	if below < inv.size() and _cover_owner(below) == i:
+		inv[below].erase("cover")
+
+
+## Keeps cover markers honest after a slot's contents change.
+func _sync_cover(i: int) -> void:
+	if i < 0 or i >= inv.size():
+		return
+	var tall := int(inv[i].get("count", 0)) > 0 		and Blocks.item_cells_tall(int(inv[i]["id"])) > 1
+	if tall:
+		_set_cover(i)
+	else:
+		_free_cover(i)
+
+
 func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: Dictionary = {}) -> int:
 	if id == Blocks.AIR or n <= 0:
 		return n
@@ -300,17 +353,25 @@ func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 			n -= add
 			if n <= 0:
 				return 0
-	for s in inv:
-		if s["count"] == 0:
-			s["id"] = id
-			s["props"] = props
-			s["src"] = src
-			s["mat"] = mat
-			var add: int = mini(n, STACK_MAX)
-			s["count"] = add
-			n -= add
-			if n <= 0:
-				return 0
+	var tall := Blocks.item_cells_tall(id) > 1
+	for i in inv.size():
+		var s: Dictionary = inv[i]
+		if s["count"] != 0 or _cover_owner(i) >= 0:
+			continue
+		# A two-cell item also needs the cell beneath it, so it can't take the
+		# bottom row or squeeze in above something.
+		if tall and not _can_place_tall(i):
+			continue
+		s["id"] = id
+		s["props"] = props
+		s["src"] = src
+		s["mat"] = mat
+		var add: int = mini(n, STACK_MAX)
+		s["count"] = add
+		n -= add
+		_sync_cover(i)
+		if n <= 0:
+			return 0
 	return n  # inventory full; leftover dropped
 
 
@@ -2171,9 +2232,12 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	# scrollable "Craft" list (scrolls instead of growing as recipes are added)
 	var grid_w := HOTBAR_SLOTS * 60
 	var grid_h := 4 * 60
-	var equip_x := 12 + grid_w + 16
+	# Suit sits on the LEFT, ahead of the grid: it's worn gear, so it reads as
+	# part of "you" rather than as an afterthought tacked on past the bag.
 	var equip_w := 64
-	var craft_x := equip_x + equip_w + 16
+	var equip_x := 12
+	var grid_x := equip_x + equip_w + 16
+	var craft_x := grid_x + grid_w + 16
 	var craft_w := 220
 	_inv_panel = Panel.new()
 	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
@@ -2188,13 +2252,13 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	layer.add_child(_inv_panel)
 	var title := Label.new()
 	title.text = "Inventory  (drag to rearrange)"
-	title.position = Vector2(14, 8)
+	title.position = Vector2(grid_x + 2, 8)
 	_inv_panel.add_child(title)
 	var grid := GridContainer.new()
 	grid.columns = HOTBAR_SLOTS
 	grid.add_theme_constant_override("h_separation", 4)
 	grid.add_theme_constant_override("v_separation", 4)
-	grid.position = Vector2(12, 36)
+	grid.position = Vector2(grid_x, 36)
 	_inv_panel.add_child(grid)
 	for i in SLOTS:
 		_grid_cells.append(_make_slot(grid, i, "select"))
@@ -2414,6 +2478,11 @@ func _copy_slot(src: Dictionary, dst: Dictionary) -> void:
 
 
 func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
+	# Clicking the lower half of a two-cell item means the item itself.
+	if fc == "inv" and _cover_owner(fi) >= 0:
+		fi = _cover_owner(fi)
+	if tc == "inv" and _cover_owner(ti) >= 0:
+		ti = _cover_owner(ti)
 	if fc == tc and fi == ti:
 		return
 	var from := _slot_ref(fc, fi)
@@ -2439,6 +2508,17 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 	if tc == "equip" and from["id"] != Blocks.SUIT:
 		_toast("Only a Suit fits there")
 		return
+	# A two-cell item needs the space beneath its destination, and swapping it
+	# with something else has no sensible footprint, so both are refused rather
+	# than silently doing something surprising.
+	var from_tall: bool = Blocks.item_cells_tall(int(from["id"])) > 1
+	if from_tall and tc == "inv":
+		if not _can_place_tall(ti, fi if fc == "inv" else -1):
+			_toast("%s needs two free slots, one above the other" % Blocks.name_of(int(from["id"])))
+			return
+		if int(to["count"]) > 0 and int(to["id"]) != int(from["id"]):
+			_toast("Move that item out first")
+			return
 	if to["count"] > 0 and to["id"] == from["id"] and to.get("src", "") == from.get("src", ""):
 		var cap: int = STACK_MAX if tc == "inv" else (1 if tc == "equip" else 100000)
 		var mv: int = mini(cap - to["count"], from["count"])
@@ -2458,6 +2538,11 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 		from["props"] = tmp["props"]
 		from["src"] = tmp["src"]
 		from["mat"] = tmp["mat"]
+	# Footprints can change on either end of a move, so re-derive both.
+	if fc == "inv":
+		_sync_cover(fi)
+	if tc == "inv":
+		_sync_cover(ti)
 	_refresh_slots()
 	_refresh_station_ui()
 
@@ -2466,8 +2551,22 @@ func _refresh_slots() -> void:
 	active_slot = clampi(active_slot, 0, SLOTS - 1)
 	for i in _hotbar_cells.size():
 		_paint_cell(_hotbar_cells[i], inv[i], i == active_slot)
+	const CELL_STEP := 60.0   # 56px cell + 4px grid separation
 	for i in _grid_cells.size():
-		_paint_cell(_grid_cells[i], inv[i], i == active_slot)
+		var cell: Dictionary = _grid_cells[i]
+		var sw: ColorRect = cell["swatch"]
+		if _cover_owner(i) >= 0:
+			# Lower half of a two-cell item: the owner's swatch already covers
+			# this ground, so drawing anything here would double up.
+			_paint_cell(cell, {"id": Blocks.AIR, "count": 0}, false)
+			sw.offset_bottom = -6.0
+			continue
+		_paint_cell(cell, inv[i], i == active_slot)
+		# A tall item is drawn as ONE swatch spilling into the cell beneath,
+		# which is what makes it read as a single bulky object rather than two
+		# copies stacked up.
+		var tall := int(inv[i].get("count", 0)) > 0 			and Blocks.item_cells_tall(int(inv[i]["id"])) > 1
+		sw.offset_bottom = (-6.0 + CELL_STEP) if tall else -6.0
 	if not _equip_cell.is_empty():
 		_paint_cell(_equip_cell, suit_slot, false)
 	_update_mine_power()

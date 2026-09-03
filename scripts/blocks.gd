@@ -719,6 +719,13 @@ static func is_material(id: int) -> bool:
 static func is_station(id: int) -> bool:
 	return id in STATION_IDS
 
+## How many vertical inventory cells an item occupies. A suit is a bulky thing
+## to haul around, and taking two cells makes carrying a spare a real decision
+## rather than a free one.
+static func item_cells_tall(id: int) -> int:
+	return 2 if id == SUIT else 1
+
+
 static func is_gear(id: int) -> bool:
 	return id in TOOL_IDS
 
