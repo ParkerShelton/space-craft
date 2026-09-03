@@ -271,26 +271,20 @@ func _init_inventory() -> void:
 	inv.clear()
 	for i in SLOTS:
 		inv.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}})
-	# Starting kit so you can build a ship and terraform right away. No Cockpit:
-	# pressing G to start a ship already seeds one for free (see
-	# WorldManager.spawn_ship), so carrying spares was redundant.
-	_add_item(Blocks.THRUSTER, 8)
-	_add_item(Blocks.WARP_DRIVE, 1)
-	_add_item(Blocks.METAL, 256)
-	# A starting sword so combat is usable immediately, not just once you've
-	# found a Fabricator -- built from baseline (Tier 0) material stats via
-	# the same weapon_damage() a crafted one would use, so it's a normal,
-	# unremarkable blade rather than a special hardcoded stat.
-	var starter_props: Dictionary = Blocks.TIER_PROPS[0]
-	_add_item(Blocks.WEAPON, 1, starter_props, "Standard Issue", {
-		"name": "Standard-Issue", "color": Color(0.75, 0.78, 0.82),
-		"tier": 0, "damage": Blocks.weapon_damage(starter_props),
-	})
-	_add_item(Blocks.GRASS, 64)
-	_add_item(Blocks.DIRT, 64)
-	_add_item(Blocks.ROCK, 64)
-	_add_item(Blocks.WOOD, 32)
-	_add_item(Blocks.LEAF_0, 32)
+	# TEST KIT: everything needed to build and run the machines, and nothing
+	# else. Fuel ore is NOT granted here -- ore properties are invented per
+	# planet, so it is handed out in main._start_world once a world exists and
+	# can be sampled for real Combustion values.
+	# Every bench you can simply place:
+	for st in [Blocks.SMELTER, Blocks.FABRICATOR, Blocks.SHIPWORKS,
+			Blocks.CARPENTER, Blocks.CHEST, Blocks.SHAPER, Blocks.CLIMATE_UNIT]:
+		_add_item(st, 1)
+	# Materials for the built machines. The Generator is a stone firebox in a
+	# metal frame; the Forge is solid metal. Machine Cores are what declare
+	# "a machine goes here", so a few spares to experiment with.
+	_add_item(Blocks.MACHINE_CORE, 4)
+	_add_item(Blocks.METAL, 128)
+	_add_item(Blocks.ROCK, 128)
 
 
 # Add n of an item; fills matching stacks first, then empty slots. Returns leftover.
