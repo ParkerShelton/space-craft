@@ -245,7 +245,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 				# All share one path -- a real partial-height box, so they render
 				# AND collide at half height rather than just looking short.
 				var hid := ids[idx]
-				if hid == Blocks.ROOF_SLAB or Blocks.is_slab(hid):
+				if hid == Blocks.ROOF_SLAB or Blocks.is_slab(hid) or Blocks.is_stacked_slab(hid):
 					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
 					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
 					var lo := Vector3(x, y, z)
@@ -261,8 +261,27 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 					elif up.z < -0.5: lo.z = hi.z - h
 					# Meshed under its MATERIAL id, so a rock slab is coloured and
 					# textured exactly like rock without needing its own entries.
-					_emit_solid_box_cell(lo, hi, gv, Blocks.base_material_of(hid),
-						planet, snap, verts, normals, colors, uvs, cverts)
+					if Blocks.is_stacked_slab(hid):
+						# Two different slabs sharing this voxel: draw each half
+						# in its own material. Same-material pairs never reach
+						# here -- they merge into the plain full block instead.
+						var t_lo := lo
+						var t_hi := hi
+						if up.x > 0.5: t_lo.x = hi.x; t_hi.x = lo.x + 1.0
+						elif up.x < -0.5: t_hi.x = lo.x; t_lo.x = hi.x - 1.0
+						elif up.y > 0.5: t_lo.y = hi.y; t_hi.y = lo.y + 1.0
+						elif up.y < -0.5: t_hi.y = lo.y; t_lo.y = hi.y - 1.0
+						elif up.z > 0.5: t_lo.z = hi.z; t_hi.z = lo.z + 1.0
+						elif up.z < -0.5: t_hi.z = lo.z; t_lo.z = hi.z - 1.0
+						_emit_solid_box_cell(lo, hi, gv,
+							Blocks.base_material_of(Blocks.bottom_of(hid)),
+							planet, snap, verts, normals, colors, uvs, cverts)
+						_emit_solid_box_cell(t_lo, t_hi, gv,
+							Blocks.base_material_of(Blocks.top_slab_of(hid)),
+							planet, snap, verts, normals, colors, uvs, cverts)
+					else:
+						_emit_solid_box_cell(lo, hi, gv, Blocks.base_material_of(hid),
+							planet, snap, verts, normals, colors, uvs, cverts)
 				idx += 1
 
 	# ore lumps: decorative geometry on exposed ore faces (see _emit_ore_chunks)
@@ -361,7 +380,7 @@ static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int
 		var nid := _id_at(planet, snap, gv + n)
 		# A half-height neighbour cannot cover a full face, so it does not hide
 		# one -- otherwise a slab beside a block punches a hole in the wall.
-		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN and not Blocks.is_slab(nid) 				and nid != Blocks.ROOF_SLAB:
+		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN and not Blocks.is_slab(nid) 				and not Blocks.is_stacked_slab(nid) and nid != Blocks.ROOF_SLAB:
 			continue  # only the faces exposed to open space are drawn
 		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
 		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
@@ -405,7 +424,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				# opaque blocks only; WATER and ROOF_SLAB are meshed separately as
 				# partial-height boxes, and an OPEN door draws as an empty gap (no
 				# face, no collision) so you can actually walk through it once opened
-				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN 						and oid != Blocks.ROOF_SLAB and not Blocks.is_slab(oid):
+				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN 						and oid != Blocks.ROOF_SLAB and not Blocks.is_slab(oid) 						and not Blocks.is_stacked_slab(oid):
 					var na := a + dir
 					var nid: int
 					if na >= 0 and na < CS:
@@ -415,7 +434,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 					# draw a face if the neighbor is air, water, an open doorway, or a
 					# roof slab (so the seabed shows under water, a room shows through
 					# an open door, and a wall/ridge shows past a half-height slab)
-					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN 							or nid == Blocks.ROOF_SLAB or Blocks.is_slab(nid):
+					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN 							or nid == Blocks.ROOF_SLAB or Blocks.is_slab(nid) 							or Blocks.is_stacked_slab(nid):
 						val = oid
 				mask[k + j * CS] = val
 

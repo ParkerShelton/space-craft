@@ -172,6 +172,47 @@ static func is_slab(id: int) -> bool:
 	return SLAB_MATERIAL.has(id)
 
 
+# --- stacked slabs -----------------------------------------------------------
+# Two DIFFERENT slabs can share one voxel (a rock slab with a wood slab on top).
+# Rather than inventing an id for every pair -- 10 materials would need 45 --
+# the second slab is packed into the high bits of the stored voxel value.
+# Two slabs of the SAME material never take this path: they merge into the plain
+# full block instead, which is both simpler and what you'd expect.
+const TOP_SHIFT := 8
+const ID_MASK := 0xFF
+
+
+static func make_stacked(bottom: int, top: int) -> int:
+	return (bottom & ID_MASK) | ((top & ID_MASK) << TOP_SHIFT)
+
+
+## The slab sitting in the upper half of a voxel, or AIR if there isn't one.
+static func top_slab_of(v: int) -> int:
+	return (v >> TOP_SHIFT) & ID_MASK
+
+
+## The block occupying the lower half (or the whole) of a voxel.
+static func bottom_of(v: int) -> int:
+	return v & ID_MASK
+
+
+static func is_stacked_slab(v: int) -> bool:
+	return top_slab_of(v) != AIR
+
+
+## What a voxel becomes when `placing` is put on top of the slab already in it.
+## Returns AIR when the two don't combine, so the caller falls back to normal
+## placement in the next voxel up.
+##   same material      -> the plain full block (two halves make a whole)
+##   different material -> both slabs packed into the one voxel
+static func stack_result(existing: int, placing: int) -> int:
+	if not is_slab(existing) or not is_slab(placing):
+		return AIR
+	if existing == placing:
+		return base_material_of(placing)
+	return make_stacked(existing, placing)
+
+
 ## The material a shaped block is made of -- itself, if it isn't shaped.
 static func base_material_of(id: int) -> int:
 	return SLAB_MATERIAL.get(id, id)
@@ -440,7 +481,10 @@ const COLORS := {
 static func is_solid(id: int) -> bool:
 	return id != AIR
 
-static func hardness(id: int) -> float:
+static func hardness(raw: int) -> float:
+	# A slab is the same material as its parent, and a stacked pair is mined as
+	# one -- both take the base block's hardness.
+	var id := base_material_of(bottom_of(raw) if is_stacked_slab(raw) else raw)
 	return HARDNESS.get(id, 0.5)
 
 static func use_of(id: int) -> String:
@@ -537,14 +581,20 @@ static func refined_of(ore_id: int) -> int:
 	var i := ORE_SLOT_IDS.find(ore_id)
 	return REFINED_SLOT_IDS[i] if i >= 0 else AIR
 
-static func color_of(id: int) -> Color:
+static func color_of(raw: int) -> Color:
+	# Stacked slabs are looked up by their LOWER half; the mesher draws each
+	# half in its own colour, this is just for UI and single-colour uses.
+	var id := bottom_of(raw) if is_stacked_slab(raw) else raw
 	# A slab is the same stuff as its parent block, so it never carries its own
 	# palette entry -- one less thing to keep in sync per material.
 	if SLAB_MATERIAL.has(id):
 		return COLORS.get(SLAB_MATERIAL[id], Color.MAGENTA)
 	return COLORS.get(id, Color.MAGENTA)
 
-static func name_of(id: int) -> String:
+static func name_of(raw: int) -> String:
+	if is_stacked_slab(raw):
+		return "%s + %s" % [name_of(bottom_of(raw)), name_of(top_slab_of(raw))]
+	var id := raw
 	if SLAB_MATERIAL.has(id):
 		return "%s Slab" % NAMES.get(SLAB_MATERIAL[id], "Unknown")
 	return NAMES.get(id, "Unknown")

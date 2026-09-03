@@ -1273,7 +1273,22 @@ func _update_outline(tgt: Dictionary) -> void:
 		return
 	var obj = tgt["obj"]
 	var v: Vector3i = tgt["voxel"]
-	_outline.global_transform = Transform3D(obj.global_transform.basis, obj.to_global(Vector3(v)))
+	var b: Basis = obj.global_transform.basis
+	var origin: Vector3 = obj.to_global(Vector3(v))
+	# A slab only fills half its voxel, so the box has to be squashed along the
+	# local up -- a full cube outline around a slab is misleading about what you
+	# are actually pointing at. A stacked pair fills the voxel, so it stays full.
+	var raw: int = obj.get_id(v)
+	if obj is Planet and Blocks.is_slab(raw) and not Blocks.is_stacked_slab(raw):
+		var up := (obj as Planet)._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+		var axis := Vector3(absf(up.x), absf(up.y), absf(up.z))
+		var scl := Vector3.ONE - axis * 0.5
+		b = b.scaled(scl)
+		# A slab sits on the local DOWN side, so a negative-up axis needs the
+		# box shifted to the far half of the cell.
+		if up.x < -0.5 or up.y < -0.5 or up.z < -0.5:
+			origin = obj.to_global(Vector3(v) + axis * 0.5)
+	_outline.global_transform = Transform3D(b, origin)
 	_outline.visible = true
 
 
@@ -1300,6 +1315,18 @@ func _edit_block(_break_it: bool) -> void:
 		return
 	var obj = tgt["obj"]
 	var pv: Vector3i = tgt["place"]
+	# Placing a slab onto a slab fills the SAME voxel's upper half rather than
+	# starting a new voxel above it, so there is no gap between the two.
+	if tgt["kind"] == "planet" and Blocks.is_slab(place_id):
+		var hit_v: Vector3i = tgt["voxel"]
+		var hit_id: int = obj.get_id(hit_v)
+		var combined: int = Blocks.stack_result(hit_id, place_id)
+		if combined != Blocks.AIR and pv != hit_v:
+			var up_axis := Vector3i((obj as Planet)._axis_of(Vector3(hit_v) + Vector3(0.5, 0.5, 0.5)))
+			if pv == hit_v + up_axis:
+				obj.set_block(hit_v, combined)
+				_consume_active()
+				return
 	if tgt["kind"] == "planet":
 		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
 			if place_id == Blocks.DOOR:
