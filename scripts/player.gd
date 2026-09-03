@@ -70,6 +70,11 @@ var grounded := false
 const SLOTS := 32
 const HOTBAR_SLOTS := 8
 const STACK_MAX := 99
+## Inventory cell metrics. The gap was 4px, which packed the rows tight enough
+## that the grid read as one dense block rather than separate slots.
+const INV_CELL := 56
+const INV_CELL_GAP := 10
+const INV_CELL_STEP := INV_CELL + INV_CELL_GAP
 # each slot: {"id": int, "count": int, "props": Dictionary, "src": String}
 # props/src are set for refined materials & crafted gear; plain blocks leave them empty.
 var inv: Array = []
@@ -2230,8 +2235,11 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 
 	# full inventory overlay (E): inventory grid, a 2-tall Suit equip slot, and a
 	# scrollable "Craft" list (scrolls instead of growing as recipes are added)
-	var grid_w := HOTBAR_SLOTS * 60
-	var grid_h := 4 * 60
+	# One source of truth for cell metrics: the tall-item renderer needs the
+	# exact row pitch, and a hardcoded copy would silently misalign the moment
+	# spacing changed.
+	var grid_w := HOTBAR_SLOTS * INV_CELL_STEP
+	var grid_h := 4 * INV_CELL_STEP
 	# Suit sits on the LEFT, ahead of the grid: it's worn gear, so it reads as
 	# part of "you" rather than as an afterthought tacked on past the bag.
 	var equip_w := 64
@@ -2243,9 +2251,12 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
 	# The filter bar costs ~90px of the craft column, so the panel grows to keep
 	# a usable number of recipe rows visible rather than squeezing to three.
-	const CRAFT_EXTRA_H := 96
+	# Taller rows already give the craft list the room it needed, so this extra
+	# height comes back down -- the panel is centred, and any more of it rides
+	# up under the HP/O2 bars.
+	const CRAFT_EXTRA_H := 52
 	_inv_panel.custom_minimum_size = Vector2(craft_x + craft_w + 12,
-		36 + grid_h + CRAFT_EXTRA_H + 16)
+		44 + grid_h + CRAFT_EXTRA_H + 24)
 	_inv_panel.size = _inv_panel.custom_minimum_size
 	_inv_panel.position = -_inv_panel.size * 0.5
 	_inv_panel.visible = false
@@ -2256,9 +2267,9 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	_inv_panel.add_child(title)
 	var grid := GridContainer.new()
 	grid.columns = HOTBAR_SLOTS
-	grid.add_theme_constant_override("h_separation", 4)
-	grid.add_theme_constant_override("v_separation", 4)
-	grid.position = Vector2(grid_x, 36)
+	grid.add_theme_constant_override("h_separation", INV_CELL_GAP)
+	grid.add_theme_constant_override("v_separation", INV_CELL_GAP)
+	grid.position = Vector2(grid_x, 44)
 	_inv_panel.add_child(grid)
 	for i in SLOTS:
 		_grid_cells.append(_make_slot(grid, i, "select"))
@@ -2270,7 +2281,7 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	equip_label.modulate = Color(1, 1, 1, 0.7)
 	equip_label.position = Vector2(equip_x, 8)
 	_inv_panel.add_child(equip_label)
-	_equip_cell = _make_equip_slot(_inv_panel, Vector2(equip_x, 36))
+	_equip_cell = _make_equip_slot(_inv_panel, Vector2(equip_x, 44))
 
 	# --- crafting column: a scrolling list of hand recipes ---
 	var chead := Label.new()
@@ -2281,7 +2292,7 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	# Search box: the fastest route once the list is long, and it costs one row.
 	_craft_search = LineEdit.new()
 	_craft_search.placeholder_text = "Search recipes"
-	_craft_search.position = Vector2(craft_x, 32)
+	_craft_search.position = Vector2(craft_x, 40)
 	_craft_search.custom_minimum_size = Vector2(craft_w, 26)
 	_craft_search.size = Vector2(craft_w, 26)
 	_craft_search.text_changed.connect(func(t: String):
@@ -2292,7 +2303,7 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	# Category chips. A flat list of every recipe stops being browsable well
 	# before the count gets interesting; these keep it to a drawer at a time.
 	var chip_x := 0.0
-	var chip_y := 64.0
+	var chip_y := 72.0
 	for cat in Blocks.CRAFT_CATS:
 		# Skip drawers nothing lives in yet, so the bar never offers a tab that
 		# can only ever show "no recipes". New categories appear on their own
@@ -2336,7 +2347,7 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	var list_top := chip_y + 54.0
 	var scroll := ScrollContainer.new()
 	scroll.position = Vector2(craft_x, list_top)
-	var list_h := grid_h + CRAFT_EXTRA_H - (list_top - 36.0)
+	var list_h := grid_h + CRAFT_EXTRA_H - (list_top - 44.0)
 	scroll.custom_minimum_size = Vector2(craft_w, list_h)
 	scroll.size = Vector2(craft_w, list_h)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
@@ -2365,7 +2376,7 @@ func _make_slot(parent: Node, index: int, mode: String) -> Dictionary:
 		root = b
 	else:
 		root = Panel.new()
-	root.custom_minimum_size = Vector2(56, 56)
+	root.custom_minimum_size = Vector2(INV_CELL, INV_CELL)
 	parent.add_child(root)
 	var swatch := ColorRect.new()
 	swatch.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -2551,7 +2562,6 @@ func _refresh_slots() -> void:
 	active_slot = clampi(active_slot, 0, SLOTS - 1)
 	for i in _hotbar_cells.size():
 		_paint_cell(_hotbar_cells[i], inv[i], i == active_slot)
-	const CELL_STEP := 60.0   # 56px cell + 4px grid separation
 	for i in _grid_cells.size():
 		var cell: Dictionary = _grid_cells[i]
 		var sw: ColorRect = cell["swatch"]
@@ -2566,7 +2576,7 @@ func _refresh_slots() -> void:
 		# which is what makes it read as a single bulky object rather than two
 		# copies stacked up.
 		var tall := int(inv[i].get("count", 0)) > 0 			and Blocks.item_cells_tall(int(inv[i]["id"])) > 1
-		sw.offset_bottom = (-6.0 + CELL_STEP) if tall else -6.0
+		sw.offset_bottom = (-6.0 + float(INV_CELL_STEP)) if tall else -6.0
 	if not _equip_cell.is_empty():
 		_paint_cell(_equip_cell, suit_slot, false)
 	_update_mine_power()
@@ -3136,7 +3146,7 @@ func _storage_placements(st: Station) -> Array:
 
 func _make_stor_cell(index: int, cx: int, cy: int) -> Dictionary:
 	var root := Panel.new()
-	root.custom_minimum_size = Vector2(56, 56)
+	root.custom_minimum_size = Vector2(INV_CELL, INV_CELL)
 	root.size = Vector2(56, 56)
 	root.position = Vector2(cx * 60, cy * 60)
 	_stor_container.add_child(root)
