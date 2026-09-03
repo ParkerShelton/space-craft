@@ -2464,27 +2464,19 @@ func _looked_at_station() -> Station:
 	return c as Station if c is Station else null
 
 
-func _open_station(st: Station) -> void:
-	_station_open = st
-	if inv_open:
-		_toggle_inventory()
-	_station_title.text = st.title()
-	_station_store_label.text = "%s contents  (drag to move)" % st.title()
+## Builds the craft buttons for a station. Split out of _open_station because
+## the Shaper's list is DYNAMIC -- it depends on the block currently loaded, so
+## it has to be rebuilt whenever the contents change, not just once on open.
+func _rebuild_craft_buttons(st) -> void:
 	var is_smelter: bool = Blocks.is_smelter_kind(st.kind)
-	_refine_btn.visible = is_smelter
-
-	# rebuild this station's craft buttons as a vertical list in the left column,
-	# below the Refine button when both are present (a Forge is a smelter, so it
-	# gets Refine AND the Alloy/Circuitry blueprints)
 	for b in _craft_buttons:
 		b.queue_free()
 	_craft_buttons.clear()
 	var crafts: Array = Blocks.STATION_CRAFTS.get(Blocks.SMELTER if is_smelter else st.kind, [])
 	if st.kind == Blocks.SHAPER:
-		# The Shaper has no fixed recipe list: it offers whatever shapes the
-		# BLOCK CURRENTLY LOADED can become. That way a new shape is one entry
-		# in Blocks.shapes_for() and instantly works for every material, rather
-		# than needing a recipe per material per shape cluttering a bench.
+		# No fixed recipe list: offer whatever shapes the loaded block can
+		# become. A new shape is then one entry in Blocks.shapes_for() and works
+		# for every material at once, instead of a recipe per material per shape.
 		crafts = _shaper_crafts(st)
 	var craft_top := 62.0 + (34.0 if is_smelter else 0.0)
 	_craft_row.position = Vector2(12, craft_top)
@@ -2498,15 +2490,38 @@ func _open_station(st: Station) -> void:
 		_craft_row.add_child(b)
 		_craft_buttons.append(b)
 		by += 34.0
-	var has_left: bool = is_smelter or not crafts.is_empty()
+
+
+## Labels currently shown, so a dynamic list is only torn down and rebuilt when
+## it actually changed (rebuilding every frame would fight clicks and focus).
+func _craft_button_labels() -> Array:
+	var out: Array = []
+	for b in _craft_buttons:
+		out.append(b.text)
+	return out
+
+
+func _open_station(st: Station) -> void:
+	_station_open = st
+	if inv_open:
+		_toggle_inventory()
+	_station_title.text = st.title()
+	_station_store_label.text = "%s contents  (drag to move)" % st.title()
+	if st.kind == Blocks.SHAPER:
+		_station_store_label.text = "Input a block, take the shapes out"
+	var is_smelter: bool = Blocks.is_smelter_kind(st.kind)
+	_refine_btn.visible = is_smelter
+
+	_rebuild_craft_buttons(st)
+	var has_left: bool = is_smelter or not _craft_buttons.is_empty()
 	_left_header.visible = has_left
 	_left_header.text = "Actions" if is_smelter else "Blueprints"
 
 	# preview + job label sit just below the action/blueprint buttons (same spot;
 	# only one shows at a time -- preview when idle, progress when working)
-	var left_bottom: int = int(craft_top) + (crafts.size() * 34 if not crafts.is_empty() else 34)
+	var left_bottom: int = int(_craft_row.position.y) + (_craft_buttons.size() * 34 if not _craft_buttons.is_empty() else 34)
 	_preview_label.position = Vector2(14, left_bottom + 8)
-	_preview_label.visible = not crafts.is_empty()
+	_preview_label.visible = not _craft_buttons.is_empty() or st.kind == Blocks.SHAPER
 	_job_label.position = Vector2(14, left_bottom + 8)
 
 	# build the storage grid (a chest opens its whole connected group) and reflow
@@ -2718,6 +2733,17 @@ func _refresh_station_ui() -> void:
 		_paint_cell(_station_cells[i], _slot_ref("stor", i), false)
 	for i in _pinv_cells.size():
 		_paint_cell(_pinv_cells[i], inv[i], false)
+	# The Shaper's options depend on what is loaded RIGHT NOW, and loading
+	# happens after the panel is already open -- so its buttons have to be
+	# rebuilt on refresh, not just once when the station is opened. (That was
+	# the bug behind "put rock in and got no options".) Only rebuilt when the
+	# resulting list actually differs, so clicks and focus aren't disturbed.
+	if _station_open.kind == Blocks.SHAPER:
+		var want: Array = []
+		for c in _shaper_crafts(_station_open):
+			want.append(c["label"])
+		if want != _craft_button_labels():
+			_rebuild_craft_buttons(_station_open)
 	var craft_key: int = Blocks.SMELTER if Blocks.is_smelter_kind(_station_open.kind) else _station_open.kind
 	var has_crafts: bool = Blocks.STATION_CRAFTS.has(craft_key) or _station_open.kind == Blocks.SHAPER
 	if has_crafts:

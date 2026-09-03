@@ -32,6 +32,11 @@ static func capacity_of(k: int) -> int:
 		return CHEST_SLOTS
 	if k == Blocks.FORGE:
 		return 16  # a multiblock-built upgrade over the hand-built Smelter
+	if k == Blocks.SHAPER:
+		# One INPUT slot -- you feed it a single block and pick a shape -- plus
+		# one for the result to land in. A literal single slot leaves the
+		# crafted shapes nowhere to go once the input is sitting in it.
+		return 2
 	return STORAGE_SLOTS
 
 
