@@ -161,6 +161,31 @@ const SLAB_OF := {
 }
 ## slab -> the material it is made of. Colour, name and surface texturing all
 ## come from the material, so a slab never needs its own palette entry.
+# Stairs, one id per material like slabs. FACING and the corner flag are packed
+# into the placed voxel (see make_stair), not baked into the id -- otherwise
+# every material would need eight ids instead of one.
+const ROCK_STAIR := 81
+const DIRT_STAIR := 82
+const GRASS_STAIR := 83
+const REGOLITH_STAIR := 84
+const ICE_STAIR := 85
+const SNOW_STAIR := 86
+const CRYSTAL_STAIR := 87
+const METAL_STAIR := 88
+const WOOD_STAIR := 89
+const GLASS_STAIR := 90
+
+const STAIR_OF := {
+	ROCK: ROCK_STAIR, DIRT: DIRT_STAIR, GRASS: GRASS_STAIR, REGOLITH: REGOLITH_STAIR,
+	ICE: ICE_STAIR, SNOW: SNOW_STAIR, CRYSTAL: CRYSTAL_STAIR, METAL: METAL_STAIR,
+	WOOD: WOOD_STAIR, WOOD_PALE: WOOD_STAIR, WOOD_DARK: WOOD_STAIR, GLASS: GLASS_STAIR,
+}
+const STAIR_MATERIAL := {
+	ROCK_STAIR: ROCK, DIRT_STAIR: DIRT, GRASS_STAIR: GRASS, REGOLITH_STAIR: REGOLITH,
+	ICE_STAIR: ICE, SNOW_STAIR: SNOW, CRYSTAL_STAIR: CRYSTAL, METAL_STAIR: METAL,
+	WOOD_STAIR: WOOD, GLASS_STAIR: GLASS,
+}
+
 const SLAB_MATERIAL := {
 	ROCK_SLAB: ROCK, DIRT_SLAB: DIRT, GRASS_SLAB: GRASS, REGOLITH_SLAB: REGOLITH,
 	ICE_SLAB: ICE, SNOW_SLAB: SNOW, CRYSTAL_SLAB: CRYSTAL, METAL_SLAB: METAL,
@@ -170,6 +195,32 @@ const SLAB_MATERIAL := {
 
 static func is_slab(id: int) -> bool:
 	return SLAB_MATERIAL.has(id)
+
+
+static func is_stair(id: int) -> bool:
+	return STAIR_MATERIAL.has(id)
+
+
+# --- placed-stair orientation ------------------------------------------------
+# A stair's FACING (which way you climb) and whether it is a corner are packed
+# into the stored voxel above the id, so one stair id per material covers all
+# eight placements instead of needing an id each.
+const FACING_SHIFT := 16
+const FACING_MASK := 0x3
+const CORNER_BIT := 1 << 18
+
+
+static func make_stair(stair_id: int, facing: int, corner: bool) -> int:
+	var v := (stair_id & ID_MASK) | ((facing & FACING_MASK) << FACING_SHIFT)
+	return v | CORNER_BIT if corner else v
+
+
+static func stair_facing_of(v: int) -> int:
+	return (v >> FACING_SHIFT) & FACING_MASK
+
+
+static func stair_is_corner(v: int) -> bool:
+	return (v & CORNER_BIT) != 0
 
 
 # --- stacked slabs -----------------------------------------------------------
@@ -215,6 +266,8 @@ static func stack_result(existing: int, placing: int) -> int:
 
 ## The material a shaped block is made of -- itself, if it isn't shaped.
 static func base_material_of(id: int) -> int:
+	if STAIR_MATERIAL.has(id):
+		return int(STAIR_MATERIAL[id])
 	return SLAB_MATERIAL.get(id, id)
 
 
@@ -224,6 +277,8 @@ static func shapes_for(mat: int) -> Array:
 	var out: Array = []
 	if SLAB_OF.has(mat):
 		out.append({"shape": "Slab", "out": int(SLAB_OF[mat]), "n": 2, "cost_n": 1})
+	if STAIR_OF.has(mat):
+		out.append({"shape": "Stairs", "out": int(STAIR_OF[mat]), "n": 1, "cost_n": 1})
 	return out
 
 # A 3x3x3 shell of `shell` around a placed INTERFACE block collapses into a
@@ -326,7 +381,9 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
 	COCKPIT, THRUSTER, LIFE_SUPPORT, GLASS, DOOR, INTERFACE, WARP_DRIVE,
 	ROCK_SLAB, DIRT_SLAB, GRASS_SLAB, REGOLITH_SLAB, ICE_SLAB, SNOW_SLAB,
-	CRYSTAL_SLAB, METAL_SLAB, WOOD_SLAB, GLASS_SLAB]
+	CRYSTAL_SLAB, METAL_SLAB, WOOD_SLAB, GLASS_SLAB,
+	ROCK_STAIR, DIRT_STAIR, GRASS_STAIR, REGOLITH_STAIR, ICE_STAIR, SNOW_STAIR,
+	CRYSTAL_STAIR, METAL_STAIR, WOOD_STAIR, GLASS_STAIR]
 
 const NAMES := {
 	AIR: "Air",
@@ -484,7 +541,7 @@ static func is_solid(id: int) -> bool:
 static func hardness(raw: int) -> float:
 	# A slab is the same material as its parent, and a stacked pair is mined as
 	# one -- both take the base block's hardness.
-	var id := base_material_of(bottom_of(raw) if is_stacked_slab(raw) else raw)
+	var id := base_material_of(bottom_of(raw))
 	return HARDNESS.get(id, 0.5)
 
 static func use_of(id: int) -> String:
@@ -584,17 +641,24 @@ static func refined_of(ore_id: int) -> int:
 static func color_of(raw: int) -> Color:
 	# Stacked slabs are looked up by their LOWER half; the mesher draws each
 	# half in its own colour, this is just for UI and single-colour uses.
-	var id := bottom_of(raw) if is_stacked_slab(raw) else raw
+	# Mask off any packed orientation/stacking bits: everything below keys off
+	# the plain block id.
+	var id := bottom_of(raw)
 	# A slab is the same stuff as its parent block, so it never carries its own
 	# palette entry -- one less thing to keep in sync per material.
 	if SLAB_MATERIAL.has(id):
 		return COLORS.get(SLAB_MATERIAL[id], Color.MAGENTA)
+	if STAIR_MATERIAL.has(id):
+		return COLORS.get(STAIR_MATERIAL[id], Color.MAGENTA)
 	return COLORS.get(id, Color.MAGENTA)
 
 static func name_of(raw: int) -> String:
 	if is_stacked_slab(raw):
 		return "%s + %s" % [name_of(bottom_of(raw)), name_of(top_slab_of(raw))]
-	var id := raw
+	var id := bottom_of(raw)
 	if SLAB_MATERIAL.has(id):
 		return "%s Slab" % NAMES.get(SLAB_MATERIAL[id], "Unknown")
+	if STAIR_MATERIAL.has(id):
+		var t := " Corner Stairs" if stair_is_corner(raw) else " Stairs"
+		return NAMES.get(STAIR_MATERIAL[id], "Unknown") + t
 	return NAMES.get(id, "Unknown")

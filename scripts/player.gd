@@ -100,6 +100,7 @@ const TETHER_LEN := 18.0          # max EVA tether distance
 var _camera: Camera3D
 var _ray: RayCast3D
 var _outline: MeshInstance3D       # wireframe box around the block under the crosshair
+var _stair_corner := false         # R toggles straight vs corner stairs before placing
 var _pitch := 0.0
 var _look := Vector2.ZERO          # accumulated mouse delta, consumed in physics
 
@@ -380,6 +381,12 @@ func _unhandled_input(event: InputEvent) -> void:
 			_try_open_starmap()
 		elif piloting:
 			return  # while flying, only F/M/Esc/mouse-look do anything
+		elif event.keycode == KEY_R:
+			# Stairs only: flip between a straight run and a corner piece. The
+			# FACING comes from where you're looking when you place, so turning
+			# your body is the rotation -- R only picks the shape.
+			_stair_corner = not _stair_corner
+			_toast("Stairs: %s" % ("corner" if _stair_corner else "straight"))
 		elif event.keycode == KEY_G:
 			if aboard == null and not eva:
 				_start_ship()
@@ -1399,6 +1406,12 @@ func _edit_block(_break_it: bool) -> void:
 				obj.set_block(hit_v, combined)
 				_consume_active()
 				return
+	# Stairs record WHICH WAY they were placed, so one stair id per material
+	# covers all eight orientations instead of needing an id for each.
+	var placed_value := place_id
+	if tgt["kind"] == "planet" and Blocks.is_stair(place_id):
+		placed_value = Blocks.make_stair(place_id,
+			_stair_facing_for(obj as Planet, pv), _stair_corner)
 	if tgt["kind"] == "planet":
 		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
 			if place_id == Blocks.DOOR:
@@ -1410,7 +1423,7 @@ func _edit_block(_break_it: bool) -> void:
 				obj.set_block(pv, place_id)
 				obj.set_block(pv + axis, place_id)
 			else:
-				obj.set_block(pv, place_id)
+				obj.set_block(pv, placed_value)
 			_consume_active()
 			if place_id == Blocks.INTERFACE:
 				_check_multiblock(obj, pv)
@@ -1419,6 +1432,32 @@ func _edit_block(_break_it: bool) -> void:
 			# crafted ship blocks carry their material stats onto the ship
 			obj.set_block(pv, place_id, inv[active_slot].get("props", {}))
 			_consume_active()
+
+
+## Which of the four flat directions a stair should climb toward: the one the
+## player is looking along, snapped to the cell axes for this face of the world.
+func _stair_facing_for(planet: Planet, v: Vector3i) -> int:
+	var up: Vector3 = planet._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+	var ax := Vector3(1, 0, 0)
+	var bx := Vector3(0, 0, 1)
+	if absf(up.x) > 0.5:
+		ax = Vector3(0, 1, 0)
+	elif absf(up.z) > 0.5:
+		bx = Vector3(0, 1, 0)
+	var look := -_camera.global_transform.basis.z
+	look = look - up * look.dot(up)   # flatten onto this face
+	if look.length() < 0.001:
+		return 0
+	look = look.normalized()
+	var dirs := [ax, bx, -ax, -bx]
+	var best := 0
+	var best_d := -2.0
+	for i in 4:
+		var d: float = look.dot(dirs[i])
+		if d > best_d:
+			best_d = d
+			best = i
+	return best
 
 
 const _CUBE26_OFFSETS := [
@@ -1572,6 +1611,12 @@ func _process_mining(delta: float) -> void:
 			if is_ore:
 				_add_item(id, 1, od["props"], planet.planet_name,
 					{"name": od["name"], "color": od["color"], "tier": od["tier"]})
+			elif Blocks.is_stacked_slab(id):
+				# Two slabs share this voxel. Hand back BOTH of them: the packed
+				# value is a storage detail, and putting it in the inventory
+				# produced an item named "A + B" that could never be placed.
+				_add_item(Blocks.bottom_of(id), 1)
+				_add_item(Blocks.top_slab_of(id), 1)
 			else:
 				_add_item(id, 1)
 		elif ship != null:

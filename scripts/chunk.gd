@@ -245,7 +245,11 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 				# All share one path -- a real partial-height box, so they render
 				# AND collide at half height rather than just looking short.
 				var hid := ids[idx]
-				if hid == Blocks.ROOF_SLAB or Blocks.is_slab(hid) or Blocks.is_stacked_slab(hid):
+				if Blocks.is_stair(Blocks.bottom_of(hid)):
+					_emit_stair(Vector3(x, y, z),
+						Vector3i(base.x + x, base.y + y, base.z + z), hid,
+						planet, snap, verts, normals, colors, uvs, cverts)
+				elif hid == Blocks.ROOF_SLAB or Blocks.is_slab(hid) or Blocks.is_stacked_slab(hid):
 					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
 					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
 					var lo := Vector3(x, y, z)
@@ -356,6 +360,59 @@ static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 				ore_col, ORE_CHUNK_ID, verts, normals, colors, uvs)
 
 
+## A stair: the lower half of the cell, plus a step on the upper half.
+##
+## Facing is which way you CLIMB, so the tall part sits on the facing side. A
+## corner keeps only a quarter of that upper step, giving an L you can turn a
+## staircase around. Both pieces go through _emit_solid_box_cell, so they
+## collide as well as render -- combined with the player's step-up, that is what
+## makes a staircase walkable.
+static func _emit_stair(lo0: Vector3, gv: Vector3i, raw: int, planet: Planet,
+		snap: Dictionary, verts: PackedVector3Array, normals: PackedVector3Array,
+		colors: PackedColorArray, uvs: PackedVector2Array,
+		cverts: PackedVector3Array) -> void:
+	var mat := Blocks.base_material_of(Blocks.bottom_of(raw))
+	var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
+	# The two cell axes lying flat against this face of the world.
+	var ax := Vector3(1, 0, 0)
+	var bx := Vector3(0, 0, 1)
+	if absf(up.x) > 0.5:
+		ax = Vector3(0, 1, 0)
+	elif absf(up.z) > 0.5:
+		bx = Vector3(0, 1, 0)
+	var facing: int = Blocks.stair_facing_of(raw)
+	var f: Vector3 = [ax, bx, -ax, -bx][facing]
+	var side: Vector3 = [bx, -ax, -bx, ax][facing]   # 90 degrees from `f`
+
+	# Lower half: full footprint, half height on the local-down side.
+	var base_box := _half_toward(lo0, lo0 + Vector3.ONE, -up)
+	_emit_solid_box_cell(base_box[0], base_box[1], gv, mat,
+		planet, snap, verts, normals, colors, uvs, cverts)
+
+	# Upper step: the half on the facing side; a corner keeps a quarter of it.
+	var top := _half_toward(lo0, lo0 + Vector3.ONE, up)
+	top = _half_toward(top[0], top[1], f)
+	if Blocks.stair_is_corner(raw):
+		top = _half_toward(top[0], top[1], side)
+	_emit_solid_box_cell(top[0], top[1], gv, mat,
+		planet, snap, verts, normals, colors, uvs, cverts)
+
+
+## The half of a box lying toward `dir`, where `dir` is one of the six unit
+## axes. Returned rather than mutated because Vector3 is a value type.
+static func _half_toward(lo: Vector3, hi: Vector3, dir: Vector3) -> Array:
+	var l := lo
+	var h := hi
+	var mid := (lo + hi) * 0.5
+	if dir.x > 0.5: l.x = mid.x
+	elif dir.x < -0.5: h.x = mid.x
+	elif dir.y > 0.5: l.y = mid.y
+	elif dir.y < -0.5: h.y = mid.y
+	elif dir.z > 0.5: l.z = mid.z
+	elif dir.z < -0.5: h.z = mid.z
+	return [l, h]
+
+
 static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Planet,
 		snap: Dictionary, wverts: PackedVector3Array, wnormals: PackedVector3Array,
 		wcolors: PackedColorArray, wuvs: PackedVector2Array) -> void:
@@ -380,7 +437,7 @@ static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int
 		var nid := _id_at(planet, snap, gv + n)
 		# A half-height neighbour cannot cover a full face, so it does not hide
 		# one -- otherwise a slab beside a block punches a hole in the wall.
-		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN and not Blocks.is_slab(nid) 				and not Blocks.is_stacked_slab(nid) and nid != Blocks.ROOF_SLAB:
+		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN and not Blocks.is_slab(nid) 				and not Blocks.is_stacked_slab(nid) and nid != Blocks.ROOF_SLAB 				and not Blocks.is_stair(Blocks.bottom_of(nid)):
 			continue  # only the faces exposed to open space are drawn
 		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
 		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
@@ -424,7 +481,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				# opaque blocks only; WATER and ROOF_SLAB are meshed separately as
 				# partial-height boxes, and an OPEN door draws as an empty gap (no
 				# face, no collision) so you can actually walk through it once opened
-				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN 						and oid != Blocks.ROOF_SLAB and not Blocks.is_slab(oid) 						and not Blocks.is_stacked_slab(oid):
+				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN 						and oid != Blocks.ROOF_SLAB and not Blocks.is_slab(oid) 						and not Blocks.is_stacked_slab(oid) 						and not Blocks.is_stair(Blocks.bottom_of(oid)):
 					var na := a + dir
 					var nid: int
 					if na >= 0 and na < CS:
@@ -434,7 +491,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 					# draw a face if the neighbor is air, water, an open doorway, or a
 					# roof slab (so the seabed shows under water, a room shows through
 					# an open door, and a wall/ridge shows past a half-height slab)
-					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN 							or nid == Blocks.ROOF_SLAB or Blocks.is_slab(nid) 							or Blocks.is_stacked_slab(nid):
+					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN 							or nid == Blocks.ROOF_SLAB or Blocks.is_slab(nid) 							or Blocks.is_stacked_slab(nid) 							or Blocks.is_stair(Blocks.bottom_of(nid)):
 						val = oid
 				mask[k + j * CS] = val
 
