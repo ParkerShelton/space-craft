@@ -603,19 +603,20 @@ func _grip_center(hand_bi: int, side: String) -> Vector3:
 ## clip in the library, including any added later, without new animation data.
 ## Sizes and mounting points come from the rig's own measured bones, so they
 ## stay proportional at any body scale.
-func _build_extra_arms(color: Color) -> void:
+func _build_extra_arms(accent: Color) -> void:
 	if _extra_arm_pairs <= 0 or _skeleton == null:
 		return
 	var bi_spine := _skeleton.find_bone("mixamorig_Spine1")
 	var bi_hand := _skeleton.find_bone("mixamorig_RightHand")
 	if bi_spine < 0 or _bi_r_arm < 0 or _bi_l_arm < 0:
 		return
-	var upper := _bone_child_offset(_bi_r_arm, _bi_r_forearm).length()
-	var fore := _bone_child_offset(_bi_r_forearm, bi_hand).length() if bi_hand >= 0 else upper * 0.9
+	# Slightly longer and thicker than the real arms, in the ACCENT colour --
+	# built in the body colour they just read as more torso, since they sit
+	# against the torso box and share its shade.
+	var upper := _bone_child_offset(_bi_r_arm, _bi_r_forearm).length() * 1.15
+	var fore := (_bone_child_offset(_bi_r_forearm, bi_hand).length() if bi_hand >= 0 else upper * 0.9) * 1.15
 	if upper <= 0.001:
 		return
-	# Mount off the real shoulders' own lateral offset so extra arms sit at the
-	# same width as the originals rather than a guessed constant.
 	var shoulder_off := _bone_child_offset(bi_spine, _bi_r_arm)
 	# Sit them OUTSIDE the torso and well below the real shoulders. Mounted at
 	# exactly the shoulder's own half-width they ended up buried in the torso
@@ -629,66 +630,59 @@ func _build_extra_arms(color: Color) -> void:
 			var pivot := Node3D.new()
 			att.add_child(pivot)
 			pivot.position = Vector3(half_w * side, shoulder_off.y - drop * float(pair + 1), shoulder_off.z)
-			# Segments run along +Y, matching the rig's own bone convention
-			# (a Mixamo arm bone's +Y points down the limb). That lets the
-			# driver below copy an arm bone's orientation onto this pivot
-			# directly instead of trying to convert between two conventions.
-			_mk_box(pivot, Vector3(0.15, upper, 0.15), Vector3(0, upper * 0.5, 0), color)
+			# Segments run along +Y, matching the rig's own bone convention.
+			_mk_box(pivot, Vector3(0.17, upper, 0.17), Vector3(0, upper * 0.5, 0), accent)
 			var elbow := Node3D.new()
 			pivot.add_child(elbow)
 			elbow.position = Vector3(0, upper, 0)
-			_mk_box(elbow, Vector3(0.13, fore, 0.13), Vector3(0, fore * 0.5, 0), color)
+			_mk_box(elbow, Vector3(0.15, fore, 0.15), Vector3(0, fore * 0.5, 0), accent)
 			_extra_arms.append({
 				"node": pivot,
 				"fore": elbow,
-				# Alternate which real arm each side follows, so the extra limbs
-				# swing in a believable alternating gait rather than in unison.
-				"src": _bi_r_arm if side > 0.0 else _bi_l_arm,
-				"src_fore": _bi_r_forearm if side > 0.0 else _bi_l_forearm,
-				# Fan successive pairs outward so they don't sit perfectly
-				# parallel to the real arms (or to each other).
-				"splay": side * (0.25 + 0.2 * float(pair)),
+				"side": side,
+				# Splay grows with each pair so they fan out down the torso
+				# instead of stacking in a flat column.
+				"splay": 0.3 + 0.22 * float(pair),
+				# Own phase and rate: this is what makes each limb move
+				# independently rather than in lockstep with the others.
+				"phase": randf() * TAU,
+				"freq": randf_range(0.7, 1.45),
+				"bend": randf_range(0.25, 0.6),
 			})
 
 
-## Copies each real arm bone's WORLD orientation onto the matching extra arm,
-## so extra limbs move with whatever clip is playing.
+## Drives the extra arms with their OWN motion rather than copying a real arm.
 ##
-## Copying the bone's orientation outright (rather than a delta against some
-## assumed rest pose) is what makes this robust: the rig's arms rest in a
-## T-pose, so a delta already contains the whole T-pose-to-hanging correction
-## and applying it to a pivot that was itself authored hanging down swung the
-## limb far past vertical -- the extra arms stuck straight out sideways.
-## Called every frame from _animate once the clip has posed the rig.
-func _drive_extra_arms() -> void:
-	if _extra_arms.is_empty() or _skeleton == null:
+## Copying an arm bone's orientation made every extra limb a duplicate of the
+## one above it, which reads as a rendering glitch more than as extra arms.
+## Each limb instead swings on its own phase and rate around a hanging rest
+## pose, with amplitude following how fast the creature is actually moving --
+## so they still agree with the action (still while idle, pumping while
+## charging, lashing during a swing) without being clones of each other.
+##
+## Sets LOCAL basis only. Assigning global_basis here would overwrite the scale
+## these limbs inherit from the scaled rig and pin them to unit size.
+func _drive_extra_arms(moving: float) -> void:
+	if _extra_arms.is_empty():
 		return
-	var sk_basis := _skeleton.global_transform.basis
+	# Attacks throw the extra limbs harder than a walk does.
+	var aggression := 0.0
+	if _state == "attack":
+		aggression = 0.9
+	elif _state == "telegraph":
+		aggression = 0.35
+	var amp: float = 0.16 + moving * 0.5 + aggression
 	for e in _extra_arms:
-		var arm: Node3D = e["node"]
-		var splay: float = float(e["splay"])
-		var b: Basis = (sk_basis * _skeleton.get_bone_global_pose(int(e["src"])).basis).orthonormalized()
-		_apply_world_rotation(arm, b * Basis(Vector3.FORWARD, splay))
-		var sf: int = int(e["src_fore"])
-		if sf >= 0:
-			var fb: Basis = (sk_basis * _skeleton.get_bone_global_pose(sf).basis).orthonormalized()
-			_apply_world_rotation(e["fore"], fb * Basis(Vector3.FORWARD, splay))
-
-
-## Points a node at a world-space orientation WITHOUT disturbing the scale it
-## inherits from its parents.
-##
-## Assigning global_basis directly would do the job for rotation but also
-## overwrite scale, and the value being assigned here is orthonormal (scale 1) --
-## which silently pinned extra limbs to unit size no matter how large the body
-## was scaled. Converting into the parent's frame and setting a pure-rotation
-## LOCAL basis leaves the rig's scale to flow down the tree as normal.
-func _apply_world_rotation(n: Node3D, world_rot: Basis) -> void:
-	var parent := n.get_parent() as Node3D
-	if parent == null:
-		n.basis = world_rot
-		return
-	n.basis = parent.global_basis.orthonormalized().inverse() * world_rot
+		var side: float = float(e["side"])
+		var ph: float = _phase * float(e["freq"]) + float(e["phase"])
+		# Hang down (+Y of the limb points down the body) and splay outward.
+		var base := Basis(Vector3(0, 0, 1), PI + side * float(e["splay"]))
+		var swing: float = sin(ph) * amp
+		(e["node"] as Node3D).basis = base * Basis(Vector3.RIGHT, swing)
+		# Elbows only bend one way, lagged behind the shoulder so the forearm
+		# reads as catching up rather than moving as one rigid piece.
+		var bend: float = float(e["bend"]) + maxf(0.0, sin(ph - 0.7)) * (0.35 + aggression * 0.4)
+		(e["fore"] as Node3D).basis = Basis(Vector3.RIGHT, bend)
 
 
 func _has_clips(state: String) -> bool:
@@ -848,7 +842,7 @@ func _build_biped_skeleton(s: float, color: Color, accent: Color) -> bool:
 	_mk_box(_mk_bone_attachment(_bi_l_thigh), Vector3(0.2, thigh_off.length(), 0.22) * s, thigh_off * 0.5 * s, accent)
 	_mk_box(_mk_bone_attachment(_bi_l_shin), Vector3(0.17, shin_off.length(), 0.19) * s, shin_off * 0.5 * s, accent)
 
-	_build_extra_arms(color)
+	_build_extra_arms(accent)
 
 	# Sword/shield hang from the hand bones directly (their origin IS the
 	# wrist), so no "-reach" offset is needed the way the pivot-fallback body
@@ -1659,7 +1653,7 @@ func _animate(delta: float) -> void:
 		# Don't touch any bone pose by hand while either is playing, or we'd
 		# fight the clip every frame. Every OTHER state still drives bone
 		# poses by hand with the exact formulas the pivot-based body used.
-		_drive_extra_arms()
+		_drive_extra_arms(moving)
 		# A one-shot reaction (hit flinch, shield-block) owns the skeleton until
 		# it finishes -- checked FIRST so nothing below restarts a locomotion
 		# clip over the top of a flinch that is still playing.
