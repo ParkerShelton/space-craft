@@ -50,6 +50,7 @@ varying float v_block;
 varying vec3 v_normal;
 varying float v_shade;   // baked face shading, so ore chunks light like the face
 varying float v_log_axis; // a log's trunk axis (0=X,1=Y,2=Z); 3 = not a log
+varying float v_block_light; // 0..1 torch light reaching this face, baked by the mesher
 
 float hash21(vec2 p) {
 	vec3 q = fract(vec3(p.xyx) * 0.1031);
@@ -80,6 +81,7 @@ void vertex() {
 	v_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	v_shade = UV.y;
 	v_log_axis = UV2.x;
+	v_block_light = UV2.y;
 }
 
 void fragment() {
@@ -217,7 +219,13 @@ void fragment() {
 	ALBEDO = base;
 	// Push well past 1.0 so the glow survives tonemapping and reads as a flame
 	// rather than a pale cube.
-	EMISSION = base * emit * 2.6;
+	// Baked block light (see Chunk._compute_block_light). Added as emission so
+	// it lights the surface regardless of the renderer's own light handling,
+	// and warmed toward flame colour so a torch-lit room reads as firelight
+	// rather than just a brighter version of daylight.
+	float bl = v_block_light;
+	vec3 lamp = mix(vec3(1.0, 0.62, 0.34), vec3(1.0, 0.88, 0.70), bl);
+	EMISSION = base * emit * 2.6 + base * lamp * bl * bl * 1.9;
 	ROUGHNESS = 0.85;
 	METALLIC = 0.0;
 }

@@ -27,6 +27,24 @@ var _collision_sig := 0  # hash of the opaque verts the current shape was cooked
 ## patterns, so one world's trees are visibly a different species from
 ## another's. Cached on the planet itself (see _get_material).
 static var _tex_seed := 0.0
+## Keys under which the light map rides along in a build's edit snapshot.
+## Deliberately NOT static state: chunks mesh concurrently on worker threads, so
+## a shared map would be clobbered mid-build by whichever chunk started last.
+## The snapshot is created fresh per build, which makes it the natural carrier.
+const LM_KEY := "__lightmap"
+const LB_KEY := "__lightbase"
+
+
+## Light 0..1 just outside a face -- i.e. in the open cell the face looks into,
+## which is where a torch's light actually is.
+static func _face_light(snap: Dictionary, gv: Vector3i, n: Vector3i) -> float:
+	var lm = snap.get(LM_KEY)
+	if lm == null or (lm as PackedByteArray).is_empty():
+		return 0.0
+	var l: Vector3i = gv + n - (snap[LB_KEY] as Vector3i) 		+ Vector3i(LIGHT_PAD, LIGHT_PAD, LIGHT_PAD)
+	if l.x < 0 or l.y < 0 or l.z < 0 			or l.x >= LIGHT_DIM or l.y >= LIGHT_DIM or l.z >= LIGHT_DIM:
+		return 0.0
+	return float((lm as PackedByteArray)[_light_index(l.x, l.y, l.z)]) / 15.0
 static var _shader: Shader
 
 
@@ -120,8 +138,13 @@ func _apply_lights(positions: PackedVector3Array) -> void:
 		var om := OmniLight3D.new()
 		var def := Blocks.light_def(planet.get_id(
 			Vector3i(cc * CS) + Vector3i(floori(p.x), floori(p.y), floori(p.z))) if planet != null else Blocks.TORCH)
-		om.omni_range = def["range"]
-		om.light_energy = def["energy"]
+		# These now light DYNAMIC things only -- the player, creatures, dropped
+		# items -- because terrain gets its light baked into the mesh instead
+		# (see _compute_block_light). Godot's Compatibility renderer would not
+		# light runtime ArrayMesh chunks with these at all. Kept modest so they
+		# complement the baked light rather than double it.
+		om.omni_range = float(def["range"]) * 0.8
+		om.light_energy = float(def["energy"]) * 0.7
 		om.light_color = def["color"]
 		om.shadow_enabled = false   # dozens of shadow-casting lights is not worth it
 		add_child(om)
@@ -198,8 +221,91 @@ static func _id_at(planet: Planet, snap: Dictionary, v: Vector3i) -> int:
 	return planet.generation_sample(v.x, v.y, v.z)
 
 
+## Voxel light, flood-filled the way a block game does it rather than with real
+## point lights.
+##
+## Godot's Compatibility renderer would not light these runtime ArrayMesh chunks
+## with OmniLight3D at all (verified at length: a plain BoxMesh beside a torch
+## lights perfectly while the terrain beside it stays black, with identical
+## normals, materials, layers and instance properties). Baking the light into
+## the mesh sidesteps that entirely -- and it is the better design anyway: it
+## costs nothing per light, supports unlimited torches, and gives the authentic
+## look of light falling off block by block and spilling around corners.
+##
+## Levels are 0..15 and drop by one per block travelled through anything that
+## isn't solid. The region is padded so light from a torch just outside this
+## chunk still reaches into it.
+const LIGHT_PAD := 15
+const LIGHT_DIM := CS + LIGHT_PAD * 2
+
+
+static func _light_index(x: int, y: int, z: int) -> int:
+	return x + y * LIGHT_DIM + z * LIGHT_DIM * LIGHT_DIM
+
+
+## Returns a byte per cell of the padded region, or an empty array when there
+## is no light source anywhere near -- which is the common case, and skipping
+## the flood fill entirely keeps ordinary chunks as cheap as they were.
+static func _compute_block_light(planet: Planet, snap: Dictionary, base: Vector3i) -> PackedByteArray:
+	var origin := base - Vector3i(LIGHT_PAD, LIGHT_PAD, LIGHT_PAD)
+	# Seed from the EDIT snapshot rather than scanning the padded volume: light
+	# blocks are always player-placed, so the only candidates are edited cells,
+	# and the snapshot already spans this chunk plus its face neighbours (far
+	# enough for a level-15 light to reach in). Scanning every cell instead
+	# meant ~100k terrain samples per remesh for a result that is almost always
+	# empty.
+	var seeds: Array = []
+	for k in snap:
+		if not (k is Vector3i):
+			continue
+		var lvl := Blocks.light_level(int(snap[k]))
+		if lvl <= 0:
+			continue
+		var lp: Vector3i = (k as Vector3i) - origin
+		if lp.x < 0 or lp.y < 0 or lp.z < 0 				or lp.x >= LIGHT_DIM or lp.y >= LIGHT_DIM or lp.z >= LIGHT_DIM:
+			continue
+		seeds.append([lp.x, lp.y, lp.z, lvl])
+	if seeds.is_empty():
+		return PackedByteArray()
+	var lv := PackedByteArray()
+	lv.resize(LIGHT_DIM * LIGHT_DIM * LIGHT_DIM)
+	# Breadth-first by level: seed the brightest first and walk outward, so each
+	# cell ends up with the strongest light that reaches it.
+	var frontier: Array = []
+	for sd in seeds:
+		var si := _light_index(sd[0], sd[1], sd[2])
+		if sd[3] > lv[si]:
+			lv[si] = sd[3]
+			frontier.append(Vector3i(sd[0], sd[1], sd[2]))
+	var nb := [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0),
+		Vector3i(0,-1,0), Vector3i(0,0,1), Vector3i(0,0,-1)]
+	while not frontier.is_empty():
+		var nxt: Array = []
+		for c in frontier:
+			var here: int = lv[_light_index(c.x, c.y, c.z)]
+			if here <= 1:
+				continue
+			for d in nb:
+				var n: Vector3i = c + d
+				if n.x < 0 or n.y < 0 or n.z < 0 						or n.x >= LIGHT_DIM or n.y >= LIGHT_DIM or n.z >= LIGHT_DIM:
+					continue
+				var ni := _light_index(n.x, n.y, n.z)
+				if lv[ni] >= here - 1:
+					continue
+				var nid := _id_at(planet, snap, origin + n)
+				# Light travels through anything you can see through.
+				if nid != Blocks.AIR and nid != Blocks.WATER and nid != Blocks.DOOR_OPEN 						and not Blocks.is_light(Blocks.bottom_of(nid)):
+					continue
+				lv[ni] = here - 1
+				nxt.append(n)
+		frontier = nxt
+	return lv
+
+
 static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsnap: Dictionary = {}) -> Dictionary:
 	var base := cc * CS
+	snap[LB_KEY] = base
+	snap[LM_KEY] = _compute_block_light(planet, snap, base)
 	var ids := PackedInt32Array()
 	ids.resize(CS * CS * CS)
 	var any_solid := false
@@ -339,7 +445,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 						elif absf(up.y) > 0.5: thin.y = (a1.y - a0.y) * 0.5
 						else: thin.z = (a1.z - a0.z) * 0.5
 						_emit_free_box(mid - thin, mid + thin, Blocks.color_of(lid),
-							lid, verts, normals, colors, uvs, uv2s)
+							lid, verts, normals, colors, uvs, uv2s, 1.0)
 					else:
 						_emit_solid_box_cell(lo, lo + Vector3.ONE, gv, lid,
 							planet, snap, verts, normals, colors, uvs, uv2s, cverts)
@@ -377,13 +483,15 @@ static func _hash3(v: Vector3i, k: int) -> float:
 ## surface the player snags on.
 static func _emit_free_box(lo: Vector3, hi: Vector3, base_col: Color, bid: int,
 		verts: PackedVector3Array, normals: PackedVector3Array,
-		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array) -> void:
+		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array,
+		light: float = 0.0) -> void:
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
 		var sh := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
 		var col := Color(base_col.r * sh, base_col.g * sh, base_col.b * sh, base_col.a)
 		var q := _box_face(lo, hi, fi)
-		_quad(q[0], q[1], q[2], q[3], Vector3(n), col, verts, normals, colors, uvs, uv2s, bid, sh)
+		_quad(q[0], q[1], q[2], q[3], Vector3(n), col, verts, normals, colors, uvs, uv2s, bid, sh,
+			light)
 
 
 ## Ore lumps standing proud of an ore block's exposed faces, so a vein reads as
@@ -415,7 +523,8 @@ static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 				                     # so it grows OUT of the rock rather than
 				                     # sitting on top of it like a dropped cube
 			_emit_free_box(c - Vector3.ONE * sz, c + Vector3.ONE * sz,
-				ore_col, ORE_CHUNK_ID, verts, normals, colors, uvs, uv2s)
+				ore_col, ORE_CHUNK_ID, verts, normals, colors, uvs, uv2s,
+				_face_light(snap, gv, n))
 
 
 ## A stair: the lower half of the cell, plus a step on the upper half.
@@ -513,7 +622,8 @@ static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int
 		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
 		var nrm := Vector3(n)
 		var q := _box_face(lo, hi, fi)
-		_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors, uvs, uv2s, id, s, cverts)
+		_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors, uvs, uv2s, id, s,
+			_face_light(snap, gv, n), cverts)
 
 
 static func _box_face(lo: Vector3, hi: Vector3, fi: int) -> Array:
@@ -541,6 +651,13 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 
 	var mask := PackedInt32Array()
 	mask.resize(CS * CS)
+	# Light is per-VERTEX, so a merged quad can only carry one value. Faces
+	# therefore only merge when their light matches as well as their block --
+	# without this the whole floor merges into a single quad and a torch's pool
+	# of light has nowhere to live. This is why voxel engines key greedy
+	# meshing on light level too.
+	var lmask := PackedInt32Array()
+	lmask.resize(CS * CS)
 
 	for a in CS:
 		for j in CS:
@@ -565,9 +682,14 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN 							or nid == Blocks.ROOF_SLAB or Blocks.is_slab(nid) 							or Blocks.is_stacked_slab(nid) 							or Blocks.is_stair(Blocks.bottom_of(nid)) 							or Blocks.is_light(Blocks.bottom_of(nid)):
 						val = oid
 				mask[k + j * CS] = val
+				lmask[k + j * CS] = 0
+				if val != 0:
+					lmask[k + j * CS] = int(round(_face_light(snap,
+						_global_coord(base, d, u, v, a, k, j),
+						Vector3i(int(narr[0]), int(narr[1]), int(narr[2]))) * 15.0))
 
 		var w_coord := a + (1 if dir > 0 else 0)
-		_emit_mask(planet, mask, d, u, v, dir, w_coord, normal,
+		_emit_mask(planet, snap, mask, lmask, d, u, v, dir, w_coord, normal,
 			verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, uv2s, wuv2s, cverts)
 
 
@@ -582,7 +704,8 @@ static func _block_color(planet: Planet, id: int) -> Color:
 	return Blocks.color_of(id)
 
 
-static func _emit_mask(planet: Planet, mask: PackedInt32Array, d: int, u: int, v: int, dir: int, w_coord: int,
+static func _emit_mask(planet: Planet, snap: Dictionary, mask: PackedInt32Array,
+		lmask: PackedInt32Array, d: int, u: int, v: int, dir: int, w_coord: int,
 		normal: Vector3,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray,
@@ -595,14 +718,15 @@ static func _emit_mask(planet: Planet, mask: PackedInt32Array, d: int, u: int, v
 			if val == 0:
 				k += 1
 				continue
+			var lv := lmask[k + j * CS]
 			var wdt := 1
-			while k + wdt < CS and mask[k + wdt + j * CS] == val:
+			while k + wdt < CS and mask[k + wdt + j * CS] == val 					and lmask[k + wdt + j * CS] == lv:
 				wdt += 1
 			var hgt := 1
 			var stop := false
 			while j + hgt < CS and not stop:
 				for x in wdt:
-					if mask[k + x + (j + hgt) * CS] != val:
+					if mask[k + x + (j + hgt) * CS] != val 							or lmask[k + x + (j + hgt) * CS] != lv:
 						stop = true
 						break
 				if not stop:
@@ -627,15 +751,18 @@ static func _emit_mask(planet: Planet, mask: PackedInt32Array, d: int, u: int, v
 					_quad(p00, p01, p11, p10, normal, col, wverts, wnormals, wcolors, wuvs, wuv2s, val, s)
 			else:
 				if dir > 0:
-					_quad(p00, p10, p11, p01, normal, col, verts, normals, colors, uvs, uv2s, val, s, cverts)
+					_quad(p00, p10, p11, p01, normal, col, verts, normals, colors, uvs, uv2s, val, s,
+						float(lv) / 15.0, cverts)
 				else:
-					_quad(p00, p01, p11, p10, normal, col, verts, normals, colors, uvs, uv2s, val, s, cverts)
+					_quad(p00, p01, p11, p10, normal, col, verts, normals, colors, uvs, uv2s, val, s,
+						float(lv) / 15.0, cverts)
 			k += wdt
 
 
 static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector3, col: Color,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		uvs: PackedVector2Array, uv2s: PackedVector2Array, bid: int, shade: float,
+		face_light: float = 0.0,
 		cverts: PackedVector3Array = PackedVector3Array()) -> void:
 	verts.append(a); verts.append(b); verts.append(c)
 	verts.append(a); verts.append(c); verts.append(e)
@@ -669,7 +796,10 @@ static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector
 		# are cut ends instead of guessing from the planet's up (only right for
 		# an upright trunk). 3 = "not a log".
 		var _la := Blocks.log_axis_of(bid) if Blocks.is_wood(Blocks.bottom_of(bid)) else -1
-		uv2s.append(Vector2(float(_la) if _la >= 0 else 3.0, 0.0))
+		# UV2.y carries the baked block light for this face (see
+		# _compute_block_light). Hard-coding 0.0 here silently discarded a value
+		# that was computed, flood-filled and threaded all the way down.
+		uv2s.append(Vector2(float(_la) if _la >= 0 else 3.0, face_light))
 
 
 ## Per-face shading baked into the vertex colour, by face orientation.

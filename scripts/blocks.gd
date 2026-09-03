@@ -185,6 +185,19 @@ static func is_light(id: int) -> bool:
 
 
 ## Light radius and colour per light block.
+## Emission level 0..15 for a light block, Minecraft-style: this is how many
+## blocks its light carries before it dies out.
+static func light_level(raw: int) -> int:
+	var id := bottom_of(raw)
+	if id == EMBER_TORCH:
+		return 11 + torch_tier_of(raw)     # 11..14, brighter ore burns further
+	if id == TORCH:
+		return 11
+	if id == GLOW_LAMP:
+		return 14
+	return 0
+
+
 static func light_def(raw: int) -> Dictionary:
 	var id := bottom_of(raw)
 	if id == EMBER_TORCH:
