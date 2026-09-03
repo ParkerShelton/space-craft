@@ -150,7 +150,14 @@ var _craft_row: Control            # holds per-station craft buttons
 var _craft_buttons: Array = []     # current station's craft buttons
 var _preview_label: Label          # live craft-stat preview (Fabricator/Shipworks)
 var _job_label: Label              # "Refining… 60%" / "Crafting… 30%" while a job runs
-var _build_buttons: Array = []     # hand-assemble-station buttons in the inventory panel
+var _build_buttons: Array = []
+var _craft_cat := "All"            # active category chip
+var _craft_query := ""             # search text
+var _craft_only_afford := false    # hide what you can't build yet
+var _craft_cat_btns: Array = []
+var _craft_vbox: VBoxContainer
+var _craft_search: LineEdit
+var _craft_empty: Label     # hand-assemble-station buttons in the inventory panel
 var _markers: Array[Label] = []   # one navigation marker per planet
 
 
@@ -2170,7 +2177,11 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	var craft_w := 220
 	_inv_panel = Panel.new()
 	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_inv_panel.custom_minimum_size = Vector2(craft_x + craft_w + 12, 36 + grid_h + 16)
+	# The filter bar costs ~90px of the craft column, so the panel grows to keep
+	# a usable number of recipe rows visible rather than squeezing to three.
+	const CRAFT_EXTRA_H := 96
+	_inv_panel.custom_minimum_size = Vector2(craft_x + craft_w + 12,
+		36 + grid_h + CRAFT_EXTRA_H + 16)
 	_inv_panel.size = _inv_panel.custom_minimum_size
 	_inv_panel.position = -_inv_panel.size * 0.5
 	_inv_panel.visible = false
@@ -2203,23 +2214,80 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	chead.modulate = Color(1, 1, 1, 0.7)
 	chead.position = Vector2(craft_x, 8)
 	_inv_panel.add_child(chead)
+	# Search box: the fastest route once the list is long, and it costs one row.
+	_craft_search = LineEdit.new()
+	_craft_search.placeholder_text = "Search recipes"
+	_craft_search.position = Vector2(craft_x, 32)
+	_craft_search.custom_minimum_size = Vector2(craft_w, 26)
+	_craft_search.size = Vector2(craft_w, 26)
+	_craft_search.text_changed.connect(func(t: String):
+		_craft_query = t.strip_edges().to_lower()
+		_rebuild_craft_list())
+	_inv_panel.add_child(_craft_search)
+
+	# Category chips. A flat list of every recipe stops being browsable well
+	# before the count gets interesting; these keep it to a drawer at a time.
+	var chip_x := 0.0
+	var chip_y := 64.0
+	for cat in Blocks.CRAFT_CATS:
+		# Skip drawers nothing lives in yet, so the bar never offers a tab that
+		# can only ever show "no recipes". New categories appear on their own
+		# as soon as a recipe claims one.
+		if cat != "All":
+			var any := false
+			for r in Blocks.HAND_RECIPES:
+				if str(r.get("cat", "")) == cat:
+					any = true
+					break
+			if not any:
+				continue
+		var cb := Button.new()
+		cb.text = cat
+		cb.toggle_mode = true
+		cb.button_pressed = cat == _craft_cat
+		cb.add_theme_font_size_override("font_size", 11)
+		cb.custom_minimum_size = Vector2(0, 22)
+		var wdt := 34.0 + float(cat.length()) * 6.0
+		if chip_x + wdt > craft_w:
+			chip_x = 0.0
+			chip_y += 26.0
+		cb.position = Vector2(craft_x + chip_x, chip_y)
+		cb.size = Vector2(wdt, 22)
+		cb.pressed.connect(func():
+			_craft_cat = cat
+			_rebuild_craft_list())
+		_inv_panel.add_child(cb)
+		_craft_cat_btns.append({"btn": cb, "cat": cat})
+		chip_x += wdt + 4.0
+
+	var only := CheckBox.new()
+	only.text = "Craftable only"
+	only.add_theme_font_size_override("font_size", 11)
+	only.position = Vector2(craft_x, chip_y + 26.0)
+	only.toggled.connect(func(on: bool):
+		_craft_only_afford = on
+		_rebuild_craft_list())
+	_inv_panel.add_child(only)
+
+	var list_top := chip_y + 54.0
 	var scroll := ScrollContainer.new()
-	scroll.position = Vector2(craft_x, 36)
-	scroll.custom_minimum_size = Vector2(craft_w, grid_h)
-	scroll.size = Vector2(craft_w, grid_h)
+	scroll.position = Vector2(craft_x, list_top)
+	var list_h := grid_h + CRAFT_EXTRA_H - (list_top - 36.0)
+	scroll.custom_minimum_size = Vector2(craft_w, list_h)
+	scroll.size = Vector2(craft_w, list_h)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_inv_panel.add_child(scroll)
 	var vbox := VBoxContainer.new()
 	vbox.add_theme_constant_override("separation", 4)
 	vbox.custom_minimum_size = Vector2(craft_w - 16, 0)
 	scroll.add_child(vbox)
-	for idx in Blocks.HAND_RECIPES.size():
-		var b := Button.new()
-		b.custom_minimum_size = Vector2(craft_w - 18, 44)
-		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		b.pressed.connect(_do_recipe.bind(idx))
-		vbox.add_child(b)
-		_build_buttons.append({"btn": b, "idx": idx})
+	_craft_vbox = vbox
+	_craft_empty = Label.new()
+	_craft_empty.modulate = Color(1, 1, 1, 0.5)
+	_craft_empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_craft_empty.custom_minimum_size = Vector2(craft_w - 18, 0)
+	vbox.add_child(_craft_empty)
+	_rebuild_craft_list()
 
 
 # One slot cell: colored square + count. `mode`: "none" = display only,
@@ -2666,7 +2734,58 @@ func _recipe_text(recipe: Dictionary) -> String:
 	return "%s %s  (%s)" % [verb, out_txt, ",  ".join(parts)]
 
 
+## Rebuilds the visible recipe list from the current category, search text and
+## craftable-only toggle. Recipes you can afford sort to the top: when the list
+## is long, "what can I make right now" is nearly always the question being
+## asked, and scrolling past twenty greyed-out rows to find it is the thing that
+## makes a flat list unusable.
+func _rebuild_craft_list() -> void:
+	if _craft_vbox == null:
+		return
+	for e in _build_buttons:
+		if is_instance_valid(e["btn"]):
+			e["btn"].queue_free()
+	_build_buttons.clear()
+	for e in _craft_cat_btns:
+		e["btn"].button_pressed = e["cat"] == _craft_cat
+
+	var afford: Array = []
+	var rest: Array = []
+	for idx in Blocks.HAND_RECIPES.size():
+		var r: Dictionary = Blocks.HAND_RECIPES[idx]
+		if _craft_cat != "All" and str(r.get("cat", "")) != _craft_cat:
+			continue
+		if _craft_query != "" and not _recipe_text(r).to_lower().contains(_craft_query):
+			continue
+		var ok := _recipe_afford(r["reqs"])
+		if not ok and _craft_only_afford:
+			continue
+		if ok:
+			afford.append(idx)
+		else:
+			rest.append(idx)
+
+	for idx in afford + rest:
+		var r2: Dictionary = Blocks.HAND_RECIPES[idx]
+		var ok2 := _recipe_afford(r2["reqs"])
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(_craft_vbox.custom_minimum_size.x - 2, 44)
+		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		b.text = _recipe_text(r2)
+		b.disabled = not ok2
+		b.pressed.connect(_do_recipe.bind(idx))
+		_craft_vbox.add_child(b)
+		_build_buttons.append({"btn": b, "idx": idx})
+	_craft_empty.text = "" if not _build_buttons.is_empty() else 		("Nothing here you can build yet." if _craft_only_afford else "No matching recipes.")
+	_craft_empty.visible = _build_buttons.is_empty()
+
+
 func _refresh_build_buttons() -> void:
+	# While "craftable only" is on, gaining or spending materials changes WHICH
+	# rows belong in the list, not just whether they're enabled.
+	if _craft_only_afford:
+		_rebuild_craft_list()
+		return
 	for e in _build_buttons:
 		var recipe: Dictionary = Blocks.HAND_RECIPES[e["idx"]]
 		e["btn"].text = _recipe_text(recipe)

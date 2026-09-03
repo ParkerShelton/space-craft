@@ -424,22 +424,27 @@ const MULTIBLOCK_RECIPES := [
 # Everything else is made at a station.
 # A requirement is {id,n} (specific item), {refined:true,n} (any refined material),
 # or {any:[ids],n} (any of a set, e.g. any wood).
+## Categories for the hand-crafting list. A flat list stops being usable long
+## before the recipe count gets interesting -- these let the panel filter, and a
+## new recipe only has to declare which drawer it lives in.
+const CRAFT_CATS := ["All", "Stations", "Light", "Building", "Materials"]
+
 const HAND_RECIPES := [
-	{"out": SMELTER, "n": 1, "reqs": [{"id": ROCK, "n": 15}]},
-	{"out": CHEST, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
-	{"out": METAL, "n": 4, "reqs": [{"refined": true, "n": 1}]},        # cast ingots into hull plates
-	{"out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
-	{"out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
-	{"out": CARPENTER, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 12, "label": "Wood"}]},
-	{"out": SHAPER, "n": 1, "reqs": [{"id": ROCK, "n": 10}, {"id": METAL, "n": 2}]},
+	{"cat": "Stations", "out": SMELTER, "n": 1, "reqs": [{"id": ROCK, "n": 15}]},
+	{"cat": "Stations", "out": CHEST, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
+	{"cat": "Materials", "out": METAL, "n": 4, "reqs": [{"refined": true, "n": 1}]},        # cast ingots into hull plates
+	{"cat": "Stations", "out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
+	{"cat": "Stations", "out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
+	{"cat": "Stations", "out": CARPENTER, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 12, "label": "Wood"}]},
+	{"cat": "Stations", "out": SHAPER, "n": 1, "reqs": [{"id": ROCK, "n": 10}, {"id": METAL, "n": 2}]},
 	# Deliberately cheap and made from the most common material there is: a
 	# light source gates cave exploration and surviving the first night, so
 	# putting it behind rare drops would just make the early game dark.
-	{"out": TORCH, "n": 4, "reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
-	{"out": GLOW_LAMP, "n": 2, "reqs": [{"id": CRYSTAL, "n": 1}, {"id": METAL, "n": 1}]},
+	{"cat": "Light", "out": TORCH, "n": 4, "reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
+	{"cat": "Light", "out": GLOW_LAMP, "n": 2, "reqs": [{"id": CRYSTAL, "n": 1}, {"id": METAL, "n": 1}]},
 	# Burns the ore itself: how bright and how far comes from that ore's
 	# Combustion, so which ore you feed it actually matters.
-	{"out": EMBER_TORCH, "n": 6, "carry_props": true,
+	{"cat": "Light", "out": EMBER_TORCH, "n": 6, "carry_props": true,
 		"reqs": [{"refined": true, "n": 1}, {"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
 ]
 
