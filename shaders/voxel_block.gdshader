@@ -33,10 +33,17 @@ uniform float wood_lo = 13.0;
 uniform float wood_hi = 15.0;
 uniform float leaf_lo = 16.0;
 uniform float leaf_hi = 27.0;
+uniform float rock_id = 1.0;
+// In-world ore blocks and this planet's own ore colours. Ore is drawn as
+// CHUNKS embedded in stone rather than the whole block being ore-coloured, so
+// the shader needs both the stone (vertex colour) and the ore colour.
+uniform float ore_ids[4];
+uniform vec3 ore_cols[4];
 
 varying vec3 v_world;
 varying float v_block;
 varying vec3 v_normal;
+varying float v_shade;   // baked face shading, so ore chunks light like the face
 
 float hash21(vec2 p) {
 	vec3 q = fract(vec3(p.xyx) * 0.1031);
@@ -65,6 +72,7 @@ void vertex() {
 	// attribute quantisation; scale back out and snap to the exact integer.
 	v_block = floor(UV.x * 64.0 + 0.5);
 	v_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	v_shade = UV.y;
 }
 
 void fragment() {
@@ -127,13 +135,43 @@ void fragment() {
 		float thr = 0.10 * (1.0 - smoothstep(14.0, 30.0, length(VERTEX)));
 		alpha = mix(1.0, (hole < thr) ? 0.0 : 1.0, texture_strength * leaf_cutout);
 
+	} else if (abs(id - rock_id) < 0.5) {
+		// ROCK: deliberately the smoothest surface in the set. Stone should
+		// read as a solid mass, so it gets only two shade steps off a HALF
+		// resolution grid -- broad, calm patches rather than per-texel grit.
+		float rh = hash21(floor(fc * texels * 0.5) + vec2(world_seed * 5.0));
+		shade = 0.965 + quantize(rh, 2.0) * 0.05;
+
 	} else {
 		// Everything else: gentle cell break-up so large merged quads stop
 		// reading as flat slabs, without inventing a look for them yet.
 		shade = 0.93 + quantize(h, 3.0) * 0.14;
 	}
 
+	// ORE: stone base (the vertex colour) with a few chunks of ore showing
+	// through, the way an ore block reads in a blocky game -- not a solid
+	// block of ore colour. Chunks come from a COARSE cluster grid so they form
+	// blobs of a few cells instead of isolated confetti, with a finer hash
+	// eating into their edges so they aren't neat squares.
+	int oi = -1;
+	for (int i = 0; i < 4; i++) {
+		if (abs(id - ore_ids[i]) < 0.5) { oi = i; }
+	}
+	bool is_chunk = false;
+	if (oi >= 0) {
+		// Stone under the ore stays smooth, matching rock above.
+		shade = 0.965 + quantize(hash21(floor(fc * texels * 0.5) + 2.0), 2.0) * 0.05;
+		float cluster = hash21(floor(fc * texels * 0.5) + vec2(31.7, 11.3));
+		float edge = hash21(cell + 47.1);
+		// Tighter than a coin-flip on purpose: ore should read as a few
+		// distinct lumps in stone, not as half the face being ore-coloured.
+		is_chunk = (cluster > 0.70) && (edge > 0.34);
+	}
+
 	base *= mix(1.0, shade, texture_strength);
+	if (is_chunk) {
+		base = mix(base, ore_cols[oi] * v_shade, texture_strength);
+	}
 
 	ALBEDO = base;
 	ALPHA = alpha;

@@ -62,6 +62,17 @@ static func _get_material(p: Planet) -> ShaderMaterial:
 	m.set_shader_parameter("leaf_hi", float(Blocks.LEAF_IDS.max()))
 	# Per-planet seed AND centre: the centre is what lets wood grain run along
 	# the local up (i.e. along a trunk), which on a sphere is not world Y.
+	# Ore ids and this planet's own ore colours, so the shader can draw ore as
+	# chunks in stone. Colours are per planet -- each world's ores differ.
+	var oids := PackedFloat32Array()
+	var ocols := PackedVector3Array()
+	for oid in Blocks.ORE_SLOT_IDS:
+		oids.append(float(oid))
+		var oc: Color = p.ore_color(oid)
+		ocols.append(Vector3(oc.r, oc.g, oc.b))
+	m.set_shader_parameter("ore_ids", oids)
+	m.set_shader_parameter("ore_cols", ocols)
+	m.set_shader_parameter("rock_id", float(Blocks.ROCK))
 	m.set_shader_parameter("world_seed", _tex_seed + float(p._seed % 9973) * 0.017)
 	m.set_shader_parameter("planet_center", p.global_position)
 	p.block_material = m
@@ -264,7 +275,7 @@ static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Pla
 		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
 		var nrm := Vector3(n)
 		var q := _box_face(lo, hi, fi)
-		_quad(q[0], q[1], q[2], q[3], nrm, col, wverts, wnormals, wcolors, wuvs, Blocks.WATER)
+		_quad(q[0], q[1], q[2], q[3], nrm, col, wverts, wnormals, wcolors, wuvs, Blocks.WATER, s)
 
 
 static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int, planet: Planet,
@@ -280,7 +291,7 @@ static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int
 		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
 		var nrm := Vector3(n)
 		var q := _box_face(lo, hi, fi)
-		_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors, uvs, id, cverts)
+		_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors, uvs, id, s, cverts)
 
 
 static func _box_face(lo: Vector3, hi: Vector3, fi: int) -> Array:
@@ -340,8 +351,11 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 # Opaque blocks use their registry colour, except procedural ores, whose colour is
 # defined by the planet (each world's ores look different).
 static func _block_color(planet: Planet, id: int) -> Color:
+	# Ore blocks are meshed as STONE. The ore itself is drawn by the shader as
+	# chunks embedded in that stone (colour supplied per planet via uniforms),
+	# rather than the whole block being one flat ore colour.
 	if Blocks.is_ore(id):
-		return planet.ore_color(id)
+		return Blocks.color_of(planet.pal_rock)
 	return Blocks.color_of(id)
 
 
@@ -384,20 +398,20 @@ static func _emit_mask(planet: Planet, mask: PackedInt32Array, d: int, u: int, v
 			var p01 := _corner(d, u, v, w_coord, k, j + hgt)
 			if val == Blocks.WATER:
 				if dir > 0:
-					_quad(p00, p10, p11, p01, normal, col, wverts, wnormals, wcolors, wuvs, val)
+					_quad(p00, p10, p11, p01, normal, col, wverts, wnormals, wcolors, wuvs, val, s)
 				else:
-					_quad(p00, p01, p11, p10, normal, col, wverts, wnormals, wcolors, wuvs, val)
+					_quad(p00, p01, p11, p10, normal, col, wverts, wnormals, wcolors, wuvs, val, s)
 			else:
 				if dir > 0:
-					_quad(p00, p10, p11, p01, normal, col, verts, normals, colors, uvs, val, cverts)
+					_quad(p00, p10, p11, p01, normal, col, verts, normals, colors, uvs, val, s, cverts)
 				else:
-					_quad(p00, p01, p11, p10, normal, col, verts, normals, colors, uvs, val, cverts)
+					_quad(p00, p01, p11, p10, normal, col, verts, normals, colors, uvs, val, s, cverts)
 			k += wdt
 
 
 static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector3, col: Color,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
-		uvs: PackedVector2Array, bid: int, cverts: PackedVector3Array = PackedVector3Array()) -> void:
+		uvs: PackedVector2Array, bid: int, shade: float, cverts: PackedVector3Array = PackedVector3Array()) -> void:
 	verts.append(a); verts.append(b); verts.append(c)
 	verts.append(a); verts.append(c); verts.append(e)
 	# Leaves render but do not collide, so a canopy feels like foliage you brush
@@ -420,7 +434,10 @@ static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector
 		# landing inside the leaf id range and getting alpha-scissored, which
 		# showed up as sky speckling through solid rock. Keeping it normalised
 		# leaves plenty of resolution (ids are well under ID_SCALE).
-		uvs.append(Vector2(float(bid) / ID_SCALE, 0.0))
+		# UV.y carries the face's baked shade. Ore blocks draw their chunks
+		# from a uniform colour rather than the vertex colour, so they need the
+		# same directional shading applied to stay consistent with the face.
+		uvs.append(Vector2(float(bid) / ID_SCALE, shade))
 
 
 ## Fake sky/directional shading by face orientation (world axes): up faces catch
