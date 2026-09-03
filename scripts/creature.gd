@@ -82,6 +82,11 @@ var _shield_rest_basis := Basis()  # build-time orientation of the shield on the
 var _telegraph_total := 0.45    # the actual (jittered) duration chosen for the current telegraph
 var _swing_t := 999.0           # counts up from 0 during "attack" (real clip duration or the pivot-fallback swing)
 var _attack_clip_len := 0.0     # real clip length once playing, else SWORD_SWING_DURATION (pivot fallback)
+# Timing of the attack clip currently selected, as fractions of it. Defaults
+# match the old global constants for the pivot-fallback body, which has no clip.
+var _atk_apex := WINDUP_END_FRACTION
+var _atk_hit := ATTACK_HIT_FRACTION
+var _atk_end := ATTACK_END_FRACTION
 var _hit_applied := false       # guards against applying one swing's damage twice
 var _engaged := false           # aggro hysteresis latch -- see _land_physics
 var _hitbox: CollisionShape3D    # switched off once a corpse has settled
@@ -129,6 +134,9 @@ const MIXAMO_CLIP := "mixamo_com"
 static var _clip_cache: Dictionary = {}
 static var _clip_cache_built := false
 static var _base_rig_path := ""
+## Per-attack-clip timing, keyed the same way as the library ("attack_0"):
+## {"apex": f, "hit": f, "end": f} as fractions of that clip. See _analyze_attack.
+static var _clip_timing: Dictionary = {}
 
 
 ## Scans the state folders once and caches every clip's Animation resource.
@@ -136,6 +144,97 @@ static var _base_rig_path := ""
 ## source (what this project does today). An exported build ships the imported
 ## .scn files rather than the original .fbx, so a release export would need this
 ## list baked out at build time instead -- revisit before shipping.
+## Bone-name -> {"rot": track_idx, "pos": track_idx} for one clip.
+static func _track_map(anim: Animation) -> Dictionary:
+	var m: Dictionary = {}
+	for i in anim.get_track_count():
+		var bone := str(anim.track_get_path(i).get_subname(0))
+		if bone == "":
+			continue
+		if not m.has(bone):
+			m[bone] = {"rot": -1, "pos": -1}
+		var t := anim.track_get_type(i)
+		if t == Animation.TYPE_ROTATION_3D:
+			m[bone]["rot"] = i
+		elif t == Animation.TYPE_POSITION_3D:
+			m[bone]["pos"] = i
+	return m
+
+
+## Forward kinematics straight off the Animation's tracks -- no Skeleton3D in
+## the tree and no frame to await, so this can run during the synchronous cache
+## build. Falls back to each bone's rest transform wherever a clip has no track.
+static func _bone_pos_at(skel: Skeleton3D, anim: Animation, tm: Dictionary, bi: int, t: float) -> Vector3:
+	var xf := Transform3D()
+	var cur := bi
+	var guard := 0
+	while cur >= 0 and guard < 64:
+		guard += 1
+		var rest := skel.get_bone_rest(cur)
+		var rot := rest.basis.get_rotation_quaternion()
+		var pos := rest.origin
+		var e = tm.get(skel.get_bone_name(cur), null)
+		if e != null:
+			if int(e["rot"]) >= 0:
+				rot = anim.rotation_track_interpolate(int(e["rot"]), t)
+			if int(e["pos"]) >= 0:
+				pos = anim.position_track_interpolate(int(e["pos"]), t)
+		xf = Transform3D(Basis(rot), pos) * xf
+		cur = skel.get_bone_parent(cur)
+	return xf.origin
+
+
+## Finds where an attack clip actually winds up and where it connects, instead
+## of assuming one set of fractions fits every clip. Measured across the four
+## authored attacks, the real apex ranges from 0.19 to 0.66 of the clip -- a
+## single constant put the "held" pose AFTER the strike had already landed on
+## some of them, which reads as pausing at the END of the attack.
+##
+## Whichever limb travels furthest (hand for a slash, foot for a kick) is the
+## attacking one; contact is its furthest-forward reach, and the apex is its
+## deepest wind-back BEFORE that reach.
+static func _analyze_attack(skel: Skeleton3D, anim: Animation) -> Dictionary:
+	var tm := _track_map(anim)
+	var bi_hips := skel.find_bone("mixamorig_Hips")
+	var bi_hand := skel.find_bone("mixamorig_RightHand")
+	var bi_foot := skel.find_bone("mixamorig_RightFoot")
+	if bi_hips < 0 or bi_hand < 0 or bi_foot < 0 or anim.length <= 0.0:
+		return {"apex": WINDUP_END_FRACTION, "hit": ATTACK_HIT_FRACTION, "end": ATTACK_END_FRACTION}
+	var N := 48
+	var hand_f: Array = []
+	var foot_f: Array = []
+	for i in N:
+		var t: float = anim.length * float(i) / float(N - 1)
+		var hips := _bone_pos_at(skel, anim, tm, bi_hips, t)
+		# The rig's forward is its local +Z (see the grip/facing notes above).
+		hand_f.append(_bone_pos_at(skel, anim, tm, bi_hand, t).z - hips.z)
+		foot_f.append(_bone_pos_at(skel, anim, tm, bi_foot, t).z - hips.z)
+	var limb: Array = hand_f
+	if (foot_f.max() - foot_f.min()) > (hand_f.max() - hand_f.min()):
+		limb = foot_f  # a kick: the leg is doing the attacking, not the arm
+	# Contact = furthest forward; apex = deepest wind-back preceding it.
+	var i_hit := 0
+	for i in N:
+		if float(limb[i]) > float(limb[i_hit]):
+			i_hit = i
+	var i_apex := 0
+	for i in i_hit + 1:
+		if float(limb[i]) < float(limb[i_apex]):
+			i_apex = i
+	var denom := float(N - 1)
+	var apex := float(i_apex) / denom
+	var hit := float(i_hit) / denom
+	if hit <= apex:
+		hit = minf(apex + 0.15, 1.0)
+	return {
+		"apex": apex,
+		"hit": hit,
+		# Cut shortly after contact: the tail of these clips is a slow reset
+		# that reads as dead time if it's played as part of the attack.
+		"end": clampf(hit + 0.2, hit + 0.05, 1.0),
+	}
+
+
 static func _build_clip_cache() -> void:
 	if _clip_cache_built:
 		return
@@ -169,6 +268,13 @@ static func _build_clip_cache() -> void:
 				var a: Animation = ap.get_animation(MIXAMO_CLIP)
 				# Only locomotion loops; one-shots (attack, hit, die) must end.
 				a.loop_mode = Animation.LOOP_LINEAR if state in ["idle", "run"] else Animation.LOOP_NONE
+				if state == "attack":
+					var sk: Skeleton3D = null
+					for c2 in inst.get_children():
+						if c2 is Skeleton3D:
+							sk = c2
+					if sk != null:
+						_clip_timing["%s_%d" % [state, anims.size()]] = _analyze_attack(sk, a)
 				anims.append(a)
 			inst.queue_free()
 		if not anims.is_empty():
@@ -194,6 +300,9 @@ static func _build_clip_cache() -> void:
 ## them lets the swing look sharp while still being fair to dodge.
 const ATTACK_SPEED_SCALE := 1.6    # playback rate once the strike is released
 const APEX_HOLD_TIME := 0.28       # seconds frozen at the top of the backswing
+# Fallback fractions, used only by the pivot-fallback body (which has no real
+# clip to measure). Every skeleton-driven attack derives its own from the clip
+# itself -- see _analyze_attack.
 const WINDUP_END_FRACTION := 0.4   # telegraph shows clip[0 .. this] -- the real backswing
 const ATTACK_END_FRACTION := 0.85  # attack shows clip[WINDUP_END_FRACTION .. this], then cuts to recover -- skips the away-swinging tail follow-through entirely
 const ATTACK_HIT_FRACTION := 0.65  # absolute fraction of the FULL clip (not the attack sub-range) -- falls well inside the toward-player window above
@@ -1036,7 +1145,7 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 				_state_t = randf_range(tt * 0.7, tt * 1.3)  # per-attempt jitter, not a fixed metronome
 				_telegraph_total = _state_t
 				# Start the real clip NOW, frozen at frame 0 -- the windup is
-				# the clip's own first WINDUP_END_FRACTION, scrubbed through by
+				# the clip's own first _atk_apex, scrubbed through by
 				# hand in _animate() as the telegraph timer counts down, not a
 				# separate hand-posed pose. speed_scale=0 hands full control to
 				# that manual scrub; "attack" below just sets it back to 1 and
@@ -1052,6 +1161,14 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 					_attack_clip_len = maxf(_cur_clip_len(), 0.05)
 					_anim_player.seek(0.0, true)
 					_oneshot_state = ""  # the attack is driven by state, not the one-shot path
+					# Use THIS clip's measured apex/contact rather than one set of
+					# constants: the authored attacks apex anywhere from 0.19 to
+					# 0.66 through, so a fixed 0.4 held some of them well past the
+					# moment they'd already landed.
+					var tm: Dictionary = _clip_timing.get(_cur_clip, {})
+					_atk_apex = float(tm.get("apex", WINDUP_END_FRACTION))
+					_atk_hit = float(tm.get("hit", ATTACK_HIT_FRACTION))
+					_atk_end = float(tm.get("end", ATTACK_END_FRACTION))
 				return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 			var flat_to_p := to_player - up * to_player.dot(up)
 			if flat_to_p.length() < 0.01:
@@ -1081,15 +1198,15 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 						# margin -- the real exit condition below is the clip's own
 						# playback position, this only guards against that somehow
 						# never being hit.
-						_state_t = (ATTACK_END_FRACTION - WINDUP_END_FRACTION) * _attack_clip_len / ATTACK_SPEED_SCALE + 0.2
+						_state_t = (_atk_end - _atk_apex) * _attack_clip_len / ATTACK_SPEED_SCALE + 0.2
 					else:
 						_state_t = _attack_clip_len  # pivot-fallback body: matches its own exit condition below
 			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 		"attack":
 			_swing_t += delta  # only the pivot-fallback body's own separate swing math uses this
 			var clip_pos: float = _anim_player.current_animation_position if _anim_player != null else _swing_t
-			var hit_point_reached: bool = clip_pos >= ATTACK_HIT_FRACTION * _attack_clip_len if _anim_player != null else _swing_t >= _attack_clip_len * ATTACK_HIT_FRACTION
-			var clip_done: bool = clip_pos >= ATTACK_END_FRACTION * _attack_clip_len if _anim_player != null else _swing_t >= _attack_clip_len
+			var hit_point_reached: bool = clip_pos >= _atk_hit * _attack_clip_len if _anim_player != null else _swing_t >= _attack_clip_len * _atk_hit
+			var clip_done: bool = clip_pos >= _atk_end * _attack_clip_len if _anim_player != null else _swing_t >= _attack_clip_len
 			# Damage lands partway through the swing (measured against the real
 			# clip's own playback position now, not a separately-tracked timer)
 			# instead of only at the very end or the instant we're in range --
@@ -1426,7 +1543,7 @@ func _animate(delta: float) -> void:
 				_oneshot_state = ""
 				_cur_clip = ""
 		elif _state == "telegraph" and _anim_player != null:
-			# Scrub through the clip's own first WINDUP_END_FRACTION by hand,
+			# Scrub through the clip's own windup (up to its measured apex) by hand,
 			# proportional to how far through the (jittered-length) telegraph
 			# window we are -- this IS the windup, not a separate pose.
 			# Reach the top of the backswing EARLY and sit there: the scrub is
@@ -1438,7 +1555,7 @@ func _animate(delta: float) -> void:
 			var scrub: float = maxf(_telegraph_total - hold, 0.05)
 			var elapsed: float = _telegraph_total - _state_t
 			var wt := clampf(elapsed / scrub, 0.0, 1.0)
-			_anim_player.seek(wt * WINDUP_END_FRACTION * _attack_clip_len, true)
+			_anim_player.seek(wt * _atk_apex * _attack_clip_len, true)
 		elif _state == "attack":
 			pass  # the attack clip started in _lunger_ai just keeps playing
 		elif _state == "block":
