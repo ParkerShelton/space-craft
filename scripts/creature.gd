@@ -668,11 +668,27 @@ func _drive_extra_arms() -> void:
 		var arm: Node3D = e["node"]
 		var splay: float = float(e["splay"])
 		var b: Basis = (sk_basis * _skeleton.get_bone_global_pose(int(e["src"])).basis).orthonormalized()
-		arm.global_basis = b * Basis(Vector3.FORWARD, splay)
+		_apply_world_rotation(arm, b * Basis(Vector3.FORWARD, splay))
 		var sf: int = int(e["src_fore"])
 		if sf >= 0:
 			var fb: Basis = (sk_basis * _skeleton.get_bone_global_pose(sf).basis).orthonormalized()
-			(e["fore"] as Node3D).global_basis = fb * Basis(Vector3.FORWARD, splay)
+			_apply_world_rotation(e["fore"], fb * Basis(Vector3.FORWARD, splay))
+
+
+## Points a node at a world-space orientation WITHOUT disturbing the scale it
+## inherits from its parents.
+##
+## Assigning global_basis directly would do the job for rotation but also
+## overwrite scale, and the value being assigned here is orthonormal (scale 1) --
+## which silently pinned extra limbs to unit size no matter how large the body
+## was scaled. Converting into the parent's frame and setting a pure-rotation
+## LOCAL basis leaves the rig's scale to flow down the tree as normal.
+func _apply_world_rotation(n: Node3D, world_rot: Basis) -> void:
+	var parent := n.get_parent() as Node3D
+	if parent == null:
+		n.basis = world_rot
+		return
+	n.basis = parent.global_basis.orthonormalized().inverse() * world_rot
 
 
 func _has_clips(state: String) -> bool:
