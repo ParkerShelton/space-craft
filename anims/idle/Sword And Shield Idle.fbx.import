@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://p1lil0iejjmo"
-path="res://.godot/imported/Standing Melee Attack Downward.fbx-9bf7e714e0332ebcfc6cc64c6bfcb84c.scn"
+uid="uid://cwayrenygx1xq"
+path="res://.godot/imported/Sword And Shield Idle.fbx-2776662cd5208de086c120ef0e4ef883.scn"
 
 [deps]
 
-source_file="res://anims/attack/Standing Melee Attack Downward.fbx"
-dest_files=["res://.godot/imported/Standing Melee Attack Downward.fbx-9bf7e714e0332ebcfc6cc64c6bfcb84c.scn"]
+source_file="res://anims/idle/Sword And Shield Idle.fbx"
+dest_files=["res://.godot/imported/Sword And Shield Idle.fbx-2776662cd5208de086c120ef0e4ef883.scn"]
 
 [params]
 

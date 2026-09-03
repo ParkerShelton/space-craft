@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://p1lil0iejjmo"
-path="res://.godot/imported/Standing Melee Attack Downward.fbx-9bf7e714e0332ebcfc6cc64c6bfcb84c.scn"
+uid="uid://lxqyxhuc0piu"
+path="res://.godot/imported/Sword And Shield Impact.fbx-c8f709514b76ab1f80316f376d8b9dac.scn"
 
 [deps]
 
-source_file="res://anims/attack/Standing Melee Attack Downward.fbx"
-dest_files=["res://.godot/imported/Standing Melee Attack Downward.fbx-9bf7e714e0332ebcfc6cc64c6bfcb84c.scn"]
+source_file="res://anims/hit-shield-block/Sword And Shield Impact.fbx"
+dest_files=["res://.godot/imported/Sword And Shield Impact.fbx-c8f709514b76ab1f80316f376d8b9dac.scn"]
 
 [params]
 

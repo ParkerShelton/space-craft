@@ -84,14 +84,88 @@ var _swing_t := 999.0           # counts up from 0 during "attack" (real clip du
 var _attack_clip_len := 0.0     # real clip length once playing, else SWORD_SWING_DURATION (pivot fallback)
 var _hit_applied := false       # guards against applying one swing's damage twice
 var _engaged := false           # aggro hysteresis latch -- see _land_physics
+var _hitbox: CollisionShape3D   # disabled while dying so a corpse isn't solid
 
 # --- lunger skeleton rig: a real Skeleton3D (from the imported FBX) instead
 # of the hand-built pivot chain, so real animation clips can drive it. Only
 # used if the rig loads; otherwise falls back to the pivot-based body/anim
 # (see _build_biped_skeleton, _animate). Bone indices are -1 if not found.
-const ATTACK_ANIM_SCENE := preload("res://anims/Standing Melee Attack Downward.fbx")
-const RUN_ANIM_SCENE := preload("res://anims/Slow Run.fbx")
 const SKELETON_SCALE := 1.0     # first guess -- Mixamo's ~1.8m rig is already close to this game's voxel-unit creature height
+
+# --- animation library -------------------------------------------------------
+# One folder per state under res://anims/, holding any number of interchangeable
+# clips -- drop another .fbx into a folder and it joins the random rotation for
+# that state automatically, no code change. Keys here are the STATE names used
+# throughout this file; values are the folder names on disk.
+const CLIP_DIRS := {
+	"idle": "idle",
+	"run": "run",
+	"attack": "attack",
+	"block": "block",
+	"die": "die",
+	"roll": "roll",
+	"hit": "hit-hit",                  # flinch when a hit lands on an unguarded creature
+	"hit_block": "hit-shield-block",   # hit absorbed on a raised shield -- shield users only
+}
+const ANIM_ROOT := "res://anims/"
+
+# Every Mixamo export names its single clip "mixamo_com", so clips are keyed by
+# "<state>_<index>" in the shared AnimationLibrary instead.
+const MIXAMO_CLIP := "mixamo_com"
+
+# Loaded ONCE for the whole game, not per creature: state -> Array[Animation].
+# Animation resources are pure data and are safely shared between
+# AnimationPlayers (they address bones by node path, and every creature rig has
+# the same Skeleton3D layout), so this avoids instantiating a dozen FBX scenes
+# for every single enemy that spawns.
+static var _clip_cache: Dictionary = {}
+static var _clip_cache_built := false
+static var _base_rig_path := ""
+
+
+## Scans the state folders once and caches every clip's Animation resource.
+## NOTE: this uses DirAccess to LIST the folders, which works when running from
+## source (what this project does today). An exported build ships the imported
+## .scn files rather than the original .fbx, so a release export would need this
+## list baked out at build time instead -- revisit before shipping.
+static func _build_clip_cache() -> void:
+	if _clip_cache_built:
+		return
+	_clip_cache_built = true
+	for state in CLIP_DIRS:
+		var dir_path: String = ANIM_ROOT + str(CLIP_DIRS[state])
+		var da := DirAccess.open(dir_path)
+		if da == null:
+			push_warning("[creature] missing animation folder: %s" % dir_path)
+			continue
+		var anims: Array = []
+		var files: PackedStringArray = da.get_files()
+		files.sort()  # stable order so a clip's index means the same thing run to run
+		for f in files:
+			# The editor also lists the sidecar "X.fbx.import"; only take sources.
+			if not f.to_lower().ends_with(".fbx"):
+				continue
+			var res_path: String = dir_path + "/" + f
+			var scene: PackedScene = load(res_path) as PackedScene
+			if scene == null:
+				push_warning("[creature] could not load %s" % res_path)
+				continue
+			if _base_rig_path == "":
+				_base_rig_path = res_path
+			var inst: Node = scene.instantiate()
+			var ap: AnimationPlayer = null
+			for c in inst.get_children():
+				if c is AnimationPlayer:
+					ap = c
+			if ap != null and ap.has_animation(MIXAMO_CLIP):
+				var a: Animation = ap.get_animation(MIXAMO_CLIP)
+				# Only locomotion loops; one-shots (attack, hit, die) must end.
+				a.loop_mode = Animation.LOOP_LINEAR if state in ["idle", "run"] else Animation.LOOP_NONE
+				anims.append(a)
+			inst.queue_free()
+		if not anims.is_empty():
+			_clip_cache[state] = anims
+
 # Measured the blade's own pointing direction (grip->tip) against the
 # to-player vector across the WHOLE clip: it swings AWAY from the player for
 # roughly the first 30-40% (a real backswing -- dot goes as low as -0.65),
@@ -108,13 +182,11 @@ const SKELETON_SCALE := 1.0     # first guess -- Mixamo's ~1.8m rig is already c
 const WINDUP_END_FRACTION := 0.4   # telegraph shows clip[0 .. this] -- the real backswing
 const ATTACK_END_FRACTION := 0.85  # attack shows clip[WINDUP_END_FRACTION .. this], then cuts to recover -- skips the away-swinging tail follow-through entirely
 const ATTACK_HIT_FRACTION := 0.65  # absolute fraction of the FULL clip (not the attack sub-range) -- falls well inside the toward-player window above
-const STATE_CLIPS := {
-	# state name -> clip names to randomly pick among (one today; more --
-	# alternate attacks, eventually block -- are planned to drop in here)
-	"attack": ["mixamo_com"],
-}
 var _skeleton: Skeleton3D
 var _anim_player: AnimationPlayer
+var _clip_keys: Dictionary = {}   # state -> Array[String] of keys in this rig's library
+var _cur_clip := ""               # library key currently playing, "" if none
+var _oneshot_state := ""          # state whose one-shot clip is playing (hit/die/etc), "" if none
 var _bi_r_arm := -1
 var _bi_r_forearm := -1
 var _bi_l_arm := -1
@@ -156,6 +228,7 @@ func _build_collision() -> void:
 	cap.shape = shape
 	cap.position = Vector3(0, 0.75 * scale_f, 0)
 	add_child(cap)
+	_hitbox = cap  # kept so a dying creature can stop blocking the player mid-death-clip
 
 
 # --- body assembly (boxes only, per body plan) ---------------------------------
@@ -328,6 +401,46 @@ func _mk_bone_attachment(bone_idx: int) -> BoneAttachment3D:
 	return att
 
 
+func _has_clips(state: String) -> bool:
+	return _clip_keys.has(state) and not (_clip_keys[state] as Array).is_empty()
+
+
+## Picks a random clip for `state` and plays it. Re-picking on every call would
+## restart the clip every frame, so a looping state already playing one of its
+## own clips is left alone -- pass force=true for one-shots (a new hit should
+## restart the flinch even if a flinch is already playing).
+func _play_state(state: String, force := false, speed := 1.0) -> bool:
+	if _anim_player == null or not _has_clips(state):
+		return false
+	var keys: Array = _clip_keys[state]
+	if not force and _cur_clip in keys and _anim_player.is_playing():
+		_anim_player.speed_scale = speed
+		return true
+	var key: String = keys[randi() % keys.size()]
+	_cur_clip = key
+	_anim_player.play(key)
+	_anim_player.speed_scale = speed
+	return true
+
+
+## Length of whatever clip is currently playing (0 if none).
+func _cur_clip_len() -> float:
+	if _anim_player == null or _cur_clip == "" or not _anim_player.has_animation(_cur_clip):
+		return 0.0
+	return _anim_player.get_animation(_cur_clip).length
+
+
+## Plays a one-shot reaction (hit / shield-block / death). Returns the clip's
+## length so callers can time a state around it, or 0.0 if the state has no
+## clips -- in which case the caller must not wait for an animation that will
+## never play.
+func _play_oneshot(state: String) -> float:
+	if not _play_state(state, true):
+		return 0.0
+	_oneshot_state = state
+	return _cur_clip_len()
+
+
 ## Builds a lunger's body on a real Skeleton3D (the imported FBX rig) instead
 ## of the hand-built pivot chain every other biped uses, so real animation
 ## clips (currently one sword swing, more planned per the user) can drive the
@@ -339,7 +452,13 @@ func _mk_bone_attachment(bone_idx: int) -> BoneAttachment3D:
 ## pivot body) if the rig failed to load for any reason, so a bad/missing
 ## asset can't leave the creature with no body at all.
 func _build_biped_skeleton(s: float, color: Color, accent: Color) -> bool:
-	var rig := ATTACK_ANIM_SCENE.instantiate()
+	_build_clip_cache()
+	if _base_rig_path == "":
+		return false  # no clips found at all -- fall back to the pivot body
+	var base_scene: PackedScene = load(_base_rig_path) as PackedScene
+	if base_scene == null:
+		return false
+	var rig: Node3D = base_scene.instantiate() as Node3D
 	if rig == null:
 		return false
 	_model.add_child(rig)
@@ -471,37 +590,25 @@ func _build_biped_skeleton(s: float, color: Color, accent: Color) -> bool:
 		_shield.rotation.x = 2.6266
 		_shield_rest_x = 2.6266  # _animate's shield-raise lerp must target this, not 0.0, or it erases the correction every frame
 
-	# Merge in a second real clip (a run cycle) for actual movement, replacing
-	# the hand-posed sin-wave walk cycle entirely -- a real authored clip
-	# either looks right immediately (proving the hand-posed formulas, not
-	# the rig/attachment orientation, were the source of "legs up by the
-	# head") or looks wrong in the exact same way the attack once did
-	# (proving something about the rig itself). Both clips share the literal
-	# name "mixamo_com" (Mixamo's generic export name), so this one is
-	# registered under "run" in the SAME AnimationPlayer/library the attack
-	# clip already lives in, rather than instantiating a second skeleton.
-	var run_rig := RUN_ANIM_SCENE.instantiate()
-	var run_ap: AnimationPlayer = null
-	for c in run_rig.get_children():
-		if c is AnimationPlayer:
-			run_ap = c
-	if run_ap != null and run_ap.has_animation("mixamo_com"):
-		var run_anim := run_ap.get_animation("mixamo_com")
-		run_anim.loop_mode = Animation.LOOP_LINEAR
-		# NOTE: an earlier export of this clip baked ~2.3 units of real forward
-		# root motion into the Hips POSITION track (start/end Z mismatched too,
-		# so looping it snapped every cycle) -- stacked on top of the game's
-		# own physics-driven translation, that was the real cause of "lagging,
-		# moving glitchy." Fixed at the source by re-authoring the clip in
-		# place (measured: Hips position now just a small +-0.06 sway with
-		# identical start/end keys, i.e. a clean seamless loop), so it's kept
-		# as-is here, natural vertical bounce included, with no track surgery.
-		var lib_names := _anim_player.get_animation_library_list()
-		if lib_names.size() > 0:
-			var lib := _anim_player.get_animation_library(lib_names[0])
-			if not lib.has_animation("run"):
-				lib.add_animation("run", run_anim)
-	run_rig.queue_free()
+	# Register every cached clip into THIS rig's animation library. The clips
+	# all come from Mixamo exports that share the literal name "mixamo_com", so
+	# each is keyed "<state>/<index>" instead; _clip_keys records which keys
+	# belong to which state so _play_state can pick among them at random.
+	var lib_names := _anim_player.get_animation_library_list()
+	if lib_names.is_empty():
+		return true
+	var lib := _anim_player.get_animation_library(lib_names[0])
+	for state in _clip_cache:
+		var keys: Array = []
+		var arr: Array = _clip_cache[state]
+		for i in arr.size():
+			# "/" is reserved -- AnimationPlayer parses "library/clip" -- so the
+			# per-state key uses "_". (":" and "," are rejected too.)
+			var key := "%s_%d" % [state, i]
+			if not lib.has_animation(key):
+				lib.add_animation(key, arr[i])
+			keys.append(key)
+		_clip_keys[state] = keys
 	return true
 
 
@@ -615,6 +722,22 @@ func _align_up(up: Vector3, delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# Dying runs no AI and no _animate: the death clip owns the whole skeleton
+	# for its duration, and anything else posing bones would fight it. Gravity
+	# still applies so a creature killed mid-air falls rather than hanging.
+	if _state == "dying":
+		_state_t -= delta
+		var gd := world.gravity_at(global_position) if world != null else Vector3.DOWN * 9.8
+		var upd := -_snap_up(gd) if gd.length() > 0.01 else Vector3.UP
+		var vu := velocity.dot(upd) - GRAVITY_ACCEL * delta
+		if is_on_floor():
+			vu = maxf(vu, 0.0)
+		velocity = upd * vu
+		up_direction = upd
+		move_and_slide()
+		if _state_t <= 0.0:
+			queue_free()
+		return
 	match species.get("kind", "land"):
 		"fish": _swim_physics(delta)
 		"air": _fly_physics(delta)
@@ -858,16 +981,16 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 				# that manual scrub; "attack" below just sets it back to 1 and
 				# lets the SAME clip keep playing forward from wherever it is.
 				_attack_clip_len = SWORD_SWING_DURATION
-				if _anim_player != null:
-					var clip_names: Array = STATE_CLIPS.get("attack", [])
-					if not clip_names.is_empty():
-						var clip_name: String = clip_names[randi() % clip_names.size()]
-						var anim := _anim_player.get_animation(clip_name)
-						if anim != null:
-							_attack_clip_len = anim.length
-						_anim_player.play(clip_name)
-						_anim_player.seek(0.0, true)
-						_anim_player.speed_scale = 0.0
+				# Pick a fresh attack at random each attempt, so a fight cycles
+				# through the whole attack folder instead of one repeated swing.
+				# The windup/hit/end fractions below are proportions of whatever
+				# clip got picked, so they scale to each clip's own length --
+				# though per-clip hit timing may still want tuning by eye, since
+				# a kick and an overhead slash don't connect at the same moment.
+				if _play_state("attack", true, 0.0):
+					_attack_clip_len = maxf(_cur_clip_len(), 0.05)
+					_anim_player.seek(0.0, true)
+					_oneshot_state = ""  # the attack is driven by state, not the one-shot path
 				return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 			var flat_to_p := to_player - up * to_player.dot(up)
 			if flat_to_p.length() < 0.01:
@@ -1227,43 +1350,34 @@ func _animate(delta: float) -> void:
 		# Don't touch any bone pose by hand while either is playing, or we'd
 		# fight the clip every frame. Every OTHER state still drives bone
 		# poses by hand with the exact formulas the pivot-based body used.
-		if _state == "telegraph" and _anim_player != null:
+		# A one-shot reaction (hit flinch, shield-block) owns the skeleton until
+		# it finishes -- checked FIRST so nothing below restarts a locomotion
+		# clip over the top of a flinch that is still playing.
+		if _oneshot_state != "":
+			if _anim_player != null and _anim_player.is_playing():
+				pass
+			else:
+				_oneshot_state = ""
+				_cur_clip = ""
+		elif _state == "telegraph" and _anim_player != null:
 			# Scrub through the clip's own first WINDUP_END_FRACTION by hand,
 			# proportional to how far through the (jittered-length) telegraph
 			# window we are -- this IS the windup, not a separate pose.
 			var wt := clampf(1.0 - _state_t / maxf(_telegraph_total, 0.05), 0.0, 1.0)
 			_anim_player.seek(wt * WINDUP_END_FRACTION * _attack_clip_len, true)
+		elif _state == "attack":
+			pass  # the attack clip started in _lunger_ai just keeps playing
+		elif _state == "block":
+			_play_state("block")
 		elif _state == "chase" or _state == "circle":
-			# Real "run" clip instead of the old hand-posed sin-wave walk
-			# cycle, replacing it entirely rather than patching it further --
-			# a real authored clip either looks right immediately (meaning
-			# the hand-posed formulas, not the rig, were the actual source of
-			# "legs up by the head") or breaks in the same specific way the
-			# attack clip once did (meaning something about the rig/attachment
-			# setup itself).
-			if _anim_player != null:
-				if _anim_player.current_animation != "run" or not _anim_player.is_playing():
-					_anim_player.play("run")
-				_anim_player.speed_scale = 1.0
-		elif _state != "attack":
-			# recover, block: no real clip for these yet. Stop "run" cleanly
-			# if it was still playing (reset_bone_pose reverts EVERYTHING,
-			# arms included, to the raw T-pose bind -- a stiff arm sticking
-			# straight out to the side -- since nothing else corrects it once
-			# "run" stops driving the whole skeleton), then always re-apply
-			# the same baseline ARM_REST_FIX hang both arms need regardless
-			# of state, same as the old idle formula at moving=0.
-			if _anim_player != null and _anim_player.current_animation == "run":
-				_anim_player.stop()
-				_reset_skeleton_pose()
-			_set_arm_pose(_bi_r_arm, 0.0)
-			_skeleton.set_bone_pose_rotation(_bi_r_forearm, Quaternion(Vector3.RIGHT, 0.5))
-			if _state == "block":
-				_set_arm_pose(_bi_l_arm, -1.4)
-				_skeleton.set_bone_pose_rotation(_bi_l_forearm, Quaternion(Vector3.RIGHT, 0.8))
-			else:
-				_set_arm_pose(_bi_l_arm, 0.0)
-				_skeleton.set_bone_pose_rotation(_bi_l_forearm, Quaternion(Vector3.RIGHT, 0.5))
+			# Scale the run cycle to how fast the creature is actually moving so
+			# the feet don't skate: at the species' own top speed this is 1.0.
+			var ref_speed: float = maxf(float(species.get("speed", 4.0)), 0.1)
+			var flat_v := velocity - global_transform.basis.y * velocity.dot(global_transform.basis.y)
+			_play_state("run", false, clampf(flat_v.length() / ref_speed, 0.4, 1.6))
+		else:
+			# recover / anything else: stand in the authored idle.
+			_play_state("idle")
 	elif species.get("pattern", "") == "lunger" and _arms.size() >= 2 and _elbows.size() >= 2:
 		# Fallback: the original hand-built pivot body/animation, only reached
 		# if the skeleton rig failed to load for some reason. Same smooth
@@ -1325,8 +1439,11 @@ func _animate(delta: float) -> void:
 ## brief knockback + recovery, refilling the meter. Returns true if the
 ## creature died from this hit.
 func take_hit(dmg: float, stagger: float = 0.0) -> bool:
+	if _state == "dying":
+		return true  # already going down; ignore further hits
 	var is_lunger: bool = species.get("pattern", "") == "lunger"
-	if is_lunger and _state == "block":
+	var guarded: bool = is_lunger and _state == "block"
+	if guarded:
 		_health -= dmg * BLOCK_DAMAGE_MULT
 	else:
 		_health -= dmg
@@ -1335,8 +1452,26 @@ func take_hit(dmg: float, stagger: float = 0.0) -> bool:
 			if _stagger <= 0.0:
 				_apply_stagger_interrupt()
 	if _health <= 0.0:
-		queue_free()
+		# Play the death clip through before disappearing, instead of the old
+		# instant queue_free(). Collision and AI are switched off immediately so
+		# a corpse can't keep fighting or block the player mid-animation.
+		var die_len := _play_oneshot("die")
+		if die_len <= 0.0:
+			queue_free()
+			return true
+		_state = "dying"
+		_state_t = die_len
+		velocity = Vector3.ZERO
+		if _hitbox != null:
+			_hitbox.set_deferred("disabled", true)
 		return true
+	# A flinch reads very differently depending on whether it was absorbed on a
+	# shield or landed clean, so pick the matching reaction. Dual-wielders have
+	# no shield, so they always take the clean-hit flinch even while "blocking".
+	if guarded and _shield != null:
+		_play_oneshot("hit_block")
+	elif not guarded:
+		_play_oneshot("hit")
 	return false
 
 
