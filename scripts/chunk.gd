@@ -9,6 +9,11 @@ extends StaticBody3D
 const CS := Blocks.CHUNK_SIZE
 ## Block ids are packed into UV as id/ID_SCALE; the shader multiplies back out.
 const ID_SCALE := 64.0
+## Marker id for the small ore lumps that protrude from an ore block's exposed
+## faces. Not a real block -- it just tells the shader to draw that geometry
+## with its own (ore) vertex colour instead of the smooth stone treatment the
+## ore BLOCK gets.
+const ORE_CHUNK_ID := 63
 
 var planet: Planet
 var cc: Vector3i  # chunk coordinate (in chunk units)
@@ -62,16 +67,11 @@ static func _get_material(p: Planet) -> ShaderMaterial:
 	m.set_shader_parameter("leaf_hi", float(Blocks.LEAF_IDS.max()))
 	# Per-planet seed AND centre: the centre is what lets wood grain run along
 	# the local up (i.e. along a trunk), which on a sphere is not world Y.
-	# Ore ids and this planet's own ore colours, so the shader can draw ore as
-	# chunks in stone. Colours are per planet -- each world's ores differ.
 	var oids := PackedFloat32Array()
-	var ocols := PackedVector3Array()
 	for oid in Blocks.ORE_SLOT_IDS:
 		oids.append(float(oid))
-		var oc: Color = p.ore_color(oid)
-		ocols.append(Vector3(oc.r, oc.g, oc.b))
 	m.set_shader_parameter("ore_ids", oids)
-	m.set_shader_parameter("ore_cols", ocols)
+	m.set_shader_parameter("ore_chunk_id", ORE_CHUNK_ID)
 	m.set_shader_parameter("rock_id", float(Blocks.ROCK))
 	m.set_shader_parameter("world_seed", _tex_seed + float(p._seed % 9973) * 0.017)
 	m.set_shader_parameter("planet_center", p.global_position)
@@ -256,12 +256,77 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 					_emit_solid_box_cell(lo, hi, gv, Blocks.ROOF_SLAB, planet, snap, verts, normals, colors, uvs, cverts)
 				idx += 1
 
+	# ore lumps: decorative geometry on exposed ore faces (see _emit_ore_chunks)
+	idx = 0
+	for z in CS:
+		for y in CS:
+			for x in CS:
+				if Blocks.is_ore(ids[idx]):
+					_emit_ore_chunks(Vector3(x, y, z),
+						Vector3i(base.x + x, base.y + y, base.z + z),
+						ids[idx], planet, snap, verts, normals, colors, uvs)
+				idx += 1
+
 	return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs,
 		"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
 
 
 const _WFACE := [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0),
 	Vector3i(0,-1,0), Vector3i(0,0,1), Vector3i(0,0,-1)]
+
+## Stable pseudo-random in 0..1 from a voxel coord and a salt, so a given ore
+## block grows the same lumps every time it is remeshed.
+static func _hash3(v: Vector3i, k: int) -> float:
+	var h: int = (v.x * 73856093) ^ (v.y * 19349663) ^ (v.z * 83492791) ^ (k * 2654435761)
+	return float(absi(h) % 100003) / 100003.0
+
+
+## A box with all six faces, unattached to the voxel grid. Deliberately NOT
+## added to the collision list: these are decorative lumps a few centimetres
+## proud of the wall, and making them solid would turn every ore vein into a
+## surface the player snags on.
+static func _emit_free_box(lo: Vector3, hi: Vector3, base_col: Color, bid: int,
+		verts: PackedVector3Array, normals: PackedVector3Array,
+		colors: PackedColorArray, uvs: PackedVector2Array) -> void:
+	for fi in 6:
+		var n: Vector3i = _WFACE[fi]
+		var sh := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
+		var col := Color(base_col.r * sh, base_col.g * sh, base_col.b * sh, base_col.a)
+		var q := _box_face(lo, hi, fi)
+		_quad(q[0], q[1], q[2], q[3], Vector3(n), col, verts, normals, colors, uvs, bid, sh)
+
+
+## Ore lumps standing proud of an ore block's exposed faces, so a vein reads as
+## chunks embedded in rock with real silhouette rather than a pattern painted
+## on a flat surface. Only exposed faces grow them -- buried ore is invisible
+## anyway, and skipping it keeps the extra geometry proportional to what is
+## actually on screen.
+static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
+		snap: Dictionary, verts: PackedVector3Array, normals: PackedVector3Array,
+		colors: PackedColorArray, uvs: PackedVector2Array) -> void:
+	var ore_col := planet.ore_color(id)
+	for fi in 6:
+		var n: Vector3i = _WFACE[fi]
+		var nid := _id_at(planet, snap, gv + n)
+		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN:
+			continue
+		var nv := Vector3(n)
+		var t1 := Vector3(nv.y, nv.z, nv.x)   # any axis perpendicular to nv
+		var t2 := nv.cross(t1)
+		var face_c := lo + Vector3(0.5, 0.5, 0.5) + nv * 0.5
+		var count := 1 + int(_hash3(gv, fi) * 2.99) % 2   # one or two lumps
+		for k in count:
+			var h1 := _hash3(gv, fi * 7 + k * 13 + 1)
+			var h2 := _hash3(gv, fi * 11 + k * 29 + 2)
+			var h3 := _hash3(gv, fi * 17 + k * 41 + 3)
+			var sz: float = 0.085 + h3 * 0.075
+			var spread: float = maxf(0.5 - sz * 2.0, 0.05)
+			var c := face_c + t1 * ((h1 - 0.5) * spread * 2.0) 				+ t2 * ((h2 - 0.5) * spread * 2.0) 				- nv * (sz * 0.25)   # mostly buried: only ~0.75 of the lump shows,
+				                     # so it grows OUT of the rock rather than
+				                     # sitting on top of it like a dropped cube
+			_emit_free_box(c - Vector3.ONE * sz, c + Vector3.ONE * sz,
+				ore_col, ORE_CHUNK_ID, verts, normals, colors, uvs)
+
 
 static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Planet,
 		snap: Dictionary, wverts: PackedVector3Array, wnormals: PackedVector3Array,
