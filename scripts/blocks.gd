@@ -59,7 +59,7 @@ const CHEST := 52     # pure storage (bigger than a machine)
 const CARPENTER := 62 # base-building bench: structural blocks from plain resources
 const FORGE := 63     # multiblock-built smelter upgrade: bigger + faster
 const CLIMATE_UNIT := 64  # planet base shelter: negates hazard damage nearby
-const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER, GENERATOR]
+const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER, GENERATOR, OXYGEN_PLANT, HEATER, COOLER, POWER_BAY]
 
 # --- procedural ore slots ---------------------------------------------------
 # Each planet invents its own ores (unique name + color) and assigns each to a
@@ -140,10 +140,13 @@ static func torch_tier_for(props: Dictionary) -> int:
 
 # --- crafted gear (inventory-only tools produced at stations) ---
 const DRILL := 51            # mining tool; its power (from its material) sets mine speed & max tier
-const O2_TANK := 55          # worn gear: raises max oxygen (capacity from Reactivity)
+# 55 was the O2 Tank (extra suit oxygen). Removed -- personal air is being
+# reworked around refillable base/ship tanks instead. The id stays reserved so
+# an old save's leftover item still resolves to a name instead of garbage.
+const O2_TANK := 55
 const SUIT := 56             # worn gear: reduces hazard damage (insulation from Density)
 const WEAPON := 59           # melee weapon: its damage (from its material) beats bare hands
-const TOOL_IDS := [DRILL, O2_TANK, SUIT, WEAPON, PULSE_PISTOL]
+const TOOL_IDS := [DRILL, SUIT, WEAPON, PULSE_PISTOL]
 
 const LIFE_SUPPORT := 53     # ship block: with a sealed interior it makes the ship habitable
 const GLASS := 54            # transparent, solid hull -- windows that still seal a cabin
@@ -154,7 +157,7 @@ const DOOR_OPEN := 58        # open door: passable, does NOT seal (air escapes)
 #     these; specific stations build FROM them instead of raw refined material,
 #     so not everything is gated behind "refine ore and you're done") ---
 const ALLOY := 60      # refined + Metal -> structural stock (Shipworks: Thruster, Life Support)
-const CIRCUIT := 61    # refined + Metal -> functional stock (Fabricator: Drill, O2 Tank, Suit, Weapon)
+const CIRCUIT := 61    # refined + Metal -> functional stock (Fabricator: Drill, Suit, Weapon)
 const INTERMEDIATE_IDS := [ALLOY, CIRCUIT]
 
 const INTERFACE := 65  # placeable trigger block: surround it with a recognized shell
@@ -347,6 +350,30 @@ static func stair_variant_name(variant: int) -> String:
 # faces. Without it, "which face is the cut end" has to be guessed from the
 # planet's up, which is only right for an upright trunk. Packed in the same
 # bits stairs use for facing -- a block is one or the other, never both.
+# Surface-mounted conduit: which of its cell's six faces the wire clings to,
+# stored +1 so 0 means "not placed against anything" (world-gen / hand-given).
+# Kept clear of the log-axis and stair bits below.
+# A BITMASK of the faces a wire clings to, not a single face: one cell can carry
+# a run along its floor and another up its wall, so a cable turns a corner inside
+# one block instead of needing two. 0 means "not placed against anything".
+const WIRE_FACE_SHIFT := 24
+const WIRE_FACE_MASK := 0x3F
+
+static func is_wire(id: int) -> bool:
+	return id == WIRE
+
+## Bitmask over Chunk._WFACE indices; 0 when unset.
+static func wire_faces_of(v: int) -> int:
+	return int((v >> WIRE_FACE_SHIFT) & WIRE_FACE_MASK)
+
+static func wire_with_faces(mask: int) -> int:
+	return WIRE | ((mask & WIRE_FACE_MASK) << WIRE_FACE_SHIFT)
+
+## Add one face to whatever this cell already carries.
+static func wire_add_face(v: int, face: int) -> int:
+	return wire_with_faces(wire_faces_of(v) | (1 << face))
+
+
 const LOG_AXIS_SHIFT := 16
 const LOG_AXIS_MASK := 0x3
 const AXIS_X := 0
@@ -432,6 +459,12 @@ const MACHINE_CORE := 94
 ## Burns combustible ore for power. Deliberately has no single-block version:
 ## a generator is the kind of thing whose whole point is that it's big.
 const GENERATOR := 95
+const OXYGEN_PLANT := 96  # multiblock: floods a SEALED room with breathable air
+const HEATER := 97        # multiblock: warms a sealed room on a cold world
+const COOLER := 98        # multiblock: the opposite -- sheds heat on a scorching one
+const WIRE := 99          # planet-side conduit: carries power between machines
+const BATTERY := 100      # carried charge: fill it at a base, empty it into a ship
+const POWER_BAY := 101    # ship station: batteries in, ship tanks filled
 
 ## Machines that can ONLY exist as a structure you physically build -- there is
 ## deliberately no single-block version that does the same job worse. The small
@@ -459,6 +492,44 @@ const STRUCTURES := [
 		],
 	},
 	{
+		"name": "Oxygen Plant",
+		"result": OXYGEN_PLANT,
+		"size": Vector3i(3, 3, 3),
+		"legend": {"#": METAL, "G": GLASS, "C": MACHINE_CORE, ".": AIR},
+		# A glass scrubber column in a metal frame -- the glass is what makes it
+		# readable as an AIR machine from across the room.
+		"layers": [
+			["###", "###", "###"],
+			["#C#", "G.G", "#G#"],
+			["###", "###", "###"],
+		],
+	},
+	{
+		"name": "Heater",
+		"result": HEATER,
+		"size": Vector3i(3, 3, 3),
+		"legend": {"#": METAL, "R": ROCK, "C": MACHINE_CORE, ".": AIR},
+		# A stone mass that holds heat, banded with metal.
+		"layers": [
+			["RRR", "RRR", "RRR"],
+			["#C#", "R.R", "R#R"],
+			["RRR", "R#R", "RRR"],
+		],
+	},
+	{
+		"name": "Cooler",
+		"result": COOLER,
+		"size": Vector3i(3, 3, 3),
+		"legend": {"#": METAL, "G": GLASS, "C": MACHINE_CORE, ".": AIR},
+		# Radiator fins in glass: the mirror of the Heater, for worlds that are
+		# trying to cook you rather than freeze you.
+		"layers": [
+			["###", "###", "###"],
+			["#C#", "G.G", "###"],
+			["#G#", "###", "###"],
+		],
+	},
+	{
 		"name": "Forge",
 		"result": FORGE,
 		"size": Vector3i(3, 3, 3),
@@ -470,6 +541,76 @@ const STRUCTURES := [
 		],
 	},
 ]
+
+
+## Every recipe in the game, flattened into one list the Recipe Book can show.
+##
+## Each entry carries a STABLE key, so unlocking recipes as you progress is a
+## matter of remembering keys rather than reshaping this list.
+static func all_recipes() -> Array:
+	var out: Array = []
+	for r in HAND_RECIPES:
+		out.append({"key": "hand:%d" % int(r["out"]), "src": "By hand",
+			"cat": str(r.get("cat", "")), "out": int(r["out"]),
+			"n": int(r.get("n", 1)), "reqs": r.get("reqs", []),
+			"cost": 0, "extra": {}, "diagram": ""})
+	for st in STATION_CRAFTS:
+		for r in STATION_CRAFTS[st]:
+			out.append({"key": "%d:%d" % [int(st), int(r["out"])],
+				"src": name_of(int(st)), "cat": "Stations", "out": int(r["out"]),
+				"n": int(r.get("n", 1)), "reqs": r.get("reqs", []),
+				"cost": int(r.get("cost", 0)), "extra": r.get("extra", {}),
+				"diagram": ""})
+	for d in STRUCTURES:
+		out.append({"key": "struct:%s" % str(d["name"]), "src": "Built from blocks",
+			"cat": "Machines", "out": int(d["result"]), "n": 1, "reqs": [],
+			"cost": 0, "extra": {}, "diagram": structure_diagram(d, false)})
+	return out
+
+
+## The materials line for a recipe-book entry.
+static func recipe_needs(rec: Dictionary) -> String:
+	var parts := PackedStringArray()
+	for r in rec.get("reqs", []):
+		if r.has("refined"):
+			parts.append("%d Refined Material" % int(r["n"]))
+		elif r.has("any"):
+			parts.append("%d %s" % [int(r["n"]), r.get("label", "items")])
+		else:
+			parts.append("%d %s" % [int(r["n"]), name_of(int(r["id"]))])
+	if int(rec.get("cost", 0)) > 0:
+		parts.append("%d Refined Material" % int(rec["cost"]))
+	var ex: Dictionary = rec.get("extra", {})
+	if not ex.is_empty():
+		parts.append("%d %s" % [int(ex["n"]), name_of(int(ex["id"]))])
+	if parts.is_empty():
+		return "no materials — assembled from placed blocks"
+	return ",  ".join(parts)
+
+
+## A readable build guide for a structure. There is no other way in the game to
+## learn what a machine looks like, so a failed assembly prints this rather than
+## just saying no.
+## `with_name` is off in the Recipe Book, where the entry's own header already
+## says which machine this is.
+static func structure_diagram(def: Dictionary, with_name := true) -> String:
+	var layers: Array = def["layers"]
+	var legend: Dictionary = def["legend"]
+	var tiers := ["bottom", "middle", "top"]
+	var out := "%s  (%dx%dx%d)" % [def["name"] if with_name else "Pattern",
+		(def["size"] as Vector3i).x,
+		(def["size"] as Vector3i).y, (def["size"] as Vector3i).z]
+	for y in layers.size():
+		var tier: String = tiers[y] if layers.size() == 3 and y < 3 else "layer %d" % (y + 1)
+		out += "
+  %-7s %s" % [tier, "  ".join(PackedStringArray(layers[y]))]
+	var key := PackedStringArray()
+	for ch in legend:
+		var id: int = legend[ch]
+		key.append("%s = %s" % [ch, "empty" if id == AIR else name_of(id)])
+	out += "
+  " + "   ".join(key)
+	return out
 
 
 ## Cells of a structure pattern as {offset: block_id}, plus which offset is the
@@ -526,6 +667,13 @@ const HAND_RECIPES := [
 	{"cat": "Stations", "out": MACHINE_CORE, "n": 1,
 		"reqs": [{"id": METAL, "n": 4}, {"refined": true, "n": 1}]},
 	{"cat": "Stations", "out": SHAPER, "n": 1, "reqs": [{"id": ROCK, "n": 10}, {"id": METAL, "n": 2}]},
+	# The base's nervous system: cheap, because a grid you cannot afford to run
+	# across your base is a grid you build around instead of with.
+	{"cat": "Building", "out": WIRE, "n": 8, "reqs": [{"id": METAL, "n": 1}, {"refined": true, "n": 1}]},
+	{"cat": "Stations", "out": BATTERY, "n": 1,
+		"reqs": [{"id": METAL, "n": 3}, {"refined": true, "n": 2}]},
+	{"cat": "Stations", "out": POWER_BAY, "n": 1,
+		"reqs": [{"id": METAL, "n": 8}, {"refined": true, "n": 3}]},
 	# Deliberately cheap and made from the most common material there is: a
 	# light source gates cave exploration and surviving the first night, so
 	# putting it behind rare drops would just make the early game dark.
@@ -586,7 +734,6 @@ const STATION_CRAFTS := {
 	],
 	FABRICATOR: [
 		{"label": "Drill", "out": DRILL, "n": 1, "cost": 3},
-		{"label": "O2 Tank", "out": O2_TANK, "n": 1, "cost": 3},
 		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 3},
 		{"label": "Melee Weapon", "out": WEAPON, "n": 1, "cost": 3},
 		{"label": "Pulse Pistol", "out": PULSE_PISTOL, "n": 1, "cost": 4},
@@ -615,7 +762,7 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	CRYSTAL_SLAB, METAL_SLAB, WOOD_SLAB, GLASS_SLAB,
 	ROCK_STAIR, DIRT_STAIR, GRASS_STAIR, REGOLITH_STAIR, ICE_STAIR, SNOW_STAIR,
 	CRYSTAL_STAIR, METAL_STAIR, WOOD_STAIR, GLASS_STAIR,
-	TORCH, GLOW_LAMP, EMBER_TORCH, MACHINE_CORE]
+	TORCH, GLOW_LAMP, EMBER_TORCH, MACHINE_CORE, WIRE]
 
 const NAMES := {
 	AIR: "Air",
@@ -660,6 +807,12 @@ const NAMES := {
 	SHAPER: "Block Shaper",
 	MACHINE_CORE: "Machine Core",
 	GENERATOR: "Generator",
+	OXYGEN_PLANT: "Oxygen Plant",
+	HEATER: "Heater",
+	COOLER: "Cooler",
+	WIRE: "Power Conduit",
+	BATTERY: "Battery",
+	POWER_BAY: "Power Bay",
 	TORCH: "Torch",
 	EMBER_TORCH: "Ember Torch",
 	GLOW_LAMP: "Glow Lamp",
@@ -701,6 +854,7 @@ const HARDNESS := {
 	LEAF_0: 0.2, LEAF_1: 0.2, LEAF_2: 0.2, LEAF_3: 0.2, LEAF_4: 0.2, LEAF_5: 0.2,
 	LEAF_6: 0.2, LEAF_7: 0.2, LEAF_8: 0.2, LEAF_9: 0.2, LEAF_10: 0.2, LEAF_11: 0.2,
 	WOOD: 0.6, WOOD_PALE: 0.6, WOOD_DARK: 0.6,
+	WIRE: 0.3,
 	TORCH: 0.1, GLOW_LAMP: 0.3, EMBER_TORCH: 0.1, MACHINE_CORE: 1.2,
 	ICE: 0.7, ROCK: 0.9, CRYSTAL: 1.2, CORE: 1.6,
 	IRON_ORE: 1.3, COPPER_ORE: 1.3, GOLD_ORE: 1.6,
@@ -751,6 +905,12 @@ const COLORS := {
 	SHAPER: Color(0.52, 0.52, 0.56),
 	MACHINE_CORE: Color(0.86, 0.52, 0.18),
 	GENERATOR: Color(0.62, 0.45, 0.28),
+	OXYGEN_PLANT: Color(0.42, 0.68, 0.78),
+	HEATER: Color(0.74, 0.40, 0.26),
+	COOLER: Color(0.36, 0.62, 0.86),
+	WIRE: Color(0.72, 0.56, 0.20),
+	BATTERY: Color(0.45, 0.80, 0.55),
+	POWER_BAY: Color(0.50, 0.70, 0.60),
 	TORCH: Color(1.0, 0.74, 0.40),
 	EMBER_TORCH: Color(1.0, 0.62, 0.26),
 	GLOW_LAMP: Color(0.95, 0.97, 1.0),
@@ -832,10 +992,6 @@ static func door_toggle_of(id: int) -> int:
 # materials drill faster and reach higher ore tiers. Bare hands are 1.0.
 static func drill_power(props: Dictionary) -> float:
 	return 1.5 + float(props.get("h", 0)) / 100.0 + float(props.get("e", 0)) / 100.0 * 0.8
-
-# O2 Tank extra oxygen capacity from its material's Reactivity (gas storage).
-static func o2_capacity(props: Dictionary) -> float:
-	return 50.0 + float(props.get("r", 0)) / 100.0 * 150.0
 
 # Insulated Suit hazard-damage reduction (0..0.9) from its material's Density.
 static func suit_resist(props: Dictionary) -> float:

@@ -120,7 +120,17 @@ void fragment() {
 		// the planet's up (the old behaviour) is only right for a standing
 		// trunk. Falls back to local up for logs from world generation, which
 		// carry no axis.
-		vec3 up = normalize(v_world - planet_center);
+		// The radial direction must be SNAPPED to an axis. Using it raw makes the
+		// grain vanish: `up` would be derived from v_world itself, so v_world is
+		// parallel to it by construction and `perp` below collapses to zero --
+		// every texel lands in the same band and the bark renders dead flat.
+		// Snapping (the same rule as Planet._axis_of) keeps trunks grained on
+		// every face of the sphere.
+		vec3 rad = normalize(v_world - planet_center);
+		vec3 ra = abs(rad);
+		vec3 up = (ra.x > ra.y && ra.x > ra.z)
+			? vec3(sign(rad.x), 0.0, 0.0)
+			: ((ra.y >= ra.z) ? vec3(0.0, sign(rad.y), 0.0) : vec3(0.0, 0.0, sign(rad.z)));
 		if (v_log_axis < 2.5) {
 			up = (v_log_axis < 0.5) ? vec3(1.0, 0.0, 0.0)
 				: ((v_log_axis < 1.5) ? vec3(0.0, 1.0, 0.0) : vec3(0.0, 0.0, 1.0));

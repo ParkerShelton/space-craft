@@ -215,6 +215,47 @@ func apply_mesh_data(data: Dictionary) -> void:
 # chunk and its face-neighbors. Everything else comes from planet.generation_sample
 # (a pure read of noise), so this function is safe to run off the main thread.
 
+# The greedy mask loop runs 6 x CS^3 times per chunk -- ~25k iterations -- and
+# used to ask Blocks up to ten questions per iteration. In GDScript the call
+# overhead dwarfed the work, and it was most of the cost of re-meshing a chunk
+# after a single block edit. Every one of those questions depends only on the
+# block's low byte, so they are answered once into two tables at class load.
+#
+#   _FULL     the block is a full opaque cube the greedy pass should mesh
+#   _SEETHRU  a neighbour of this kind does NOT hide the face behind it
+#
+# Packed voxels (stair facing, log axis, a stacked slab's top id) keep their
+# extra data in the high bytes, so indexing by `id & ID_MASK` is exact: a
+# stacked slab's low byte is its bottom slab id, which is already not-full and
+# see-through, matching what the per-call version decided.
+static var _FULL: PackedByteArray
+static var _SEETHRU: PackedByteArray
+# Leaves are see-through, so without this two adjacent leaves would EACH draw a
+# face toward the other. Those quads are coplanar and, under cull_disabled, both
+# render at the same depth -- z-fighting across the whole canopy. Same-material
+# transparent neighbours cull each other, as in any block game.
+static var _LEAF: PackedByteArray
+
+
+static func _static_init() -> void:
+	_FULL = PackedByteArray()
+	_FULL.resize(256)
+	_SEETHRU = PackedByteArray()
+	_SEETHRU.resize(256)
+	_LEAF = PackedByteArray()
+	_LEAF.resize(256)
+	for id in 256:
+		var full: bool = not (id == Blocks.AIR or id == Blocks.WATER
+			or id == Blocks.DOOR_OPEN or id == Blocks.ROOF_SLAB
+			or Blocks.is_slab(id) or Blocks.is_stair(id) or Blocks.is_light(id)
+			or Blocks.is_wire(id))
+		_FULL[id] = 1 if full else 0
+		# Leaves are meshed AND see-through: they are drawn with cutout holes, so
+		# they must not hide the block behind them.
+		_SEETHRU[id] = 1 if (not full or Blocks.is_leaf(id)) else 0
+		_LEAF[id] = 1 if Blocks.is_leaf(id) else 0
+
+
 static func _id_at(planet: Planet, snap: Dictionary, v: Vector3i) -> int:
 	if snap.has(v):
 		return snap[v]
@@ -452,6 +493,37 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 					lights.append(Vector3(x, y, z) + Vector3(0.5, 0.5, 0.5))
 				idx += 1
 
+	# conduit: thin surface-mounted runs. Free boxes, so they are not culled
+	# against the wall they hug and carry no collision -- you walk through wiring.
+	idx = 0
+	for z in CS:
+		for y in CS:
+			for x in CS:
+				var wid := ids[idx]
+				if Blocks.bottom_of(wid) == Blocks.WIRE:
+					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
+					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
+					var col := Blocks.color_of(Blocks.WIRE)
+					# Reach toward neighbouring conduit only, so arms never
+					# poke into the wall the run is stapled to.
+					var conn := 0
+					for fi2 in 6:
+						var nraw := _id_at(planet, snap, gv + _WFACE[fi2])
+						if Blocks.bottom_of(nraw) != Blocks.WIRE:
+							continue
+						conn |= 1 << fi2
+						# Turning a corner (floor run meeting a wall run) the two
+						# cables lie on different planes. Reach toward the
+						# neighbour's mounting face as well, which is the elbow
+						# that brings them together instead of leaving a gap.
+						conn |= Blocks.wire_faces_of(nraw)
+					for bx in shape_boxes(wid, up, conn):
+						_emit_free_box(Vector3(x, y, z) + (bx[0] as Vector3),
+							Vector3(x, y, z) + (bx[1] as Vector3),
+							col, Blocks.WIRE, verts, normals, colors, uvs, uv2s,
+							_face_light(snap, gv, Vector3i.ZERO))
+				idx += 1
+
 	# ore lumps: decorative geometry on exposed ore faces (see _emit_ore_chunks)
 	idx = 0
 	for z in CS:
@@ -549,7 +621,11 @@ static func _emit_stair(lo0: Vector3, gv: Vector3i, raw: int, planet: Planet,
 ## 0..1 cell space. ONE definition of each shape, shared by the mesher and the
 ## placement ghost -- if these diverged, the preview would lie about what you
 ## are about to build.
-static func shape_boxes(raw: int, up: Vector3) -> Array:
+## `conn` is a 6-bit mask of _WFACE directions this cell should reach toward --
+## only conduit uses it, so a run grows arms toward its neighbours instead of
+## sprouting a stub on every cell. The default (all directions) is what a ghost
+## preview shows, since a preview has no neighbours yet.
+static func shape_boxes(raw: int, up: Vector3, conn: int = 0x3F) -> Array:
 	var lo := Vector3.ZERO
 	var hi := Vector3.ONE
 	var base := Blocks.bottom_of(raw)
@@ -569,11 +645,68 @@ static func shape_boxes(raw: int, up: Vector3) -> Array:
 		if Blocks.stair_variant_of(raw) == Blocks.STAIR_CORNER:
 			step = _half_toward(step[0], step[1], side)
 		return [_half_toward(lo, hi, -up), step]
+	if base == Blocks.WIRE:
+		var faces := Blocks.wire_faces_of(raw)
+		if faces == 0:
+			# Never placed against anything (hand-given): lie it on the floor.
+			for i in 6:
+				if Vector3(_WFACE[i]).dot(up) < -0.5:
+					faces = 1 << i
+					break
+		var out: Array = []
+		for f in 6:
+			if (faces & (1 << f)) == 0:
+				continue
+			# Reach toward neighbouring cells AND toward the other faces wired in
+			# THIS cell -- that second part is what joins a floor run to a wall
+			# run inside a single block.
+			out.append_array(_wire_boxes(lo, hi, Vector3(_WFACE[f]),
+				(conn | faces) & ~(1 << f)))
+		return out
 	if Blocks.is_stacked_slab(raw):
 		return [_half_toward(lo, hi, -up), _half_toward(lo, hi, up)]
 	if Blocks.is_slab(base) or base == Blocks.ROOF_SLAB:
 		return [_half_toward(lo, hi, -up)]
 	return [[lo, hi]]
+
+
+## One face's worth of conduit: a small junction on the mounting face plus an
+## arm toward each direction in `arms`.
+static func _wire_boxes(lo: Vector3, hi: Vector3, mount: Vector3, arms: int) -> Array:
+	const T := 0.05    # how far it stands off the surface
+	const W := 0.10    # how thick the cable is
+	const E := 0.004   # held just clear of the wall, so the two never z-fight
+	var a := lo
+	var b := hi
+	if mount.x > 0.5: a.x = hi.x - T - E; b.x = hi.x - E
+	elif mount.x < -0.5: b.x = lo.x + T + E; a.x = lo.x + E
+	elif mount.y > 0.5: a.y = hi.y - T - E; b.y = hi.y - E
+	elif mount.y < -0.5: b.y = lo.y + T + E; a.y = lo.y + E
+	elif mount.z > 0.5: a.z = hi.z - T - E; b.z = hi.z - E
+	else: b.z = lo.z + T + E; a.z = lo.z + E
+	var c0 := a
+	var c1 := b
+	for axis in 3:
+		if absf(mount[axis]) > 0.5:
+			continue
+		c0[axis] = lo[axis] + 0.5 - W * 0.5
+		c1[axis] = lo[axis] + 0.5 + W * 0.5
+	var out: Array = [[c0, c1]]
+	for fi in 6:
+		if (arms & (1 << fi)) == 0:
+			continue
+		var d := Vector3(_WFACE[fi])
+		if absf(d.dot(mount)) > 0.5:
+			continue   # into or out of the wall, not along it
+		var s0 := c0
+		var s1 := c1
+		for axis2 in 3:
+			if d[axis2] > 0.5:
+				s1[axis2] = hi[axis2]
+			elif d[axis2] < -0.5:
+				s0[axis2] = lo[axis2]
+		out.append([s0, s1])
+	return out
 
 
 ## The half of a box lying toward `dir`, where `dir` is one of the six unit
@@ -597,7 +730,8 @@ static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Pla
 	var base := Blocks.color_of(Blocks.WATER)
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
-		if _id_at(planet, snap, gv + n) != Blocks.AIR:
+		var wnid := _id_at(planet, snap, gv + n)
+		if wnid != Blocks.AIR and not Blocks.is_leaf(Blocks.bottom_of(wnid)):
 			continue  # only the faces exposed to air are drawn
 		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
 		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
@@ -616,7 +750,7 @@ static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int
 		var nid := _id_at(planet, snap, gv + n)
 		# A half-height neighbour cannot cover a full face, so it does not hide
 		# one -- otherwise a slab beside a block punches a hole in the wall.
-		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN and not Blocks.is_slab(nid) 				and not Blocks.is_stacked_slab(nid) and nid != Blocks.ROOF_SLAB 				and not Blocks.is_stair(Blocks.bottom_of(nid)):
+		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN and not Blocks.is_slab(nid) 				and not Blocks.is_stacked_slab(nid) and nid != Blocks.ROOF_SLAB 				and not Blocks.is_stair(Blocks.bottom_of(nid)) 				and not Blocks.is_leaf(Blocks.bottom_of(nid)):
 			continue  # only the faces exposed to open space are drawn
 		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
 		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
@@ -658,6 +792,10 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 	# meshing on light level too.
 	var lmask := PackedInt32Array()
 	lmask.resize(CS * CS)
+	# Hoisted: with no light sources in range _face_light returns 0 immediately,
+	# but paying a function call per face to learn that is not free.
+	var _lm = snap.get(LM_KEY)
+	var has_light: bool = _lm != null and not (_lm as PackedByteArray).is_empty()
 
 	for a in CS:
 		for j in CS:
@@ -666,24 +804,20 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				var lin := a * sd + k * su + row
 				var oid := ids[lin]
 				var val := 0
-				# opaque blocks only; WATER and ROOF_SLAB are meshed separately as
-				# partial-height boxes, and an OPEN door draws as an empty gap (no
-				# face, no collision) so you can actually walk through it once opened
-				if oid != Blocks.AIR and oid != Blocks.WATER and oid != Blocks.DOOR_OPEN 						and oid != Blocks.ROOF_SLAB and not Blocks.is_slab(oid) 						and not Blocks.is_stacked_slab(oid) 						and not Blocks.is_stair(Blocks.bottom_of(oid)) 						and not Blocks.is_light(Blocks.bottom_of(oid)):
+				if _FULL[oid & Blocks.ID_MASK] == 1:
 					var na := a + dir
 					var nid: int
 					if na >= 0 and na < CS:
 						nid = ids[na * sd + k * su + row]
 					else:
 						nid = _id_at(planet, snap, _global_coord(base, d, u, v, na, k, j))
-					# draw a face if the neighbor is air, water, an open doorway, or a
-					# roof slab (so the seabed shows under water, a room shows through
-					# an open door, and a wall/ridge shows past a half-height slab)
-					if nid == Blocks.AIR or nid == Blocks.WATER or nid == Blocks.DOOR_OPEN 							or nid == Blocks.ROOF_SLAB or Blocks.is_slab(nid) 							or Blocks.is_stacked_slab(nid) 							or Blocks.is_stair(Blocks.bottom_of(nid)) 							or Blocks.is_light(Blocks.bottom_of(nid)):
+					var nlow := nid & Blocks.ID_MASK
+					if _SEETHRU[nlow] == 1 and not (
+							_LEAF[nlow] == 1 and _LEAF[oid & Blocks.ID_MASK] == 1):
 						val = oid
 				mask[k + j * CS] = val
 				lmask[k + j * CS] = 0
-				if val != 0:
+				if val != 0 and has_light:
 					lmask[k + j * CS] = int(round(_face_light(snap,
 						_global_coord(base, d, u, v, a, k, j),
 						Vector3i(int(narr[0]), int(narr[1]), int(narr[2]))) * 15.0))

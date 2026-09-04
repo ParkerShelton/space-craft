@@ -140,6 +140,8 @@ func save_game() -> bool:
 			"inv": pl.inv,
 			"active_slot": pl.active_slot,
 			"suit_slot": pl.suit_slot,
+			"known_recipes": pl.known_recipes,
+			"all_known": pl.all_known,
 		}
 	# Time of day travels with the save, so stepping away and coming back does
 	# not snap the world to a different hour.
@@ -157,7 +159,8 @@ func save_game() -> bool:
 	for s in _ships:
 		if is_instance_valid(s) and not s.blocks.is_empty():
 			ship_index[s] = data["ships"].size()
-			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform, "meta": s.block_meta})
+			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform,
+				"meta": s.block_meta, "air": s.air, "charge": s.charge})
 	for st in _stations:
 		if not is_instance_valid(st):
 			continue
@@ -229,6 +232,10 @@ func load_game() -> bool:
 		ship.blocks = sd.get("blocks", {})
 		ship.block_meta = sd.get("meta", {})
 		ship.global_transform = sd.get("xform", Transform3D.IDENTITY)
+		# Ships saved before tanks existed come back full rather than suffocating
+		# their owner the moment the world loads.
+		ship.air = float(sd.get("air", 1.0))
+		ship.charge = float(sd.get("charge", 1.0))
 		ship.rebuild()
 		_ships.append(ship)
 
@@ -269,6 +276,10 @@ func load_game() -> bool:
 		if pd.has("suit_slot"):
 			pl.suit_slot = pd["suit_slot"]
 		pl.active_slot = pd.get("active_slot", 0)
+		# Saves from before the Recipe Book carry no learned set; they keep the
+		# blanket "everything known" rather than losing every recipe.
+		pl.known_recipes = pd.get("known_recipes", {})
+		pl.all_known = bool(pd.get("all_known", true))
 		pl.velocity = Vector3.ZERO
 		pl._refresh_slots()
 	return true

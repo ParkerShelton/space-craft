@@ -41,12 +41,23 @@ var power := 0.0
 var burn_t := 0.0          # seconds left on the current unit of fuel
 var burn_rate := 0.0       # power/sec it is producing while that burns
 
+# Base machines. Both are driven by Planet.update_base, which owns the sealed
+# room they serve -- a Life Support with no room around it has nothing to fill.
+const O2_POWER_RATE := 4.0    # power/sec to keep scrubbing
+const HEAT_POWER_RATE := 6.0  # power/sec to hold a room at 20 C (heater OR cooler)
+var o2 := 0.0                 # 0..1 breathable air in this machine's room
+var warmth := 15.0            # degrees C it is holding its room at
+
 
 static func capacity_of(k: int) -> int:
 	if k == Blocks.GENERATOR:
 		return 6   # a fuel bunker: feed it ore and let it run
 	if k == Blocks.CHEST:
 		return CHEST_SLOTS
+	if k == Blocks.POWER_BAY:
+		return 4   # a rack of batteries
+	if k == Blocks.OXYGEN_PLANT or k == Blocks.HEATER or k == Blocks.COOLER:
+		return 2   # spare filters / elements: no recipes, just somewhere to stash parts
 	if k == Blocks.FORGE:
 		return 16  # a multiblock-built upgrade over the hand-built Smelter
 	if k == Blocks.SHAPER:
@@ -302,8 +313,59 @@ func _tick_generator(delta: float) -> void:
 		return
 
 
+const BATTERY_CAP := 400.0   # power one Battery holds
+const CHARGE_RATE := 45.0    # power/sec a Generator pushes into batteries in it
+const BAY_RATE := 90.0       # power/sec a Power Bay pulls out of them
+const SHIP_POWER := 900.0    # power to fill a ship's charge tank from empty
+const SHIP_AIR_POWER := 700.0  # power to fill its air tank from empty
+
+
+## Batteries sitting in a Generator soak up its output. This is the only way to
+## get power off a planet, so it is deliberately the simplest possible action:
+## drop them in and wait.
+func _tick_batteries(delta: float) -> void:
+	if kind != Blocks.GENERATOR or power <= 0.0:
+		return
+	for slot in storage:
+		if int(slot.get("id", Blocks.AIR)) != Blocks.BATTERY:
+			continue
+		var cap: float = BATTERY_CAP * float(int(slot.get("count", 0)))
+		var held: float = float((slot["props"] as Dictionary).get("charge", 0.0))
+		if held >= cap:
+			continue
+		var moved: float = minf(minf(CHARGE_RATE * delta, cap - held), power)
+		(slot["props"] as Dictionary)["charge"] = held + moved
+		power -= moved
+		return   # one battery at a time, so a stack fills in order
+
+
+## A Power Bay empties batteries into the ship it is mounted on. Charge first --
+## without power the scrubbers stop and the air goes much faster.
+func _tick_power_bay(delta: float) -> void:
+	if kind != Blocks.POWER_BAY:
+		return
+	var sh := get_parent() as Ship
+	if sh == null or (sh.charge >= 1.0 and sh.air >= 1.0):
+		return
+	for slot in storage:
+		if int(slot.get("id", Blocks.AIR)) != Blocks.BATTERY:
+			continue
+		var held: float = float((slot["props"] as Dictionary).get("charge", 0.0))
+		if held <= 0.0:
+			continue
+		var moved: float = minf(BAY_RATE * delta, held)
+		(slot["props"] as Dictionary)["charge"] = held - moved
+		if sh.charge < 1.0:
+			sh.charge = minf(sh.charge + moved / SHIP_POWER, 1.0)
+		else:
+			sh.air = minf(sh.air + moved / SHIP_AIR_POWER, 1.0)
+		return
+
+
 func _process(delta: float) -> void:
 	_tick_generator(delta)
+	_tick_batteries(delta)
+	_tick_power_bay(delta)
 	if _job == "":
 		return
 	_job_t += delta
@@ -359,8 +421,6 @@ func _do_craft(craft: Dictionary) -> void:
 	match out:
 		Blocks.DRILL:
 			cmat["power"] = Blocks.drill_power(props)
-		Blocks.O2_TANK:
-			cmat["o2"] = Blocks.o2_capacity(props)
 		Blocks.SUIT:
 			cmat["resist"] = Blocks.suit_resist(props)
 		Blocks.WEAPON:

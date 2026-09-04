@@ -53,6 +53,9 @@ var machine_cores: Array = []              # Array[Vector3i], saved
 var _world_ref: WorldManager               # for headless machine stations
 var _machines: Dictionary = {}             # controller -> {def, rot, online, missing}
 var _machine_at: Dictionary = {}           # voxel -> controller
+# controller -> Station. Kept OUTSIDE _machines so revalidate_machines() can
+# rebuild the registry without orphaning the node that holds the fuel.
+var _machine_stations: Dictionary = {}
 var surface_noise := FastNoiseLite.new()
 var ore_noise := FastNoiseLite.new()
 
@@ -766,51 +769,92 @@ func _make_ore(orng: RandomNumberGenerator, slot: int, tier: int) -> Dictionary:
 ## Try to assemble a machine whose controller sits at `c`. Returns a result
 ## dictionary describing success or exactly what is wrong, so the caller can
 ## tell the player rather than failing silently.
+## Pattern offsets are authored with Y as "up". On a sphere the local up is
+## whichever face you're standing on, so they're mapped onto that frame here --
+## otherwise a structure would only assemble near the pole where up happens to
+## be world +Y.
+func _pattern_axes(c: Vector3i) -> Array:
+	var up := Vector3i(_axis_of(Vector3(c) + Vector3(0.5, 0.5, 0.5)))
+	if up == Vector3i.ZERO:
+		up = Vector3i(0, 1, 0)
+	var ax := Vector3i(1, 0, 0)
+	if absi(up.x) > 0:
+		ax = Vector3i(0, 1, 0)
+	var az := Vector3i(
+		up.y * ax.z - up.z * ax.y,
+		up.z * ax.x - up.x * ax.z,
+		up.x * ax.y - up.y * ax.x)
+	return [ax, up, az]
+
+
+func _pattern_to_world(off: Vector3i, axes: Array) -> Vector3i:
+	return (axes[0] as Vector3i) * off.x + (axes[1] as Vector3i) * off.y 		+ (axes[2] as Vector3i) * off.z
+
+
 func assemble_machine(c: Vector3i) -> Dictionary:
 	if get_id(c) != Blocks.MACHINE_CORE:
 		return {"ok": false, "reason": "No machine core here"}
+	# Track the closest near-miss across every structure and rotation, so a
+	# build that is nearly right says what is missing instead of the useless
+	# "that isn't a machine".
+	var best_missing := 1 << 30
+	var best_name := ""
+	var best_block := Blocks.AIR
+	var best_def := {}
 	for i in Blocks.STRUCTURES.size():
 		var def: Dictionary = Blocks.STRUCTURES[i]
 		for rot in 4:
 			var built := Blocks.structure_cells(def, rot)
 			var cells: Dictionary = built["cells"]
-			var origin: Vector3i = c - (built["controller"] as Vector3i)
+			var axes := _pattern_axes(c)
+			var origin: Vector3i = c - _pattern_to_world(built["controller"], axes)
 			var missing := 0
 			var first_missing := Blocks.AIR
 			for off in cells:
 				var want: int = cells[off]
-				if get_id(origin + (off as Vector3i)) != want:
+				if get_id(origin + _pattern_to_world(off, axes)) != want:
 					missing += 1
 					if first_missing == Blocks.AIR:
 						first_missing = want
 			if missing == 0:
 				_register_machine(c, def, rot, origin)
 				return {"ok": true, "name": str(def["name"])}
-			# Remember the closest near-miss so the message is useful.
-			if missing <= 3:
-				return {"ok": false, "reason": "%s needs %d more %s" % [
-					str(def["name"]), missing, Blocks.name_of(first_missing)]}
+			if missing < best_missing:
+				best_missing = missing
+				best_name = str(def["name"])
+				best_block = first_missing
+				best_def = def
+	if best_name != "":
+		var what := "empty space" if best_block == Blocks.AIR else Blocks.name_of(best_block)
+		var head := "%s: %d block%s wrong or missing (needs %s)" % [
+			best_name, best_missing, "" if best_missing == 1 else "s", what]
+		# Print the whole pattern, not just the count: with nothing built yet the
+		# count alone tells you nothing, and there is no blueprint screen.
+		return {"ok": false, "reason": head + "
+" + Blocks.structure_diagram(best_def)}
 	return {"ok": false, "reason": "These blocks don't form a machine"}
 
 
 func _register_machine(c: Vector3i, def: Dictionary, rot: int, origin: Vector3i) -> void:
 	var built := Blocks.structure_cells(def, rot)
 	var cells: Dictionary = built["cells"]
+	var axes := _pattern_axes(c)
 	# Reuse Station for storage, jobs and UI, but HEADLESS: the blocks the
 	# player built are the machine, so it must not drop a second body inside
 	# them. Kept across damage so a raid doesn't empty the fuel bunker.
-	var prev: Dictionary = _machines.get(c, {})
-	var st: Station = prev.get("station")
+	var st: Station = _machine_stations.get(c)
 	if st == null or not is_instance_valid(st):
 		st = Station.new()
 		st.headless = true
 		st.configure(int(def["result"]), _world_ref)
 		add_child(st)
 		st.position = Vector3(c) + Vector3(0.5, 0.5, 0.5)
+		_machine_stations[c] = st
 	st.active = true
 	_machines[c] = {"def": def, "rot": rot, "origin": origin, "online": true, "station": st}
 	for off in cells:
-		_machine_at[origin + (off as Vector3i)] = c
+		_machine_at[origin + _pattern_to_world(off, axes)] = c
+	_grid_cache.clear()
 	if not machine_cores.has(c):
 		machine_cores.append(c)
 
@@ -829,11 +873,13 @@ func _machine_block_changed(v: Vector3i) -> void:
 	var built := Blocks.structure_cells(m["def"], int(m["rot"]))
 	var cells: Dictionary = built["cells"]
 	var origin: Vector3i = m["origin"]
+	var axes := _pattern_axes(c)
 	var whole := true
 	for off in cells:
-		if get_id(origin + (off as Vector3i)) != int(cells[off]):
+		if get_id(origin + _pattern_to_world(off, axes)) != int(cells[off]):
 			whole = false
 			break
+	_grid_cache.clear()
 	m["online"] = whole
 	var st: Station = m.get("station")
 	if st != null and is_instance_valid(st):
@@ -848,6 +894,280 @@ func machine_station_at(v: Vector3i) -> Station:
 		return null
 	var st = _machines.get(c, {}).get("station")
 	return st if st != null and is_instance_valid(st) else null
+
+
+# --- power grid --------------------------------------------------------------
+#
+# Machines are wired together with Power Conduit. A generator feeds any machine
+# reachable through a run of conduit, plus anything built flush against it -- so
+# a small base can skip wiring entirely, and a sprawling one runs cable.
+const GRID_MAX := 2500        # conduit cells followed before giving up
+
+var _grid_cache := {}         # controller -> Array[Station] of generators feeding it
+
+## Every voxel belonging to the machine at controller `c`.
+func _machine_cells(c: Vector3i) -> Array:
+	var m: Dictionary = _machines.get(c, {})
+	if m.is_empty():
+		return []
+	var built := Blocks.structure_cells(m["def"], int(m["rot"]))
+	var axes := _pattern_axes(c)
+	var origin: Vector3i = m["origin"]
+	var out: Array = []
+	for off in (built["cells"] as Dictionary):
+		out.append(origin + _pattern_to_world(off, axes))
+	return out
+
+
+## The online generators feeding the machine at `c`, via conduit or direct contact.
+func grid_generators(c: Vector3i) -> Array:
+	if _grid_cache.has(c):
+		return _grid_cache[c]
+	var ctrls := {}
+	var wires := {}
+	var q: Array[Vector3i] = []
+	for cell in _machine_cells(c):
+		for n in _NEIGH6:
+			var a: Vector3i = (cell as Vector3i) + n
+			if Blocks.bottom_of(get_id(a)) == Blocks.WIRE:
+				if not wires.has(a):
+					wires[a] = true
+					q.append(a)
+			else:
+				var m = _machine_at.get(a)
+				if m != null:
+					ctrls[m] = true
+	var head := 0
+	while head < q.size():
+		var w: Vector3i = q[head]
+		head += 1
+		for n in _NEIGH6:
+			var a: Vector3i = w + n
+			if Blocks.bottom_of(get_id(a)) == Blocks.WIRE:
+				if not wires.has(a) and wires.size() < GRID_MAX:
+					wires[a] = true
+					q.append(a)
+			else:
+				var m = _machine_at.get(a)
+				if m != null:
+					ctrls[m] = true
+	var gens: Array = []
+	for k in ctrls:
+		var rec: Dictionary = _machines.get(k, {})
+		if not bool(rec.get("online", false)):
+			continue
+		var st: Station = rec.get("station")
+		if st != null and is_instance_valid(st) and st.kind == Blocks.GENERATOR:
+			gens.append(st)
+	_grid_cache[c] = gens
+	return gens
+
+
+# --- bases -------------------------------------------------------------------
+#
+# A BASE is a sealed pocket of air you built: flood-fill from where you stand
+# through open cells, and if it closes without running away into the open world,
+# you are indoors. This is the check the Climate Unit deliberately skipped ("no
+# cheap way to flood-fill is this voxel structure enclosed") -- it is affordable
+# because it only ever runs for the ONE room the player is standing in, and only
+# when they cross into a new cell.
+const ROOM_MAX_CELLS := 900    # bigger than this and you are outdoors, not in a room
+const ROOM_RECHECK := 0.35     # seconds between re-floods while walking around
+const ROOM_GIVEUP := 2.0       # ...but much slower once we know you are outside
+const BASE_NEAR := 26          # only look for a room this close to a real machine
+
+var _room: Dictionary = {}     # cached flood-fill result for the player's room
+var _room_at := Vector3i(0, -99999, 0)
+var _room_age := 999.0
+var _room_ctrls: Array = []    # machine controllers bordering _room, found with it
+var _room_scan_at := Vector3i(0, -99999, 0)   # where the last flood was attempted
+var _room_temp := 1e9          # the room's own temperature; 1e9 = not established yet
+
+const REGULATED_TEMP := 20.0   # what a powered Heater or Cooler holds a room at
+
+## Does this block hold air in? Leaves and open doorways plainly do not, and
+## water is not a wall either.
+func _seals(id: int) -> bool:
+	if id == Blocks.AIR or id == Blocks.DOOR_OPEN or id == Blocks.WATER:
+		return false
+	var low := Blocks.bottom_of(id)
+	return not (Blocks.is_leaf(low) or Blocks.is_wire(low))
+
+
+## Is there any assembled machine close enough for this to be somebody's base?
+##
+## This gate exists for SPEED, and it is the whole reason walking is smooth: a
+## flood fill out in the open runs to the cell cap and costs thousands of
+## terrain samples, which is tens of milliseconds every time. A base has
+## machines in it by definition -- an empty box is not a base and would not keep
+## you alive anyway -- so out in the world, and in caves, the fill never runs.
+func _near_base_machine(v: Vector3i) -> bool:
+	for c in machine_cores:
+		var d: Vector3i = (c as Vector3i) - v
+		if absi(d.x) <= BASE_NEAR and absi(d.y) <= BASE_NEAR and absi(d.z) <= BASE_NEAR:
+			return true
+	return false
+
+
+## Flood-fill the open space containing `start`. Returns the set of cells, or an
+## empty dict if the space runs past ROOM_MAX_CELLS (i.e. it is the outdoors).
+func _flood_room(start: Vector3i) -> Dictionary:
+	if _seals(get_id(start)):
+		return {}
+	var seen := {start: true}
+	var queue: Array[Vector3i] = [start]
+	var head := 0
+	while head < queue.size():
+		var c: Vector3i = queue[head]
+		head += 1
+		for n in _NEIGH6:
+			var q: Vector3i = c + n
+			if seen.has(q):
+				continue
+			if _seals(get_id(q)):
+				continue
+			seen[q] = true
+			if seen.size() > ROOM_MAX_CELLS:
+				return {}   # escaped: this is open ground, not a room
+			queue.append(q)
+	return seen
+
+
+## Advance and report the base the player is standing in. Everything a base does
+## is only observable from inside it, so the machines are ticked from here rather
+## than each running its own simulation -- that keeps the cost to one room.
+func update_base(v: Vector3i, delta: float) -> Dictionary:
+	_room_age += delta
+	# Throttled hard: re-flood when you have MOVED and the timer is up, or once a
+	# second regardless so a wall broken while you stand still is still noticed.
+	# Without the timer guard a sprinting player re-floods many times a second.
+	# Once we know you are outside, back right off: re-checking every third of a
+	# second while you walk around your own base was the stutter.
+	var gap: float = ROOM_RECHECK if not _room.is_empty() else ROOM_GIVEUP
+	var moved: bool = (v - _room_scan_at).length_squared() >= 9   # ~3 blocks
+	if _room_age >= gap and (moved or _room_age >= 3.0):
+		_room_at = v
+		_room_scan_at = v
+		_room_age = 0.0
+		var was := _room.size()
+		_room = _flood_room(v) if _near_base_machine(v) else {}
+		if _room.size() != was:
+			_room_temp = 1e9   # different room (or none): start from outside again
+		# Found once with the room rather than re-walked every tick: this scan is
+		# 6 lookups per cell, and the room only changes when the fill does.
+		var found := {}
+		for c in _room:
+			for n in _NEIGH6:
+				var m = _machine_at.get((c as Vector3i) + n)
+				if m != null:
+					found[m] = true
+		_room_ctrls = found.keys()
+	var out := {"sealed": false, "power": 0.0, "power_max": 0.0,
+		"o2": 0.0, "temp": ambient_temp(), "gen": false, "ls": false, "heater": false,
+		"cells": _room.size()}
+	if _room.is_empty():
+		return out
+	out["sealed"] = true
+	# Which machines does this room touch? A machine counts as part of the base
+	# when any of its blocks borders the sealed volume -- you built it into the
+	# wall, so it is yours.
+	var gens: Array = []
+	var ls: Station = null
+	var heater: Station = null
+	var cooler: Station = null
+	var ls_c := Vector3i.ZERO
+	var heater_c := Vector3i.ZERO
+	var cooler_c := Vector3i.ZERO
+	var gset := {}
+	for c in _room_ctrls:
+		var rec: Dictionary = _machines.get(c, {})
+		if not bool(rec.get("online", false)):
+			continue
+		var st: Station = rec.get("station")
+		if st == null or not is_instance_valid(st):
+			continue
+		if st.kind == Blocks.GENERATOR:
+			gset[st] = true
+		else:
+			# A consumer is powered by whatever its CONDUIT reaches, which may be
+			# a generator in another room entirely.
+			for g in grid_generators(c):
+				gset[g] = true
+			if st.kind == Blocks.OXYGEN_PLANT:
+				ls = st
+				ls_c = c
+			elif st.kind == Blocks.HEATER:
+				heater = st
+				heater_c = c
+			elif st.kind == Blocks.COOLER:
+				cooler = st
+				cooler_c = c
+	gens = gset.keys()
+	for g in gens:
+		out["power"] += (g as Station).power
+		out["power_max"] += Station.POWER_MAX
+	out["gen"] = not gens.is_empty()
+	out["ls"] = ls != null
+	out["heater"] = heater != null
+	out["cooler"] = cooler != null
+	# Each consumer draws down its OWN grid, so an unwired machine sitting in a
+	# powered base genuinely does nothing until you run conduit to it.
+	var draw := func(cc2: Vector3i, amount: float) -> bool:
+		for g in grid_generators(cc2):
+			var st: Station = g
+			if st.power >= amount:
+				st.power -= amount
+				return true
+		return false
+	if ls != null:
+		# A bigger room takes proportionally longer to fill, so a cathedral is a
+		# real commitment and a cupboard is quick.
+		var rate: float = 0.55 * (200.0 / maxf(float(_room.size()), 60.0))
+		if draw.call(ls_c, Station.O2_POWER_RATE * delta):
+			ls.o2 = minf(ls.o2 + rate * delta, 1.0)
+		else:
+			ls.o2 = maxf(ls.o2 - 0.05 * delta, 0.0)
+		out["o2"] = ls.o2
+	# Four walls are NOT shelter. A sealed room sits at whatever the planet is
+	# doing to it; only a powered regulator moves it off ambient. Each pushes one
+	# way only, so a Heater is no help on a world that is cooking you -- that
+	# needs a Cooler, and vice versa.
+	var target := ambient_temp()
+	if heater != null and draw.call(heater_c, Station.HEAT_POWER_RATE * delta):
+		target = maxf(target, REGULATED_TEMP)
+	if cooler != null and draw.call(cooler_c, Station.HEAT_POWER_RATE * delta):
+		target = minf(target, REGULATED_TEMP)
+	if _room_temp > 1e8:
+		_room_temp = ambient_temp()
+	_room_temp = move_toward(_room_temp, target, 6.0 * delta)
+	out["temp"] = _room_temp
+	return out
+
+
+## What it is like outside right now, in degrees C.
+func ambient_temp() -> float:
+	var base := 15.0
+	if hazard == "cold":
+		base = -45.0
+	elif hazard == "heat":
+		base = 62.0
+	if has_atmosphere:
+		# Night is colder than noon, which is what makes a Heater worth building
+		# on an otherwise mild world.
+		base += lerpf(-12.0, 6.0, clampf(sin(day_phase * TAU) * 0.5 + 0.5, 0.0, 1.0))
+	return base
+
+
+## The name of the intact machine covering `v` (""  if there is none, or if it
+## is damaged -- broken structures read as their individual blocks again).
+func machine_name_at(v: Vector3i) -> String:
+	var c = _machine_at.get(v)
+	if c == null:
+		return ""
+	var m: Dictionary = _machines.get(c, {})
+	if not bool(m.get("online", false)):
+		return ""
+	return str((m["def"] as Dictionary)["name"])
 
 
 ## Is the machine whose footprint covers `v` currently intact?
@@ -868,6 +1188,12 @@ func revalidate_machines() -> void:
 		if r.get("ok", false):
 			keep.append(c)
 	machine_cores = keep
+	for c in _machine_stations.keys():
+		if not keep.has(c):
+			var dead: Station = _machine_stations[c]
+			if dead != null and is_instance_valid(dead):
+				dead.queue_free()
+			_machine_stations.erase(c)
 
 
 func ore_def(block_id: int) -> Dictionary:
@@ -1924,8 +2250,20 @@ func process_load_queue(_budget: int) -> int:
 
 	# 2) re-mesh dirty (edited / flowed) chunks FIRST -- player edits and flowing
 	# water must update promptly, not wait behind chunk streaming
-	for cc in _dirty.keys():
-		if _inflight.size() >= MAX_INFLIGHT:
+	var dirty_ccs: Array = _dirty.keys()
+	if not _edit_priority.is_empty():
+		# Edits before flowing water: a dict's key order is arbitrary, so without
+		# this a click can wait behind a lake that is still settling.
+		var ef: Array = []
+		var er: Array = []
+		for cc in dirty_ccs:
+			if _edit_priority.has(cc):
+				ef.append(cc)
+			else:
+				er.append(cc)
+		dirty_ccs = ef + er
+	for cc in dirty_ccs:
+		if _inflight.size() >= MAX_INFLIGHT and not _edit_priority.has(cc):
 			break
 		if _inflight.has(cc):
 			continue  # already meshing; stays dirty and re-dispatches next frame
@@ -2032,7 +2370,61 @@ func load_edits(e: Dictionary) -> void:
 		_dirty[cc] = true
 
 
+## A player edit must show up NOW, so it does not go through the normal
+## dirty-then-dispatch-next-tick path. Three frames of lag between the click and
+## the block appearing is small on paper and very obvious in the hand.
+##
+## Dispatched straight away (ignoring MAX_INFLIGHT -- an edit touches at most 7
+## chunks, and making it queue behind terrain streaming is exactly the delay
+## being removed), then collected in _process the moment the worker is done.
+func _edit_remesh(cc: Vector3i) -> void:
+	if not loaded_chunks.has(cc):
+		return
+	_edit_priority[cc] = true
+	if _inflight.has(cc):
+		# Already meshing against older data -- can't start a second task for the
+		# same chunk (they'd race to write _ready_data), so fall back to dirty.
+		_dirty[cc] = true
+		return
+	_dirty.erase(cc)
+	var snap := _edits_snapshot(cc)
+	# HIGH PRIORITY: during exploration the pool is full of streaming builds, and
+	# a normal-priority edit task queues behind them -- which is what made
+	# building while walking feel so much worse than building standing still.
+	_inflight[cc] = WorkerThreadPool.add_task(
+		Callable(self, "_build_task").bind(cc, snap, _wlev_snapshot(snap)), true)
+
+
+## Turn finished EDIT meshes into geometry as soon as they are ready, rather than
+## waiting for the next physics tick's process_load_queue.
+func _apply_ready_edits() -> void:
+	if _edit_priority.is_empty():
+		return
+	for cc in _edit_priority.keys():
+		_ready_mutex.lock()
+		var has := _ready_data.has(cc)
+		var data: Dictionary = _ready_data.get(cc, {})
+		if has:
+			_ready_data.erase(cc)
+		_ready_mutex.unlock()
+		if not has:
+			continue
+		if _inflight.has(cc):
+			WorkerThreadPool.wait_for_task_completion(_inflight[cc])
+			_inflight.erase(cc)
+		var node = loaded_chunks.get(cc)
+		if node != null and is_instance_valid(node):
+			node.apply_mesh_data(data)
+		_edit_priority.erase(cc)
+		# A chunk re-dirtied while it was meshing (a fast second click) gets its
+		# follow-up task started immediately instead of next tick.
+		if _dirty.has(cc):
+			_dirty.erase(cc)
+			_edit_remesh(cc)
+
+
 func set_block(v: Vector3i, id: int) -> void:
+	var was := get_id(v)
 	# A built machine only works while every one of its blocks is present, so
 	# any edit inside a footprint re-checks it (see _machine_block_changed).
 	if not _machine_at.is_empty() and _machine_at.has(v):
@@ -2041,15 +2433,17 @@ func set_block(v: Vector3i, id: int) -> void:
 	if not _edits_by_chunk.has(cc):
 		_edits_by_chunk[cc] = {}
 	_edits_by_chunk[cc][v] = id
-	_rebuild_if_loaded(cc)
+	if Blocks.bottom_of(id) == Blocks.WIRE or Blocks.bottom_of(was) == Blocks.WIRE:
+		_grid_cache.clear()   # the conduit network just changed shape
+	_edit_remesh(cc)
 	# a change on a chunk border also changes the neighbor's visible faces
 	var local := v - cc * CS
-	if local.x == 0: _rebuild_if_loaded(cc + Vector3i(-1, 0, 0))
-	if local.x == CS - 1: _rebuild_if_loaded(cc + Vector3i(1, 0, 0))
-	if local.y == 0: _rebuild_if_loaded(cc + Vector3i(0, -1, 0))
-	if local.y == CS - 1: _rebuild_if_loaded(cc + Vector3i(0, 1, 0))
-	if local.z == 0: _rebuild_if_loaded(cc + Vector3i(0, 0, -1))
-	if local.z == CS - 1: _rebuild_if_loaded(cc + Vector3i(0, 0, 1))
+	if local.x == 0: _edit_remesh(cc + Vector3i(-1, 0, 0))
+	if local.x == CS - 1: _edit_remesh(cc + Vector3i(1, 0, 0))
+	if local.y == 0: _edit_remesh(cc + Vector3i(0, -1, 0))
+	if local.y == CS - 1: _edit_remesh(cc + Vector3i(0, 1, 0))
+	if local.z == 0: _edit_remesh(cc + Vector3i(0, 0, -1))
+	if local.z == CS - 1: _edit_remesh(cc + Vector3i(0, 0, 1))
 
 
 ## Planet doors are placed as TWO stacked voxels (see Player._edit_block) so they
@@ -2167,6 +2561,7 @@ func _water_target(c: Vector3i) -> int:
 
 
 func _process(delta: float) -> void:
+	_apply_ready_edits()
 	if water_style != WATER_LIQUID or _water_active.is_empty():
 		return
 	_flow_accum += delta

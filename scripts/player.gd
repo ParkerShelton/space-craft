@@ -35,7 +35,6 @@ const SUFFOCATE_DMG := 7.0        # health/sec once oxygen hits zero
 const HEALTH_REGEN := 3.0         # health/sec while safe and oxygenated
 var health := MAX_HEALTH
 var oxygen := MAX_OXYGEN
-var _o2_bonus := 0.0          # extra oxygen capacity from the best O2 Tank carried
 var _hazard_resist := 0.0     # 0..0.9 hazard-damage reduction from the best Suit carried
 
 # --- melee combat ---
@@ -81,7 +80,7 @@ var inv: Array = []
 var active_slot := 0              # which slot we place from
 var inv_open := false
 # dedicated 2-slot-tall equip slot: a Suit only protects you once it's WORN here,
-# not just carried in the general grid (unlike the Drill/O2 Tank, which stay
+# not just carried in the general grid (unlike the Drill, which stays
 # passively equipped from anywhere). Same slot shape as an `inv` entry.
 var suit_slot: Dictionary = {"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}}
 # mining (hold left-click to break; harder blocks take longer)
@@ -132,7 +131,41 @@ var _toast_time := 0.0
 var _hp_fill: ColorRect            # health bar fill
 var _o2_fill: ColorRect            # oxygen bar fill
 var _hazard_label: Label           # "FREEZING"/"OVERHEATING" warning
+var base_status: Dictionary = {}   # the sealed base you are standing in, {} outdoors
+var _base_panel: Panel             # power/oxygen/temp readout, only while indoors
+var _base_title: Label
+var _base_fills: Array[ColorRect] = []
+var _base_values: Array[Label] = []
 var _inv_panel: Control            # full inventory overlay (toggled with E)
+var _book_panel: Panel             # recipe book (toggled with B)
+var _book_vbox: VBoxContainer
+var _book_search: LineEdit
+var _book_empty: Label
+var _book_query := ""
+var _book_src := "All"
+var _book_src_btns: Array = []
+var book_open := false
+
+# Which recipes you have learned. Progression will gate this later -- unlocking
+# is already a matter of remembering a stable key, so it needs no new plumbing.
+# Until then `all_known` is on and the book shows everything.
+var known_recipes: Dictionary = {}
+var all_known := true
+
+
+func knows_recipe(key: String) -> bool:
+	return all_known or known_recipes.has(key)
+
+
+## Learn a recipe. Returns true if it was actually new, so callers can announce
+## it without having to check first.
+func learn_recipe(key: String) -> bool:
+	if known_recipes.has(key):
+		return false
+	known_recipes[key] = true
+	if _book_panel != null and _book_panel.visible:
+		_rebuild_book()
+	return true
 var _hotbar_cells: Array = []      # always-visible hotbar slot views
 var _grid_cells: Array = []        # full-inventory slot buttons
 var _equip_cell: Dictionary = {}   # the 2-slot-tall Suit equip slot view
@@ -412,7 +445,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_look += event.relative
 	elif event is InputEventMouseButton and event.pressed:
-		if inv_open or _station_open != null:
+		if inv_open or book_open or _station_open != null:
 			return  # a panel is open: clicks go to the UI
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -424,6 +457,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			var st := _looked_at_station()
 			if st != null and not eva:
 				_open_station(st)
+			elif _try_assemble_machine():
+				pass
 			elif _try_toggle_door():
 				pass
 			else:
@@ -436,6 +471,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.keycode == KEY_ESCAPE:
 			if _station_open != null:
 				_close_station()
+			elif book_open:
+				_toggle_book()
 			elif inv_open:
 				_toggle_inventory()
 			elif _starmap_panel != null and _starmap_panel.visible:
@@ -482,6 +519,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			# precisely what will be placed.
 			_stair_state = (_stair_state + 1) % Blocks.STAIR_STATES
 			_toast("Stairs: %s" % Blocks.stair_state_name(_stair_state))
+		elif event.keycode == KEY_B:
+			if not (_book_search != null and _book_search.has_focus()):
+				_toggle_book()
 		elif event.keycode == KEY_G:
 			if aboard == null and not eva:
 				_start_ship()
@@ -493,6 +533,161 @@ func _unhandled_input(event: InputEvent) -> void:
 func _cycle_slot(dir: int) -> void:
 	active_slot = (active_slot + dir + HOTBAR_SLOTS) % HOTBAR_SLOTS
 	_refresh_slots()
+
+
+func _toggle_book() -> void:
+	book_open = not book_open
+	if _book_panel != null:
+		_book_panel.visible = book_open
+		if book_open:
+			_rebuild_book()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if book_open else Input.MOUSE_MODE_CAPTURED
+
+
+## The Recipe Book: everything you know how to make, in one place. The game
+## teaches almost none of this anywhere else -- multiblock patterns especially
+## were unguessable without it.
+func _build_book_ui(layer: CanvasLayer) -> void:
+	_book_panel = Panel.new()
+	_book_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_book_panel.custom_minimum_size = Vector2(620, 560)
+	_book_panel.size = _book_panel.custom_minimum_size
+	_book_panel.position = -_book_panel.size * 0.5
+	_book_panel.visible = false
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.06, 0.07, 0.10, 0.96)
+	sb.border_color = Color(0.40, 0.52, 0.62, 0.9)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(5)
+	_book_panel.add_theme_stylebox_override("panel", sb)
+	layer.add_child(_book_panel)
+
+	var title := Label.new()
+	title.position = Vector2(14, 10)
+	title.text = "Recipe Book"
+	title.add_theme_font_size_override("font_size", 18)
+	_book_panel.add_child(title)
+	var hint := Label.new()
+	hint.position = Vector2(14, 34)
+	hint.text = "B to close"
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.modulate = Color(1, 1, 1, 0.5)
+	_book_panel.add_child(hint)
+
+	_book_search = LineEdit.new()
+	_book_search.position = Vector2(320, 12)
+	_book_search.custom_minimum_size = Vector2(286, 28)
+	_book_search.size = _book_search.custom_minimum_size
+	_book_search.placeholder_text = "Search"
+	_book_search.text_changed.connect(func(t):
+		_book_query = t.to_lower()
+		_rebuild_book())
+	_book_panel.add_child(_book_search)
+
+	# One filter per place a recipe can be made, built from the data so a new
+	# station or structure shows up here without touching this function.
+	var srcs := ["All"]
+	for r in Blocks.all_recipes():
+		if not srcs.has(str(r["src"])):
+			srcs.append(str(r["src"]))
+	var fx := 14.0
+	var fy := 56.0
+	for srcname in srcs:
+		var b := Button.new()
+		b.toggle_mode = true
+		b.text = srcname
+		b.add_theme_font_size_override("font_size", 12)
+		b.position = Vector2(fx, fy)
+		b.button_pressed = srcname == _book_src
+		b.pressed.connect(func():
+			_book_src = srcname
+			_rebuild_book())
+		_book_panel.add_child(b)
+		_book_src_btns.append({"btn": b, "src": srcname})
+		fx += b.get_minimum_size().x + 34.0
+		if fx > 470.0:
+			fx = 14.0
+			fy += 30.0
+
+	var scroll := ScrollContainer.new()
+	scroll.position = Vector2(12, fy + 36.0)
+	scroll.custom_minimum_size = Vector2(596, 560.0 - fy - 48.0)
+	scroll.size = scroll.custom_minimum_size
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_book_panel.add_child(scroll)
+	_book_vbox = VBoxContainer.new()
+	_book_vbox.custom_minimum_size = Vector2(580, 0)
+	scroll.add_child(_book_vbox)
+	_book_empty = Label.new()
+	_book_empty.position = Vector2(16, fy + 44.0)
+	_book_empty.add_theme_font_size_override("font_size", 13)
+	_book_empty.modulate = Color(1, 1, 1, 0.6)
+	_book_panel.add_child(_book_empty)
+
+
+func _rebuild_book() -> void:
+	if _book_vbox == null:
+		return
+	for c in _book_vbox.get_children():
+		c.queue_free()
+	for e in _book_src_btns:
+		e["btn"].button_pressed = e["src"] == _book_src
+	var shown := 0
+	for rec in Blocks.all_recipes():
+		if not knows_recipe(str(rec["key"])):
+			continue
+		if _book_src != "All" and str(rec["src"]) != _book_src:
+			continue
+		var name := Blocks.name_of(int(rec["out"]))
+		var needs := Blocks.recipe_needs(rec)
+		if _book_query != "" and not (name.to_lower().contains(_book_query)
+				or needs.to_lower().contains(_book_query)
+				or str(rec["src"]).to_lower().contains(_book_query)):
+			continue
+		shown += 1
+		var row := PanelContainer.new()
+		var rsb := StyleBoxFlat.new()
+		rsb.bg_color = Color(1, 1, 1, 0.04)
+		rsb.set_corner_radius_all(4)
+		rsb.content_margin_left = 10
+		rsb.content_margin_right = 10
+		rsb.content_margin_top = 7
+		rsb.content_margin_bottom = 7
+		row.add_theme_stylebox_override("panel", rsb)
+		var vb := VBoxContainer.new()
+		row.add_child(vb)
+		var head := Label.new()
+		var qty := "" if int(rec["n"]) == 1 else " x%d" % int(rec["n"])
+		head.text = "%s%s" % [name, qty]
+		head.add_theme_font_size_override("font_size", 15)
+		head.modulate = Color(0.88, 0.94, 1.0)
+		vb.add_child(head)
+		var where := Label.new()
+		where.text = str(rec["src"])
+		where.add_theme_font_size_override("font_size", 11)
+		where.modulate = Color(0.62, 0.80, 0.95)
+		vb.add_child(where)
+		# A multiblock has no ingredient list -- it is the pattern -- so the
+		# materials line would just say so at length.
+		var mats := Label.new()
+		mats.visible = str(rec["diagram"]) == ""
+		mats.text = needs
+		mats.add_theme_font_size_override("font_size", 12)
+		mats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		mats.custom_minimum_size = Vector2(548, 0)
+		mats.modulate = Color(1, 1, 1, 0.75)
+		vb.add_child(mats)
+		if str(rec["diagram"]) != "":
+			# Multiblocks are the reason this screen exists: the pattern is
+			# shown in full, monospaced, so it can actually be copied.
+			var dg := Label.new()
+			dg.text = str(rec["diagram"])
+			dg.add_theme_font_size_override("font_size", 12)
+			dg.add_theme_color_override("font_color", Color(0.98, 0.86, 0.58))
+			vb.add_child(dg)
+		_book_vbox.add_child(row)
+	_book_empty.text = "" if shown > 0 else "Nothing matches that."
+	_book_empty.visible = shown == 0
 
 
 func _toggle_inventory() -> void:
@@ -1087,12 +1282,39 @@ func _in_safe_ship() -> bool:
 	return false
 
 
+## The base the player is standing in, or {} outdoors. Refreshed once per
+## survival tick so everything downstream reads one consistent snapshot.
+func _update_base(delta: float) -> void:
+	base_status = {}
+	if world == null or piloting != null or aboard != null or eva:
+		return
+	var p := world.nearest_planet(global_position)
+	if p == null or p.altitude(global_position) > 300.0:
+		return
+	base_status = p.update_base(p.world_to_voxel(global_position + Vector3(0, 0.2, 0)), delta)
+	if not bool(base_status.get("sealed", false)):
+		base_status = {}
+
+
+## Is the base you are in actually keeping you alive? A sealed room only counts
+## once its Life Support has put real air in it.
+func base_breathable() -> bool:
+	return float(base_status.get("o2", 0.0)) >= 0.15
+
+
+func base_safe_temp() -> bool:
+	var t := float(base_status.get("temp", -999.0))
+	return t > 0.0 and t < 45.0
+
+
 func _has_air() -> bool:
 	if _in_safe_ship():
 		return true  # sealed ship with life support
 	var up := global_transform.basis.y
 	if _in_water(global_position + up * 0.7):
 		return false  # head underwater
+	if base_breathable():
+		return true   # your own sealed, life-supported base
 	if world == null:
 		return false
 	var p := world.nearest_planet(global_position)
@@ -1122,6 +1344,8 @@ func _near_climate_unit() -> bool:
 func _hazard_dps() -> float:
 	if _in_safe_ship() or _near_climate_unit() or world == null:
 		return 0.0
+	if base_safe_temp():
+		return 0.0   # indoors, and the room is being held at a survivable temperature
 	var p := world.nearest_planet(global_position)
 	if p == null or p.hazard_dps <= 0.0:
 		return 0.0
@@ -1133,6 +1357,8 @@ func _hazard_dps() -> float:
 func _current_hazard() -> String:
 	if _in_safe_ship() or _near_climate_unit() or world == null:
 		return ""
+	if base_safe_temp():
+		return ""
 	var p := world.nearest_planet(global_position)
 	if p == null or p.hazard_dps <= 0.0 or p.altitude(global_position) > HAZARD_RANGE:
 		return ""
@@ -1141,16 +1367,26 @@ func _current_hazard() -> String:
 
 func _life_support_text(ship: Ship) -> String:
 	var st := ship.get_status()
-	if st["habitable"]:
-		return "Life support: OK"
 	if not st["life_support"]:
 		return "NO LIFE SUPPORT (craft one)"
 	if not st["sealed"]:
 		return "CABIN NOT SEALED"
-	return "Life support offline"
+	var air := float(st["air"])
+	var chg := float(st["charge"])
+	if air <= 0.0:
+		return "AIR TANK EMPTY — refill at a base"
+	var tanks := "Air %d%%  Power %d%%" % [int(air * 100.0), int(chg * 100.0)]
+	if air < 0.25 or chg < 0.25:
+		return "LOW — " + tanks
+	return "Life support: " + tanks
 
 
 func _process_survival(delta: float) -> void:
+	_update_base(delta)
+	# A ship only burns its tanks while you are actually living in it.
+	var ride: Ship = piloting if piloting != null else aboard
+	if ride != null and is_instance_valid(ride):
+		ride.consume_life_support(delta)
 	var air := _has_air()
 	var hz := _hazard_dps()
 	if air:
@@ -1305,7 +1541,12 @@ func _move_input() -> Vector2:
 func _raycast_voxel() -> Dictionary:
 	_ray.force_raycast_update()
 	if not _ray.is_colliding():
-		return {}
+		# Nothing SOLID under the crosshair -- but non-collidable blocks (leaves,
+		# open doors) are still real blocks you should be able to target. Against
+		# open sky there is no collider at all, which used to mean a canopy could
+		# only be aimed at where solid ground happened to line up behind it.
+		# March the voxel grid anyway, on whatever body the player is at.
+		return _dda_no_collider()
 	var collider := _ray.get_collider()
 	var hit := _ray.get_collision_point()
 	var origin := _camera.global_position
@@ -1324,7 +1565,23 @@ func _raycast_voxel() -> Dictionary:
 	return {}
 
 
-func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: String) -> Dictionary:
+## Fallback for when the physics ray finds nothing: march the voxel grid of the
+## body the player is on, so non-collidable blocks can still be aimed at.
+func _dda_no_collider() -> Dictionary:
+	if world == null or _camera == null:
+		return {}
+	var origin := _camera.global_position
+	var dir := -_camera.global_transform.basis.z
+	if aboard != null:
+		return _dda(aboard, origin, dir, origin + dir, "ship", REACH)
+	var planet := world.nearest_planet(origin)
+	if planet == null:
+		return {}
+	return _dda(planet, origin, dir, origin + dir, "planet", REACH)
+
+
+func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: String,
+		max_dist := 0.0) -> Dictionary:
 	# march in the object's local voxel space (planets are axis-aligned; ships rotate)
 	var ld: Vector3 = (obj.global_transform.basis.inverse() * dir_w).normalized()
 	# march from the camera (not the surface hit) so an open door -- which has no
@@ -1338,7 +1595,12 @@ func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: 
 	var tdelta := Vector3(_tdelta(ld.x), _tdelta(ld.y), _tdelta(ld.z))
 	var normal := Vector3i.ZERO
 	var prev := v
+	# Distance marched so far. Only used by the no-collider fallback, where
+	# nothing else bounds the march to REACH the way the physics ray does.
+	var travelled := 0.0
 	for i in steps:
+		if max_dist > 0.0 and travelled > max_dist:
+			break
 		var id: int = obj.get_id(v)
 		if id != Blocks.AIR and id != Blocks.WATER:
 			# Partial-height blocks only fill part of their cell, so marching
@@ -1346,17 +1608,26 @@ func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: 
 			# what you can see. Aiming just over a slab's top surface used to
 			# register as entering the cube's SIDE, which put the next slab
 			# beside it instead of on top. Test the real box instead.
-			var box := _partial_box(obj, v, id, kind)
-			if box.is_empty():
+			var boxes := _shape_boxes_at(obj, v, id, kind)
+			if boxes.is_empty():
 				return {"hit": true, "kind": kind, "obj": obj, "voxel": v,
 					"place": prev, "normal": normal, "id": id}
-			var bx := _ray_box(start, ld, box["lo"], box["hi"])
-			if bx["hit"]:
-				var n: Vector3i = bx["normal"]
+			# A shape can be several boxes (a stair's two steps, a conduit's
+			# arms). Take the one the ray reaches FIRST, or its entry face is
+			# whichever box happened to be listed first.
+			var best_t := INF
+			var best_n := Vector3i.ZERO
+			for b in boxes:
+				var bx := _ray_box(start, ld, b[0], b[1])
+				if bx["hit"] and float(bx["t"]) < best_t:
+					best_t = float(bx["t"])
+					best_n = bx["normal"]
+			if best_t < INF:
 				return {"hit": true, "kind": kind, "obj": obj, "voxel": v,
-					"place": v + n, "normal": n, "id": id}
+					"place": v + best_n, "normal": best_n, "id": id}
 			# Ray passed through the empty part of the cell -- keep marching.
 		prev = v
+		travelled = minf(tmax.x, minf(tmax.y, tmax.z))
 		if tmax.x <= tmax.y and tmax.x <= tmax.z:
 			v.x += step.x
 			tmax.x += tdelta.x
@@ -1375,25 +1646,29 @@ func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: 
 ## The solid box of a partial-height block, in the object's local space.
 ## Returns {} for anything that fills its whole cell (so the caller keeps the
 ## cheap whole-cube path).
-func _partial_box(obj: Object, v: Vector3i, id: int, kind: String) -> Dictionary:
+## The real solid parts of a cell, in the object's local space -- empty for a
+## plain full cube, which takes the cheap path instead.
+##
+## This comes from Chunk.shape_boxes, the same definition the mesher and the
+## outline use, so what you can aim at is exactly what you can see. Conduit is
+## why this had to stop being a single box: a wire cell is mostly empty air, and
+## treating it as a cube meant you could never aim past one to wire the next
+## face of the same block.
+func _shape_boxes_at(obj: Object, v: Vector3i, id: int, kind: String) -> Array:
 	if kind != "planet":
-		return {}
+		return []
 	# A stacked pair fills the cell between them, so it behaves as a full block.
 	if Blocks.is_stacked_slab(id):
-		return {}
-	if not Blocks.is_slab(id) and id != Blocks.ROOF_SLAB:
-		return {}
+		return []
+	var low := Blocks.bottom_of(id)
+	if not (Blocks.is_slab(low) or low == Blocks.ROOF_SLAB
+			or Blocks.is_stair(low) or low == Blocks.WIRE):
+		return []
 	var up: Vector3 = (obj as Planet)._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
-	var lo := Vector3(v)
-	var hi := lo + Vector3.ONE
-	var h := 0.5
-	if up.x > 0.5: hi.x = lo.x + h
-	elif up.x < -0.5: lo.x = hi.x - h
-	elif up.y > 0.5: hi.y = lo.y + h
-	elif up.y < -0.5: lo.y = hi.y - h
-	elif up.z > 0.5: hi.z = lo.z + h
-	elif up.z < -0.5: lo.z = hi.z - h
-	return {"lo": lo, "hi": hi}
+	var out: Array = []
+	for b in Chunk.shape_boxes(id, up):
+		out.append([Vector3(v) + (b[0] as Vector3), Vector3(v) + (b[1] as Vector3)])
+	return out
 
 
 ## Slab-method ray/AABB test. Returns {hit, normal}, where normal points back
@@ -1409,7 +1684,7 @@ func _ray_box(o: Vector3, d: Vector3, lo: Vector3, hi: Vector3) -> Dictionary:
 		var h: float = hi[i]
 		if absf(di) < 1e-9:
 			if o[i] < l or o[i] > h:
-				return {"hit": false, "normal": Vector3i.ZERO}
+				return {"hit": false, "normal": Vector3i.ZERO, "t": INF}
 			continue
 		var t1: float = (l - o[i]) / di
 		var t2: float = (h - o[i]) / di
@@ -1422,12 +1697,12 @@ func _ray_box(o: Vector3, d: Vector3, lo: Vector3, hi: Vector3) -> Dictionary:
 			axis = i
 		tmax = minf(tmax, t2)
 		if tmin > tmax:
-			return {"hit": false, "normal": Vector3i.ZERO}
+			return {"hit": false, "normal": Vector3i.ZERO, "t": INF}
 	if tmax < 0.0:
-		return {"hit": false, "normal": Vector3i.ZERO}
+		return {"hit": false, "normal": Vector3i.ZERO, "t": INF}
 	var n := [0, 0, 0]
 	n[axis] = -1 if d[axis] > 0.0 else 1
-	return {"hit": true, "normal": Vector3i(n[0], n[1], n[2])}
+	return {"hit": true, "normal": Vector3i(n[0], n[1], n[2]), "t": maxf(tmin, 0.0)}
 
 
 func _tmax(s: float, d: float) -> float:
@@ -1662,6 +1937,23 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 		return {"voxel": pv, "value": Blocks.make_stair(place_id,
 			Blocks.stair_state_facing(_stair_state),
 			Blocks.stair_state_variant(_stair_state))}
+	if place_id == Blocks.WIRE:
+		# Conduit is surface-mounted: it clings to the face you clicked, so it
+		# runs across floors, up walls and along ceilings. The face it hugs is
+		# the opposite of the one you placed against.
+		var wn: Vector3i = tgt.get("normal", Vector3i(0, 1, 0))
+		var fi := Chunk._WFACE.find(-wn)
+		if fi < 0:
+			fi = 3   # no usable face: lie it on the floor
+		# If this cell is already wired on another face, ADD to it rather than
+		# refusing: that is how a run turns from the floor onto the wall without
+		# spending a second block.
+		var here: int = obj.get_id(pv)
+		if Blocks.bottom_of(here) == Blocks.WIRE:
+			if (Blocks.wire_faces_of(here) & (1 << fi)) != 0:
+				return {}   # that face already has cable on it
+			return {"voxel": pv, "value": Blocks.wire_add_face(here, fi)}
+		return {"voxel": pv, "value": Blocks.wire_with_faces(1 << fi)}
 	if place_id == Blocks.EMBER_TORCH:
 		# A placed voxel is a bare int and can't carry item properties, so the
 		# brightness step is baked in here from the ore it was crafted with.
@@ -1704,18 +1996,21 @@ func _try_assemble_machine() -> bool:
 	var tgt := _raycast_voxel()
 	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "planet":
 		return false
-	if int(tgt.get("id", Blocks.AIR)) != Blocks.MACHINE_CORE:
-		return false
 	var planet := tgt["obj"] as Planet
 	var v: Vector3i = tgt["voxel"]
-	# Already built? Right-clicking the core opens it -- that is how you reach a
-	# machine made of blocks, since there is no body to look at.
+	var is_core := int(tgt.get("id", Blocks.AIR)) == Blocks.MACHINE_CORE
 	var existing := planet.machine_station_at(v)
-	if existing != null:
+	# ANY block of a working machine opens it: the structure is the machine, so
+	# clicking its wall should do what clicking the core does. While it is
+	# damaged only the core opens -- the other blocks go back to being blocks so
+	# you can right-click to put the missing one back.
+	if existing != null and (is_core or planet.machine_online_at(v)):
 		if not planet.machine_online_at(v):
 			_toast("%s is damaged -- replace the missing block" % existing.title())
 		_open_station(existing)
 		return true
+	if not is_core:
+		return false
 	var res := planet.assemble_machine(v)
 	if res.get("ok", false):
 		_toast("%s assembled" % res.get("name", "Machine"))
@@ -1809,6 +2104,14 @@ func _process_mining(delta: float) -> void:
 	else:
 		var use := Blocks.use_of(id)
 		_look_name = Blocks.name_of(id) + ("  (" + use + ")" if use != "" else "")
+	# Every block of an assembled machine reports the MACHINE, so a hand-built
+	# structure reads as one object instead of the bricks it is made of. Only
+	# while it is intact -- damage it and the blocks go back to being blocks,
+	# which is also how you spot that it has stopped working.
+	if planet != null:
+		var mach := planet.machine_name_at(v)
+		if mach != "":
+			_look_name = mach + "  (right-click to open)"
 
 	# High-tier ore is too hard for weak tools -- that gate is itself the tier hint.
 	var hardness := Blocks.hardness(id)
@@ -1830,7 +2133,11 @@ func _process_mining(delta: float) -> void:
 	if key != _mine_key:
 		_mine_key = key
 		_mine_time = 0.0
-		_mine_total = hardness * BARE_MINE_MULT / mine_power
+		# Foliage is torn away, not mined: the bare-hand penalty exists to make
+		# you want a drill for stone, and applying it to leaves just makes
+		# clearing a canopy a chore.
+		var bare := 1.0 if Blocks.is_leaf(Blocks.bottom_of(id)) else BARE_MINE_MULT
+		_mine_total = hardness * bare / mine_power
 	_mine_time += delta
 	_update_crack(obj, v, id, _mine_time / maxf(_mine_total, 0.001))
 	if _mine_time >= _mine_total:
@@ -1846,6 +2153,15 @@ func _process_mining(delta: float) -> void:
 				# produced an item named "A + B" that could never be placed.
 				_add_item(Blocks.bottom_of(id), 1)
 				_add_item(Blocks.top_slab_of(id), 1)
+			elif Blocks.bottom_of(id) == Blocks.WIRE:
+				# One cell can carry a run on several faces; hand back one length
+				# of cable per face, not one for the lot.
+				var runs := 0
+				var fm := Blocks.wire_faces_of(id)
+				for f in 6:
+					if (fm & (1 << f)) != 0:
+						runs += 1
+				_add_item(Blocks.WIRE, maxi(runs, 1))
 			else:
 				# Strip any packed orientation before it becomes an item: a
 				# rotated stair or an axis-aligned log would otherwise come back
@@ -2147,6 +2463,7 @@ func _build_ui() -> void:
 	_build_inventory_ui(layer)
 	_build_station_ui(layer)
 	_build_starmap_ui(layer)
+	_build_book_ui(layer)
 
 	# transient save/load confirmation, top-center
 	_toast_label = Label.new()
@@ -2161,6 +2478,7 @@ func _build_ui() -> void:
 	# survival bars (top-left, below the status labels)
 	_hp_fill = _make_bar(layer, 104, Color(0.85, 0.25, 0.25), "HP")
 	_o2_fill = _make_bar(layer, 126, Color(0.30, 0.62, 0.95), "O2")
+	_build_base_panel(layer)
 	_hazard_label = Label.new()
 	_hazard_label.position = Vector2(16, 148)
 	_hazard_label.add_theme_font_size_override("font_size", 15)
@@ -2191,7 +2509,82 @@ func _make_bar(layer: CanvasLayer, y: int, color: Color, label: String) -> Color
 	return fill
 
 
+## Readout for the base you are standing in. Hidden outdoors, so it costs
+## nothing and never clutters the screen while you are exploring.
+func _build_base_panel(layer: CanvasLayer) -> void:
+	_base_panel = Panel.new()
+	_base_panel.position = Vector2(16, 178)
+	_base_panel.size = Vector2(238, 108)
+	_base_panel.visible = false
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.07, 0.10, 0.78)
+	sb.border_color = Color(0.35, 0.62, 0.72, 0.85)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(4)
+	_base_panel.add_theme_stylebox_override("panel", sb)
+	layer.add_child(_base_panel)
+	_base_title = Label.new()
+	_base_title.position = Vector2(10, 5)
+	_base_title.add_theme_font_size_override("font_size", 13)
+	_base_title.modulate = Color(0.65, 0.88, 1.0)
+	_base_panel.add_child(_base_title)
+	var rows := [["Power", Color(0.95, 0.80, 0.30)], ["Oxygen", Color(0.30, 0.62, 0.95)],
+		["Temp", Color(0.90, 0.45, 0.30)]]
+	for i in rows.size():
+		var y := 28 + i * 26
+		var name_lbl := Label.new()
+		name_lbl.position = Vector2(10, y - 3)
+		name_lbl.text = str(rows[i][0])
+		name_lbl.add_theme_font_size_override("font_size", 12)
+		name_lbl.modulate = Color(1, 1, 1, 0.75)
+		_base_panel.add_child(name_lbl)
+		var bg := ColorRect.new()
+		bg.position = Vector2(62, y)
+		bg.size = Vector2(112, 14)
+		bg.color = Color(0, 0, 0, 0.55)
+		_base_panel.add_child(bg)
+		var fill := ColorRect.new()
+		fill.position = Vector2(1, 1)
+		fill.size = Vector2(110, 12)
+		fill.color = rows[i][1]
+		bg.add_child(fill)
+		_base_fills.append(fill)
+		var val := Label.new()
+		val.position = Vector2(180, y - 3)
+		val.add_theme_font_size_override("font_size", 12)
+		_base_panel.add_child(val)
+		_base_values.append(val)
+
+
+func _update_base_panel() -> void:
+	if _base_panel == null:
+		return
+	if base_status.is_empty():
+		_base_panel.visible = false
+		return
+	_base_panel.visible = true
+	var pw: float = float(base_status.get("power", 0.0))
+	var pmax: float = float(base_status.get("power_max", 0.0))
+	var o2: float = float(base_status.get("o2", 0.0))
+	var tp: float = float(base_status.get("temp", 15.0))
+	_base_title.text = "BASE  ·  %d cells" % int(base_status.get("cells", 0))
+	var pf: float = (pw / pmax) if pmax > 0.0 else 0.0
+	_base_fills[0].size.x = 110.0 * clampf(pf, 0.0, 1.0)
+	_base_values[0].text = "%d%%" % int(pf * 100.0) if pmax > 0.0 else "none"
+	_base_values[0].modulate = Color(1, 1, 1, 0.85) if pmax > 0.0 else Color(1.0, 0.5, 0.4)
+	_base_fills[1].size.x = 110.0 * clampf(o2, 0.0, 1.0)
+	_base_values[1].text = "%d%%" % int(o2 * 100.0) if bool(base_status.get("ls", false)) else "none"
+	_base_values[1].modulate = Color(1, 1, 1, 0.85) if base_breathable() else Color(1.0, 0.5, 0.4)
+	# Temperature is a RANGE, not a fill from zero: -50..70 C mapped across the bar.
+	_base_fills[2].size.x = 110.0 * clampf((tp + 50.0) / 120.0, 0.0, 1.0)
+	_base_fills[2].color = Color(0.45, 0.72, 1.0) if tp < 5.0 else (
+		Color(0.95, 0.45, 0.25) if tp > 40.0 else Color(0.45, 0.85, 0.45))
+	_base_values[2].text = "%d C" % int(round(tp))
+	_base_values[2].modulate = Color(1, 1, 1, 0.85) if base_safe_temp() else Color(1.0, 0.5, 0.4)
+
+
 func _update_survival_ui() -> void:
+	_update_base_panel()
 	if _hp_fill != null:
 		_hp_fill.size.x = 176.0 * clampf(health / MAX_HEALTH, 0.0, 1.0)
 		_hp_fill.color = Color(0.85, 0.25, 0.25) if health > MAX_HEALTH * 0.3 else Color(1.0, 0.35, 0.2)
@@ -2274,7 +2667,7 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 		_grid_cells.append(_make_slot(grid, i, "select"))
 
 	# equip slot: a Suit only protects you once dragged here -- carrying one loose
-	# in the grid above does nothing (unlike the Drill/O2 Tank)
+	# in the grid above does nothing (unlike the Drill)
 	var equip_label := Label.new()
 	equip_label.text = "Suit"
 	equip_label.modulate = Color(1, 1, 1, 0.7)
@@ -2583,12 +2976,11 @@ func _refresh_slots() -> void:
 
 
 # Your effective mining power is the best drill you carry (bare hands = 1.0). This
-# sets mining speed and which ore tiers you can break. Also scans for O2 Tank
+# sets mining speed and which ore tiers you can break. Also scans for
 # gear -- the best you carry applies automatically. The Suit is different: it
 # only protects you while actually worn in `suit_slot` (see that var's comment).
 func _update_mine_power() -> void:
 	var best := 1.0
-	var o2b := 0.0
 	for s in inv:
 		if s["count"] <= 0:
 			continue
@@ -2596,10 +2988,7 @@ func _update_mine_power() -> void:
 		match s["id"]:
 			Blocks.DRILL:
 				best = maxf(best, float(mat.get("power", 1.0)))
-			Blocks.O2_TANK:
-				o2b = maxf(o2b, float(mat.get("o2", 0.0)))
 	mine_power = best
-	_o2_bonus = o2b
 	var resist := 0.0
 	if suit_slot.get("id", Blocks.AIR) == Blocks.SUIT and int(suit_slot.get("count", 0)) > 0:
 		resist = float(suit_slot.get("mat", {}).get("resist", 0.0))
@@ -2643,7 +3032,7 @@ func _update_held_item(active: Dictionary) -> void:
 		_build_held_drill(mat.get("color", Color(0.7, 0.7, 0.75)))
 	elif Blocks.is_placeable_block(id) or Blocks.is_ore(id) or Blocks.is_refined(id) or Blocks.is_intermediate(id):
 		_build_held_block(mat.get("color", Blocks.color_of(id)))
-	# other gear (O2 Tank, Suit) is worn, not wielded -- nothing shown in hand
+	# other gear (the Suit) is worn, not wielded -- nothing shown in hand
 
 
 func _mk_view_box(size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
@@ -2682,7 +3071,7 @@ func _build_held_block(color: Color) -> void:
 
 
 func _max_oxygen() -> float:
-	return MAX_OXYGEN + _o2_bonus
+	return MAX_OXYGEN
 
 
 # Paint any slot cell from a slot dict. `highlight` toggles the active-slot glow.
@@ -2713,8 +3102,6 @@ func _item_tooltip(slot: Dictionary) -> String:
 		var power := float(mat.get("power", 1.0))
 		return "%s Drill%s\nMining power %.1f — breaks up to Tier %d" % [
 			mname, suffix, power, Blocks.max_tier_for_power(power)]
-	if id == Blocks.O2_TANK:
-		return "%s O2 Tank%s\n+%d max oxygen" % [mname, suffix, int(mat.get("o2", 0.0))]
 	if id == Blocks.SUIT:
 		return "%s Insulated Suit%s\nHazard resist %d%%" % [
 			mname, suffix, int(round(float(mat.get("resist", 0.0)) * 100.0))]

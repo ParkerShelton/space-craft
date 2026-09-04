@@ -122,6 +122,30 @@ func set_block(v: Vector3i, id: int, meta: Dictionary = {}) -> void:
 	rebuild()
 
 
+# --- ship tanks --------------------------------------------------------------
+#
+# A ship makes nothing of its own. Its Life Support is a TANK: you fill it from
+# a planet base (via Batteries and a Power Bay) and it keeps you alive until it
+# runs out. Running dry is what pulls you home.
+var air := 1.0      # 0..1 breathable air left in the cabin
+var charge := 1.0   # 0..1 stored power, run down by life support and systems
+
+const AIR_DRAIN := 0.0055     # per second while you are inside breathing it
+const CHARGE_DRAIN := 0.0035  # per second while life support is running
+
+
+## Burn a slice of the tanks. Driven by the player, so a parked empty ship does
+## not quietly drain itself while you are off doing something else.
+func consume_life_support(delta: float) -> void:
+	if not _habitable:
+		return
+	charge = maxf(charge - CHARGE_DRAIN * delta, 0.0)
+	if charge <= 0.0:
+		air = maxf(air - AIR_DRAIN * 2.0 * delta, 0.0)  # no power, no scrubbing
+	else:
+		air = maxf(air - AIR_DRAIN * delta, 0.0)
+
+
 func get_status() -> Dictionary:
 	var has_cockpit := false
 	var thrusters := 0
@@ -141,20 +165,24 @@ func get_status() -> Dictionary:
 		"life_support": life_support,
 		"warp_drive": warp_drive,
 		"sealed": _sealed,
-		"habitable": _habitable,
+		"habitable": is_habitable(),
+		"air": air,
+		"charge": charge,
 	}
 
 
 ## The ship keeps you alive inside (breathing, climate) only when it has a Life
 ## Support block AND a sealed interior (an enclosed air pocket).
 func is_habitable() -> bool:
-	return _habitable
+	# The block and the seal are not enough any more: the tank has to have
+	# something in it.
+	return _habitable and air > 0.0
 
 
 ## Is a world point physically inside this habitable ship's sealed interior? This
 ## is what makes standing inside the cabin safe (not merely being in the cockpit).
 func is_inside_pressurized(world_pos: Vector3) -> bool:
-	if not _habitable or _sealed_cells.is_empty():
+	if not is_habitable() or _sealed_cells.is_empty():
 		return false
 	var lp := to_local(world_pos)
 	var base := Vector3i(floori(lp.x), floori(lp.y), floori(lp.z))
