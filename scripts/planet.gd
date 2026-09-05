@@ -1668,11 +1668,16 @@ func _derive_caves(amount: float) -> void:
 	# veins" ran ~200. That is how a cave system became a shaft you fall down for
 	# a mile. A cave is something you walk through, so its scale belongs in paces
 	# rather than in planet radii.
-	var room_size := lerpf(52.0, 34.0, a)
-	var tunnel_size := lerpf(22.0, 15.0, a)
+	# Tunnel size is set by how it feels to WALK down one. Widening the scale
+	# widens the passage without hollowing out more rock (open volume holds at
+	# ~6% across the whole range), so it is the lever to reach for: at a 22-block
+	# scale only 62% of floor spots had standing headroom and the average passage
+	# was 3.0 wide, which is a crawl. At 40 it is 80% and 4.4 wide.
+	var room_size := lerpf(80.0, 55.0, a)
+	var tunnel_size := lerpf(46.0, 34.0, a)
 	if cave_style == "cavern":
 		room_size = lerpf(150.0, 100.0, a)
-		tunnel_size = lerpf(40.0, 27.0, a)
+		tunnel_size = lerpf(52.0, 40.0, a)
 
 	# BIG network: sparse, wide -> the rooms. More amount -> lower threshold
 	# (denser) and lower frequency (bigger rooms).
