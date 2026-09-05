@@ -86,11 +86,38 @@ var hazard := "none"     # "none" / "cold" / "heat"
 var hazard_dps := 0.0    # health/sec when exposed on the surface without protection
 
 # --- flora (derived from seed in configure) ---
-const TREE_CELL := 7          # avg spacing grid for tree placement
+const TREE_CELL := 7          # default spacing grid for tree placement
+# Spacing is PER PLANET, because canopy size and spacing are the same problem:
+# a tree may only reach one cell, so a giant needs its trees further apart to be
+# allowed a canopy worth the name. Widening the grid instead of widening the
+# search keeps the per-voxel cost identical on every world.
+var tree_cell := TREE_CELL
+# --- alien palette -------------------------------------------------------------
+#
+# A habitable world is not the same thing as an Earth-like one. Every planet
+# recolours its own ground, stone, timber, foliage and water from its seed, so
+# "safe to stand on" stops implying green grass and blue sea.
+#
+# Tints ride on the mesh's VERTEX COLOURS rather than the block registry: block
+# ids stay global (a Rock is a Rock everywhere, and so is a recipe), while what
+# you see is per world.
+var alien_palette := false    # home stays familiar; everywhere else is recoloured
+var strangeness := 0.0        # 0 = Earth-like, 1 = properly alien
+var tint := {}                # block id -> Color, empty on a default world
+var leaf_holes := 1.0         # foliage gappiness, 0 = solid canopy
+var leaf_grain := 1.0         # foliage cell size multiplier
+var ground_grain := 1.0       # grass/dirt texel size
+var ground_levels := 4.0      # how many discrete shades the ground steps through
+var ground_contrast := 1.0    # how far those shades spread
+var rock_grain := 1.0
+var rock_contrast := 1.0
+
 var tree_density := 0.0       # 0 = desert (no trees), up to ~0.6 = dense forest
 var flora_leaves: Array = []  # this planet's leaf-color palette (subset of Blocks.LEAF_IDS)
 var flora_wood := Blocks.WOOD
-var flora_shape := 0          # 0 round, 1 tall/pine, 2 wide
+var flora_shape := 0          # 0 round, 1 pine, 2 wide, 3 giant, 4 coral
+var trunk_rad := 0.7          # trunk half-width in blocks; a giant is a pillar
+var _tree_scan := 1           # neighbouring tree cells to consider per voxel
 var trunk_min := 3
 var trunk_max := 6
 var canopy_min := 2.0
@@ -226,6 +253,8 @@ func configure(cfg: Dictionary) -> void:
 	ore_noise.frequency = 0.14
 	ore_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 
+	alien_palette = cfg.get("alien", false)
+	_derive_palette()
 	_derive_flora(cfg.get("tree_density", 0.0))
 	_derive_ores()
 	_derive_caves(cfg.get("cave_amount", -1.0))
@@ -870,15 +899,18 @@ func _machine_block_changed(v: Vector3i) -> void:
 	var m: Dictionary = _machines.get(c, {})
 	if m.is_empty():
 		return
-	var built := Blocks.structure_cells(m["def"], int(m["rot"]))
-	var cells: Dictionary = built["cells"]
-	var origin: Vector3i = m["origin"]
-	var axes := _pattern_axes(c)
 	var whole := true
-	for off in cells:
-		if get_id(origin + _pattern_to_world(off, axes)) != int(cells[off]):
-			whole = false
-			break
+	if bool(m.get("parts", false)):
+		whole = _part_machine_intact(m)
+	else:
+		var built := Blocks.structure_cells(m["def"], int(m["rot"]))
+		var cells: Dictionary = built["cells"]
+		var origin: Vector3i = m["origin"]
+		var axes := _pattern_axes(c)
+		for off in cells:
+			if get_id(origin + _pattern_to_world(off, axes)) != int(cells[off]):
+				whole = false
+				break
 	_grid_cache.clear()
 	m["online"] = whole
 	var st: Station = m.get("station")
@@ -896,6 +928,362 @@ func machine_station_at(v: Vector3i) -> Station:
 	return st if st != null and is_instance_valid(st) else null
 
 
+# --- eighth-block parts -------------------------------------------------------
+#
+# A PARTS voxel's eight sub-cells live here rather than in the voxel int: eight
+# ids will not fit alongside the orientation bits already packed in there, and
+# keeping them out of the hot path leaves get_id a plain lookup.
+var _parts_by_chunk := {}      # cc -> {voxel: PackedByteArray(PART_COUNT)}
+
+## The eight sub-cells of `v`, or an empty array when it holds none.
+func parts_at(v: Vector3i) -> PackedByteArray:
+	var d = _parts_by_chunk.get(chunk_of(v))
+	if d == null:
+		return PackedByteArray()
+	var got = d.get(v)
+	return got if got != null else PackedByteArray()
+
+
+func part_at(v: Vector3i, sub: int) -> int:
+	var p := parts_at(v)
+	return int(p[sub]) if p.size() == Blocks.PART_COUNT else Blocks.AIR
+
+
+## Put one eighth into `v`. The voxel itself becomes a PARTS marker so meshing,
+## occlusion and re-meshing all behave without knowing about sub-cells.
+func set_part(v: Vector3i, sub: int, id: int) -> void:
+	var cc := chunk_of(v)
+	if not _parts_by_chunk.has(cc):
+		_parts_by_chunk[cc] = {}
+	var cell: PackedByteArray = parts_at(v)
+	if cell.size() != Blocks.PART_COUNT:
+		cell = PackedByteArray()
+		cell.resize(Blocks.PART_COUNT)
+	cell[sub] = id
+	_parts_by_chunk[cc][v] = cell
+	set_block(v, Blocks.PARTS)
+
+
+## Take one eighth back out. The last one leaving turns the cell back to air.
+func clear_part(v: Vector3i, sub: int) -> void:
+	var cell: PackedByteArray = parts_at(v)
+	if cell.size() != Blocks.PART_COUNT:
+		return
+	cell[sub] = Blocks.AIR
+	var any := false
+	for i in Blocks.PART_COUNT:
+		if cell[i] != Blocks.AIR:
+			any = true
+			break
+	var cc := chunk_of(v)
+	if any:
+		_parts_by_chunk[cc][v] = cell
+		set_block(v, Blocks.PARTS)
+	else:
+		(_parts_by_chunk[cc] as Dictionary).erase(v)
+		set_block(v, Blocks.AIR)
+
+
+## What occupies one EIGHTH of the world, in global sub-cell coordinates
+## (voxel * 2 + sub). A full block reads as eight filled sub-cells, which is what
+## lets one pattern language describe both cubes and parts.
+func sub_id(sv: Vector3i) -> int:
+	var v := Vector3i(floori(sv.x / 2.0), floori(sv.y / 2.0), floori(sv.z / 2.0))
+	var raw := get_id(v)
+	if raw == Blocks.PARTS:
+		var o := sv - v * 2
+		return part_at(v, Blocks.part_index(o.x, o.y, o.z))
+	if raw == Blocks.AIR or raw == Blocks.WATER or raw == Blocks.DOOR_OPEN:
+		return Blocks.AIR
+	return Blocks.bottom_of(raw)
+
+
+## sub_id, but remembering each VOXEL it has already resolved.
+##
+## The matcher asks about the same voxel eight times (once per sub-cell) for
+## every candidate placement, and an unedited voxel costs a terrain noise sample
+## each time. Caching that within one wrench click is the difference between a
+## visible freeze and no pause at all.
+func _sub_id_cached(sv: Vector3i, cache: Dictionary) -> int:
+	var v := Vector3i(floori(sv.x / 2.0), floori(sv.y / 2.0), floori(sv.z / 2.0))
+	var raw = cache.get(v)
+	if raw == null:
+		raw = get_id(v)
+		cache[v] = raw
+	if raw == Blocks.PARTS:
+		var o := sv - v * 2
+		return part_at(v, Blocks.part_index(o.x, o.y, o.z))
+	if raw == Blocks.AIR or raw == Blocks.WATER or raw == Blocks.DOOR_OPEN:
+		return Blocks.AIR
+	return Blocks.bottom_of(raw)
+
+
+func _sub_matches_cached(sv: Vector3i, ch: String, cache: Dictionary) -> bool:
+	var got := _sub_id_cached(sv, cache)
+	if ch == ".":
+		return got == Blocks.AIR
+	return Blocks.class_set(ch).has(got)
+
+
+## Does what is at `sv` satisfy this pattern character?
+func _sub_matches(sv: Vector3i, ch: String) -> bool:
+	var got := sub_id(sv)
+	if ch == ".":
+		return got == Blocks.AIR
+	var cls = Blocks.PART_CLASSES.get(ch)
+	if cls == null:
+		return false
+	return got in (cls as Array)
+
+
+## Spot the commonest way a build goes wrong: the right shape laid out in
+## EIGHTHS because fine placing was left on. Such a cell holds a part or two and
+## reads as a solid block from outside, so the player counts their blocks, finds
+## them all present, and has no way to see what is wrong.
+func _fine_hint(v: Vector3i) -> String:
+	if get_id(v) != Blocks.PARTS:
+		return ""
+	var filled := 0
+	for si in Blocks.PART_COUNT:
+		if part_at(v, si) != Blocks.AIR:
+			filled += 1
+	if filled == 0 or filled >= Blocks.PART_COUNT:
+		return ""
+	return " — this block is only %d/%d filled. Turn OFF fine placing (C) and build it from whole blocks." % [filled, Blocks.PART_COUNT]
+
+
+## A pattern's extent AFTER rotating it. A quarter turn swaps the x and z
+## extents, so scanning candidate origins with the unrotated size searched too
+## narrow a band on one axis and too wide on the other -- which meant a build
+## laid out sideways could never be found, and the "blocks missing" count
+## changed depending on which block you happened to right-click.
+func _rot_extent(size: Vector3i, rot: int) -> Vector3i:
+	return Vector3i(size.z, size.y, size.x) if (rot % 2) == 1 else size
+
+
+## Try to turn whatever the player is pointing at into a station.
+##
+## The clicked voxel can be ANY part of the build, so every placement of the
+## pattern that would cover it is tried, in four rotations. That is a few
+## thousand checks, which costs nothing because it only runs on a wrench click.
+func assemble_parts(v: Vector3i) -> Dictionary:
+	var cache := {}
+	# PASS 1 -- is it finished? Bail on the first cell that does not fit, which
+	# kills almost every candidate placement immediately.
+	for di in Blocks.PART_STRUCTURES.size():
+		var size: Vector3i = (Blocks.PART_STRUCTURES[di] as Dictionary)["size"]
+		for rot in 4:
+			var cells: Array = Blocks.part_cells(di, rot)
+			var ext := _rot_extent(size, rot)
+			for ox in range(1 - ext.x, 2):
+				for oy in range(1 - ext.y, 2):
+					for oz in range(1 - ext.z, 2):
+						var origin := v * 2 + Vector3i(ox, oy, oz)
+						var fits := true
+						for c in cells:
+							if not _sub_matches_cached(origin + (c[0] as Vector3i),
+									c[1], cache):
+								fits = false
+								break
+						if fits:
+							return _register_part_machine(v,
+								Blocks.PART_STRUCTURES[di], rot, origin)
+	# PASS 2 -- nothing fits, so work out what to TELL them. Only reached on a
+	# failed click, and only for placements whose first cell is already right,
+	# which is enough to find the build they were plainly attempting.
+	var best_score := INF
+	var best_missing := 0
+	var best_name := ""
+	var best_def := {}
+	# Remembered so the exact cells that are wrong can be recomputed and shown.
+	var best_origin := Vector3i.ZERO
+	var best_rot := 0
+	var best_di := 0
+	# What did they actually click? A pattern that cannot contain that material
+	# is not what they were building, so it is neither searched nor reported --
+	# which is why a lone rock no longer comes back as a failed wooden bench.
+	# What materials are actually in the clicked cell? A PARTS voxel holds a
+	# MARKER, not a material, so reading it directly matched no pattern at all
+	# and every build made of parts reported "that is not a station yet".
+	var clicked_ids := {}
+	var craw := get_id(v)
+	if craw == Blocks.PARTS:
+		for si in Blocks.PART_COUNT:
+			var pid := part_at(v, si)
+			if pid != Blocks.AIR:
+				clicked_ids[pid] = true
+	elif craw != Blocks.AIR and craw != Blocks.WATER:
+		clicked_ids[Blocks.bottom_of(craw)] = true
+	# Hard ceiling on the diagnosis. This only runs on a FAILED click, and a
+	# perfect explanation is not worth a visible freeze.
+	var budget := 12000
+	var searched := 0
+	for di in Blocks.PART_STRUCTURES.size():
+		var def: Dictionary = Blocks.PART_STRUCTURES[di]
+		if not clicked_ids.is_empty():
+			var ids := Blocks.part_pattern_ids(di)
+			var shares := false
+			for cid in clicked_ids:
+				if ids.has(cid):
+					shares = true
+					break
+			if not shares:
+				continue
+		searched += 1
+		var size: Vector3i = def["size"]
+		for rot in 4:
+			var cells: Array = Blocks.part_cells(di, rot)
+			var probes: Array = Blocks.part_probes(di, rot)
+			var ext := _rot_extent(size, rot)
+			for ox in range(1 - ext.x, 2):
+				for oy in range(1 - ext.y, 2):
+					for oz in range(1 - ext.z, 2):
+						var origin := v * 2 + Vector3i(ox, oy, oz)
+						# Cheap rejection first: a placement that gets two of
+						# three spread-out landmarks wrong is not the build in
+						# front of the player, and is not worth scoring.
+						var hits := 0
+						for pc in probes:
+							if _sub_matches_cached(origin + (pc[0] as Vector3i),
+									pc[1], cache):
+								hits += 1
+						budget -= probes.size()
+						if probes.size() == 3 and hits < 2:
+							continue
+						var missing := 0
+						var pruned := false
+						# No pruning until there is something to prune against:
+						# int(INF * n) overflows to a negative, which would abort
+						# the very first candidate after one miss and let its
+						# bogus score win.
+						var cutoff := cells.size() + 1
+						if best_score < INF:
+							cutoff = maxi(int(best_score * float(cells.size())), 1)
+						if budget <= 0:
+							pruned = true
+						for c in cells:
+							if budget <= 0:
+								pruned = true
+								break
+							budget -= 1
+							if not _sub_matches_cached(origin + (c[0] as Vector3i),
+									c[1], cache):
+								missing += 1
+								if missing >= cutoff:
+									pruned = true
+									break
+						# A pruned count is a LOWER BOUND, not a result. Scoring
+						# it let a hopeless candidate that stopped counting early
+						# out-rank the build actually in front of the player.
+						if pruned:
+							continue
+						# Scored as a FRACTION of the pattern, so a small build
+						# that is entirely wrong stops out-ranking a big one that
+						# is nearly right -- which is what made a half-finished
+						# Smelter report itself as a failed Carpenter's Bench.
+						var score := float(missing) / float(maxi(cells.size(), 1))
+						if score < best_score:
+							best_score = score
+							best_missing = missing
+							best_name = str(def["name"])
+							best_def = def
+							best_origin = origin
+							best_rot = rot
+							best_di = di
+	if best_name != "":
+		# Work out exactly WHICH cells are wrong for the closest candidate, so
+		# the player can be shown the difference instead of being told a number
+		# and left to hunt for it.
+		var wrong: Array = []
+		if not best_def.is_empty():
+			for c in Blocks.part_cells(best_di, best_rot):
+				var sv: Vector3i = best_origin + (c[0] as Vector3i)
+				if not _sub_matches_cached(sv, c[1], cache):
+					wrong.append([sv, str(c[1])])
+		# Count in whatever the player actually placed. Telling someone who put
+		# one block in the wrong spot that eight "pieces" are wrong is true only
+		# in sub-cells, and useless to them.
+		var unit := "piece"
+		var n := best_missing
+		if Blocks.part_pattern_is_blocky(best_def):
+			unit = "block"
+			n = int(ceil(best_missing / 8.0))
+		var msg := "%s: %d %s%s wrong or missing" % [
+			best_name, n, unit, "" if n == 1 else "s"]
+		return {"ok": false, "wrong": wrong, "reason": msg + _fine_hint(v)}
+	if craw == Blocks.PARTS:
+		var h := _fine_hint(v)
+		if h != "":
+			return {"ok": false, "wrong": [], "reason": "This is built from eighths" + h}
+	if searched == 0 and not clicked_ids.is_empty():
+		# Nothing is made of what they are holding this up with. Saying so beats
+		# "that is not a station yet", which sounds like the SHAPE is wrong and
+		# sends people back to re-count blocks that were never going to work.
+		var names := PackedStringArray()
+		for cid in clicked_ids:
+			names.append(Blocks.name_of(cid))
+		return {"ok": false, "wrong": [],
+			"reason": "No station is built from %s" % " / ".join(names)}
+	return {"ok": false, "wrong": [], "reason": "That is not a station yet"}
+
+
+## Every VOXEL a sub-cell pattern touches, so damage checks can hook the same
+## per-voxel machinery the block-built structures already use.
+func _part_machine_voxels(def: Dictionary, rot: int, origin: Vector3i) -> Array:
+	var size: Vector3i = def["size"]
+	var layers: Array = def["layers"]
+	var seen := {}
+	for y in layers.size():
+		var rows: Array = layers[y]
+		for z in rows.size():
+			var row: String = rows[z]
+			for x in row.length():
+				if row[x] == ".":
+					continue
+				var sv: Vector3i = origin + Blocks._rotate_offset(Vector3i(x, y, z), size, rot)
+				seen[Vector3i(floori(sv.x / 2.0), floori(sv.y / 2.0), floori(sv.z / 2.0))] = true
+	return seen.keys()
+
+
+func _register_part_machine(anchor: Vector3i, def: Dictionary, rot: int,
+		origin: Vector3i) -> Dictionary:
+	var st: Station = _machine_stations.get(anchor)
+	if st == null or not is_instance_valid(st):
+		st = Station.new()
+		st.headless = true
+		st.configure(int(def["result"]), _world_ref)
+		add_child(st)
+		st.position = Vector3(anchor) + Vector3(0.5, 0.5, 0.5)
+		_machine_stations[anchor] = st
+	st.active = true
+	_machines[anchor] = {"def": def, "rot": rot, "origin": origin, "online": true,
+		"station": st, "parts": true}
+	for pv in _part_machine_voxels(def, rot, origin):
+		_machine_at[pv] = anchor
+	if not machine_cores.has(anchor):
+		machine_cores.append(anchor)
+	_grid_cache.clear()
+	return {"ok": true, "name": str(def["name"])}
+
+
+## Is a sub-cell-built machine still whole?
+func _part_machine_intact(m: Dictionary) -> bool:
+	var def: Dictionary = m["def"]
+	var size: Vector3i = def["size"]
+	var layers: Array = def["layers"]
+	var origin: Vector3i = m["origin"]
+	var rot: int = int(m["rot"])
+	for y in layers.size():
+		var rows: Array = layers[y]
+		for z in rows.size():
+			var row: String = rows[z]
+			for x in row.length():
+				if not _sub_matches(origin + Blocks._rotate_offset(
+						Vector3i(x, y, z), size, rot), row[x]):
+					return false
+	return true
+
+
 # --- power grid --------------------------------------------------------------
 #
 # Machines are wired together with Power Conduit. A generator feeds any machine
@@ -910,6 +1298,8 @@ func _machine_cells(c: Vector3i) -> Array:
 	var m: Dictionary = _machines.get(c, {})
 	if m.is_empty():
 		return []
+	if bool(m.get("parts", false)):
+		return _part_machine_voxels(m["def"], int(m["rot"]), m["origin"])
 	var built := Blocks.structure_cells(m["def"], int(m["rot"]))
 	var axes := _pattern_axes(c)
 	var origin: Vector3i = m["origin"]
@@ -991,7 +1381,27 @@ func _seals(id: int) -> bool:
 	if id == Blocks.AIR or id == Blocks.DOOR_OPEN or id == Blocks.WATER:
 		return false
 	var low := Blocks.bottom_of(id)
-	return not (Blocks.is_leaf(low) or Blocks.is_wire(low))
+	return not (Blocks.is_leaf(low) or Blocks.is_wire(low) or low == Blocks.PARTS)
+
+
+## Sealing test for one CELL, which is the same thing except for conduit.
+##
+## A cable is a cable: run across a room floor it must not chop the room in two,
+## but threaded through a wall it must not vent the place either. Which one it
+## is comes down to what surrounds it -- a wire buried in a wall has solid on
+## nearly every side, one lying in a room has solid only underneath. Without
+## this, powering a base from an outside generator meant cutting a hole in it.
+const WIRE_EMBEDDED := 4       # solid neighbours before a conduit counts as wall
+
+func _cell_seals(v: Vector3i) -> bool:
+	var id := get_id(v)
+	if not Blocks.is_wire(Blocks.bottom_of(id)):
+		return _seals(id)
+	var solid := 0
+	for n in _NEIGH6:
+		if _seals(get_id(v + n)):
+			solid += 1
+	return solid >= WIRE_EMBEDDED
 
 
 ## Is there any assembled machine close enough for this to be somebody's base?
@@ -1012,7 +1422,7 @@ func _near_base_machine(v: Vector3i) -> bool:
 ## Flood-fill the open space containing `start`. Returns the set of cells, or an
 ## empty dict if the space runs past ROOM_MAX_CELLS (i.e. it is the outdoors).
 func _flood_room(start: Vector3i) -> Dictionary:
-	if _seals(get_id(start)):
+	if _cell_seals(start):
 		return {}
 	var seen := {start: true}
 	var queue: Array[Vector3i] = [start]
@@ -1024,7 +1434,7 @@ func _flood_room(start: Vector3i) -> Dictionary:
 			var q: Vector3i = c + n
 			if seen.has(q):
 				continue
-			if _seals(get_id(q)):
+			if _cell_seals(q):
 				continue
 			seen[q] = true
 			if seen.size() > ROOM_MAX_CELLS:
@@ -1072,6 +1482,10 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 	# when any of its blocks borders the sealed volume -- you built it into the
 	# wall, so it is yours.
 	var gens: Array = []
+	# Generators built into this base. Anything else built into the same base
+	# draws from them with no wiring: sharing a building IS the connection.
+	# Conduit is for reaching machines that are not part of it.
+	var room_gens: Array = []
 	var ls: Station = null
 	var heater: Station = null
 	var cooler: Station = null
@@ -1088,6 +1502,7 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 			continue
 		if st.kind == Blocks.GENERATOR:
 			gset[st] = true
+			room_gens.append(st)
 		else:
 			# A consumer is powered by whatever its CONDUIT reaches, which may be
 			# a generator in another room entirely.
@@ -1110,13 +1525,19 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 	out["ls"] = ls != null
 	out["heater"] = heater != null
 	out["cooler"] = cooler != null
-	# Each consumer draws down its OWN grid, so an unwired machine sitting in a
-	# powered base genuinely does nothing until you run conduit to it.
+	# Touching the base is a connection; anything further off needs conduit run
+	# to it. Base generators are tried first, so a self-contained base never
+	# depends on wiring at all.
 	var draw := func(cc2: Vector3i, amount: float) -> bool:
-		for g in grid_generators(cc2):
+		for g in room_gens:
 			var st: Station = g
 			if st.power >= amount:
 				st.power -= amount
+				return true
+		for g2 in grid_generators(cc2):
+			var st2: Station = g2
+			if st2.power >= amount:
+				st2.power -= amount
 				return true
 		return false
 	if ls != null:
@@ -1185,6 +1606,8 @@ func revalidate_machines() -> void:
 	var keep: Array = []
 	for c in machine_cores:
 		var r := assemble_machine(c)
+		if not r.get("ok", false):
+			r = assemble_parts(c)   # sub-cell builds re-check the same way
 		if r.get("ok", false):
 			keep.append(c)
 	machine_cores = keep
@@ -1289,6 +1712,97 @@ func _is_cave(gx: int, gy: int, gz: int) -> bool:
 
 # Give each planet a distinct forest: color palette, wood tone, canopy shape and
 # size, all derived from the seed so no two planets feel the same.
+## Recolour this world. Hues are chosen as a FAMILY rather than independently:
+## foliage picks a hue, ground sits near it, stone and water take their own but
+## related hues. Rolling six unrelated colours produces noise, not a planet.
+func _derive_palette() -> void:
+	tint.clear()
+	if not alien_palette:
+		return
+	var r := RandomNumberGenerator.new()
+	r.seed = _seed + 9001
+	# How far from Earth this world sits. A third of habitable worlds stay
+	# recognisable -- green, brown, blue -- because "alien" only lands if there
+	# is something ordinary to measure it against. The rest are allowed to be
+	# properly strange, and the strangeness carries through hue, saturation,
+	# the sky and the shape of the trees.
+	strangeness = r.randf()
+	var homely := strangeness < 0.35
+	var life_h: float
+	var life_s: float
+	if homely:
+		life_h = r.randf_range(0.22, 0.42)          # greens
+		life_s = r.randf_range(0.30, 0.60)
+	else:
+		# Everything BUT green, so an alien world can never be mistaken for a
+		# slightly-off Earth.
+		var bands := [Vector2(0.80, 1.05), Vector2(0.02, 0.13),
+			Vector2(0.46, 0.56), Vector2(0.60, 0.75)]
+		var band: Vector2 = bands[r.randi() % bands.size()]
+		life_h = fposmod(r.randf_range(band.x, band.y), 1.0)
+		life_s = r.randf_range(0.55, 0.95)
+	var ground_h := fposmod(life_h + r.randf_range(-0.06, 0.06), 1.0)
+	tint[Blocks.GRASS] = Color.from_hsv(ground_h, life_s * 0.9, r.randf_range(0.45, 0.75))
+	tint[Blocks.DIRT] = Color.from_hsv(fposmod(ground_h + r.randf_range(-0.10, 0.10), 1.0),
+		life_s * 0.55, r.randf_range(0.28, 0.48))
+	# Minerals are their own story: drab on a homely world, occasionally
+	# striking on a strange one.
+	var rock_h := r.randf()
+	var rock_s := r.randf_range(0.03, 0.16)
+	if not homely and r.randf() < 0.5:
+		rock_s = r.randf_range(0.35, 0.7)
+	tint[Blocks.ROCK] = Color.from_hsv(rock_h, rock_s, r.randf_range(0.30, 0.62))
+	# Timber is warm brown at home, and can echo the foliage further out.
+	var wood_h := r.randf_range(0.03, 0.11)
+	if not homely and r.randf() < 0.6:
+		wood_h = fposmod(life_h + 0.5, 1.0)
+	for w in Blocks.WOOD_IDS:
+		tint[w] = Color.from_hsv(wood_h, r.randf_range(0.25, 0.6), r.randf_range(0.22, 0.46))
+	for i in Blocks.PLANK_IDS.size():
+		tint[Blocks.PLANK_IDS[i]] = (tint[Blocks.WOOD_IDS[i]] as Color).lightened(0.25)
+	# Leaves spread around the biosphere hue so one canopy has variety in it.
+	var spread: float = 0.10 if homely else 0.26
+	for li in Blocks.LEAF_IDS.size():
+		var h := fposmod(life_h + (float(li) / float(Blocks.LEAF_IDS.size()) - 0.5) * spread, 1.0)
+		tint[Blocks.LEAF_IDS[li]] = Color.from_hsv(h, life_s, r.randf_range(0.45, 0.85))
+	# Seas: blue at home, anything at all further out.
+	var water_h := r.randf_range(0.52, 0.62) if homely else r.randf()
+	tint[Blocks.WATER] = Color.from_hsv(water_h,
+		r.randf_range(0.25, 0.55) if homely else r.randf_range(0.4, 0.85),
+		r.randf_range(0.35, 0.75), Blocks.color_of(Blocks.WATER).a)
+	# The sky is half of how a place feels, so it moves with the rest.
+	if not homely:
+		atmo_color = Color.from_hsv(fposmod(life_h + r.randf_range(0.3, 0.7), 1.0),
+			r.randf_range(0.35, 0.8), r.randf_range(0.55, 0.95))
+	leaf_holes = r.randf_range(0.0, 2.2)
+	leaf_grain = r.randf_range(0.6, 1.9)
+	# SURFACE STYLE, not just surface colour. The texel pattern was seeded per
+	# planet but always used the same cell size, step count and contrast, so
+	# every world's ground was the same material in a different colour. These
+	# make one planet's soil a fine even wash and another's a coarse mottle.
+	var tame: float = 1.0 if strangeness < 0.35 else 0.0
+	ground_grain = lerpf(r.randf_range(0.45, 2.2), r.randf_range(0.85, 1.3), tame)
+	ground_levels = lerpf(r.randf_range(2.0, 7.0), r.randf_range(3.0, 5.0), tame)
+	ground_contrast = lerpf(r.randf_range(0.35, 2.6), r.randf_range(0.7, 1.3), tame)
+	rock_grain = lerpf(r.randf_range(0.4, 2.6), r.randf_range(0.8, 1.4), tame)
+	rock_contrast = lerpf(r.randf_range(0.5, 6.0), r.randf_range(0.8, 1.6), tame)
+
+
+## What this world calls a block. A retinted leaf must not still be called
+## "Violet Leaves" while being mint green -- the name is derived from the colour
+## it actually is here.
+func name_of(id: int) -> String:
+	if Blocks.is_leaf(Blocks.bottom_of(id)) and tint.has(Blocks.bottom_of(id)):
+		return "%s Leaves" % Blocks.hue_name(tint[Blocks.bottom_of(id)])
+	return Blocks.name_of(id)
+
+
+## This world's colour for a block, falling back to the global registry.
+func color_of(id: int) -> Color:
+	var c = tint.get(id)
+	return c if c != null else Blocks.color_of(id)
+
+
 func _derive_flora(density: float) -> void:
 	tree_density = density
 	if tree_density <= 0.0:
@@ -1300,12 +1814,45 @@ func _derive_flora(density: float) -> void:
 	for i in n:
 		flora_leaves.append(pool.pop_at(fr.randi() % pool.size()))
 	flora_wood = Blocks.WOOD_IDS[fr.randi() % Blocks.WOOD_IDS.size()]
-	flora_shape = fr.randi() % 3
+	# Shape follows the palette: a homely world grows recognisable trees, a
+	# strange one is where the giants and the coral live. Colour alone was not
+	# enough -- normal tree silhouettes read as Earth whatever their hue.
+	if strangeness < 0.35:
+		flora_shape = fr.randi() % 3
+	elif strangeness < 0.65:
+		flora_shape = [0, 2, 3, 4][fr.randi() % 4]
+	else:
+		flora_shape = [3, 4, 4, 2][fr.randi() % 4]
 	trunk_min = fr.randi_range(3, 4)
 	trunk_max = trunk_min + fr.randi_range(2, 4)
 	canopy_min = fr.randf_range(2.5, 3.5)
 	canopy_max = canopy_min + fr.randf_range(1.5, 3.0)
+	trunk_rad = 0.7
+	if flora_shape == 3:
+		# GIANT: a pillar of a tree with a canopy you can build a house under.
+		trunk_min = fr.randi_range(26, 34)
+		trunk_max = trunk_min + fr.randi_range(6, 14)
+		trunk_rad = fr.randf_range(2.2, 3.4)
+		# A crown in proportion to the trunk. Affordable because giants stand
+		# far apart -- the canopy still fits inside a single (much larger) cell.
+		tree_cell = 22
+		canopy_min = fr.randf_range(11.0, 13.5)
+		canopy_max = canopy_min + fr.randf_range(2.0, 4.0)
+	elif flora_shape == 4:
+		# CORAL: no single canopy -- a cluster of lobes budding off a short,
+		# fat stem, which reads as something that grew underwater.
+		trunk_min = fr.randi_range(2, 4)
+		trunk_max = trunk_min + fr.randi_range(1, 3)
+		trunk_rad = fr.randf_range(1.0, 1.8)
+		tree_cell = 10
+		canopy_min = fr.randf_range(2.4, 3.4)
+		canopy_max = canopy_min + fr.randf_range(1.2, 2.6)
 	tree_reach = float(trunk_max) + canopy_max * 2.0 + 2.0
+	# A canopy wider than one cell would be sliced off at the cell boundary.
+	# Only what the canopy can actually reach. Over-estimating here costs every
+	# world 125 cell tests per voxel instead of 27, to fix clipping that only
+	# the giants suffer.
+	_tree_scan = maxi(1, int(ceil(canopy_max * 1.15 / float(tree_cell))))
 
 
 # --- settlements: invent small-to-large civilizations from the seed, exactly ----
@@ -1441,6 +1988,12 @@ func _add_distant_sphere() -> void:
 
 
 # --- terrain sampling ---------------------------------------------------------
+
+## The terrain surface radius along `dir`. Exposed so the mesher can work out
+## how deep a face is buried, and therefore how much daylight reaches it.
+func surface_radius(dir: Vector3) -> float:
+	return _surf(dir)
+
 
 func _surf(dir: Vector3) -> float:
 	return radius + surface_noise.get_noise_3d(dir.x * radius, dir.y * radius, dir.z * radius) * terrain_amp
@@ -1611,13 +2164,28 @@ func _hash01(c: Vector3i, salt: int) -> float:
 
 # Is voxel p (air, near the surface) part of a tree? Trees are scattered on a grid
 # over the surface; we check the cells around p's surface projection.
+## Shortest distance from a point to a line segment. Used to grow branches
+## between a coral tree's stem and its lobes.
+func _dist_to_segment(p: Vector3, a: Vector3, b: Vector3) -> float:
+	var ab := b - a
+	var d := ab.length_squared()
+	if d < 0.0001:
+		return (p - a).length()
+	var t := clampf((p - a).dot(ab) / d, 0.0, 1.0)
+	return (p - (a + ab * t)).length()
+
+
 func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
-	var c := float(TREE_CELL)
+	var c := float(tree_cell)
 	var sp := _surface_point(dir)  # surface point beneath p (cube- or sphere-aware)
 	var scell := Vector3i(floori(sp.x / c), floori(sp.y / c), floori(sp.z / c))
-	for dx in range(-1, 2):
-		for dy in range(-1, 2):
-			for dz in range(-1, 2):
+	# How many neighbouring cells can reach this voxel. Only the giants need a
+	# wider sweep, and paying for it everywhere would slow generation on every
+	# world to fix a problem two of them have.
+	var sr := _tree_scan
+	for dx in range(-sr, sr + 1):
+		for dy in range(-sr, sr + 1):
+			for dz in range(-sr, sr + 1):
 				var cc := scell + Vector3i(dx, dy, dz)
 				if _hash01(cc, 0) >= tree_density:
 					continue
@@ -1642,13 +2210,48 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 				var rel := p - base
 				var along := rel.dot(up)
 				var horiz := (rel - up * along).length()
-				# trunk
-				if along >= 0.0 and along <= float(th) and horiz < 0.7:
+				# Trunk. It starts BELOW the surface point, because a thick trunk
+				# spans several ground columns and on any slope some of them sit
+				# lower -- without this the uphill side floats and the tree stops
+				# reading as rooted in anything.
+				var sink := 1.0 + trunk_rad * 2.0
+				if along >= -sink and along <= float(th) and horiz < trunk_rad:
 					return flora_wood
+				if flora_shape == 4:
+					# CORAL: lobes budding off the stem at different heights and
+					# bearings. Each is joined to the stem by a real BRANCH --
+					# without one the lobes hang in mid-air well clear of the
+					# trunk, which is what made the leaves look unattached.
+					var ax := up.cross(Vector3(1, 0, 0))
+					if ax.length_squared() < 0.01:
+						ax = up.cross(Vector3(0, 0, 1))
+					ax = ax.normalized()
+					var bx := up.cross(ax).normalized()
+					var lobes := 3 + int(_hash01(cc, 8) * 3.0)
+					var arms: Array = []
+					for lb in lobes:
+						var a := _hash01(cc, 20 + lb) * TAU
+						var hgt := float(th) * (0.5 + _hash01(cc, 30 + lb) * 0.6)
+						var reach := cr * (0.5 + _hash01(cc, 40 + lb) * 0.7)
+						var lc := base + up * hgt + (ax * cos(a) + bx * sin(a)) * reach
+						var lr := cr * (0.5 + _hash01(cc, 50 + lb) * 0.5)
+						if (p - lc).length() < lr:
+							return flora_leaves[int(_hash01(cc, 60 + lb)
+								* flora_leaves.size()) % flora_leaves.size()]
+						arms.append([base + up * (hgt * 0.55), lc])
+					for arm in arms:
+						if _dist_to_segment(p, arm[0], arm[1]) < maxf(trunk_rad * 0.55, 0.75):
+							return flora_wood
+					continue
 				# canopy (ellipsoid, shape-dependent, with lumpy edge)
 				var vscale := 1.5 if flora_shape == 1 else (0.7 if flora_shape == 2 else 1.0)
+				if flora_shape == 3:
+					vscale = 0.55     # a giant spreads far wider than it is deep
 				var ch := cr * vscale
-				var center := base + up * (float(th) + ch * 0.4)
+				# Overlap the crown with the top of the trunk rather than
+				# balancing it above: a gap there is what makes leaves and log
+				# look like separate objects.
+				var center := base + up * (float(th) - ch * 0.25)
 				var rc := p - center
 				var cvert := rc.dot(up)
 				var choriz := (rc - up * cvert).length()
@@ -1657,7 +2260,17 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 					var t := clampf((cvert + ch) / (2.0 * ch), 0.0, 1.0)
 					rad = cr * (1.0 - t * 0.8)
 				var e := (choriz * choriz) / maxf(rad * rad, 0.01) + (cvert * cvert) / maxf(ch * ch, 0.01)
-				var lump := _hash01(Vector3i(floori(p.x), floori(p.y), floori(p.z)), 7) * 0.35 - 0.15
+				# Lumpy canopy edge, but COARSE: a per-voxel roll speckles single
+				# leaves off the rim, and a leaf one voxel clear of the canopy
+				# reads as not belonging to the tree. Sampling at half
+				# resolution makes the wobble happen in clumps that stay
+				# attached, and the range is tighter for the same reason.
+				# ADDITIVE only. A lump that can also bite INTO the canopy carves
+				# notches in its surface, and a notch deep enough to cut a rim
+				# voxel loose leaves foliage floating clear of the tree. Adding
+				# outward can only ever hang a clump off a face it touches.
+				var lump := maxf(0.0, _hash01(Vector3i(floori(p.x * 0.5),
+					floori(p.y * 0.5), floori(p.z * 0.5)), 7) * 0.26 - 0.09)
 				if e < 1.0 + lump:
 					var li: int = flora_leaves[int(_hash01(cc, 3) * flora_leaves.size()) % flora_leaves.size()]
 					return li
@@ -2169,6 +2782,7 @@ func chunk_of(v: Vector3i) -> Vector3i:
 
 var _stream_last_cc0 := Vector3i(0x7fffffff, 0, 0)  # sentinel: never a real chunk coord
 var _stream_last_rd := -1
+var _stream_last_ms := 0
 
 ## Keep chunks within `rd` (chunk radius) of `center_voxel` loaded; unload the rest.
 ##
@@ -2184,8 +2798,15 @@ var _stream_last_rd := -1
 ## chunks still get dispatched every frame via process_load_queue regardless.
 func stream(center_voxel: Vector3i, rd: int) -> void:
 	var cc0 := chunk_of(center_voxel)
-	if cc0 == _stream_last_cc0 and rd == _stream_last_rd:
+	# Re-scan periodically even when standing still. The early-out below only
+	# fires when you cross a chunk boundary, so a chunk that failed to load --
+	# dropped from the queue, or whose build was discarded -- was never asked
+	# for again and simply stayed missing until you happened to walk far enough
+	# away and back. That is the terrain that "never loads".
+	var now := Time.get_ticks_msec()
+	if cc0 == _stream_last_cc0 and rd == _stream_last_rd and now - _stream_last_ms < 400:
 		return
+	_stream_last_ms = now
 	_stream_last_cc0 = cc0
 	_stream_last_rd = rd
 	var wanted := {}
@@ -2245,6 +2866,7 @@ func process_load_queue(_budget: int) -> int:
 		var node = loaded_chunks.get(cc)
 		if node != null and is_instance_valid(node):
 			node.apply_mesh_data(data)
+			_clear_temp_colliders(cc)
 		_edit_priority.erase(cc)
 		applied += 1
 
@@ -2318,11 +2940,19 @@ func _edits_snapshot(cc: Vector3i) -> Dictionary:
 	var snap := {}
 	const OFFS := [Vector3i(0, 0, 0), Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
 		Vector3i(0, 1, 0), Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	var parts := {}
 	for off in OFFS:
 		var d = _edits_by_chunk.get(cc + off)
 		if d != null:
 			for k in d:
 				snap[k] = d[k]
+		var pd = _parts_by_chunk.get(cc + off)
+		if pd != null:
+			for k in pd:
+				parts[k] = (pd[k] as PackedByteArray).duplicate()
+	# Copied, not referenced: the mesher runs on a worker thread and must not
+	# read a cell the main thread is part-way through editing.
+	snap[Chunk.PARTS_KEY] = parts
 	return snap
 
 
@@ -2331,6 +2961,10 @@ func _edits_snapshot(cc: Vector3i) -> Dictionary:
 func _wlev_snapshot(snap: Dictionary) -> Dictionary:
 	var w := {}
 	for v in snap:
+		# The snapshot carries non-voxel keys too (the parts table, the baked
+		# light map), so anything that walks it must check what it is holding.
+		if not (v is Vector3i):
+			continue
 		if snap[v] == Blocks.WATER:
 			w[v] = _wlev.get(v, W_FULL)
 	return w
@@ -2415,12 +3049,49 @@ func _apply_ready_edits() -> void:
 		var node = loaded_chunks.get(cc)
 		if node != null and is_instance_valid(node):
 			node.apply_mesh_data(data)
+			_clear_temp_colliders(cc)
 		_edit_priority.erase(cc)
 		# A chunk re-dirtied while it was meshing (a fast second click) gets its
 		# follow-up task started immediately instead of next tick.
 		if _dirty.has(cc):
 			_dirty.erase(cc)
 			_edit_remesh(cc)
+
+
+# A block you just placed has no collision until its chunk finishes re-meshing
+# on a worker thread. That is only a frame or two, but it is exactly the frame
+# you need it: pillaring up means placing a block under yourself mid-jump and
+# landing on it, and without collision you fall straight through into the column
+# below. So a placed block gets a temporary box collider immediately, thrown
+# away as soon as the real chunk mesh arrives.
+var _temp_solid := {}          # voxel -> StaticBody3D
+
+
+func _add_temp_collider(v: Vector3i) -> void:
+	if _temp_solid.has(v):
+		return
+	var body := StaticBody3D.new()
+	var col := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3.ONE
+	col.shape = box
+	body.add_child(col)
+	body.position = Vector3(v) + Vector3(0.5, 0.5, 0.5)
+	add_child(body)
+	_temp_solid[v] = body
+
+
+## Drop the stand-ins for a chunk once its real collision exists.
+func _clear_temp_colliders(cc: Vector3i) -> void:
+	if _temp_solid.is_empty():
+		return
+	for v in _temp_solid.keys():
+		if chunk_of(v) != cc:
+			continue
+		var b: Node = _temp_solid[v]
+		if b != null and is_instance_valid(b):
+			b.queue_free()
+		_temp_solid.erase(v)
 
 
 func set_block(v: Vector3i, id: int) -> void:
@@ -2433,6 +3104,14 @@ func set_block(v: Vector3i, id: int) -> void:
 	if not _edits_by_chunk.has(cc):
 		_edits_by_chunk[cc] = {}
 	_edits_by_chunk[cc][v] = id
+	# Stand-in collision so the block is solid THIS frame, not in two.
+	if id != Blocks.AIR and id != Blocks.WATER and not Blocks.is_leaf(Blocks.bottom_of(id)) 			and Blocks.bottom_of(id) != Blocks.WIRE and Blocks.bottom_of(id) != Blocks.PARTS:
+		_add_temp_collider(v)
+	elif _temp_solid.has(v):
+		var gone: Node = _temp_solid[v]
+		if gone != null and is_instance_valid(gone):
+			gone.queue_free()
+		_temp_solid.erase(v)
 	if Blocks.bottom_of(id) == Blocks.WIRE or Blocks.bottom_of(was) == Blocks.WIRE:
 		_grid_cache.clear()   # the conduit network just changed shape
 	_edit_remesh(cc)

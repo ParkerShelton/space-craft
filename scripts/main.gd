@@ -418,6 +418,11 @@ func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, 
 	return {
 		"name": _planet_name(rng), "position": pos,
 		"radius": radius, "amp": amp, "gravity": gravity, "seed": master_seed + index * 7919,
+		# EVERY world invents its own colours, home included. A starting planet
+		# that is always Earth means most players never see an alien one; the
+		# strangeness roll already keeps about a third of worlds familiar, so
+		# some starts are green anyway -- by chance rather than by decree.
+		"alien": true,
 		"top": a["top"], "sub": a["sub"], "rock": a["rock"], "core": a["core"],
 		"ore": Blocks.IRON_ORE,  # legacy field; ores are procedural per planet
 		"tree_density": trees,
@@ -465,7 +470,18 @@ func _setup_environment() -> void:
 	sun.rotation = Vector3(deg_to_rad(-45), deg_to_rad(30), 0)
 	sun.light_energy = 1.2
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 160.0  # keep shadow map focused near the player
+	sun.directional_shadow_max_distance = 110.0  # keep shadow map focused near the player
+	# Shadow acne on flat voxel walls, worst when the sun is near the horizon:
+	# the depth range the shadow map has to cover stretches right out, and this
+	# world sits ~1300 units from the origin, so precision is already tight. A
+	# shorter range plus normal bias (which offsets the lookup along the surface
+	# normal, the thing that actually helps on flat geometry) is the standard
+	# remedy. If banding survives, normal_bias is the number to raise.
+	sun.shadow_normal_bias = 2.6
+	sun.shadow_bias = 0.045
+	sun.directional_shadow_split_1 = 0.10
+	sun.directional_shadow_split_2 = 0.28
+	sun.directional_shadow_blend_splits = true
 	add_child(sun)
 	_sun = sun
 
@@ -473,6 +489,8 @@ func _setup_environment() -> void:
 # Blend the sky/ambient between deep space and a lit atmosphere based on how deep
 # in an atmospheric planet the player is. No per-planet sun math -- just a mood
 # that fades in as you descend and out as you climb toward space.
+var _underground := 0.0   # smoothed "how far inside the planet the camera is"
+
 func _process(delta: float) -> void:
 	if _world == null or _world.player == null or _sky_mat == null:
 		return
@@ -500,6 +518,7 @@ func _process(delta: float) -> void:
 		pl.day_phase = fposmod(pl.day_phase + delta / maxf(pl.day_length, 1.0), 1.0)
 	var sun_dir := Vector3(0.3, -0.8, 0.4).normalized()   # fixed light in space
 	var daylight := 1.0
+	var sun_height := 1.0   # 1 overhead, 0 at the horizon, negative at night
 	if p != null:
 		# A basis on the planet's own up, so the sun tracks across ITS sky.
 		var east := up.cross(Vector3(0, 0, 1))
@@ -511,12 +530,11 @@ func _process(delta: float) -> void:
 		# sunrise at the horizon, noon overhead, sunset opposite, then below
 		var sun_pos := east * cos(ang) + noon * sin(ang)
 		sun_dir = -sun_pos.normalized()
-		# How high the sun is: 1 overhead, 0 at the horizon, negative at night.
-		var height := sin(ang)
+		sun_height = sin(ang)
 		# An atmosphere scatters light, so dusk lingers and night keeps a little
 		# blue. Without one it's a hard terminator -- glare or nothing.
 		var soft: float = 0.22 if p.has_atmosphere else 0.04
-		daylight = clampf(smoothstep(-soft, soft, height), 0.0, 1.0)
+		daylight = clampf(smoothstep(-soft, soft, sun_height), 0.0, 1.0)
 	_day = lerpf(_day, daylight, clampf(delta * 3.0, 0.0, 1.0))
 
 	# Redden the sky near the horizon crossing, then drain it toward night.
@@ -535,6 +553,19 @@ func _process(delta: float) -> void:
 	_sky_mat.set_shader_parameter("horizon_color", Vector3(hor.r, hor.g, hor.b))
 	_sky_mat.set_shader_parameter("sun_dir", -sun_dir)
 	_sky_mat.set_shader_parameter("day", _day)
+	# Below the terrain the sky is blacked out. A giant cavern can be wider than
+	# the streamed chunk radius, and an unloaded chunk shows whatever is behind
+	# it -- which was stars and neighbouring planets, seen straight through the
+	# rock. Fading over a few blocks keeps a cave mouth looking like a cave mouth.
+	var below := 0.0
+	if p != null:
+		var lp := p.to_local(ppos)
+		var ln := lp.length()
+		var dep: float = p.surface_radius(lp / maxf(ln, 0.0001)) - p._norm(lp)
+		below = clampf(dep / 5.0, 0.0, 1.0)
+	_underground = lerpf(_underground, below, clampf(delta * 4.0, 0.0, 1.0))
+	_sky_mat.set_shader_parameter("underground", _underground)
+	_world.player.underground = _underground > 0.6
 	# Never let night reach true black: this game drains O2 and applies hazard
 	# damage, and being unable to see on top of that is punishing before you
 	# have any light source.
@@ -543,6 +574,15 @@ func _process(delta: float) -> void:
 	# almost black and strongly blue-weighted, and tinting ambient toward it
 	# washed the whole world blue-purple.
 	_env.ambient_light_color = SPACE_AMBIENT.lerp(acol, _atmo * 0.8 * _day)
+	# The terrain shader applies ambient itself (see voxel_block.gdshader), so it
+	# needs the same values the environment is using.
+	var amb: Color = _env.ambient_light_color
+	for pl2 in _world.planets:
+		if pl2.block_material != null:
+			pl2.block_material.set_shader_parameter("ambient_color",
+				Vector3(amb.r, amb.g, amb.b))
+			pl2.block_material.set_shader_parameter("ambient_energy",
+				_env.ambient_light_energy)
 	# looking_at() is DEGENERATE when the direction is parallel to the up
 	# reference, which happens exactly at noon and midnight (the sun sits along
 	# the planet's up axis). That produced an invalid basis, and with it the
@@ -556,14 +596,36 @@ func _process(delta: float) -> void:
 	_sun.light_energy = lerpf(1.2, 1.5, _atmo) * _day
 	# Warm the sunlight as it sits low, the way real low sun reddens.
 	_sun.light_color = Color(1, 1, 1).lerp(Color(1.0, 0.62, 0.35), dusk * 0.7 * _atmo)
+	# Shadow acne, and the banded lines that come with it, is a GRAZING-ANGLE
+	# problem: with the sun near the horizon the depth slope across a flat voxel
+	# wall is enormous, so any fixed bias is either too small to clear the acne at
+	# dawn or so large it detaches shadows from their casters at noon. So the bias
+	# tracks the sun instead of being one compromise value, and as a backstop the
+	# shadows themselves fade out over the last few degrees -- the window where no
+	# bias is enough, and also the window where the sun is dim and orange and the
+	# shadows it casts are the least of what the eye is looking at.
+	var graze := 1.0 - smoothstep(0.0, 0.42, absf(sun_height))
+	_sun.shadow_normal_bias = lerpf(1.4, 9.0, graze)
+	_sun.shadow_opacity = lerpf(1.0, 0.1, graze * graze)
 	# fog hides the render-distance edge (and the far LOD sphere) behind haze
-	_env.fog_enabled = _atmo > 0.02
-	_env.fog_light_color = acol
 	_env.fog_sky_affect = 0.0            # keep the sky itself clear
-	_env.fog_density = _atmo * 0.008
+	# Underground the fog turns BLACK rather than switching off. Sky-coloured
+	# haze on a cave wall is what made the rock read as blue instead of as
+	# black -- but with no fog at all, the streamed world simply stops at a hard
+	# edge against the void. Black fog does both jobs: it tints nothing, and
+	# distance still dissolves into darkness instead of ending.
+	_env.fog_enabled = _atmo > 0.02 or _underground > 0.02
+	_env.fog_light_color = acol.lerp(Color(0, 0, 0), _underground)
+	# Denser below ground, so the far wall is gone before the chunk that would
+	# have held it runs out.
+	_env.fog_density = lerpf(_atmo * 0.008, 0.024, _underground)
 
 	# Hide each planet's low-res LOD sphere when you're close to it (on/near the
 	# surface) so you never see it through gaps or at the horizon; show it far away.
+	# Underground, hide EVERY planet. These are real meshes out in space, not part
+	# of the skybox, so blacking the sky out does nothing for them -- and a
+	# cavern wider than the streamed chunk radius has unloaded gaps they show
+	# straight through. From inside a planet you should see rock or nothing.
 	for pl in _world.planets:
 		if pl.lod_sphere != null:
-			pl.lod_sphere.visible = pl.altitude(ppos) > 260.0
+			pl.lod_sphere.visible = _underground < 0.6 and pl.altitude(ppos) > 260.0

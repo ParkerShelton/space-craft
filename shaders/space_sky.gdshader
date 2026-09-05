@@ -15,6 +15,11 @@ uniform vec3 horizon_color : source_color = vec3(0.75, 0.85, 1.0);
 // be drawn and the sky brightened around it; `day` is 0 at night, 1 at noon.
 uniform vec3 sun_dir = vec3(0.0, 1.0, 0.0);
 uniform float day : hint_range(0.0, 1.0) = 1.0;
+// How far the viewer is INSIDE the planet. Caves can be wider than the streamed
+// chunk radius, and there is nothing behind an unloaded chunk but the skybox --
+// so from a big cavern you could see stars and other planets through the rock.
+// Underground the sky simply goes black, which is both a fix and the truth.
+uniform float underground : hint_range(0.0, 1.0) = 0.0;
 
 float hash13(vec3 p) {
 	p = fract(p * 0.1031);
@@ -46,7 +51,7 @@ void sky() {
 	vec3 sun_col = mix(vec3(1.0, 0.55, 0.25), vec3(1.0, 0.96, 0.88), day);
 
 	vec3 sky_lit = skycol + sun_col * glow * atmo;
-	COLOR = sky_lit * atmo + stars * star_vis;
+	COLOR = (sky_lit * atmo + stars * star_vis) * (1.0 - underground);
 	// The disc stays visible in space too, where there is no atmosphere.
 	COLOR += sun_col * disc;
 }

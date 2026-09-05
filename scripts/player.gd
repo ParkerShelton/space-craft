@@ -106,7 +106,10 @@ var _ray: RayCast3D
 var _outline: MeshInstance3D       # wireframe box around the block under the crosshair
 var _stair_state := 0              # R cycles every stair rotation + shape
 var _ghost: MeshInstance3D         # translucent preview of the block about to be placed
-var _ghost_sig := ""               # shape key, so the mesh is only rebuilt when it changes
+var _diff: MeshInstance3D          # what is wrong with a build the wrench refused
+var _diff_t := 0.0
+var _ghost_sig := ""
+var _ghost_mat: StandardMaterial3D               # shape key, so the mesh is only rebuilt when it changes
 var _crack: MeshInstance3D         # progressive break-up drawn over the block being mined
 var _crack_mat: ShaderMaterial
 var _crack_sig := ""
@@ -132,6 +135,12 @@ var _hp_fill: ColorRect            # health bar fill
 var _o2_fill: ColorRect            # oxygen bar fill
 var _hazard_label: Label           # "FREEZING"/"OVERHEATING" warning
 var base_status: Dictionary = {}   # the sealed base you are standing in, {} outdoors
+var underground := false           # below the terrain: no sky, no sky markers
+var _await_ground := 0.0           # seconds left waiting for chunks under a spawn
+# Fine mode places an EIGHTH of a block instead of a whole one, into the corner
+# of the face you are looking at. Toggled rather than held: building a bench
+# out of eighths is a lot of clicks to do with a finger on a modifier.
+var fine_place := false
 var _base_panel: Panel             # power/oxygen/temp readout, only while indoors
 var _base_title: Label
 var _base_fills: Array[ColorRect] = []
@@ -247,7 +256,8 @@ func _ready() -> void:
 	_outline.visible = false
 	_ghost = MeshInstance3D.new()
 	_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var gm := StandardMaterial3D.new()
+	_ghost_mat = StandardMaterial3D.new()
+	var gm := _ghost_mat
 	gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	gm.albedo_color = Color(0.6, 0.9, 1.0, 0.35)
 	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -255,6 +265,17 @@ func _ready() -> void:
 	# Draw over the world: a preview sunk inside terrain is worse than useless.
 	gm.no_depth_test = true
 	_ghost.material_override = gm
+	# Blueprint diff: the cells a refused build got wrong, shown in place. A
+	# count in a toast tells you there is a mistake; this tells you where.
+	_diff = MeshInstance3D.new()
+	_diff.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var dm := StandardMaterial3D.new()
+	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dm.albedo_color = Color(1.0, 0.35, 0.3, 0.55)
+	dm.no_depth_test = true
+	_diff.material_override = dm
+	_diff.visible = false
 	_ghost.visible = false
 
 	_crack = MeshInstance3D.new()
@@ -266,10 +287,12 @@ func _ready() -> void:
 	if world != null:
 		world.add_child(_outline)
 		world.add_child(_ghost)
+		world.add_child(_diff)
 		world.add_child(_crack)
 	else:
 		get_parent().add_child(_outline)
 		get_parent().add_child(_ghost)
+		get_parent().add_child(_diff)
 		get_parent().add_child(_crack)
 
 	_init_inventory()
@@ -519,6 +542,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			# precisely what will be placed.
 			_stair_state = (_stair_state + 1) % Blocks.STAIR_STATES
 			_toast("Stairs: %s" % Blocks.stair_state_name(_stair_state))
+		elif event.keycode == KEY_C:
+			fine_place = not fine_place
+			_apply_place_mode_ui()
+			_toast("Fine placing: %s" % ("ON — eighth blocks" if fine_place else "off"))
 		elif event.keycode == KEY_B:
 			if not (_book_search != null and _book_search.has_focus()):
 				_toggle_book()
@@ -533,6 +560,16 @@ func _unhandled_input(event: InputEvent) -> void:
 func _cycle_slot(dir: int) -> void:
 	active_slot = (active_slot + dir + HOTBAR_SLOTS) % HOTBAR_SLOTS
 	_refresh_slots()
+
+
+## Fine placing changes what every click does, so it is shown where the eye
+## already is -- on the crosshair and on the ghost -- not only in a corner label.
+func _apply_place_mode_ui() -> void:
+	if _crosshair != null:
+		_crosshair.text = "+ 1/8" if fine_place else "+"
+		_crosshair.modulate = Color(1.0, 0.78, 0.30) if fine_place else Color(1, 1, 1)
+	if _ghost_mat != null:
+		_ghost_mat.albedo_color = Color(1.0, 0.78, 0.30, 0.45) if fine_place 			else Color(0.6, 0.9, 1.0, 0.35)
 
 
 func _toggle_book() -> void:
@@ -820,10 +857,27 @@ func _on_warp_pressed() -> void:
 
 
 func _physics_process(delta: float) -> void:
+	# The build diff fades on its own; it is a hint, not a mode.
+	if _diff != null and _diff.visible:
+		_diff_t -= delta
+		if _diff_t <= 0.0:
+			_diff.visible = false
 	if _toast_time > 0.0:
 		_toast_time -= delta
 		if _toast_time <= 0.0 and _toast_label != null:
 			_toast_label.visible = false
+	# Freeze in place until the ground beneath a fresh spawn has actually
+	# streamed in and been given collision. Falling through the world for the
+	# first second after respawning is not a physics problem, it is an ordering
+	# one -- the player arrives before the terrain does.
+	if _await_ground > 0.0:
+		_await_ground -= delta
+		velocity = Vector3.ZERO
+		if _ground_ready():
+			_await_ground = 0.0
+		else:
+			_update_survival_ui()
+			return
 	_process_survival(delta)
 	_check_ship_transitions()
 	_update_swing(delta)
@@ -1414,6 +1468,26 @@ func take_damage(amount: float) -> void:
 		_respawn()
 
 
+## Is there real, collidable terrain under the player yet? Checked against the
+## chunk's collision shape rather than the voxel data, because the voxels exist
+## long before anything you can stand on does.
+func _ground_ready() -> bool:
+	if world == null:
+		return true
+	var p := world.nearest_planet(global_position)
+	if p == null:
+		return true
+	var up := (global_position - p.global_position).normalized()
+	for d in 4:
+		var v := p.world_to_voxel(global_position - up * (1.0 + float(d)))
+		var ch = p.loaded_chunks.get(p.chunk_of(v))
+		if ch == null or not is_instance_valid(ch):
+			continue
+		if ch._collision != null and ch._collision.shape != null:
+			return true
+	return false
+
+
 func _respawn() -> void:
 	if eva:
 		_end_eva()
@@ -1428,6 +1502,10 @@ func _respawn() -> void:
 	velocity = Vector3.ZERO
 	if world != null and not world.planets.is_empty():
 		global_position = world.planets[0].find_spawn_point(Vector3.UP)
+	# Hold still until there is ground. Chunks stream in asynchronously, so for
+	# the first moments after a respawn there is nothing under you and gravity
+	# drops you straight through the world.
+	_await_ground = 6.0
 	_toast("You blacked out — respawned at home")
 
 
@@ -1611,7 +1689,8 @@ func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: 
 			var boxes := _shape_boxes_at(obj, v, id, kind)
 			if boxes.is_empty():
 				return {"hit": true, "kind": kind, "obj": obj, "voxel": v,
-					"place": prev, "normal": normal, "id": id}
+					"place": prev, "normal": normal, "id": id,
+					"point": start + ld * travelled}
 			# A shape can be several boxes (a stair's two steps, a conduit's
 			# arms). Take the one the ray reaches FIRST, or its entry face is
 			# whichever box happened to be listed first.
@@ -1624,7 +1703,8 @@ func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: 
 					best_n = bx["normal"]
 			if best_t < INF:
 				return {"hit": true, "kind": kind, "obj": obj, "voxel": v,
-					"place": v + best_n, "normal": best_n, "id": id}
+					"place": v + best_n, "normal": best_n, "id": id,
+					"point": start + ld * best_t}
 			# Ray passed through the empty part of the cell -- keep marching.
 		prev = v
 		travelled = minf(tmax.x, minf(tmax.y, tmax.z))
@@ -1661,6 +1741,19 @@ func _shape_boxes_at(obj: Object, v: Vector3i, id: int, kind: String) -> Array:
 	if Blocks.is_stacked_slab(id):
 		return []
 	var low := Blocks.bottom_of(id)
+	if low == Blocks.PARTS:
+		# Each filled eighth is its own target, so you aim at, and mine, one
+		# part at a time rather than the cell holding them.
+		var cell := (obj as Planet).parts_at(v)
+		var pb: Array = []
+		for si in Blocks.PART_COUNT:
+			if si >= cell.size() or cell[si] == Blocks.AIR:
+				continue
+			var o := Vector3(si % Blocks.PART_DIM,
+				(si / Blocks.PART_DIM) % Blocks.PART_DIM,
+				si / (Blocks.PART_DIM * Blocks.PART_DIM)) * 0.5
+			pb.append([Vector3(v) + o, Vector3(v) + o + Vector3(0.5, 0.5, 0.5)])
+		return pb
 	if not (Blocks.is_slab(low) or low == Blocks.ROOF_SLAB
 			or Blocks.is_stair(low) or low == Blocks.WIRE):
 		return []
@@ -1758,7 +1851,8 @@ func _update_ghost(tgt: Dictionary) -> void:
 	if _ghost == null:
 		return
 	var place_id := _selected_id()
-	if place_id == Blocks.AIR or not Blocks.is_placeable_block(place_id):
+	if place_id == Blocks.AIR or not (Blocks.is_placeable_block(place_id)
+			or (fine_place and Blocks.is_partable(place_id))):
 		_ghost.visible = false
 		return
 	var plan := _placement_plan(tgt, place_id)
@@ -1771,10 +1865,23 @@ func _update_ghost(tgt: Dictionary) -> void:
 	var up := Vector3.UP
 	if obj is Planet:
 		up = (obj as Planet)._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
-	var boxes := Chunk.shape_boxes(value, up)
-	# Rebuilding the mesh every frame would be wasteful; the shape only changes
-	# when the block, its orientation, or the face you're on changes.
-	var sig := "%d|%s|%s" % [value, up, boxes.size()]
+	var boxes: Array
+	var sig: String
+	if plan.has("part"):
+		# Show the exact eighth about to be filled. Without this the preview is
+		# a whole cube and there is no way to tell which corner you are aiming
+		# at until after you have placed it.
+		var si := int(plan["part"])
+		var o := Vector3(si % Blocks.PART_DIM,
+			(si / Blocks.PART_DIM) % Blocks.PART_DIM,
+			si / (Blocks.PART_DIM * Blocks.PART_DIM)) * 0.5
+		boxes = [[o, o + Vector3(0.5, 0.5, 0.5)]]
+		sig = "part%d|%d" % [si, value]
+	else:
+		boxes = Chunk.shape_boxes(value, up)
+		# Rebuilding the mesh every frame would be wasteful; the shape only
+		# changes when the block, its orientation, or the face you're on changes.
+		sig = "%d|%s|%s" % [value, up, boxes.size()]
 	if sig != _ghost_sig:
 		_ghost_sig = sig
 		_ghost.mesh = _make_ghost_mesh(boxes)
@@ -1797,9 +1904,15 @@ func _update_crack(obj: Object, v: Vector3i, raw: int, progress: float) -> void:
 	var sig := "%d|%s" % [raw, up]
 	if sig != _crack_sig:
 		_crack_sig = sig
-		# Slightly inflated so the shell sits just proud of the block instead of
-		# fighting it for depth.
-		_crack.mesh = _make_ghost_mesh(boxes)
+		# Actually inflate it. The comment here used to claim this and the code
+		# did not do it, so the shell sat exactly coplanar with the block face
+		# and the two fought for depth -- which is the streaky mess that shows
+		# up over and around a block being mined.
+		var proud: Array = []
+		for b in boxes:
+			proud.append([(b[0] as Vector3) - Vector3.ONE * 0.006,
+				(b[1] as Vector3) + Vector3.ONE * 0.006])
+		_crack.mesh = _make_ghost_mesh(proud)
 	_crack_mat.set_shader_parameter("progress", clampf(progress, 0.0, 1.0))
 	_crack.global_transform = Transform3D(obj.global_transform.basis, obj.to_global(Vector3(v)))
 	_crack.visible = true
@@ -1868,7 +1981,11 @@ func _edit_block(_break_it: bool) -> void:
 	if Blocks.is_station(place_id):
 		_place_station(place_id)
 		return
-	if not Blocks.is_placeable_block(place_id):
+	# Parts are placeable even when the item is not a BLOCK: Circuitry and Alloy
+	# only exist as eighths, so gating them on is_placeable_block meant fine mode
+	# could never place the very things it was built for.
+	if not Blocks.is_placeable_block(place_id) and not (
+			fine_place and Blocks.is_partable(place_id)):
 		if place_id == Blocks.SUIT:
 			_toast("Drag the Suit into its equip slot (Inventory) to wear it")
 		elif Blocks.is_gear(place_id):
@@ -1885,6 +2002,10 @@ func _edit_block(_break_it: bool) -> void:
 	# the preview can't disagree with the result.
 	var plan := _placement_plan(tgt, place_id)
 	if plan.is_empty():
+		return
+	if plan.has("part") and tgt["kind"] == "planet":
+		(obj as Planet).set_part(plan["voxel"], int(plan["part"]), int(plan["value"]))
+		_consume_active()
 		return
 	# Slab-onto-slab lands in the cell you're POINTING AT, not the one beyond
 	# it, so it takes an early exit before the normal adjacent-cell path.
@@ -1914,6 +2035,47 @@ func _edit_block(_break_it: bool) -> void:
 			_consume_active()
 
 
+## Paint the cells a refused build got wrong, in place, for a few seconds.
+func _show_build_diff(planet: Planet, wrong: Array) -> void:
+	if _diff == null:
+		return
+	if wrong.is_empty():
+		_diff.visible = false
+		return
+	var boxes: Array = []
+	for w in wrong:
+		var sv: Vector3i = w[0]
+		var lo := Vector3(sv) * 0.5
+		# Cells that should be EMPTY are drawn full-size so "something is in the
+		# way here" reads differently from "something is missing here".
+		var pad := 0.5 if str(w[1]) == "." else 0.46
+		boxes.append([lo + Vector3.ONE * ((0.5 - pad) * 0.5), lo + Vector3.ONE * pad])
+	_diff.mesh = _make_ghost_mesh(boxes)
+	_diff.global_transform = Transform3D(planet.global_transform.basis,
+		planet.global_position)
+	_diff.visible = true
+	_diff_t = 6.0
+
+
+## The sub-cell the crosshair is on, and the one a part would go into, both in
+## GLOBAL eighth coordinates (voxel * 2 + sub). Working in that space makes
+## "the next eighth over" one addition whether it lands in this voxel or the
+## neighbouring one -- which is what lets you build a leg upward against
+## itself, not just against full blocks.
+func _sub_hit(tgt: Dictionary) -> Vector3i:
+	var pt: Vector3 = tgt.get("point", Vector3.ZERO)
+	var n: Vector3i = tgt.get("normal", Vector3i.ZERO)
+	var inside := pt - Vector3(n) * 0.002   # nudge off the face, into the solid
+	return Vector3i(floori(inside.x * 2.0), floori(inside.y * 2.0), floori(inside.z * 2.0))
+
+
+## Split a global eighth coordinate back into its voxel and sub-cell index.
+func _sub_split(sv: Vector3i) -> Array:
+	var v := Vector3i(floori(sv.x / 2.0), floori(sv.y / 2.0), floori(sv.z / 2.0))
+	var o := sv - v * 2
+	return [v, Blocks.part_index(o.x, o.y, o.z)]
+
+
 ## Where a block would land and what value it would take. Both the ghost and
 ## the real placement go through this, so the preview cannot disagree with what
 ## actually gets built. Returns {} if it wouldn't place.
@@ -1937,6 +2099,17 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 		return {"voxel": pv, "value": Blocks.make_stair(place_id,
 			Blocks.stair_state_facing(_stair_state),
 			Blocks.stair_state_variant(_stair_state))}
+	if fine_place and Blocks.is_partable(place_id):
+		var target := _sub_hit(tgt) + (tgt.get("normal", Vector3i.ZERO) as Vector3i)
+		var sp := _sub_split(target)
+		var tv: Vector3i = sp[0]
+		var si: int = sp[1]
+		var occ: int = (obj as Planet).get_id(tv)
+		if occ != Blocks.AIR and occ != Blocks.PARTS:
+			return {}   # a full block already fills that cell
+		if (obj as Planet).part_at(tv, si) != Blocks.AIR:
+			return {}   # that eighth is taken
+		return {"voxel": tv, "part": si, "value": place_id}
 	if place_id == Blocks.WIRE:
 		# Conduit is surface-mounted: it clings to the face you clicked, so it
 		# runs across floors, up walls and along ceilings. The face it hugs is
@@ -2000,6 +2173,10 @@ func _try_assemble_machine() -> bool:
 	var v: Vector3i = tgt["voxel"]
 	var is_core := int(tgt.get("id", Blocks.AIR)) == Blocks.MACHINE_CORE
 	var existing := planet.machine_station_at(v)
+	# Holding a Wrench is what MAKES something a station. Opening one you already
+	# built needs no tool -- only the act of commissioning it does, so nobody
+	# turns a shelf they liked the look of into a Fabricator by accident.
+	var wrench := _selected_id() == Blocks.WRENCH
 	# ANY block of a working machine opens it: the structure is the machine, so
 	# clicking its wall should do what clicking the core does. While it is
 	# damaged only the core opens -- the other blocks go back to being blocks so
@@ -2009,8 +2186,21 @@ func _try_assemble_machine() -> bool:
 			_toast("%s is damaged -- replace the missing block" % existing.title())
 		_open_station(existing)
 		return true
-	if not is_core:
+	if not wrench:
 		return false
+	# Sub-cell builds first: they are what the wrench is mostly for. Fall back to
+	# the older whole-block patterns, which still want their Machine Core.
+	var pres := planet.assemble_parts(v)
+	if pres.get("ok", false):
+		_toast("%s assembled" % pres.get("name", "Station"))
+		var pst := planet.machine_station_at(v)
+		if pst != null:
+			_open_station(pst)
+		return true
+	if not is_core:
+		_show_build_diff(planet, pres.get("wrong", []))
+		_toast(str(pres.get("reason", "That is not a station yet")))
+		return true
 	var res := planet.assemble_machine(v)
 	if res.get("ok", false):
 		_toast("%s assembled" % res.get("name", "Machine"))
@@ -2103,7 +2293,9 @@ func _process_mining(delta: float) -> void:
 		_look_name = od.get("name", "Ore") + " Ore  (unidentified)"
 	else:
 		var use := Blocks.use_of(id)
-		_look_name = Blocks.name_of(id) + ("  (" + use + ")" if use != "" else "")
+		# Named by the planet, so a retinted leaf reports the colour it IS.
+		var nm := planet.name_of(id) if planet != null else Blocks.name_of(id)
+		_look_name = nm + ("  (" + use + ")" if use != "" else "")
 	# Every block of an assembled machine reports the MACHINE, so a hand-built
 	# structure reads as one object instead of the bricks it is made of. Only
 	# while it is intact -- damage it and the blocks go back to being blocks,
@@ -2141,6 +2333,19 @@ func _process_mining(delta: float) -> void:
 	_mine_time += delta
 	_update_crack(obj, v, id, _mine_time / maxf(_mine_total, 0.001))
 	if _mine_time >= _mine_total:
+		if planet != null and Blocks.bottom_of(id) == Blocks.PARTS:
+			# One eighth at a time: the cell only turns back to air when the
+			# last part in it is gone.
+			var sp := _sub_split(_sub_hit(tgt))
+			var pid := planet.part_at(sp[0], int(sp[1]))
+			if pid != Blocks.AIR:
+				planet.clear_part(sp[0], int(sp[1]))
+				_add_item(pid, 1)
+			_mine_key = ""
+			_mine_time = 0.0
+			if _crack != null:
+				_crack.visible = false
+			return
 		if planet != null:
 			planet.set_block(v, Blocks.AIR)
 			planet.flow_water(v)  # let adjacent water pour into the gap
@@ -2354,6 +2559,13 @@ func _update_markers() -> void:
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
 		return
+	# Underground you cannot see the sky, so you cannot see what is in it. These
+	# are drawn as flat HUD text with no depth test, so without this they hang in
+	# front of solid rock like the planets are inside the cave with you.
+	if underground:
+		for m in _markers:
+			m.visible = false
+		return
 	while _markers.size() < world.planets.size():
 		var l := Label.new()
 		l.add_theme_font_size_override("font_size", 14)
@@ -2464,6 +2676,7 @@ func _build_ui() -> void:
 	_build_station_ui(layer)
 	_build_starmap_ui(layer)
 	_build_book_ui(layer)
+	_apply_place_mode_ui()   # start the crosshair and ghost in the right mode
 
 	# transient save/load confirmation, top-center
 	_toast_label = Label.new()
@@ -3862,8 +4075,14 @@ func _update_ui() -> void:
 
 	var held := _selected_id()
 	var tool_txt := "Drill (power %.1f, T%d)" % [mine_power, Blocks.max_tier_for_power(mine_power)] if mine_power > 1.0 else "bare hands"
-	_hotbar_label.text = "Holding: %s   |   Mining: %s" % [
-		(Blocks.name_of(held) if held != Blocks.AIR else "(empty slot)"), tool_txt]
+	# Fine placing changes what EVERY click does, so it cannot live in a toast
+	# you saw once. Left on by accident it silently builds eighth-blocks where
+	# you meant whole ones -- a structure that looks right and matches nothing.
+	var fine_txt := "   |   FINE PLACING (1/8) — C" if fine_place else ""
+	_hotbar_label.text = "Holding: %s   |   Mining: %s%s" % [
+		(Blocks.name_of(held) if held != Blocks.AIR else "(empty slot)"),
+		tool_txt, fine_txt]
+	_hotbar_label.modulate = Color(1.0, 0.82, 0.35) if fine_place else Color(1, 1, 1)
 	var p := world.nearest_planet(global_position) if world else null
 	var pname := p.planet_name if p else "Deep Space"
 	_mode_label.text = "%s  |  %s" % ["GROUNDED" if grounded else "FLOATING (6-axis)", pname]

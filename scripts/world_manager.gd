@@ -147,9 +147,12 @@ func save_game() -> bool:
 	# not snap the world to a different hour.
 	data["day_phase"] = {}
 	data["machines"] = {}
+	data["parts"] = {}
 	for p in planets:
 		if not p._edits_by_chunk.is_empty():
 			data["planets"][p.planet_name] = p._edits_by_chunk
+		if not p._parts_by_chunk.is_empty():
+			data["parts"][p.planet_name] = p._parts_by_chunk
 		data["day_phase"][p.planet_name] = p.day_phase
 		# Only the CONTROLLER positions: the blocks already persist, so this
 		# stays tiny and can never disagree with the world it describes.
@@ -212,6 +215,7 @@ func load_game() -> bool:
 	var pedits: Dictionary = data.get("planets", {})
 	var pphase: Dictionary = data.get("day_phase", {})
 	for p in planets:
+		p._parts_by_chunk = (data.get("parts", {}) as Dictionary).get(p.planet_name, {})
 		p.load_edits(pedits.get(p.planet_name, {}))
 		p.day_phase = float(pphase.get(p.planet_name, p.day_phase))
 		p.machine_cores = (data.get("machines", {}).get(p.planet_name, []) as Array).duplicate()

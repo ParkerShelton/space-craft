@@ -42,6 +42,14 @@ const LEAF_11 := 27  # mint
 const LEAF_IDS := [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27]
 const WOOD_IDS := [13, 14, 15]
 
+# STONE: the hard stuff under a planet's soil, and what ore is embedded in.
+# Every planet archetype currently uses ROCK for that layer -- if a world ever
+# gets its own stone (basalt, chalk), add it here and every recipe that asks for
+# stone accepts it with no other change. Deliberately NOT dirt, regolith, ice or
+# crystal: those are soils and surfaces, not something you would build a furnace
+# out of.
+const STONE_IDS := [ROCK]
+
 # --- legacy fixed ore ids (kept so old planet configs don't break; no longer
 #     generated -- ores are now procedural per planet, see ORE slots below) ---
 const COPPER_ORE := 28
@@ -146,7 +154,7 @@ const DRILL := 51            # mining tool; its power (from its material) sets m
 const O2_TANK := 55
 const SUIT := 56             # worn gear: reduces hazard damage (insulation from Density)
 const WEAPON := 59           # melee weapon: its damage (from its material) beats bare hands
-const TOOL_IDS := [DRILL, SUIT, WEAPON, PULSE_PISTOL]
+const TOOL_IDS := [DRILL, SUIT, WEAPON, PULSE_PISTOL, WRENCH]
 
 const LIFE_SUPPORT := 53     # ship block: with a sealed interior it makes the ship habitable
 const GLASS := 54            # transparent, solid hull -- windows that still seal a cabin
@@ -445,6 +453,10 @@ static func base_material_of(id: int) -> int:
 ## {"label", "out", "n", "cost_n"}. One entry per SHAPE, not per material.
 static func shapes_for(mat: int) -> Array:
 	var out: Array = []
+	# Sawing a log is the one shape that MULTIPLIES: one log gives four boards,
+	# and they keep the timber they came from.
+	if PLANK_OF.has(mat):
+		out.append({"shape": "Planks", "out": int(PLANK_OF[mat]), "n": 4, "cost_n": 1})
 	if SLAB_OF.has(mat):
 		out.append({"shape": "Slab", "out": int(SLAB_OF[mat]), "n": 2, "cost_n": 1})
 	if STAIR_OF.has(mat):
@@ -465,6 +477,33 @@ const COOLER := 98        # multiblock: the opposite -- sheds heat on a scorchin
 const WIRE := 99          # planet-side conduit: carries power between machines
 const BATTERY := 100      # carried charge: fill it at a base, empty it into a ship
 const POWER_BAY := 101    # ship station: batteries in, ship tanks filled
+
+# --- eighth-block PARTS -------------------------------------------------------
+# A voxel holding PARTS is a marker: its real contents are eight sub-cells kept
+# in the planet's parts table, addressed as sx + sy*2 + sz*4. Machines are meant
+# to be BUILT rather than conjured from a menu, and a full cube is too coarse a
+# brush for a workbench leg or a control panel.
+const PARTS := 102
+const WRENCH := 103       # right-click a build with this to turn it into a station
+
+# Sawn boards, one per timber. A log keeps its species through the saw, so a
+# pale forest builds a pale house -- the material is the player's signature and
+# turning every wood into one generic plank would throw that away.
+const PLANK := 104
+const PLANK_PALE := 105
+const PLANK_DARK := 106
+const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
+const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
+const PART_DIM := 2                    # sub-cells per axis
+const PART_COUNT := PART_DIM * PART_DIM * PART_DIM
+
+static func part_index(sx: int, sy: int, sz: int) -> int:
+	return sx + sy * PART_DIM + sz * PART_DIM * PART_DIM
+
+## Can this item be placed as an eighth rather than a full cube? Building
+## materials can, so a leg can be wood and a panel metal; loose gear cannot.
+static func is_partable(id: int) -> bool:
+	return id == ALLOY or id == CIRCUIT or (id in PLACEABLE and not is_station(id))
 
 ## Machines that can ONLY exist as a structure you physically build -- there is
 ## deliberately no single-block version that does the same job worse. The small
@@ -543,6 +582,247 @@ const STRUCTURES := [
 ]
 
 
+# --- buildable stations -------------------------------------------------------
+#
+# Patterns are written in EIGHTH-blocks, so a full cube is simply eight filled
+# sub-cells and legs, worktops and panels can all be described in one grid.
+# Layers run bottom to top; each row runs along local +Z, each character along
+# local +X. Matched in four rotations about local up.
+#
+# A legend character names a CLASS, not one block, so the same bench can be oak
+# or pine and still be a bench. That is deliberate: the shape is the recipe, the
+# material is yours.
+const PART_CLASSES := {
+	"W": WOOD_IDS,                       # any wood
+	"S": STONE_IDS,                      # stone only -- not soil, not ice
+	"M": [METAL],
+	"A": [ALLOY],
+	"C": [CIRCUIT],
+	"G": [GLASS],
+}
+
+const PART_STRUCTURES := [
+	{
+		"name": "Carpenter's Bench",
+		"result": CARPENTER,
+		"size": Vector3i(4, 2, 2),       # two blocks wide, one deep, one tall
+		"layers": [
+			["W..W", "W..W"],            # a leg at each end
+			["WWWW", "WWWW"],            # worktop across the top
+		],
+	},
+	{
+		# A forge hearth built from EIGHTHS: a stone shell two blocks wide and
+		# two tall, one block deep, with a mouth cut into its face. At this
+		# resolution it reads as a fireplace rather than a stack of cubes, which
+		# is the whole reason parts exist.
+		"name": "Smelter",
+		"result": SMELTER,
+		"size": Vector3i(4, 4, 2),        # 2 x 2 blocks, one deep, in eighths
+		"layers": [
+			["SSSS", "SSSS"],             # hearth floor
+			["S..S", "SSSS"],             # fire chamber, open at the front
+			["S..S", "SSSS"],
+			["SSSS", "SSSS"],             # lintel across the top
+		],
+	},
+	{
+		# A metal box with its control panel built from real parts: circuit board
+		# below, alloy casing above, in the one block at the front left.
+		"name": "Fabricator",
+		"result": FABRICATOR,
+		"size": Vector3i(4, 4, 4),
+		"layers": [
+			["MMMM", "MMMM", "MMMM", "MMMM"],     # metal base
+			["MMMM", "MMMM", "MMMM", "MMMM"],
+			["CCMM", "CCMM", "MMMM", "MMMM"],     # circuit boards
+			["AAMM", "AAMM", "MMMM", "MMMM"],     # alloy facing over them
+		],
+	},
+]
+
+
+# Class membership as SETS. The matcher asks "is this id in this class" tens of
+# thousands of times per wrench click, and a linear scan of an Array there is
+# most of the cost.
+static var _CLASS_SETS: Dictionary = {}
+# Per pattern and rotation, the cells flattened once into [offset, class_char].
+# Rebuilding these inside the search meant re-reading strings and re-running the
+# rotation maths for every candidate placement -- that was the wrench's lag.
+static var _PART_CELLS: Dictionary = {}
+
+
+static func class_set(ch: String) -> Dictionary:
+	if _CLASS_SETS.is_empty():
+		for k in PART_CLASSES:
+			var d := {}
+			for id in PART_CLASSES[k]:
+				d[id] = true
+			_CLASS_SETS[k] = d
+	return _CLASS_SETS.get(ch, {})
+
+
+## Flattened, rotated cells of a pattern: [[Vector3i offset, String ch], ...].
+static func part_cells(di: int, rot: int) -> Array:
+	var key := di * 4 + rot
+	var got = _PART_CELLS.get(key)
+	if got != null:
+		return got
+	var def: Dictionary = PART_STRUCTURES[di]
+	var size: Vector3i = def["size"]
+	var layers: Array = def["layers"]
+	var out: Array = []
+	for y in layers.size():
+		var rows: Array = layers[y]
+		for z in rows.size():
+			var row: String = rows[z]
+			for x in row.length():
+				out.append([_rotate_offset(Vector3i(x, y, z), size, rot), row[x]])
+	_PART_CELLS[key] = out
+	return out
+
+
+static var _PART_PROBES: Dictionary = {}
+
+## Three filled cells spread across a pattern, used to reject a candidate
+## placement in three checks instead of ninety-six. Without this the search has
+## to score every placement equally, runs out of its work budget, and reports
+## whichever wrong answer it happened to reach first.
+static func part_probes(di: int, rot: int) -> Array:
+	var key := di * 4 + rot
+	var got = _PART_PROBES.get(key)
+	if got != null:
+		return got
+	var filled: Array = []
+	for c in part_cells(di, rot):
+		if c[1] != ".":
+			filled.append(c)
+	var out: Array = []
+	if not filled.is_empty():
+		out.append(filled[0])
+		out.append(filled[filled.size() / 2])
+		out.append(filled[filled.size() - 1])
+	_PART_PROBES[key] = out
+	return out
+
+
+static var _PART_IDS: Dictionary = {}
+
+## Every block id that appears anywhere in a pattern, as a set. Used to skip
+## patterns the block you clicked could not possibly belong to.
+static func part_pattern_ids(di: int) -> Dictionary:
+	var got = _PART_IDS.get(di)
+	if got != null:
+		return got
+	var d := {}
+	for lay in (PART_STRUCTURES[di] as Dictionary)["layers"]:
+		for row in lay:
+			for ch in str(row):
+				if ch == ".":
+					continue
+				for id in PART_CLASSES.get(ch, []):
+					d[id] = true
+	_PART_IDS[di] = d
+	return d
+
+
+## Is every sub-cell in this pattern doubled up on all three axes? If so it can
+## be built out of whole cubes, and the Recipe Book can say so at block scale
+## instead of making you read an eighth-by-eighth grid.
+static func part_pattern_is_blocky(def: Dictionary) -> bool:
+	var size: Vector3i = def["size"]
+	if size.x % 2 != 0 or size.y % 2 != 0 or size.z % 2 != 0:
+		return false
+	var layers: Array = def["layers"]
+	for y in layers.size():
+		var rows: Array = layers[y]
+		# paired with the layer it shares a block with
+		var orows: Array = layers[y ^ 1]
+		for z in rows.size():
+			var row: String = rows[z]
+			if row != String(orows[z]) or row != String(rows[z ^ 1]):
+				return false
+			for x in row.length():
+				if row[x] != row[x ^ 1]:
+					return false
+	return true
+
+
+## A build guide for a sub-cell station.
+static func part_structure_diagram(def: Dictionary, with_name := true) -> String:
+	var size: Vector3i = def["size"]
+	var layers: Array = def["layers"]
+	var blocky := part_pattern_is_blocky(def)
+	var step := 2 if blocky else 1
+	var out := "%s  (%d wide x %d tall x %d deep %s)" % [
+		def["name"] if with_name else "Pattern",
+		size.x / step, size.y / step, size.z / step,
+		"blocks" if blocky else "eighths"]
+	var names := ["bottom", "middle", "top"]
+	var count := layers.size() / step
+	var y := 0
+	while y < layers.size():
+		var li := y / step
+		var tag := ""
+		if count == 2:
+			tag = "  (%s)" % ["bottom", "top"][li]
+		elif count == 3:
+			tag = "  (%s)" % names[li]
+		out += "
+  layer %d%s" % [li + 1, tag]
+		# Rows STACKED, one per line, so a layer reads as the footprint you
+		# actually lay down rather than a run of groups on one line.
+		var rows: Array = layers[y]
+		var z := 0
+		while z < rows.size():
+			var row: String = rows[z]
+			var cut := ""
+			var x := 0
+			while x < row.length():
+				cut += row[x]
+				x += step
+			out += "
+      " + cut
+			z += step
+		y += step
+	out += "
+  rows run front to back, seen from above"
+	# Say the quiet part: nothing here becomes a station until you tell it to.
+	out += "
+  build it, then right-click with a Wrench"
+	var key := PackedStringArray()
+	var seen := {}
+	for lay in layers:
+		for row in lay:
+			for ch in str(row):
+				if seen.has(ch):
+					continue
+				seen[ch] = true
+				if ch == ".":
+					key.append(". = empty")
+				else:
+					key.append("%s = %s" % [ch, class_label(ch)])
+	out += "
+  " + "   ".join(key)
+	if not blocky:
+		out += "
+  (each character is an eighth-block part)"
+	return out
+
+
+## Name the ACTUAL blocks a pattern character accepts. Saying "any stone" was
+## worse than useless: there is no block called Stone, so it read as a block
+## name that does not exist and gave no clue that Grass or Snow are not it.
+static func class_label(ch: String) -> String:
+	var cls: Array = PART_CLASSES.get(ch, [])
+	if cls.is_empty():
+		return "?"
+	var names := PackedStringArray()
+	for id in cls:
+		names.append(name_of(int(id)))
+	return " / ".join(names)
+
+
 ## Every recipe in the game, flattened into one list the Recipe Book can show.
 ##
 ## Each entry carries a STABLE key, so unlocking recipes as you progress is a
@@ -561,6 +841,10 @@ static func all_recipes() -> Array:
 				"n": int(r.get("n", 1)), "reqs": r.get("reqs", []),
 				"cost": int(r.get("cost", 0)), "extra": r.get("extra", {}),
 				"diagram": ""})
+	for d in PART_STRUCTURES:
+		out.append({"key": "part:%s" % str(d["name"]), "src": "Built from blocks",
+			"cat": "Machines", "out": int(d["result"]), "n": 1, "reqs": [],
+			"cost": 0, "extra": {}, "diagram": part_structure_diagram(d, false)})
 	for d in STRUCTURES:
 		out.append({"key": "struct:%s" % str(d["name"]), "src": "Built from blocks",
 			"cat": "Machines", "out": int(d["result"]), "n": 1, "reqs": [],
@@ -657,16 +941,21 @@ static func _rotate_offset(o: Vector3i, size: Vector3i, rot: int) -> Vector3i:
 ## new recipe only has to declare which drawer it lives in.
 const CRAFT_CATS := ["All", "Stations", "Light", "Building", "Materials"]
 
+# Stations are BUILT, not crafted: the Smelter, Fabricator and Carpenter's Bench
+# are laid out block by block and commissioned with a Wrench (see
+# PART_STRUCTURES). What is left here is gear that lives on your person.
 const HAND_RECIPES := [
-	{"cat": "Stations", "out": SMELTER, "n": 1, "reqs": [{"id": ROCK, "n": 15}]},
 	{"cat": "Stations", "out": CHEST, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
 	{"cat": "Materials", "out": METAL, "n": 4, "reqs": [{"refined": true, "n": 1}]},        # cast ingots into hull plates
-	{"cat": "Stations", "out": FABRICATOR, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 	{"cat": "Stations", "out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
-	{"cat": "Stations", "out": CARPENTER, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 12, "label": "Wood"}]},
 	{"cat": "Stations", "out": MACHINE_CORE, "n": 1,
 		"reqs": [{"id": METAL, "n": 4}, {"refined": true, "n": 1}]},
 	{"cat": "Stations", "out": SHAPER, "n": 1, "reqs": [{"id": ROCK, "n": 10}, {"id": METAL, "n": 2}]},
+	# The tool that turns a pile of blocks into a machine. Deliberately makeable
+	# with nothing but what you can gather by hand: every station is built now,
+	# so a wrench you could not make would lock the whole game.
+	{"cat": "Materials", "out": WRENCH, "n": 1,
+		"reqs": [{"id": ROCK, "n": 4}, {"any": WOOD_IDS, "n": 2, "label": "Wood"}]},
 	# The base's nervous system: cheap, because a grid you cannot afford to run
 	# across your base is a grid you build around instead of with.
 	{"cat": "Building", "out": WIRE, "n": 8, "reqs": [{"id": METAL, "n": 1}, {"refined": true, "n": 1}]},
@@ -762,7 +1051,8 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	CRYSTAL_SLAB, METAL_SLAB, WOOD_SLAB, GLASS_SLAB,
 	ROCK_STAIR, DIRT_STAIR, GRASS_STAIR, REGOLITH_STAIR, ICE_STAIR, SNOW_STAIR,
 	CRYSTAL_STAIR, METAL_STAIR, WOOD_STAIR, GLASS_STAIR,
-	TORCH, GLOW_LAMP, EMBER_TORCH, MACHINE_CORE, WIRE]
+	TORCH, GLOW_LAMP, EMBER_TORCH, MACHINE_CORE, WIRE,
+	PLANK, PLANK_PALE, PLANK_DARK]
 
 const NAMES := {
 	AIR: "Air",
@@ -813,6 +1103,11 @@ const NAMES := {
 	WIRE: "Power Conduit",
 	BATTERY: "Battery",
 	POWER_BAY: "Power Bay",
+	PARTS: "Parts",
+	WRENCH: "Wrench",
+	PLANK: "Planks",
+	PLANK_PALE: "Pale Planks",
+	PLANK_DARK: "Dark Planks",
 	TORCH: "Torch",
 	EMBER_TORCH: "Ember Torch",
 	GLOW_LAMP: "Glow Lamp",
@@ -854,6 +1149,7 @@ const HARDNESS := {
 	LEAF_0: 0.2, LEAF_1: 0.2, LEAF_2: 0.2, LEAF_3: 0.2, LEAF_4: 0.2, LEAF_5: 0.2,
 	LEAF_6: 0.2, LEAF_7: 0.2, LEAF_8: 0.2, LEAF_9: 0.2, LEAF_10: 0.2, LEAF_11: 0.2,
 	WOOD: 0.6, WOOD_PALE: 0.6, WOOD_DARK: 0.6,
+	PLANK: 0.5, PLANK_PALE: 0.5, PLANK_DARK: 0.5,
 	WIRE: 0.3,
 	TORCH: 0.1, GLOW_LAMP: 0.3, EMBER_TORCH: 0.1, MACHINE_CORE: 1.2,
 	ICE: 0.7, ROCK: 0.9, CRYSTAL: 1.2, CORE: 1.6,
@@ -911,6 +1207,11 @@ const COLORS := {
 	WIRE: Color(0.72, 0.56, 0.20),
 	BATTERY: Color(0.45, 0.80, 0.55),
 	POWER_BAY: Color(0.50, 0.70, 0.60),
+	PARTS: Color(0.70, 0.70, 0.72),
+	WRENCH: Color(0.72, 0.66, 0.30),
+	PLANK: Color(0.60, 0.42, 0.24),
+	PLANK_PALE: Color(0.78, 0.65, 0.46),
+	PLANK_DARK: Color(0.38, 0.26, 0.17),
 	TORCH: Color(1.0, 0.74, 0.40),
 	EMBER_TORCH: Color(1.0, 0.62, 0.26),
 	GLOW_LAMP: Color(0.95, 0.97, 1.0),
@@ -1043,6 +1344,25 @@ static func is_placeable_block(id: int) -> bool:
 static func refined_of(ore_id: int) -> int:
 	var i := ORE_SLOT_IDS.find(ore_id)
 	return REFINED_SLOT_IDS[i] if i >= 0 else AIR
+
+## What a colour would be CALLED. Leaf blocks carry colour words in their names
+## ("Mint Leaves"), but a planet retints them freely, so the fixed name and the
+## thing on screen stop agreeing. Naming from the actual colour keeps the two
+## honest wherever the world's palette is known.
+static func hue_name(c: Color) -> String:
+	if c.s < 0.12:
+		return "Ashen" if c.v < 0.55 else "Bone"
+	var bands := [
+		[0.028, "Crimson"], [0.055, "Rust"], [0.09, "Amber"], [0.14, "Golden"],
+		[0.19, "Olive"], [0.26, "Lime"], [0.36, "Green"], [0.43, "Mint"],
+		[0.50, "Teal"], [0.55, "Cyan"], [0.62, "Azure"], [0.70, "Indigo"],
+		[0.78, "Violet"], [0.86, "Magenta"], [0.94, "Rose"], [1.01, "Crimson"],
+	]
+	for b in bands:
+		if c.h < float(b[0]):
+			return str(b[1])
+	return "Crimson"
+
 
 static func color_of(raw: int) -> Color:
 	# Stacked slabs are looked up by their LOWER half; the mesher draws each

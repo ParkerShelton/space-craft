@@ -82,6 +82,8 @@ static func _get_material(p: Planet) -> ShaderMaterial:
 	m.set_shader_parameter("dirt_id", float(Blocks.DIRT))
 	m.set_shader_parameter("wood_lo", float(Blocks.WOOD_IDS.min()))
 	m.set_shader_parameter("wood_hi", float(Blocks.WOOD_IDS.max()))
+	m.set_shader_parameter("plank_lo", float(Blocks.PLANK_IDS.min()))
+	m.set_shader_parameter("plank_hi", float(Blocks.PLANK_IDS.max()))
 	m.set_shader_parameter("leaf_lo", float(Blocks.LEAF_IDS.min()))
 	m.set_shader_parameter("leaf_hi", float(Blocks.LEAF_IDS.max()))
 	# Per-planet seed AND centre: the centre is what lets wood grain run along
@@ -91,6 +93,15 @@ static func _get_material(p: Planet) -> ShaderMaterial:
 		oids.append(float(oid))
 	m.set_shader_parameter("ore_ids", oids)
 	m.set_shader_parameter("ore_chunk_id", ORE_CHUNK_ID)
+	# Foliage silhouette varies per world, so an alien canopy differs in shape
+	# and density and not only in colour.
+	m.set_shader_parameter("leaf_holes", p.leaf_holes)
+	m.set_shader_parameter("leaf_grain", p.leaf_grain)
+	m.set_shader_parameter("ground_grain", p.ground_grain)
+	m.set_shader_parameter("ground_levels", p.ground_levels)
+	m.set_shader_parameter("ground_contrast", p.ground_contrast)
+	m.set_shader_parameter("rock_grain", p.rock_grain)
+	m.set_shader_parameter("rock_contrast", p.rock_contrast)
 	m.set_shader_parameter("light_lo", float(Blocks.LIGHT_IDS.min()))
 	m.set_shader_parameter("light_hi", float(Blocks.LIGHT_IDS.max()))
 	m.set_shader_parameter("rock_id", float(Blocks.ROCK))
@@ -228,6 +239,23 @@ func apply_mesh_data(data: Dictionary) -> void:
 # extra data in the high bytes, so indexing by `id & ID_MASK` is exact: a
 # stacked slab's low byte is its bottom slab id, which is already not-full and
 # see-through, matching what the per-call version decided.
+## Key under which _edits_snapshot hands the mesher a thread-safe copy of the
+## parts table (voxel -> PackedByteArray of eight sub-cell ids).
+const PARTS_KEY := "__parts"
+
+# Daylight fades with how deeply a face is buried. Depth ALONE, deliberately:
+# earlier versions also probed upward for a roof and took the darker of the two,
+# and the two signals fell off at different rates, so one cavern wall snapped to
+# black while the wall beside it stayed lit. One smooth term cannot blotch.
+#
+# SKY_FREE is slack for voxel stepping -- blocky ground means a cliff face in
+# full daylight still sits a few blocks under the smooth noise surface.
+const SKY_FREE := 4.0
+const SKY_FADE := 30.0
+
+# How far below the surface daylight stops reaching, in blocks. Below this a
+# face is lit only by whatever the player brought with them.
+
 static var _FULL: PackedByteArray
 static var _SEETHRU: PackedByteArray
 # Leaves are see-through, so without this two adjacent leaves would EACH draw a
@@ -248,7 +276,7 @@ static func _static_init() -> void:
 		var full: bool = not (id == Blocks.AIR or id == Blocks.WATER
 			or id == Blocks.DOOR_OPEN or id == Blocks.ROOF_SLAB
 			or Blocks.is_slab(id) or Blocks.is_stair(id) or Blocks.is_light(id)
-			or Blocks.is_wire(id))
+			or Blocks.is_wire(id) or id == Blocks.PARTS)
 		_FULL[id] = 1 if full else 0
 		# Leaves are meshed AND see-through: they are drawn with cutout holes, so
 		# they must not hide the block behind them.
@@ -383,7 +411,8 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 		var v := (d + 2) % 3
 		for dir in [1, -1]:
 			_greedy_pass(planet, snap, d, u, v, dir, base, ids, strides,
-				verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, uv2s, wuv2s, cverts)
+				verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, uv2s, wuv2s,
+				cverts)
 
 	# water: one box per cell, its height set by the water level (shallow water
 	# renders lower). Fill is along the cell's outward axis (radial-snapped).
@@ -485,7 +514,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 						if absf(up.x) > 0.5: thin.x = (a1.x - a0.x) * 0.5
 						elif absf(up.y) > 0.5: thin.y = (a1.y - a0.y) * 0.5
 						else: thin.z = (a1.z - a0.z) * 0.5
-						_emit_free_box(mid - thin, mid + thin, Blocks.color_of(lid),
+						_emit_free_box(mid - thin, mid + thin, planet.color_of(lid),
 							lid, verts, normals, colors, uvs, uv2s, 1.0)
 					else:
 						_emit_solid_box_cell(lo, lo + Vector3.ONE, gv, lid,
@@ -503,7 +532,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 				if Blocks.bottom_of(wid) == Blocks.WIRE:
 					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
 					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
-					var col := Blocks.color_of(Blocks.WIRE)
+					var col := planet.color_of(Blocks.WIRE)
 					# Reach toward neighbouring conduit only, so arms never
 					# poke into the wall the run is stapled to.
 					var conn := 0
@@ -523,6 +552,33 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 							col, Blocks.WIRE, verts, normals, colors, uvs, uv2s,
 							_face_light(snap, gv, Vector3i.ZERO))
 				idx += 1
+
+	# eighth-block parts: a workbench leg, a control panel, a machine's guts. Each
+	# occupied sub-cell is a half-size box in its own material, and unlike leaves
+	# or conduit these DO collide -- you stand on the bench you built.
+	var pmap: Dictionary = snap.get(PARTS_KEY, {})
+	if not pmap.is_empty():
+		idx = 0
+		for z in CS:
+			for y in CS:
+				for x in CS:
+					if ids[idx] == Blocks.PARTS:
+						var gv := Vector3i(base.x + x, base.y + y, base.z + z)
+						var cell = pmap.get(gv)
+						if cell != null and (cell as PackedByteArray).size() == Blocks.PART_COUNT:
+							var lit := _face_light(snap, gv, Vector3i.ZERO)
+							for si in Blocks.PART_COUNT:
+								var pid: int = (cell as PackedByteArray)[si]
+								if pid == Blocks.AIR:
+									continue
+								var sx := si % Blocks.PART_DIM
+								var sy := (si / Blocks.PART_DIM) % Blocks.PART_DIM
+								var sz := si / (Blocks.PART_DIM * Blocks.PART_DIM)
+								var plo := Vector3(x + sx * 0.5, y + sy * 0.5, z + sz * 0.5)
+								_emit_free_box(plo, plo + Vector3(0.5, 0.5, 0.5),
+									_block_color(planet, pid), pid,
+									verts, normals, colors, uvs, uv2s, lit, cverts)
+					idx += 1
 
 	# ore lumps: decorative geometry on exposed ore faces (see _emit_ore_chunks)
 	idx = 0
@@ -556,14 +612,14 @@ static func _hash3(v: Vector3i, k: int) -> float:
 static func _emit_free_box(lo: Vector3, hi: Vector3, base_col: Color, bid: int,
 		verts: PackedVector3Array, normals: PackedVector3Array,
 		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array,
-		light: float = 0.0) -> void:
+		light: float = 0.0, cverts: PackedVector3Array = PackedVector3Array()) -> void:
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
 		var sh := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
 		var col := Color(base_col.r * sh, base_col.g * sh, base_col.b * sh, base_col.a)
 		var q := _box_face(lo, hi, fi)
 		_quad(q[0], q[1], q[2], q[3], Vector3(n), col, verts, normals, colors, uvs, uv2s, bid, sh,
-			light)
+			light, cverts)
 
 
 ## Ore lumps standing proud of an ore block's exposed faces, so a vein reads as
@@ -595,7 +651,8 @@ static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 				                     # so it grows OUT of the rock rather than
 				                     # sitting on top of it like a dropped cube
 			_emit_free_box(c - Vector3.ONE * sz, c + Vector3.ONE * sz,
-				ore_col, ORE_CHUNK_ID, verts, normals, colors, uvs, uv2s,
+				Color(ore_col.r, ore_col.g, ore_col.b, _sky_depth(planet, gv)),
+				ORE_CHUNK_ID, verts, normals, colors, uvs, uv2s,
 				_face_light(snap, gv, n))
 
 
@@ -727,14 +784,14 @@ static func _half_toward(lo: Vector3, hi: Vector3, dir: Vector3) -> Array:
 static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Planet,
 		snap: Dictionary, wverts: PackedVector3Array, wnormals: PackedVector3Array,
 		wcolors: PackedColorArray, wuvs: PackedVector2Array, wuv2s: PackedVector2Array) -> void:
-	var base := Blocks.color_of(Blocks.WATER)
+	var base := planet.color_of(Blocks.WATER)
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
 		var wnid := _id_at(planet, snap, gv + n)
 		if wnid != Blocks.AIR and not Blocks.is_leaf(Blocks.bottom_of(wnid)):
 			continue  # only the faces exposed to air are drawn
 		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
-		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
+		var col := Color(base.r * s, base.g * s, base.b * s, _sky_depth(planet, gv))
 		var nrm := Vector3(n)
 		var q := _box_face(lo, hi, fi)
 		_quad(q[0], q[1], q[2], q[3], nrm, col, wverts, wnormals, wcolors, wuvs, wuv2s, Blocks.WATER, s)
@@ -770,7 +827,8 @@ static func _box_face(lo: Vector3, hi: Vector3, fi: int) -> Array:
 		_: return [Vector3(lo.x, lo.y, lo.z), Vector3(lo.x, hi.y, lo.z), Vector3(hi.x, hi.y, lo.z), Vector3(hi.x, lo.y, lo.z)]  # -Z
 
 
-static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: int, dir: int,
+static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: int,
+		dir: int,
 		base: Vector3i, ids: PackedInt32Array, strides: Array,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray,
@@ -792,6 +850,11 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 	# meshing on light level too.
 	var lmask := PackedInt32Array()
 	lmask.resize(CS * CS)
+	# Daylight per face. It has to take part in the merge key, or one quad can
+	# span a wall running from the topsoil down into a cave and take a single
+	# brightness for the whole thing.
+	var smask := PackedInt32Array()
+	smask.resize(CS * CS)
 	# Hoisted: with no light sources in range _face_light returns 0 immediately,
 	# but paying a function call per face to learn that is not free.
 	var _lm = snap.get(LM_KEY)
@@ -816,6 +879,10 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 							_LEAF[nlow] == 1 and _LEAF[oid & Blocks.ID_MASK] == 1):
 						val = oid
 				mask[k + j * CS] = val
+				smask[k + j * CS] = 15
+				if val != 0:
+					smask[k + j * CS] = int(round(_sky_depth(planet,
+						_global_coord(base, d, u, v, a, k, j)) * 15.0))
 				lmask[k + j * CS] = 0
 				if val != 0 and has_light:
 					lmask[k + j * CS] = int(round(_face_light(snap,
@@ -823,28 +890,43 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 						Vector3i(int(narr[0]), int(narr[1]), int(narr[2]))) * 15.0))
 
 		var w_coord := a + (1 if dir > 0 else 0)
-		_emit_mask(planet, snap, mask, lmask, d, u, v, dir, w_coord, normal,
-			verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, uv2s, wuv2s, cverts)
+		_emit_mask(planet, snap, mask, lmask, smask, d, u, v, dir, w_coord, normal,
+			verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, uv2s, wuv2s,
+			cverts, base)
 
 
 # Opaque blocks use their registry colour, except procedural ores, whose colour is
 # defined by the planet (each world's ores look different).
+## How much daylight reaches this voxel, from depth below the terrain surface.
+## Sampled per QUAD -- greedy meshing means one lookup covers a whole wall.
+static func _sky_depth(planet: Planet, gv: Vector3i) -> float:
+	var c := Vector3(gv) + Vector3(0.5, 0.5, 0.5)
+	var ln := c.length()
+	var depth: float = planet.surface_radius(c / maxf(ln, 0.0001)) - planet._norm(c)
+	if depth <= SKY_FREE:
+		return 1.0
+	return clampf(1.0 - (depth - SKY_FREE) / SKY_FADE, 0.0, 1.0)
+
+
 static func _block_color(planet: Planet, id: int) -> Color:
 	# Ore blocks are meshed as STONE. The ore itself is drawn by the shader as
 	# chunks embedded in that stone (colour supplied per planet via uniforms),
 	# rather than the whole block being one flat ore colour.
 	if Blocks.is_ore(id):
-		return Blocks.color_of(planet.pal_rock)
-	return Blocks.color_of(id)
+		return planet.color_of(planet.pal_rock)
+	# Per-planet, not per-registry: the block id stays global so recipes and
+	# inventories are unchanged, while what you see belongs to this world.
+	return planet.color_of(id)
 
 
 static func _emit_mask(planet: Planet, snap: Dictionary, mask: PackedInt32Array,
-		lmask: PackedInt32Array, d: int, u: int, v: int, dir: int, w_coord: int,
+		lmask: PackedInt32Array, smask: PackedInt32Array, d: int, u: int, v: int, dir: int, w_coord: int,
 		normal: Vector3,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray,
 		uvs: PackedVector2Array, wuvs: PackedVector2Array, uv2s: PackedVector2Array,
-		wuv2s: PackedVector2Array, cverts: PackedVector3Array) -> void:
+		wuv2s: PackedVector2Array, cverts: PackedVector3Array,
+		base: Vector3i) -> void:
 	for j in CS:
 		var k := 0
 		while k < CS:
@@ -853,14 +935,15 @@ static func _emit_mask(planet: Planet, snap: Dictionary, mask: PackedInt32Array,
 				k += 1
 				continue
 			var lv := lmask[k + j * CS]
+			var sv := smask[k + j * CS]
 			var wdt := 1
-			while k + wdt < CS and mask[k + wdt + j * CS] == val 					and lmask[k + wdt + j * CS] == lv:
+			while k + wdt < CS and mask[k + wdt + j * CS] == val 					and lmask[k + wdt + j * CS] == lv and smask[k + wdt + j * CS] == sv:
 				wdt += 1
 			var hgt := 1
 			var stop := false
 			while j + hgt < CS and not stop:
 				for x in wdt:
-					if mask[k + x + (j + hgt) * CS] != val 							or lmask[k + x + (j + hgt) * CS] != lv:
+					if mask[k + x + (j + hgt) * CS] != val 							or lmask[k + x + (j + hgt) * CS] != lv 							or smask[k + x + (j + hgt) * CS] != sv:
 						stop = true
 						break
 				if not stop:
@@ -872,8 +955,10 @@ static func _emit_mask(planet: Planet, snap: Dictionary, mask: PackedInt32Array,
 			# Bake per-face directional shading into the vertex color so faces of
 			# different orientation read distinctly even under flat ambient light.
 			var s := _face_shade(d, dir)
-			var base := _block_color(planet, val)
-			var col := Color(base.r * s, base.g * s, base.b * s, base.a)  # keep alpha (water)
+			var bcol := _block_color(planet, val)
+			var col := Color(bcol.r * s, bcol.g * s, bcol.b * s, bcol.a)  # keep alpha (water)
+			if val != Blocks.WATER:
+				col.a = float(sv) / 15.0   # opaque terrain: alpha carries daylight
 			var p00 := _corner(d, u, v, w_coord, k, j)
 			var p10 := _corner(d, u, v, w_coord, k + wdt, j)
 			var p11 := _corner(d, u, v, w_coord, k + wdt, j + hgt)

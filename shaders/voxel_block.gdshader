@@ -2,7 +2,12 @@ shader_type spatial;
 // CULL_DISABLED is deliberate and pairs with backface_collision on the chunk's
 // ConcavePolygonShape3D -- together they make rendering AND collision correct
 // regardless of triangle winding. Do not "fix" this to cull backfaces.
-render_mode cull_disabled, diffuse_burley;
+// ambient_light_disabled: the renderer's ambient is added AFTER the fragment
+// shader and ignores light(), so a cave wall kept receiving the sky's colour no
+// matter what -- looking up underground showed the sky's own tint washed over
+// the rock. Ambient is applied here instead, scaled by how much sky the face
+// can actually see.
+render_mode cull_disabled, diffuse_burley, ambient_light_disabled;
 
 // Procedural, TEXEL-BASED block texturing.
 //
@@ -20,10 +25,24 @@ render_mode cull_disabled, diffuse_burley;
 // Texels therefore line up across merged quads and chunk borders for free.
 // UV carries only the block id.
 
+// The environment's ambient, handed over so this shader can apply it itself.
+uniform vec3 ambient_color : source_color = vec3(0.4, 0.5, 0.7);
+uniform float ambient_energy = 0.3;
+
 uniform float world_seed = 0.0;
 uniform vec3 planet_center = vec3(0.0);
 uniform float texture_strength = 1.0; // 0 = flat colours again
 uniform float leaf_cutout = 1.0;      // 0 = no holes in leaves
+// Per-planet SURFACE STYLE. Seeding the pattern alone left every world with the
+// same material: same cell size, same number of steps, same contrast. These let
+// one planet be a fine even wash and the next a coarse two-tone mottle.
+uniform float ground_grain = 1.0;
+uniform float ground_levels = 4.0;
+uniform float ground_contrast = 1.0;
+uniform float rock_grain = 1.0;
+uniform float rock_contrast = 1.0;
+uniform float leaf_holes = 1.0;       // per-planet gappiness, 0 = solid canopy
+uniform float leaf_grain = 1.0;       // per-planet foliage cell size
 uniform float texels = 8.0;           // cells per block edge -- the "resolution"
 
 // Block id ranges, set from Blocks so they can't drift out of sync.
@@ -31,6 +50,8 @@ uniform float grass_id = 3.0;
 uniform float dirt_id = 2.0;
 uniform float wood_lo = 13.0;
 uniform float wood_hi = 15.0;
+uniform float plank_lo = 104.0;
+uniform float plank_hi = 106.0;
 uniform float leaf_lo = 16.0;
 uniform float leaf_hi = 27.0;
 uniform float rock_id = 1.0;
@@ -51,6 +72,7 @@ varying vec3 v_normal;
 varying float v_shade;   // baked face shading, so ore chunks light like the face
 varying float v_log_axis; // a log's trunk axis (0=X,1=Y,2=Z); 3 = not a log
 varying float v_block_light; // 0..1 torch light reaching this face, baked by the mesher
+varying float v_sky;         // 0..1 daylight reaching this face, baked by the mesher
 
 float hash21(vec2 p) {
 	vec3 q = fract(vec3(p.xyx) * 0.1031);
@@ -82,7 +104,21 @@ void vertex() {
 	v_shade = UV.y;
 	v_log_axis = UV2.x;
 	v_block_light = UV2.y;
+	// Opaque terrain has no use for vertex alpha, so it carries daylight reach.
+	v_sky = COLOR.a;
 }
+
+// Sunlight is scaled by how much sky reaches the face. Dimming ALBEDO instead
+// only makes a lit surface darker -- the sun still falls on it, so a cave was
+// bright grey at noon and near black at midnight, tracking the day/night cycle
+// exactly like the open surface. Gating the LIGHT is what makes underground
+// independent of the time of day.
+void light() {
+	float s = clamp(v_sky, 0.0, 1.0);
+	DIFFUSE_LIGHT += clamp(dot(NORMAL, LIGHT), 0.0, 1.0)
+		* ATTENUATION * LIGHT_COLOR * ALBEDO * s;
+}
+
 
 void fragment() {
 	// The vertex colour already carries the block's own colour AND the baked
@@ -98,16 +134,21 @@ void fragment() {
 	float h = hash21(cell);
 	float shade = 1.0;
 
+	vec2 gcell = floor(fc * texels * ground_grain)
+		+ vec2(world_seed * 13.7, world_seed * 7.1);
+	float gh = hash21(gcell);
+
 	if (abs(id - grass_id) < 0.5) {
 		// GRASS: mostly even, with a few darker and a few brighter cells --
-		// enough to break the slab up without looking like static.
-		shade = 0.90 + quantize(h, 4.0) * 0.20;
+		// enough to break the slab up without looking like static. How even,
+		// and at what scale, is this planet's own.
+		shade = 1.0 + (quantize(gh, ground_levels) - 0.5) * 0.20 * ground_contrast;
 
 	} else if (abs(id - dirt_id) < 0.5) {
 		// DIRT: coarser and grittier, with the occasional near-black cell
 		// standing in for a pebble.
-		shade = 0.84 + quantize(h, 5.0) * 0.26;
-		shade *= (h > 0.94) ? 0.78 : 1.0;
+		shade = 1.0 + (quantize(gh, ground_levels + 1.0) - 0.5) * 0.26 * ground_contrast;
+		shade *= (gh > 0.94) ? 0.78 : 1.0;
 
 	} else if (id >= wood_lo - 0.5 && id <= wood_hi + 0.5) {
 		// WOOD: the giveaway is BANDS, not speckle. Cells are grouped into
@@ -167,18 +208,38 @@ void fragment() {
 		}
 		shade *= 0.97 + h * 0.06;   // faint per-cell break-up on top
 
+	} else if (id >= plank_lo - 0.5 && id <= plank_hi + 0.5) {
+		// PLANKS: sawn boards, so the pattern is LONG STRIPES with a dark seam
+		// between them, not the log's rings and bark. Boards run along the same
+		// face axis everywhere, which is what makes a plank wall read as
+		// floorboards instead of a flat panel.
+		vec2 tc = fc * texels;
+		float board = floor(tc.y / 3.0);          // a board every three texels
+		float seam = fract(tc.y / 3.0);
+		shade = 0.90 + quantize(hash21(vec2(board, 7.0)), 3.0) * 0.16;
+		// Grain along the length of each board, keyed to the board so two
+		// neighbours never share a pattern.
+		shade *= 0.97 + quantize(hash21(vec2(floor(tc.x), board)), 3.0) * 0.06;
+		if (seam < 0.12) {
+			shade *= 0.80;                        // the gap between boards
+		}
+
 	} else if (id >= leaf_lo - 0.5 && id <= leaf_hi + 0.5) {
 		// LEAVES: chunky cells with hard-edged holes punched on the SAME grid,
 		// so gaps look like missing pixels rather than smooth erosion. Alpha
 		// scissor keeps this in the cheap opaque pass and sorts correctly.
-		shade = 0.84 + quantize(h, 4.0) * 0.28;
-		float hole = hash21(cell + 19.7);
+		// Foliage cells are sized per planet, so one world has fine speckled
+		// fronds and another broad flat pads.
+		vec2 lcell = floor(fc * texels * leaf_grain) + vec2(world_seed * 3.1, world_seed * 5.9);
+		float lh = hash21(lcell);
+		shade = 0.84 + quantize(lh, 4.0) * 0.28;
+		float hole = hash21(lcell + 19.7);
 		// Close the holes up with distance. There are no mipmaps on a
 		// procedural pattern, so at range a canopy full of one-texel gaps
 		// turns into shimmering speckle against the sky -- and every discard
 		// costs fill rate. Near the camera, where they actually read as
 		// foliage, they stay open.
-		float thr = 0.10 * (1.0 - smoothstep(14.0, 30.0, length(VERTEX)));
+		float thr = 0.10 * leaf_holes * (1.0 - smoothstep(14.0, 30.0, length(VERTEX)));
 		// discard, NOT ALPHA. Writing ALPHA at all makes Godot treat this
 		// material as transparent, and transparent surfaces get no omni lights
 		// in the Compatibility renderer -- which silently meant torches lit
@@ -192,8 +253,9 @@ void fragment() {
 		// ROCK: deliberately the smoothest surface in the set. Stone should
 		// read as a solid mass, so it gets only two shade steps off a HALF
 		// resolution grid -- broad, calm patches rather than per-texel grit.
-		float rh = hash21(floor(fc * texels * 0.5) + vec2(world_seed * 5.0));
-		shade = 0.965 + quantize(rh, 2.0) * 0.05;
+		float rh = hash21(floor(fc * texels * 0.5 * rock_grain)
+			+ vec2(world_seed * 5.0));
+		shade = 1.0 + (quantize(rh, 2.0) - 0.5) * 0.05 * rock_contrast;
 
 	} else if (id >= light_lo - 0.5 && id <= light_hi + 0.5) {
 		// A light source is the one thing that should NOT be shaded down by the
@@ -213,7 +275,8 @@ void fragment() {
 	// than a pattern painted on the face.
 	for (int i = 0; i < 4; i++) {
 		if (abs(id - ore_ids[i]) < 0.5) {
-			shade = 0.965 + quantize(hash21(floor(fc * texels * 0.5) + 2.0), 2.0) * 0.05;
+			shade = 1.0 + (quantize(hash21(floor(fc * texels * 0.5 * rock_grain) + 2.0), 2.0)
+				- 0.5) * 0.05 * rock_contrast;
 		}
 	}
 	// The protruding lumps themselves: keep their own (ore) vertex colour, and
@@ -226,6 +289,20 @@ void fragment() {
 
 	base *= mix(1.0, shade, texture_strength);
 
+	// Underground the surface stops returning daylight, so a cave is dark at
+	// noon. Never fully black: torchlight and the mining overlay have to read
+	// against it. Torches are EMISSION below and so still work down there.
+	float sky = clamp(v_sky, 0.0, 1.0);
+
+	// COLOUR NEEDS LIGHT. An alien world tints its stone magenta or blue, and
+	// dimming a saturated colour just gives a dark saturated colour -- so an
+	// unlit cave read as blue and magenta rather than as unlit rock. Real stone
+	// in the dark goes grey, because there is not enough light to see hue by.
+	// Torchlight counts as light, so a lit cave gets its colour back.
+	float litness = max(sky, clamp(v_block_light, 0.0, 1.0));
+	float lum = dot(base, vec3(0.299, 0.587, 0.114));
+	base = mix(vec3(lum), base, mix(0.15, 1.0, litness));
+
 	ALBEDO = base;
 	// Push well past 1.0 so the glow survives tonemapping and reads as a flame
 	// rather than a pale cube.
@@ -235,7 +312,25 @@ void fragment() {
 	// rather than just a brighter version of daylight.
 	float bl = v_block_light;
 	vec3 lamp = mix(vec3(1.0, 0.62, 0.34), vec3(1.0, 0.88, 0.70), bl);
-	EMISSION = base * emit * 2.6 + base * lamp * bl * bl * 1.9;
+	// A CONSTANT floor underground, owing nothing to the sun. This is what makes
+	// a cave the same darkness at noon and at midnight: it is not sunlight
+	// reduced, it is the small amount of light there always is down there.
+	EMISSION = base * emit * 2.6 + base * lamp * bl * bl * 1.9
+		// A CONSTANT floor underground, owing nothing to the sun. This is what
+		// makes a cave the same darkness at noon and at midnight: not sunlight
+		// reduced, but the small amount of light there always is down there.
+		+ base * 0.085 * (1.0 - sky)
+		// Starlight on anything open to the sky. Invisible against daylight;
+		// at night it is the difference between dark and unreadable.
+		+ base * 0.075 * sky
+		// Ambient, but only where the sky can reach. This is the piece the
+		// renderer used to add for us, unconditionally.
+		+ base * ambient_color * ambient_energy * sky;
+	// Underground, kill the ambient/sky contribution too, or a cave floor still
+	// reads as a dim outdoor surface rather than something genuinely unlit.
+	// Ambient is sky light too, so it dies underground with everything else.
+	AO = sky;
+	AO_LIGHT_AFFECT = 1.0;
 	ROUGHNESS = 0.85;
 	METALLIC = 0.0;
 }
