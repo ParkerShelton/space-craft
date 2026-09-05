@@ -68,6 +68,9 @@ var cave_noise2 := FastNoiseLite.new()  # BIG: second field, multiplied with the
 var cave_noise3 := FastNoiseLite.new()  # FINE: same technique, higher frequency, more common
 var cave_noise4 := FastNoiseLite.new()  # FINE: branching partner for cave_noise3
 var cave_enabled := false
+## "warren" (most worlds): walkable tunnels with rooms off them. "cavern": the
+## enormous voids, kept for a minority of planets as a spectacle.
+var cave_style := "warren"
 var cave_threshold := 0.04         # BIG: higher = thinner/rarer caverns
 var cave_threshold_fine := 0.04    # FINE: higher = thinner/rarer veins
 var cave_min_depth := 5.0          # normal tunnels need at least this much roof
@@ -1650,11 +1653,39 @@ func _derive_caves(amount: float) -> void:
 	if not cave_enabled:
 		return
 
-	# BIG network: sparse, wide -> the rare giant caverns. More amount -> lower
-	# threshold (denser) and lower frequency (bigger rooms).
-	cave_threshold = lerpf(0.90, 0.62, a)
+	# How this world's caves are SHAPED, independently of how many it has. Most
+	# planets get a warren -- corridors you walk down with the odd room off them.
+	# A minority keep the enormous voids, which are worth seeing but make a poor
+	# default: a chamber wider than the streaming radius shows you its own
+	# unloaded far wall, and its ceiling sits shallow enough to catch daylight.
+	var srng := RandomNumberGenerator.new()
+	srng.seed = _seed + 9191
+	cave_style = "cavern" if srng.randf() < 0.22 else "warren"
+
+	# Cave size is measured in BLOCKS. It used to be divided by the planet
+	# radius, so a bigger world got proportionally bigger caves: on a 1300-block
+	# planet the main network had a ~900-block wavelength and even the "fine
+	# veins" ran ~200. That is how a cave system became a shaft you fall down for
+	# a mile. A cave is something you walk through, so its scale belongs in paces
+	# rather than in planet radii.
+	var room_size := lerpf(52.0, 34.0, a)
+	var tunnel_size := lerpf(22.0, 15.0, a)
+	if cave_style == "cavern":
+		room_size = lerpf(150.0, 100.0, a)
+		tunnel_size = lerpf(40.0, 27.0, a)
+
+	# BIG network: sparse, wide -> the rooms. More amount -> lower threshold
+	# (denser) and lower frequency (bigger rooms).
+	# Thresholds are calibrated against the fraction of rock they actually open
+	# (measured, not guessed): these give roughly 0.5%-3% for the rooms and
+	# 1.5%-7% for the tunnels, so a warren world lands near 2%-10% open. The old
+	# values opened 32% of every planet's rock, which is what made caves read as
+	# endless connected voids rather than as passages through stone.
+	cave_threshold = lerpf(0.82, 0.72, a)
+	if cave_style == "cavern":
+		cave_threshold = lerpf(0.78, 0.66, a)
 	cave_breach_threshold = minf(cave_threshold + 0.09, 0.985)
-	var freq := lerpf(4.5, 1.4, a) / maxf(radius, 1.0)
+	var freq := 1.0 / room_size
 	cave_noise.seed = _seed + 2020
 	cave_noise.frequency = freq
 	cave_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
@@ -1670,12 +1701,12 @@ func _derive_caves(amount: float) -> void:
 	# straight shaft dug down from almost any spot eventually breaks into one,
 	# without requiring you to stumble on a rare big cavern. Present even on
 	# "barely-there" (low amount) worlds so digging down always has a decent shot.
-	cave_threshold_fine = lerpf(0.62, 0.42, a)
+	cave_threshold_fine = lerpf(0.76, 0.66, a)
 	# breach uses a near-absolute bar (NOT a small margin over the base threshold,
 	# which is tuned low for deep diggability and would make breaches everywhere)
 	# so surface entrances from the fine network stay rare regardless of density
 	cave_breach_threshold_fine = lerpf(0.965, 0.93, a)
-	var freq_fine := lerpf(9.0, 6.0, a) / maxf(radius, 1.0)
+	var freq_fine := 1.0 / tunnel_size
 	cave_noise3.seed = _seed + 4040
 	cave_noise3.frequency = freq_fine
 	cave_noise3.noise_type = FastNoiseLite.TYPE_SIMPLEX

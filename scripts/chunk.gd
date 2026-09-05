@@ -651,7 +651,7 @@ static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 				                     # so it grows OUT of the rock rather than
 				                     # sitting on top of it like a dropped cube
 			_emit_free_box(c - Vector3.ONE * sz, c + Vector3.ONE * sz,
-				Color(ore_col.r, ore_col.g, ore_col.b, _sky_depth(planet, gv)),
+				Color(ore_col.r, ore_col.g, ore_col.b, _sky_depth(planet, snap, gv)),
 				ORE_CHUNK_ID, verts, normals, colors, uvs, uv2s,
 				_face_light(snap, gv, n))
 
@@ -791,7 +791,7 @@ static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Pla
 		if wnid != Blocks.AIR and not Blocks.is_leaf(Blocks.bottom_of(wnid)):
 			continue  # only the faces exposed to air are drawn
 		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
-		var col := Color(base.r * s, base.g * s, base.b * s, _sky_depth(planet, gv))
+		var col := Color(base.r * s, base.g * s, base.b * s, _sky_depth(planet, snap, gv))
 		var nrm := Vector3(n)
 		var q := _box_face(lo, hi, fi)
 		_quad(q[0], q[1], q[2], q[3], nrm, col, wverts, wnormals, wcolors, wuvs, wuv2s, Blocks.WATER, s)
@@ -881,7 +881,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				mask[k + j * CS] = val
 				smask[k + j * CS] = 15
 				if val != 0:
-					smask[k + j * CS] = int(round(_sky_depth(planet,
+					smask[k + j * CS] = int(round(_sky_depth(planet, snap,
 						_global_coord(base, d, u, v, a, k, j)) * 15.0))
 				lmask[k + j * CS] = 0
 				if val != 0 and has_light:
@@ -899,13 +899,29 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 # defined by the planet (each world's ores look different).
 ## How much daylight reaches this voxel, from depth below the terrain surface.
 ## Sampled per QUAD -- greedy meshing means one lookup covers a whole wall.
-static func _sky_depth(planet: Planet, gv: Vector3i) -> float:
+static func _sky_depth(planet: Planet, snap: Dictionary, gv: Vector3i) -> float:
 	var c := Vector3(gv) + Vector3(0.5, 0.5, 0.5)
 	var ln := c.length()
 	var depth: float = planet.surface_radius(c / maxf(ln, 0.0001)) - planet._norm(c)
 	if depth <= SKY_FREE:
 		return 1.0
-	return clampf(1.0 - (depth - SKY_FREE) / SKY_FADE, 0.0, 1.0)
+	var f := clampf(1.0 - (depth - SKY_FREE) / SKY_FADE, 0.0, 1.0)
+	if f <= 0.0:
+		return 0.0
+	# Depth below the surface cannot tell a shallow cave from an open hillside:
+	# on depth alone a chamber ten blocks under solid rock comes out 80% daylit,
+	# which is why caves near the surface still read as lit by the sky. So look
+	# UP and see whether anything is actually in the way. Cells deep enough to
+	# have no daylight to lose returned above and never pay for this.
+	var up := planet._axis_of(c)
+	var uq := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
+	if uq == Vector3i.ZERO:
+		return f
+	var reach := int(depth) + 2
+	for i in range(1, reach):
+		if _FULL[_id_at(planet, snap, gv + uq * i) & Blocks.ID_MASK] == 1:
+			return 0.0
+	return f
 
 
 static func _block_color(planet: Planet, id: int) -> Color:
