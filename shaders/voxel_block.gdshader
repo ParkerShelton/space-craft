@@ -311,7 +311,10 @@ void fragment() {
 	// and warmed toward flame colour so a torch-lit room reads as firelight
 	// rather than just a brighter version of daylight.
 	float bl = v_block_light;
-	vec3 lamp = mix(vec3(1.0, 0.62, 0.34), vec3(1.0, 0.88, 0.70), bl);
+	// Warm at BOTH ends. Fading toward white as the light gets stronger put the
+	// coldest colour right where the flame is, so a torch sat in a pale grey
+	// pool -- the opposite of firelight, which is most orange at its source.
+	vec3 lamp = mix(vec3(1.0, 0.58, 0.30), vec3(1.0, 0.76, 0.46), bl);
 	// A CONSTANT floor underground, owing nothing to the sun. This is what makes
 	// a cave the same darkness at noon and at midnight: it is not sunlight
 	// reduced, it is the small amount of light there always is down there.

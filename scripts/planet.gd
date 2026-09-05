@@ -2938,8 +2938,20 @@ func _build_task(cc: Vector3i, snap: Dictionary, wsnap: Dictionary) -> void:
 # Copy edits for a chunk and its 6 face-neighbors into a plain dict for a worker.
 func _edits_snapshot(cc: Vector3i) -> Dictionary:
 	var snap := {}
-	const OFFS := [Vector3i(0, 0, 0), Vector3i(1, 0, 0), Vector3i(-1, 0, 0),
-		Vector3i(0, 1, 0), Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	# The FULL 3x3x3 neighbourhood, not just the 6 face-adjacent chunks. A torch
+	# lights up to 14 blocks (see Blocks.light_level), which reaches diagonally
+	# into the corner chunks as easily as straight into the face ones -- and a
+	# light the mesher cannot see in the snapshot is a light it cannot bake.
+	const OFFS := [Vector3i(0, 0, 0),
+		Vector3i(-1, -1, -1), Vector3i(-1, -1, 0), Vector3i(-1, -1, 1),
+		Vector3i(-1, 0, -1), Vector3i(-1, 0, 0), Vector3i(-1, 0, 1),
+		Vector3i(-1, 1, -1), Vector3i(-1, 1, 0), Vector3i(-1, 1, 1),
+		Vector3i(0, -1, -1), Vector3i(0, -1, 0), Vector3i(0, -1, 1),
+		Vector3i(0, 0, -1), Vector3i(0, 0, 1),
+		Vector3i(0, 1, -1), Vector3i(0, 1, 0), Vector3i(0, 1, 1),
+		Vector3i(1, -1, -1), Vector3i(1, -1, 0), Vector3i(1, -1, 1),
+		Vector3i(1, 0, -1), Vector3i(1, 0, 0), Vector3i(1, 0, 1),
+		Vector3i(1, 1, -1), Vector3i(1, 1, 0), Vector3i(1, 1, 1)]
 	var parts := {}
 	for off in OFFS:
 		var d = _edits_by_chunk.get(cc + off)
@@ -3123,6 +3135,18 @@ func set_block(v: Vector3i, id: int) -> void:
 	if local.y == CS - 1: _edit_remesh(cc + Vector3i(0, 1, 0))
 	if local.z == 0: _edit_remesh(cc + Vector3i(0, 0, -1))
 	if local.z == CS - 1: _edit_remesh(cc + Vector3i(0, 0, 1))
+	# A light source reaches far past its own chunk, and every chunk it touches
+	# has that light BAKED into its mesh (see Chunk._compute_block_light). Only
+	# re-meshing this one left the neighbours holding their old, unlit mesh, so a
+	# torch's pool of light stopped dead against a straight line on the chunk
+	# boundary. Light never travels further than one chunk (max level 14 < CS),
+	# so the 3x3x3 around it is exactly enough.
+	if Blocks.light_level(id) > 0 or Blocks.light_level(was) > 0:
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				for dz in range(-1, 2):
+					if dx != 0 or dy != 0 or dz != 0:
+						_edit_remesh(cc + Vector3i(dx, dy, dz))
 
 
 ## Planet doors are placed as TWO stacked voxels (see Player._edit_block) so they
