@@ -16,6 +16,12 @@ const CS := Blocks.CHUNK_SIZE
 # per-chunk cost contributor and complicates loading-perf debugging, so it's
 # out of the picture entirely until it's brought back deliberately.
 const SETTLEMENTS_DISABLED := true
+## Hostile wildlife is switched off (2026-09-05, user request) -- the guaranteed
+## combat enemy is not created and no hostile species is ever spawned. Passive
+## and neutral wildlife is untouched. Flip this back to false to re-enable; the
+## species are still generated from the seed either way, so turning it off and on
+## does not change what a world rolls.
+const HOSTILES_DISABLED := true
 
 # --- configuration (set via configure()) ---
 var planet_name := "Planet"
@@ -305,13 +311,24 @@ func _water_block() -> int:
 
 var _forced_enemy_species: Dictionary = {}  # set by _derive_fauna when force_hostile_enemy is true
 
+## Drop hostile species from a fauna list, so they are never picked at spawn.
+## Filtering the LISTS rather than each of the four spawn sites means a habitat
+## whose species were all hostile correctly reports itself as empty.
+func _without_hostiles(list: Array) -> Array:
+	var keep: Array = []
+	for sp in list:
+		if (sp as Dictionary).get("temperament", "") != "hostile":
+			keep.append(sp)
+	return keep
+
+
 func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _seed + 6060
 	var n_land := rng.randi_range(2, 4)
 	for i in n_land:
 		fauna_land.append(_make_species(rng, "land"))
-	if force_hostile_enemy:
+	if force_hostile_enemy and not HOSTILES_DISABLED:
 		# Guaranteed on top of the normal roll (not instead of it) -- for combat
 		# testing on the home planet regardless of what the random wildlife mix
 		# would otherwise be. Independent of settlements/civ tier.
@@ -335,6 +352,12 @@ func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	var n_air := rng4.randi_range(1, 3)
 	for i in n_air:
 		fauna_air.append(_make_species(rng4, "air"))
+	if HOSTILES_DISABLED:
+		_forced_enemy_species = {}
+		fauna_land = _without_hostiles(fauna_land)
+		fauna_fish = _without_hostiles(fauna_fish)
+		fauna_cave = _without_hostiles(fauna_cave)
+		fauna_air = _without_hostiles(fauna_air)
 
 
 # A handful of resident "professions" (really just look/behavior archetypes,
@@ -2213,7 +2236,26 @@ func _dist_to_segment(p: Vector3, a: Vector3, b: Vector3) -> float:
 
 func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 	var c := float(tree_cell)
-	var sp := _surface_point(dir)  # surface point beneath p (cube- or sphere-aware)
+	# The surface point BENEATH p, in the same frame the trees are built in.
+	#
+	# This used to project p RADIALLY (_surface_point(p.normalized())), but on a
+	# cube planet a tree grows along its face NORMAL, not toward the core. The
+	# two disagree by the voxel's height times its distance from the face centre,
+	# over the radius -- 30 blocks at 40 up and 1000 off centre, which is more
+	# than a whole tree cell. The canopy of a tall tree therefore looked itself up
+	# in the WRONG cell: its own cell fell outside the scan, so no leaves were
+	# generated above the trunk, while the cell it drifted into supplied leaves
+	# off to one side. That is the trees whose foliage sits beside them instead of
+	# on top, and why it only afflicts tall trees far from a face centre.
+	var sp := _surface_point(dir)
+	if shape_cube:
+		# Keep the HEIGHT that radial projection found, but put it back at p's own
+		# tangential position. That costs a handful of vector ops and no extra
+		# noise lookup, and the leftover error -- sampling the height a little way
+		# off, where the terrain is a few blocks different -- can only ever shift
+		# the cell along the up axis, which the neighbour scan already covers.
+		var up_a := _axis_of(dir)
+		sp = (p - up_a * p.dot(up_a)) + up_a * sp.dot(up_a)
 	var scell := Vector3i(floori(sp.x / c), floori(sp.y / c), floori(sp.z / c))
 	# How many neighbouring cells can reach this voxel. Only the giants need a
 	# wider sweep, and paying for it everywhere would slow generation on every
@@ -2253,6 +2295,15 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 				var sink := 1.0 + trunk_rad * 2.0
 				if along >= -sink and along <= float(th) and horiz < trunk_rad:
 					return flora_wood
+				# Nothing else in this tree can reach p, so skip the canopy and
+				# coral-lobe work outright. That work is the expensive half of
+				# terrain generation -- a coral tree walks every lobe with trig
+				# and hashing, once per candidate cell -- and most candidate
+				# cells are nowhere near the voxel being asked about. The bounds
+				# are deliberately loose; they are verified to reproduce the
+				# previous terrain voxel-for-voxel.
+				if horiz > cr * 1.3 + trunk_rad + 1.0 						or along > float(th) * 1.15 + cr * 1.6 + 1.0 						or along < minf(-sink - 1.0, float(th) - cr * 2.2 - 1.0):
+					continue
 				if flora_shape == 4:
 					# CORAL: lobes budding off the stem at different heights and
 					# bearings. Each is joined to the stem by a real BRANCH --
@@ -2268,9 +2319,14 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 					for lb in lobes:
 						var a := _hash01(cc, 20 + lb) * TAU
 						var hgt := float(th) * (0.5 + _hash01(cc, 30 + lb) * 0.6)
-						var reach := cr * (0.5 + _hash01(cc, 40 + lb) * 0.7)
+						# Lobe centre and radius are kept so that centre+radius
+						# stays inside the reach the neighbour scan actually
+						# covers (1.15x the canopy). They used to sum to 2.2x, so
+						# the outer half of every lobe fell in cells no voxel ever
+						# consulted and was simply missing.
+						var reach := cr * (0.30 + _hash01(cc, 40 + lb) * 0.40)
 						var lc := base + up * hgt + (ax * cos(a) + bx * sin(a)) * reach
-						var lr := cr * (0.5 + _hash01(cc, 50 + lb) * 0.5)
+						var lr := cr * (0.30 + _hash01(cc, 50 + lb) * 0.15)
 						if (p - lc).length() < lr:
 							return flora_leaves[int(_hash01(cc, 60 + lb)
 								* flora_leaves.size()) % flora_leaves.size()]
@@ -3059,6 +3115,23 @@ func load_edits(e: Dictionary) -> void:
 ## Dispatched straight away (ignoring MAX_INFLIGHT -- an edit touches at most 7
 ## chunks, and making it queue behind terrain streaming is exactly the delay
 ## being removed), then collected in _process the moment the worker is done.
+## Can a light of level `lvl` at voxel `v` put any light into chunk `cc`?
+##
+## Light spreads one cell at a time through the 6 face neighbours, losing a level
+## per step, so the distance that matters is MANHATTAN, not straight-line. A
+## torch in the middle of a chunk reaches its face neighbours and no further --
+## the corner chunks are three times as far by this measure, which is why
+## rebuilding all 26 of them was almost entirely wasted work.
+func _light_reaches(cc: Vector3i, v: Vector3i, lvl: int) -> bool:
+	var lo := cc * CS
+	var hi := lo + Vector3i(CS - 1, CS - 1, CS - 1)
+	var d := 0
+	d += maxi(0, maxi(lo.x - v.x, v.x - hi.x))
+	d += maxi(0, maxi(lo.y - v.y, v.y - hi.y))
+	d += maxi(0, maxi(lo.z - v.z, v.z - hi.z))
+	return d <= lvl - 1
+
+
 func _edit_remesh(cc: Vector3i) -> void:
 	if not loaded_chunks.has(cc):
 		return
@@ -3177,12 +3250,23 @@ func set_block(v: Vector3i, id: int) -> void:
 	# torch's pool of light stopped dead against a straight line on the chunk
 	# boundary. Light never travels further than one chunk (max level 14 < CS),
 	# so the 3x3x3 around it is exactly enough.
-	if Blocks.light_level(id) > 0 or Blocks.light_level(was) > 0:
+	# Only the chunks it ACTUALLY reaches, and only at normal priority. Rebuilding
+	# the whole 3x3x3 on the high-priority edit path meant 27 full chunk re-meshes
+	# for one torch, all landing on the main thread together -- a second-long
+	# freeze. Light spilling into a neighbour is a cosmetic update: it can arrive
+	# a few frames later through the ordinary streaming queue. The chunk the light
+	# is IN was already queued at high priority above, so the block itself still
+	# appears instantly.
+	var lvl := maxi(Blocks.light_level(id), Blocks.light_level(was))
+	if lvl > 0:
 		for dx in range(-1, 2):
 			for dy in range(-1, 2):
 				for dz in range(-1, 2):
-					if dx != 0 or dy != 0 or dz != 0:
-						_edit_remesh(cc + Vector3i(dx, dy, dz))
+					if dx == 0 and dy == 0 and dz == 0:
+						continue
+					var ncc := cc + Vector3i(dx, dy, dz)
+					if loaded_chunks.has(ncc) and _light_reaches(ncc, v, lvl):
+						_dirty[ncc] = true
 
 
 ## Planet doors are placed as TWO stacked voxels (see Player._edit_block) so they
