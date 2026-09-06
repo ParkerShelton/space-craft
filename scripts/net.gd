@@ -240,16 +240,21 @@ func _planet(planet_name: String) -> Planet:
 
 ## Sent often and unreliably: a dropped position update is replaced by the next
 ## one a moment later, and waiting for a resend would be worse than the gap.
+##
+## FACING is sent as a direction, not as a yaw angle. A player's yaw is measured
+## against the surface it happens to be standing on, so the same number means a
+## different direction on the far side of a planet -- reconstructing it elsewhere
+## produced a skewed body that leaned over.
 @rpc("any_peer", "call_remote", "unreliable_ordered")
-func player_state(pos: Vector3, yaw: float) -> void:
+func player_state(pos: Vector3, facing: Vector3) -> void:
 	var id := multiplayer.get_remote_sender_id()
 	if not peers.has(id):
 		peers[id] = {}
 		roster_changed.emit()
 	peers[id]["pos"] = pos
-	peers[id]["yaw"] = yaw
+	peers[id]["facing"] = facing
 
 
-func broadcast_state(pos: Vector3, yaw: float) -> void:
+func broadcast_state(pos: Vector3, facing: Vector3) -> void:
 	if active:
-		player_state.rpc(pos, yaw)
+		player_state.rpc(pos, facing)

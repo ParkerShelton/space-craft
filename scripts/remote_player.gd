@@ -10,7 +10,6 @@ class_name RemotePlayer
 var peer_id := 0
 
 var _target := Vector3.ZERO
-var _target_yaw := 0.0
 var _label: Label3D
 
 
@@ -37,7 +36,9 @@ func setup(id: int) -> void:
 		_box(Vector3(0.10, 0.10, 0.06), Vector3(sx * 0.11, FEET + 1.77, -0.22),
 			Color(0.05, 0.05, 0.06))
 	_label = Label3D.new()
-	_label.text = "Player %d" % id
+	# Peer ids are large random numbers; the last four digits are enough to tell
+	# two people apart and short enough to read across a field.
+	_label.text = "Player %04d" % (id % 10000)
 	_label.font_size = 48
 	_label.pixel_size = 0.006
 	_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
@@ -58,19 +59,25 @@ func _box(size: Vector3, pos: Vector3, col: Color) -> void:
 	add_child(mi)
 
 
-## Where the network last said this player was. Position updates arrive maybe
-## twenty times a second, so they are smoothed toward rather than snapped to --
+## Where the network last said this player was. Updates arrive about twenty
+## times a second, so they are smoothed toward rather than snapped to --
 ## otherwise everyone else visibly stutters.
-func remote_state(pos: Vector3, yaw: float, up: Vector3) -> void:
+func remote_state(pos: Vector3, facing: Vector3, up: Vector3) -> void:
 	_target = pos
-	_target_yaw = yaw
-	if up.length() > 0.01:
-		var fwd := Vector3(sin(yaw), 0, cos(yaw))
-		var side := up.cross(fwd)
-		if side.length() > 0.01:
-			basis = Basis(side.normalized(), up.normalized(),
-				side.normalized().cross(up.normalized()))
-
+	var u := up.normalized()
+	if u.length_squared() < 0.5:
+		return
+	# Flatten the facing into the surface the player is standing on. Without
+	# this the body leans by however much its heading pointed into or out of the
+	# ground, which is what had everyone standing diagonally.
+	var f := facing - u * facing.dot(u)
+	if f.length_squared() < 0.0001:
+		f = u.cross(Vector3.RIGHT)
+		if f.length_squared() < 0.0001:
+			f = u.cross(Vector3.FORWARD)
+	f = f.normalized()
+	# Godot faces -Z, so the basis Z column is the BACKWARD direction.
+	basis = Basis(f.cross(u).normalized(), u, -f)
 
 func _process(delta: float) -> void:
 	if global_position.distance_to(_target) > 12.0:
