@@ -390,7 +390,14 @@ func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, 
 	var is_moon: bool = (index != 0) and bool(a["moon"]) and rng.randf() < 0.7
 	var radius := rng.randf_range(240.0, 420.0) if is_moon else rng.randf_range(1100.0, 1900.0)
 	var amp := rng.randf_range(12.0, 26.0) if is_moon else rng.randf_range(45.0, 75.0)
-	var gravity := rng.randf_range(4.0, 7.0) if is_moon else rng.randf_range(10.0, 15.0)
+	# Gravity is set by how high a JUMP it leaves you, since that is what the
+	# feel of walking around actually comes from. The player leaves the ground at
+	# 8 m/s (Player.JUMP_SPEED), so height is 64/(2g): the old 10-15 gave a
+	# 2.1-3.2 block hop, which is why everything felt like the moon. 20-26 gives
+	# 1.2-1.6 blocks, against Minecraft's 1.25 -- still comfortably over the one
+	# block you need to climb a step. Moons stay deliberately floaty; they are
+	# the variety, not the norm.
+	var gravity := rng.randf_range(7.0, 11.0) if is_moon else rng.randf_range(20.0, 26.0)
 
 	# position: home at origin, others spread on random directions/distances, kept
 	# a few thousand units apart (float precision stays fine within ~10k)
@@ -616,9 +623,19 @@ func _process(delta: float) -> void:
 	# distance still dissolves into darkness instead of ending.
 	_env.fog_enabled = _atmo > 0.02 or _underground > 0.02
 	_env.fog_light_color = acol.lerp(Color(0, 0, 0), _underground)
-	# Denser below ground, so the far wall is gone before the chunk that would
-	# have held it runs out.
-	_env.fog_density = lerpf(_atmo * 0.008, 0.024, _underground)
+	# DEPTH fog, not exponential. Exponential fog starts thickening the moment
+	# you look away from your own feet, which was tuned to hide a render edge 80
+	# blocks out; at twice that distance the same setting reads as thick haze on
+	# a clear day. Depth fog stays out of the way entirely until the far end of
+	# what is actually streamed, then closes the gap to the edge.
+	_env.fog_mode = Environment.FOG_MODE_DEPTH
+	var reach := float(WorldManager.RENDER_DISTANCE * Blocks.CHUNK_SIZE)
+	# Underground the same fog closes right in, which is what makes a cave wall
+	# beyond the streamed chunks dissolve into black rather than end at an edge.
+	_env.fog_depth_begin = lerpf(reach * 0.58, 7.0, _underground)
+	_env.fog_depth_end = lerpf(reach * 1.02, 32.0, _underground)
+	_env.fog_depth_curve = 1.0
+	_env.fog_density = lerpf(_atmo, 1.0, _underground)
 
 	# Hide each planet's low-res LOD sphere when you're close to it (on/near the
 	# surface) so you never see it through gaps or at the horizon; show it far away.

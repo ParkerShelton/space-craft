@@ -67,7 +67,7 @@ const CHEST := 52     # pure storage (bigger than a machine)
 const CARPENTER := 62 # base-building bench: structural blocks from plain resources
 const FORGE := 63     # multiblock-built smelter upgrade: bigger + faster
 const CLIMATE_UNIT := 64  # planet base shelter: negates hazard damage nearby
-const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER, GENERATOR, OXYGEN_PLANT, HEATER, COOLER, POWER_BAY]
+const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER, GENERATOR, OXYGEN_PLANT, HEATER, COOLER, POWER_BAY, CAMPFIRE]
 
 # --- procedural ore slots ---------------------------------------------------
 # Each planet invents its own ores (unique name + color) and assigns each to a
@@ -492,6 +492,18 @@ const WRENCH := 103       # right-click a build with this to turn it into a stat
 const PLANK := 104
 const PLANK_PALE := 105
 const PLANK_DARK := 106
+
+# --- food and animal products ---------------------------------------------
+# Dropped by wildlife, not mined. Meat is the whole point of hunting: raw keeps
+# you alive in a pinch, cooked is what actually feeds you (see FOOD_VALUE).
+const RAW_MEAT := 107
+const COOKED_MEAT := 108
+const HIDE := 109
+const BONE := 110
+## A fire you can cook on, built from a single 2x2 layer of wood eighths --
+## the cheapest structure in the game, because going hungry should not be
+## gated behind a workshop.
+const CAMPFIRE := 111
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
@@ -592,6 +604,22 @@ const STRUCTURES := [
 # A legend character names a CLASS, not one block, so the same bench can be oak
 # or pine and still be a bench. That is deliberate: the shape is the recipe, the
 # material is yours.
+## How much hunger each food restores. Raw meat is deliberately poor value: it
+## keeps you going, but cooking it is worth roughly four times as much, which is
+## what makes a campfire worth building the moment you start hunting.
+const FOOD_VALUE := {
+	RAW_MEAT: 9.0,
+	COOKED_MEAT: 38.0,
+}
+
+static func is_food(raw: int) -> bool:
+	return FOOD_VALUE.has(bottom_of(raw))
+
+
+static func food_value(raw: int) -> float:
+	return float(FOOD_VALUE.get(bottom_of(raw), 0.0))
+
+
 const PART_CLASSES := {
 	"W": WOOD_IDS,                       # any wood
 	"S": STONE_IDS,                      # stone only -- not soil, not ice
@@ -624,6 +652,17 @@ const PART_STRUCTURES := [
 			["S..S", "SSSS"],             # fire chamber, open at the front
 			["S..S", "SSSS"],
 			["SSSS", "SSSS"],             # lintel across the top
+		],
+	},
+	{
+		# The cheapest structure there is: one 2x2 layer of wood eighths, laid
+		# flat on the ground. Deliberately trivial -- food should not wait on a
+		# workshop -- and it doubles as a light source once lit.
+		"name": "Campfire",
+		"result": CAMPFIRE,
+		"size": Vector3i(2, 1, 2),        # a single block, one eighth-layer tall
+		"layers": [
+			["WW", "WW"],
 		],
 	},
 	{
@@ -1017,6 +1056,9 @@ static func is_smelter_kind(kind: int) -> bool:
 #   Shipworks      -- hull & propulsion, built from Alloy Plating
 #   Carpenter      -- structural blocks, built from plain Wood/Rock/Metal
 const STATION_CRAFTS := {
+	CAMPFIRE: [
+		{"label": "Cooked Meat", "out": COOKED_MEAT, "n": 1, "reqs": [{"id": RAW_MEAT, "n": 1}]},
+	],
 	SMELTER: [
 		{"label": "Alloy Plating x2", "out": ALLOY, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 3}},
 		{"label": "Circuitry x2", "out": CIRCUIT, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 2}},
@@ -1055,6 +1097,11 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	PLANK, PLANK_PALE, PLANK_DARK]
 
 const NAMES := {
+	RAW_MEAT: "Raw Meat",
+	COOKED_MEAT: "Cooked Meat",
+	HIDE: "Hide",
+	BONE: "Bone",
+	CAMPFIRE: "Campfire",
 	AIR: "Air",
 	ROCK: "Rock",
 	DIRT: "Dirt",
@@ -1160,6 +1207,11 @@ const HARDNESS := {
 }
 
 const COLORS := {
+	RAW_MEAT: Color(0.72, 0.26, 0.28),
+	COOKED_MEAT: Color(0.55, 0.34, 0.18),
+	HIDE: Color(0.60, 0.45, 0.30),
+	BONE: Color(0.88, 0.86, 0.76),
+	CAMPFIRE: Color(0.86, 0.45, 0.16),
 	ROCK: Color(0.44, 0.44, 0.50),
 	DIRT: Color(0.40, 0.29, 0.20),
 	GRASS: Color(0.34, 0.58, 0.30),

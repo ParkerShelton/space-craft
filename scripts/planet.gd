@@ -27,7 +27,7 @@ const HOSTILES_DISABLED := true
 var planet_name := "Planet"
 var radius := 64.0          # nominal surface radius in voxels
 var terrain_amp := 6.0      # +/- surface variation from noise
-var surface_gravity := 12.0 # m/s^2 at the surface; drives walk-vs-float feel
+var surface_gravity := 23.0 # m/s^2 at the surface; drives walk-vs-float feel
 
 # block palette
 var pal_top := Blocks.GRASS
@@ -62,6 +62,11 @@ var _machine_at: Dictionary = {}           # voxel -> controller
 # controller -> Station. Kept OUTSIDE _machines so revalidate_machines() can
 # rebuild the registry without orphaning the node that holds the fuel.
 var _machine_stations: Dictionary = {}
+## Cells holding a lit campfire. Tracked apart from block ids because an
+## assembled machine is not a block -- it is a logical thing sitting over a group
+## of eighth-parts -- and both the mesher (which draws the flames) and the light
+## bake need to know where the fires are.
+var _fire_cells: Dictionary = {}
 var surface_noise := FastNoiseLite.new()
 var ore_noise := FastNoiseLite.new()
 
@@ -445,6 +450,27 @@ func _try_spawn_npc(player_pos: Vector3, world: WorldManager) -> void:
 # Invent one species: a unique name, body plan, size, color, and behavior. Harsher
 # (hazardous) planets skew a bit more toward hostile wildlife; cave dwellers skew
 # hostile and dark-colored (no sunlight down there).
+## What a creature leaves behind. Everything edible drops meat scaled by how big
+## it was, so hunting something large is worth the trouble; hide and bone come
+## only off animals actually built to carry them, which is what makes the choice
+## of what to hunt mean something.
+func _make_drops(rng: RandomNumberGenerator, kind: String, body: String, scale: float) -> Array:
+	if kind == "npc":
+		return []
+	var drops: Array = []
+	var meat := int(round(scale * 2.2))
+	if body == "flyer" or body == "fish":
+		meat = int(round(scale * 1.4))
+	meat = maxi(1, meat)
+	drops.append({"id": Blocks.RAW_MEAT, "min": maxi(1, meat - 1), "max": meat + 1})
+	if body in ["quad", "grazer", "biped", "hopper"] and scale >= 0.55:
+		var hide := maxi(1, int(round(scale * 1.3)))
+		drops.append({"id": Blocks.HIDE, "min": maxi(1, hide - 1), "max": hide})
+	if scale >= 1.2 and body != "fish":
+		drops.append({"id": Blocks.BONE, "min": 1, "max": maxi(1, int(round(scale)))})
+	return drops
+
+
 func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 	var sname: String = Blocks.FAUNA_NAME_PRE[rng.randi() % Blocks.FAUNA_NAME_PRE.size()] \
 		+ Blocks.FAUNA_NAME_SUF[rng.randi() % Blocks.FAUNA_NAME_SUF.size()]
@@ -454,10 +480,35 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		"air": body = "flyer"
 		"npc": body = "biped"  # settlement residents always stand upright
 		"enemy": body = "biped"  # hostile humanoid -- see _make_species's "enemy" branch below
-		"cave": body = ["serpent", "serpent", "quad", "biped"][rng.randi() % 4]
-		_: body = ["quad", "quad", "biped", "serpent"][rng.randi() % 4]  # land
-	var scale: float = rng.randf_range(0.85, 1.15) if kind in ["npc", "enemy"] \
-		else (rng.randf_range(0.5, 2.0) if kind in ["land", "cave"] else rng.randf_range(0.4, 1.6))
+		"cave": body = ["serpent", "serpent", "crawler", "crawler", "quad", "hopper"][rng.randi() % 6]
+		# Land life is the bulk of what you meet, so it gets the widest range of
+		# builds: the old four plus a low many-legged crawler, a hopper, and a
+		# long-necked grazer.
+		# No humanoid shape in the wildlife: the upright biped is what an NPC and
+		# a hostile enemy are built from, and an animal wearing it reads as a
+		# person rather than as fauna.
+		_: body = ["quad", "quad", "grazer", "grazer", "hopper", "hopper",
+			"crawler", "serpent"][rng.randi() % 8]
+	# Size is rolled in BANDS rather than one flat range, so a world's animals
+	# read as different creatures instead of one animal at different zooms. Most
+	# are ordinary; a good slice are small enough to be underfoot, and a rare few
+	# are genuinely big -- and since health, speed and drops all key off scale, a
+	# big one is a real event rather than a bigger sprite.
+	var scale: float
+	if kind in ["npc", "enemy"]:
+		scale = rng.randf_range(0.85, 1.15)
+	elif kind in ["land", "cave"]:
+		var band := rng.randf()
+		if band < 0.22:
+			scale = rng.randf_range(0.28, 0.5)       # critter
+		elif band < 0.82:
+			scale = rng.randf_range(0.6, 1.5)        # ordinary
+		elif band < 0.96:
+			scale = rng.randf_range(1.6, 2.4)        # large
+		else:
+			scale = rng.randf_range(2.6, 3.6)        # rare giant
+	else:
+		scale = rng.randf_range(0.4, 1.6)
 	# an enemy's hue is biased toward red/purple -- a "this is dangerous" read at
 	# a glance, distinct from an NPC's muted clothing tones or wildlife's full range
 	var hue := rng.randf_range(-0.06, 0.08) if kind == "enemy" else rng.randf()
@@ -496,7 +547,8 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 			temperament = "neutral"
 		else:
 			temperament = "passive"
-	var base_speed: float = {"quad": 5.0, "biped": 4.0, "serpent": 4.0, "fish": 3.0, "flyer": 6.0}.get(body, 4.0)
+	var base_speed: float = {"quad": 5.0, "biped": 4.0, "serpent": 4.0, "fish": 3.0,
+		"flyer": 6.0, "crawler": 3.2, "hopper": 6.5, "grazer": 3.8}.get(body, 4.0)
 	var speed := (base_speed * 0.6 if kind == "npc" else base_speed) * rng.randf_range(0.8, 1.3) / maxf(scale * 0.6, 0.6)
 	var health := rng.randf_range(18.0, 45.0) * scale
 	var damage := rng.randf_range(4.0, 14.0) if temperament == "hostile" else 0.0
@@ -508,6 +560,17 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		"speed": speed, "health": health, "damage": damage,
 		"aggro_range": aggro, "flee_range": flee,
 		"arm_count": 2, "leg_count": 2,  # data-driven for future limb variety; unused past 2/2 today
+		"drops": _make_drops(rng, kind, body, scale),
+		# Markings. Wildlife gets a real coat -- stripes, spots, patches, scales,
+		# banding -- while people stay plain, because a striped settler would read
+		# as an animal wearing clothes.
+		"skin": (0 if kind == "npc" else rng.randi() % 6),
+		"skin_scale": rng.randf_range(0.6, 2.2),
+		# Herds are what make a planet's wildlife read as alive rather than as lone
+		# animals wandering past. Grazers and quads travel together; serpents and
+		# crawlers are loners.
+		"herd": (rng.randi_range(2, 5) if body in ["grazer", "quad"] and kind == "land" 			else (2 if body == "hopper" and rng.randf() < 0.5 else 1)),
+		"graze": body in ["grazer", "quad", "hopper"] and kind != "enemy",
 	}
 	if kind == "enemy":
 		# "lunger" is the only attack pattern today: chase -> telegraph (real
@@ -543,6 +606,12 @@ func _point_at_height(dir: Vector3, d_target: float) -> Vector3:
 ## Called once per physics frame for the ACTIVE planet only (see WorldManager).
 ## Despawns creatures that drifted too far from the player, then occasionally
 ## attempts to spawn a new one nearby.
+## The most creatures allowed alive at once right now -- night lifts it, since
+## that is when more of them come out.
+func creature_cap() -> int:
+	return MAX_CREATURES + int(round(night_factor() * NIGHT_EXTRA_CREATURES))
+
+
 func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> void:
 	_creatures = _creatures.filter(func(c): return is_instance_valid(c))
 	for c in _creatures.duplicate():
@@ -555,7 +624,7 @@ func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> voi
 	# a shelter, light it, and be inside it when the sun goes down.
 	_spawn_timer -= delta
 	var night := night_factor()
-	var cap: int = MAX_CREATURES + int(round(night * NIGHT_EXTRA_CREATURES))
+	var cap: int = creature_cap()
 	if _spawn_timer > 0.0 or _creatures.size() >= cap:
 		return
 	# Things come out faster after dark, not merely in greater numbers.
@@ -698,7 +767,21 @@ func _try_spawn_creature(player_pos: Vector3, world: WorldManager) -> void:
 					continue  # no solid ground here
 				if get_id(stand_v) != Blocks.AIR or get_id(head_v) != Blocks.AIR:
 					continue  # no headroom
-				_spawn_at(to_global(surface_pt + up * 0.05), _pick_land_species(), world)
+				# Herd animals arrive as a group, scattered around the spot the
+				# spawner picked. One animal at a time is what made a planet feel
+				# empty even when the spawn rate was fine.
+				var sp_land: Dictionary = _pick_land_species()
+				var herd := maxi(1, int(sp_land.get("herd", 1)))
+				for h in herd:
+					var jitter := Vector3.ZERO
+					if h > 0:
+						var ja := randf() * TAU
+						var jr := randf_range(1.5, 3.5) * float(h)
+						jitter = (t1 * cos(ja) + t2 * sin(ja)) * jr
+					var hp := surface_pt + jitter + up * 0.05
+					if _creatures.size() >= creature_cap():
+						break
+					_spawn_at(to_global(hp), sp_land, world)
 				return
 
 
@@ -1271,6 +1354,21 @@ func _part_machine_voxels(def: Dictionary, rot: int, origin: Vector3i) -> Array:
 	return seen.keys()
 
 
+## A campfire lights its surroundings the same way a torch does, so the same
+## chunks have to re-bake. Mirrors the light fan-out in set_block.
+func _relight_around(v: Vector3i) -> void:
+	var cc := chunk_of(v)
+	_edit_remesh(cc)
+	for dx in range(-1, 2):
+		for dy in range(-1, 2):
+			for dz in range(-1, 2):
+				if dx == 0 and dy == 0 and dz == 0:
+					continue
+				var ncc := cc + Vector3i(dx, dy, dz)
+				if loaded_chunks.has(ncc) and _light_reaches(ncc, v, Chunk.FIRE_LIGHT):
+					_dirty[ncc] = true
+
+
 func _register_part_machine(anchor: Vector3i, def: Dictionary, rot: int,
 		origin: Vector3i) -> Dictionary:
 	var st: Station = _machine_stations.get(anchor)
@@ -1289,6 +1387,9 @@ func _register_part_machine(anchor: Vector3i, def: Dictionary, rot: int,
 	if not machine_cores.has(anchor):
 		machine_cores.append(anchor)
 	_grid_cache.clear()
+	if int(def["result"]) == Blocks.CAMPFIRE and not _fire_cells.has(anchor):
+		_fire_cells[anchor] = true
+		_relight_around(anchor)
 	return {"ok": true, "name": str(def["name"])}
 
 
@@ -1643,6 +1744,13 @@ func revalidate_machines() -> void:
 			if dead != null and is_instance_valid(dead):
 				dead.queue_free()
 			_machine_stations.erase(c)
+	# A fire whose wood was broken out from under it stops burning: the flames and
+	# the light it was casting both have to go, which means the chunks it lit have
+	# to bake again.
+	for fc in _fire_cells.keys():
+		if not keep.has(fc):
+			_fire_cells.erase(fc)
+			_relight_around(fc)
 
 
 func ore_def(block_id: int) -> Dictionary:
@@ -2121,7 +2229,13 @@ func _surface_point(dir: Vector3) -> Vector3:
 
 
 ## Pure terrain function: what block id would be here with no player edits.
-func generation_sample(gx: int, gy: int, gz: int) -> int:
+## `tcache` is a per-build memo of which cells hold trees. It is passed in
+## rather than kept on the planet because the mesher runs on worker threads: a
+## dictionary shared between them would be a data race, while one created per
+## chunk build is private to that task. Callers outside the mesher pass nothing
+## and simply pay full price, which is fine for the handful of samples a
+## raycast or a spawn check makes.
+func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 	var p := Vector3(gx, gy, gz)
 	var d := _norm(p)
 	if d > _max_reach() + 2.0:
@@ -2158,7 +2272,7 @@ func generation_sample(gx: int, gy: int, gz: int) -> int:
 		if water_style != WATER_NONE and d <= water_level:
 			return _water_block()
 		if tree_density > 0.0 and d <= surf + tree_reach:
-			return _tree_at(p, dir, surf)
+			return _tree_at(p, dir, surf, tcache)
 		return Blocks.AIR
 
 	var depth := surf - d
@@ -2234,7 +2348,35 @@ func _dist_to_segment(p: Vector3, a: Vector3, b: Vector3) -> float:
 	return (p - (a + ab * t)).length()
 
 
-func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
+## The tree, if any, rooted in one cell. Empty array means none. Split out of
+## _tree_at so it can be memoised per chunk build (see the tcache argument).
+func _tree_in_cell(cc: Vector3i, c: float) -> Array:
+	if _hash01(cc, 0) >= tree_density:
+		return []
+	var cdir := (Vector3(cc) * c + Vector3(c * 0.5, c * 0.5, c * 0.5)).normalized()
+	var base := _surface_point(cdir)
+	# one tree per cell: only if its base actually sits in this cell
+	if Vector3i(floori(base.x / c), floori(base.y / c), floori(base.z / c)) != cc:
+		return []
+	# no trees standing in water -- skip if the base is at/below sea level
+	if water_style != WATER_NONE and _norm(base) <= water_level:
+		return []
+	# no trees rooted inside a settlement -- rejecting at the ROOT (not per-voxel)
+	# means a canopy can never end up sliced in half by a wall; the land people
+	# build on reads as actually cleared
+	if not settlements.is_empty() and _tree_blocked_by_settlement(base):
+		return []
+	# On a cube, trees grow straight out of the flat face (axis-aligned), not
+	# toward the center -- otherwise they lean on diagonal faces.
+	var up := _axis_of(cdir) if shape_cube else cdir
+	var th := trunk_min + int(_hash01(cc, 1) * float(trunk_max - trunk_min + 1))
+	var cr := canopy_min + _hash01(cc, 2) * (canopy_max - canopy_min)
+	# The cell itself rides along: every hash that decides this tree's look --
+	# lobe angles, which leaf colour, canopy wobble -- is seeded from it.
+	return [base, up, th, cr, cc]
+
+
+func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float, tcache = null) -> int:
 	var c := float(tree_cell)
 	# The surface point BENEATH p, in the same frame the trees are built in.
 	#
@@ -2261,30 +2403,44 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float) -> int:
 	# wider sweep, and paying for it everywhere would slow generation on every
 	# world to fix a problem two of them have.
 	var sr := _tree_scan
-	for dx in range(-sr, sr + 1):
-		for dy in range(-sr, sr + 1):
-			for dz in range(-sr, sr + 1):
-				var cc := scell + Vector3i(dx, dy, dz)
-				if _hash01(cc, 0) >= tree_density:
-					continue
-				var cdir := (Vector3(cc) * c + Vector3(c * 0.5, c * 0.5, c * 0.5)).normalized()
-				var base := _surface_point(cdir)
-				# one tree per cell: only if its base actually sits in this cell
-				if Vector3i(floori(base.x / c), floori(base.y / c), floori(base.z / c)) != cc:
-					continue
-				# no trees standing in water -- skip if the base is at/below sea level
-				if water_style != WATER_NONE and _norm(base) <= water_level:
-					continue
-				# no trees rooted inside a settlement -- rejecting at the ROOT
-				# (not per-voxel) means a canopy can never end up sliced in half
-				# by a wall; the land people build on reads as actually cleared
-				if not settlements.is_empty() and _tree_blocked_by_settlement(base):
-					continue
-				# On a cube, trees grow straight out of the flat face (axis-aligned),
-				# not toward the center -- otherwise they lean on diagonal faces.
-				var up := _axis_of(cdir) if shape_cube else cdir
-				var th := trunk_min + int(_hash01(cc, 1) * float(trunk_max - trunk_min + 1))
-				var cr := canopy_min + _hash01(cc, 2) * (canopy_max - canopy_min)
+	# Which trees can reach ANY voxel in this column is a property of the column,
+	# not of the voxel -- so the whole neighbourhood scan is memoised per surface
+	# cell. A chunk is thousands of voxels over a handful of columns, and this
+	# turns a 27-cell sweep per voxel into one dictionary lookup plus a walk over
+	# the nought-to-three trees that are actually nearby.
+	var cells = null
+	var lists = null
+	if tcache != null:
+		cells = tcache.get("c")
+		if cells == null:
+			cells = {}
+			tcache["c"] = cells
+		lists = tcache.get("l")
+		if lists == null:
+			lists = {}
+			tcache["l"] = lists
+	var near = lists.get(scell) if lists != null else null
+	if near == null:
+		near = []
+		for dx in range(-sr, sr + 1):
+			for dy in range(-sr, sr + 1):
+				for dz in range(-sr, sr + 1):
+					var ncell := scell + Vector3i(dx, dy, dz)
+					var got = cells.get(ncell) if cells != null else null
+					if got == null:
+						got = _tree_in_cell(ncell, c)
+						if cells != null:
+							cells[ncell] = got
+					if not (got as Array).is_empty():
+						near.append(got)
+		if lists != null:
+			lists[scell] = near
+	for info in near:
+				var base: Vector3 = info[0]
+				var up: Vector3 = info[1]
+				var th: int = info[2]
+				var cr: float = info[3]
+				var cc: Vector3i = info[4]
 				var rel := p - base
 				var along := rel.dot(up)
 				var horiz := (rel - up * along).length()
@@ -3056,6 +3212,17 @@ func _edits_snapshot(cc: Vector3i) -> Dictionary:
 				parts[k] = (pd[k] as PackedByteArray).duplicate()
 	# Copied, not referenced: the mesher runs on a worker thread and must not
 	# read a cell the main thread is part-way through editing.
+	# Fires near this chunk, so the worker can draw their flames and bake their
+	# light without touching planet state from another thread.
+	var fires: Array = []
+	if not _fire_cells.is_empty():
+		var lo := (cc - Vector3i.ONE) * CS
+		var hi := (cc + Vector3i.ONE * 2) * CS
+		for fv in _fire_cells:
+			var f: Vector3i = fv
+			if f.x >= lo.x and f.y >= lo.y and f.z >= lo.z 					and f.x < hi.x and f.y < hi.y and f.z < hi.z:
+				fires.append(f)
+	snap[Chunk.FIRE_KEY] = fires
 	snap[Chunk.PARTS_KEY] = parts
 	return snap
 

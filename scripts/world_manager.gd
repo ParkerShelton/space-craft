@@ -4,7 +4,12 @@ extends Node3D
 ## Owns every planet, decides which one you're closest to, streams that planet's
 ## chunks around you, and answers gravity queries for the player controller.
 
-const RENDER_DISTANCE := 5        # chunk radius streamed around the player
+## Chunk radius streamed around the player. 5 was 80 blocks -- close enough that
+## terrain visibly arrived a chunk ahead of your feet. Raising it is only
+## affordable because terrain generation got much cheaper (see the tree cache in
+## Planet.generation_sample); the cold fill still happens behind the loading
+## screen, and walking only ever pays for the shell entering the sphere.
+const RENDER_DISTANCE := 10
 const LOADS_PER_FRAME := 4        # chunks meshed per frame (spreads out hitches)
 const STREAM_MARGIN := 48.0       # extra reach (voxels) beyond a planet's surface
 

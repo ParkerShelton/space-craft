@@ -65,6 +65,9 @@ uniform float ore_chunk_id = 63.0;
 // they read as a painted cube and in a dark cave they vanish into the wall.
 uniform float light_lo = 91.0;
 uniform float light_hi = 93.0;
+// A campfire's flames are their own geometry (see Chunk.build_mesh_data), drawn
+// with the campfire's id so they can burn rather than sit there as orange boxes.
+uniform float flame_id = 111.0;
 
 varying vec3 v_world;
 varying float v_block;
@@ -256,6 +259,18 @@ void fragment() {
 		float rh = hash21(floor(fc * texels * 0.5 * rock_grain)
 			+ vec2(world_seed * 5.0));
 		shade = 1.0 + (quantize(rh, 2.0) - 0.5) * 0.05 * rock_contrast;
+
+	} else if (abs(id - flame_id) < 0.5) {
+		// Flame. Emissive like any light source, but FLICKERING: a fire that
+		// glows at a fixed brightness reads as a lamp. Two offset waves keep the
+		// beat from being an obvious pulse, and the world position seeds them so
+		// neighbouring fires do not flicker in unison.
+		float fseed = v_world.x * 2.3 + v_world.z * 3.7 + v_world.y * 1.1;
+		float flick = 0.72
+			+ 0.20 * sin(TIME * 8.5 + fseed)
+			+ 0.12 * sin(TIME * 19.0 + fseed * 2.7);
+		shade = 1.0;
+		emit = flick;
 
 	} else if (id >= light_lo - 0.5 && id <= light_hi + 0.5) {
 		// A light source is the one thing that should NOT be shaded down by the

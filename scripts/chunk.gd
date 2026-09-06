@@ -287,7 +287,7 @@ static func _static_init() -> void:
 static func _id_at(planet: Planet, snap: Dictionary, v: Vector3i) -> int:
 	if snap.has(v):
 		return snap[v]
-	return planet.generation_sample(v.x, v.y, v.z)
+	return planet.generation_sample(v.x, v.y, v.z, snap.get(TCACHE_KEY))
 
 
 ## Voxel light, flood-filled the way a block game does it rather than with real
@@ -304,6 +304,18 @@ static func _id_at(planet: Planet, snap: Dictionary, v: Vector3i) -> int:
 ## Levels are 0..15 and drop by one per block travelled through anything that
 ## isn't solid. The region is padded so light from a torch just outside this
 ## chunk still reaches into it.
+## Campfire cells reach the mesher through the snapshot under this key (see
+## Planet._edits_snapshot). A fire is not a block, so it cannot be found by
+## walking block ids the way a torch can.
+const FIRE_KEY := "fires"
+## Per-build memo of which tree cells hold a tree (see Planet.generation_sample).
+## Lives in the snapshot because the snapshot is already private to one worker
+## task, which is exactly the lifetime and the isolation this needs.
+const TCACHE_KEY := "tcache"
+## How far a campfire throws light. A shade under a torch: it is a hearth, not
+## a lamp on a pole.
+const FIRE_LIGHT := 10
+
 const LIGHT_PAD := 15
 const LIGHT_DIM := CS + LIGHT_PAD * 2
 
@@ -334,6 +346,13 @@ static func _compute_block_light(planet: Planet, snap: Dictionary, base: Vector3
 		if lp.x < 0 or lp.y < 0 or lp.z < 0 				or lp.x >= LIGHT_DIM or lp.y >= LIGHT_DIM or lp.z >= LIGHT_DIM:
 			continue
 		seeds.append([lp.x, lp.y, lp.z, lvl])
+	# Campfires seed the flood too. They are not blocks, so they arrive as their
+	# own list rather than being found among the edited cells above.
+	for fv in snap.get(FIRE_KEY, []):
+		var fp: Vector3i = (fv as Vector3i) - origin
+		if fp.x < 0 or fp.y < 0 or fp.z < 0 				or fp.x >= LIGHT_DIM or fp.y >= LIGHT_DIM or fp.z >= LIGHT_DIM:
+			continue
+		seeds.append([fp.x, fp.y, fp.z, FIRE_LIGHT])
 	if seeds.is_empty():
 		return PackedByteArray()
 	var lv := PackedByteArray()
@@ -374,6 +393,8 @@ static func _compute_block_light(planet: Planet, snap: Dictionary, base: Vector3
 static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsnap: Dictionary = {}) -> Dictionary:
 	var base := cc * CS
 	snap[LB_KEY] = base
+	if not snap.has(TCACHE_KEY):
+		snap[TCACHE_KEY] = {}
 	snap[LM_KEY] = _compute_block_light(planet, snap, base)
 	var ids := PackedInt32Array()
 	ids.resize(CS * CS * CS)
@@ -553,6 +574,23 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 							_face_light(snap, gv, Vector3i.ZERO))
 				idx += 1
 
+	# campfire flames. Emissive geometry standing above the fuel, because four
+	# wood eighths on the ground do not read as a fire on their own -- and unlike
+	# the parts themselves these carry no collision, so you walk through the flame
+	# rather than being stopped by it.
+	for fv in snap.get(FIRE_KEY, []):
+		var fl: Vector3i = (fv as Vector3i) - base
+		if fl.x < 0 or fl.y < 0 or fl.z < 0 or fl.x >= CS or fl.y >= CS or fl.z >= CS:
+			continue
+		var flo := Vector3(fl)
+		var fcol := planet.color_of(Blocks.CAMPFIRE)
+		for fb in [[Vector3(0.28, 0.48, 0.28), Vector3(0.72, 0.98, 0.72)],
+				[Vector3(0.16, 0.48, 0.40), Vector3(0.40, 0.80, 0.64)],
+				[Vector3(0.58, 0.48, 0.22), Vector3(0.80, 0.74, 0.46)],
+				[Vector3(0.38, 0.92, 0.38), Vector3(0.62, 1.22, 0.62)]]:
+			_emit_free_box(flo + (fb[0] as Vector3), flo + (fb[1] as Vector3),
+				fcol, Blocks.CAMPFIRE, verts, normals, colors, uvs, uv2s, 1.0)
+
 	# eighth-block parts: a workbench leg, a control panel, a machine's guts. Each
 	# occupied sub-cell is a half-size box in its own material, and unlike leaves
 	# or conduit these DO collide -- you stand on the bench you built.
@@ -651,7 +689,7 @@ static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 				                     # so it grows OUT of the rock rather than
 				                     # sitting on top of it like a dropped cube
 			_emit_free_box(c - Vector3.ONE * sz, c + Vector3.ONE * sz,
-				Color(ore_col.r, ore_col.g, ore_col.b, _sky_depth(planet, snap, gv)),
+				Color(ore_col.r, ore_col.g, ore_col.b, _sky_depth(planet, snap, gv + n)),
 				ORE_CHUNK_ID, verts, normals, colors, uvs, uv2s,
 				_face_light(snap, gv, n))
 
@@ -791,7 +829,17 @@ static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Pla
 		if wnid != Blocks.AIR and not Blocks.is_leaf(Blocks.bottom_of(wnid)):
 			continue  # only the faces exposed to air are drawn
 		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
-		var col := Color(base.r * s, base.g * s, base.b * s, _sky_depth(planet, snap, gv))
+		# Water keeps its OWN alpha. Unlike terrain, water is drawn with a plain
+		# StandardMaterial3D that reads vertex alpha as opacity -- so writing the
+		# skylight into that channel (which is what terrain does with it) made every
+		# lit surface of water fully opaque. An opaque sheet at render distance
+		# reads as a chunk that has not loaded.
+		#
+		# Daylight still gets to darken deep or roofed-over water; it just does it
+		# through the COLOUR rather than through the alpha.
+		var sky := _sky_depth(planet, snap, gv + n)
+		var lit := s * lerpf(0.4, 1.0, sky)
+		var col := Color(base.r * lit, base.g * lit, base.b * lit, base.a)
 		var nrm := Vector3(n)
 		var q := _box_face(lo, hi, fi)
 		_quad(q[0], q[1], q[2], q[3], nrm, col, wverts, wnormals, wcolors, wuvs, wuv2s, Blocks.WATER, s)
@@ -881,8 +929,14 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 				mask[k + j * CS] = val
 				smask[k + j * CS] = 15
 				if val != 0:
+					# Sampled at the cell the face LOOKS INTO, not at the block
+					# itself. Daylight reaches a surface through the air in front of
+					# it: measuring from inside the block meant the wall of a shaft
+					# you dug found its own solid neighbours overhead and went pitch
+					# black, while the open shaft it faced was letting light down.
 					smask[k + j * CS] = int(round(_sky_depth(planet, snap,
-						_global_coord(base, d, u, v, a, k, j)) * 15.0))
+						_global_coord(base, d, u, v, a, k, j)
+						+ Vector3i(int(narr[0]), int(narr[1]), int(narr[2]))) * 15.0))
 				lmask[k + j * CS] = 0
 				if val != 0 and has_light:
 					lmask[k + j * CS] = int(round(_face_light(snap,

@@ -4,8 +4,8 @@ extends CharacterBody3D
 ## Hybrid controller.
 ##
 ## GROUND mode (gravity strong): the body smoothly stands up so its "up" points
-## away from the planet center; you walk on the tangent plane, jump, and can hold
-## jump to jetpack. Climb high enough that gravity fades and you...
+## away from the planet center; you walk on the tangent plane and jump. Climb
+## high enough that gravity fades and you...
 ## FLOAT mode (gravity weak / deep space): full 6-axis flight, no forced
 ## orientation -- WASD moves along your view, jump/crouch thrust up/down.
 ##
@@ -14,8 +14,6 @@ extends CharacterBody3D
 
 const WALK_SPEED := 7.0
 const JUMP_SPEED := 8.0
-const JETPACK_ACCEL := 9.0        # gentle thrust
-const JETPACK_MAX_SPEED := 8.0    # cap so it can't launch you off
 const FLY_SPEED := 16.0
 const FLY_ACCEL := 6.0
 const FLY_DAMP := 3.0
@@ -33,8 +31,18 @@ const O2_DRAIN := 4.0             # oxygen/sec with no air (space / airless / un
 const O2_REFILL := 30.0           # oxygen/sec while breathing (in atmosphere or a ship)
 const SUFFOCATE_DMG := 7.0        # health/sec once oxygen hits zero
 const HEALTH_REGEN := 3.0         # health/sec while safe and oxygenated
+# --- hunger -----------------------------------------------------------------
+# Slow enough that food is an errand rather than a chore: a full meter lasts
+# roughly twelve minutes of ordinary play, less if you are working hard.
+const MAX_HUNGER := 100.0
+const HUNGER_DRAIN := 0.14        # hunger/sec standing still
+const HUNGER_EXERTION := 0.22     # extra hunger/sec while actually moving
+const STARVE_DMG := 1.1           # health/sec at zero hunger -- slow, not sudden
+const STARVE_SPEED_MULT := 0.62   # and you drag your feet once you are empty
+const HUNGER_REGEN_MIN := 25.0    # below this you stop healing
 var health := MAX_HEALTH
 var oxygen := MAX_OXYGEN
+var hunger := MAX_HUNGER
 var _hazard_resist := 0.0     # 0..0.9 hazard-damage reduction from the best Suit carried
 
 # --- melee combat ---
@@ -133,6 +141,7 @@ var _toast_label: Label            # transient "Saved"/"Loaded" confirmation
 var _toast_time := 0.0
 var _hp_fill: ColorRect            # health bar fill
 var _o2_fill: ColorRect            # oxygen bar fill
+var _food_fill: ColorRect          # hunger bar fill
 var _hazard_label: Label           # "FREEZING"/"OVERHEATING" warning
 var base_status: Dictionary = {}   # the sealed base you are standing in, {} outdoors
 var underground := false           # below the terrain: no sky, no sky markers
@@ -430,6 +439,16 @@ func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 	return n  # inventory full; leftover dropped
 
 
+## Public entry points for things outside the player that hand it items or
+## messages -- creature drops, mainly (see Creature._grant_drops).
+func grant_item(id: int, n: int, props: Dictionary = {}) -> int:
+	return _add_item(id, n, props)
+
+
+func notify(msg: String) -> void:
+	_toast(msg)
+
+
 func _count_item(id: int) -> int:
 	var total := 0
 	for s in inv:
@@ -480,6 +499,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			var st := _looked_at_station()
 			if st != null and not eva:
 				_open_station(st)
+			elif _try_eat():
+				pass
 			elif _try_assemble_machine():
 				pass
 			elif _try_toggle_door():
@@ -1161,7 +1182,7 @@ func _walk_interior(delta: float, ship: Ship) -> void:
 	var wish := right * input.x + fwd * input.y
 	if wish.length() > 0.001:
 		wish = wish.normalized()
-	var disp := wish * WALK_SPEED * delta
+	var disp := wish * WALK_SPEED * (STARVE_SPEED_MULT if hunger <= 0.0 else 1.0) * delta
 
 	if _interior_floor and Input.is_physical_key_pressed(KEY_SPACE):
 		_iv_y = JUMP_SPEED
@@ -1240,7 +1261,7 @@ func _align_up(up: Vector3, delta: float) -> void:
 	global_transform.basis = global_transform.basis.orthonormalized()
 
 
-func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -> void:
+func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	_align_up(up, delta)
 
 	# Yaw around local up; pitch the camera.
@@ -1261,7 +1282,8 @@ func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -
 
 	# Split velocity into tangent (horizontal) and along-up (vertical) parts.
 	var v_up := velocity.dot(up)
-	var horiz := wish * WALK_SPEED
+	# Starving drags: you keep moving, just not well.
+	var horiz := wish * WALK_SPEED * (STARVE_SPEED_MULT if hunger <= 0.0 else 1.0)
 
 	v_up += -gmag * delta  # gravity pulls along -up (the snapped down axis)
 
@@ -1270,12 +1292,9 @@ func _walk(delta: float, up: Vector3, gmag: float, allow_jetpack: bool = true) -
 			v_up = 0.0
 		if Input.is_physical_key_pressed(KEY_SPACE):
 			v_up = JUMP_SPEED
-	elif allow_jetpack:
-		# jetpack: hold jump to thrust up, crouch to thrust down (hybrid flight)
-		if Input.is_physical_key_pressed(KEY_SPACE):
-			v_up = minf(v_up + JETPACK_ACCEL * delta, JETPACK_MAX_SPEED)
-		if Input.is_physical_key_pressed(KEY_SHIFT):
-			v_up = maxf(v_up - JETPACK_ACCEL * delta, -JETPACK_MAX_SPEED)
+	# No thrust once your feet leave the ground: a jump is a jump. There is no
+	# jetpack in the game yet, and being able to hold jump and climb was standing
+	# in for one -- if you are down a hole, the way out is to build your way out.
 
 	velocity = horiz + up * v_up
 	up_direction = up
@@ -1447,11 +1466,18 @@ func _process_survival(delta: float) -> void:
 		oxygen = minf(oxygen + O2_REFILL * delta, _max_oxygen())
 	else:
 		oxygen = maxf(oxygen - O2_DRAIN * delta, 0.0)
+	# Hunger drains all the time and faster while you are moving. It never stops
+	# you playing outright: an empty stomach costs you health slowly and slows
+	# you down, so running out is a problem you can still walk away from.
+	var exerting := velocity.length() > 0.5
+	hunger = maxf(hunger - (HUNGER_DRAIN + (HUNGER_EXERTION if exerting else 0.0)) * delta, 0.0)
+	if hunger <= 0.0:
+		health = maxf(health - STARVE_DMG * delta, 0.0)
 	if oxygen <= 0.0:
 		health = maxf(health - SUFFOCATE_DMG * delta, 0.0)
 	if hz > 0.0:
 		health = maxf(health - hz * delta, 0.0)
-	elif air and oxygen > 0.0 and health < MAX_HEALTH:
+	elif air and oxygen > 0.0 and health < MAX_HEALTH and hunger >= HUNGER_REGEN_MIN:
 		health = minf(health + HEALTH_REGEN * delta, MAX_HEALTH)
 	if health <= 0.0:
 		_respawn()
@@ -1499,6 +1525,7 @@ func _respawn() -> void:
 		reparent(_home_parent, true)
 	health = MAX_HEALTH
 	oxygen = MAX_OXYGEN
+	hunger = MAX_HUNGER
 	velocity = Vector3.ZERO
 	if world != null and not world.planets.is_empty():
 		global_position = world.planets[0].find_spawn_point(Vector3.UP)
@@ -1914,6 +1941,10 @@ func _update_crack(obj: Object, v: Vector3i, raw: int, progress: float) -> void:
 				(b[1] as Vector3) + Vector3.ONE * 0.006])
 		_crack.mesh = _make_ghost_mesh(proud)
 	_crack_mat.set_shader_parameter("progress", clampf(progress, 0.0, 1.0))
+	# The overlay draws in the block's own space, so every block would otherwise
+	# crack identically. One number per voxel gives each its own break.
+	var hsh: int = (v.x * 73856093) ^ (v.y * 19349663) ^ (v.z * 83492791)
+	_crack_mat.set_shader_parameter("block_seed", float(absi(hsh) % 4096) / 4096.0)
 	_crack.global_transform = Transform3D(obj.global_transform.basis, obj.to_global(Vector3(v)))
 	_crack.visible = true
 
@@ -2165,6 +2196,28 @@ const _CUBE26_OFFSETS := [
 ## Core once the structure is finished. Checking every pattern in four rotations
 ## on every block placement would be both wasteful and silent -- this way it
 ## costs nothing until asked, and it can say exactly what is still missing.
+## Eat whatever food is in the active slot. Sits ahead of block placement in the
+## right-click chain, so holding meat feeds you rather than trying to build with
+## it -- food is not a placeable block, so there is nothing to shadow.
+func _try_eat() -> bool:
+	var active := _active_item()
+	if active.is_empty():
+		return false
+	var id := int(active.get("id", Blocks.AIR))
+	if not Blocks.is_food(id):
+		return false
+	if hunger >= MAX_HUNGER - 0.5:
+		_toast("Not hungry")
+		return true
+	var gain := Blocks.food_value(id)
+	hunger = minf(hunger + gain, MAX_HUNGER)
+	_remove_item(id, 1)
+	_toast("Ate %s  (+%d food)" % [Blocks.name_of(id), int(round(gain))])
+	_update_survival_ui()
+	_refresh_slots()
+	return true
+
+
 func _try_assemble_machine() -> bool:
 	var tgt := _raycast_voxel()
 	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "planet":
@@ -2691,9 +2744,10 @@ func _build_ui() -> void:
 	# survival bars (top-left, below the status labels)
 	_hp_fill = _make_bar(layer, 104, Color(0.85, 0.25, 0.25), "HP")
 	_o2_fill = _make_bar(layer, 126, Color(0.30, 0.62, 0.95), "O2")
+	_food_fill = _make_bar(layer, 148, Color(0.78, 0.55, 0.20), "FOOD")
 	_build_base_panel(layer)
 	_hazard_label = Label.new()
-	_hazard_label.position = Vector2(16, 148)
+	_hazard_label.position = Vector2(16, 170)
 	_hazard_label.add_theme_font_size_override("font_size", 15)
 	_hazard_label.visible = false
 	layer.add_child(_hazard_label)
@@ -2803,6 +2857,9 @@ func _update_survival_ui() -> void:
 		_hp_fill.color = Color(0.85, 0.25, 0.25) if health > MAX_HEALTH * 0.3 else Color(1.0, 0.35, 0.2)
 	if _o2_fill != null:
 		_o2_fill.size.x = 176.0 * clampf(oxygen / _max_oxygen(), 0.0, 1.0)
+	if _food_fill != null:
+		_food_fill.size.x = 176.0 * clampf(hunger / MAX_HUNGER, 0.0, 1.0)
+		_food_fill.color = Color(0.78, 0.55, 0.20) if hunger > HUNGER_REGEN_MIN 			else Color(0.95, 0.35, 0.2)
 	if _hazard_label != null:
 		var hz := _current_hazard()
 		var suit := "  (suit -%d%%)" % int(_hazard_resist * 100.0) if _hazard_resist > 0.0 else ""

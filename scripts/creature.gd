@@ -59,6 +59,8 @@ var _knees: Array = []      # secondary leg joint (calf), forward-only bend laye
 var _arms: Array = []       # shoulder pivots (bipeds only), light counter-swing
 var _elbows: Array = []     # secondary arm joint (forearm), same idea as _knees
 var _tail_pivot: Node3D     # tail or fish tail-fin pivot, animated as a wag
+var _neck_pivot: Node3D     # grazer neck, lowered to the ground while grazing
+var _dropped := false       # drops are handed over once, on the killing blow
 var _segments: Array = []   # serpent body segments, animated as a wiggle
 var _wings: Array = []      # flyer wing pivots, animated as a flap
 var _model: Node3D
@@ -401,7 +403,25 @@ func _build_body() -> void:
 		"serpent": _build_serpent(s, color, accent)
 		"fish": _build_fish(s, color, accent)
 		"flyer": _build_flyer(s, color, accent)
+		"crawler": _build_crawler(s, color, accent)
+		"hopper": _build_hopper(s, color, accent)
+		"grazer": _build_grazer(s, color, accent)
 		_: _build_quad(s, color, accent)
+
+
+static var _skin_shader: Shader
+
+
+## Where a box sits on the body, in creature space -- the sum of every position
+## from here up to the model root. The skin shader adds this to the vertex so a
+## stripe carries on across separate boxes instead of restarting on each limb.
+func _part_origin(parent: Node3D, pos: Vector3) -> Vector3:
+	var o := pos
+	var n := parent
+	while n != null and n != _model:
+		o += n.position
+		n = n.get_parent() as Node3D
+	return o
 
 
 func _mk_box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
@@ -410,9 +430,19 @@ func _mk_box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshI
 	m.size = size
 	mi.mesh = m
 	mi.position = pos
-	var mat := StandardMaterial3D.new()
-	mat.albedo_color = color
-	mat.roughness = 0.9
+	if _skin_shader == null:
+		_skin_shader = load("res://shaders/creature_skin.gdshader")
+	var mat := ShaderMaterial.new()
+	mat.shader = _skin_shader
+	# The box's own colour stays the base; the species accent supplies the
+	# markings, so a limb built in the accent colour still reads as part of the
+	# same animal rather than as a differently painted spare part.
+	var acc: Color = species.get("accent", color)
+	mat.set_shader_parameter("base_color", Vector3(color.r, color.g, color.b))
+	mat.set_shader_parameter("accent_color", Vector3(acc.r, acc.g, acc.b))
+	mat.set_shader_parameter("pattern", int(species.get("skin", 0)))
+	mat.set_shader_parameter("pattern_scale", float(species.get("skin_scale", 1.0)))
+	mat.set_shader_parameter("part_origin", _part_origin(parent, pos))
 	mi.material_override = mat
 	parent.add_child(mi)
 	return mi
@@ -442,6 +472,92 @@ func _build_quad(s: float, color: Color, accent: Color) -> void:
 	_tail_pivot = _mk_pivot(_model, Vector3(0, torso_y + torso.y * 0.1, torso.z * 0.5))
 	_tail_pivot.rotation.x = -0.5
 	_mk_box(_tail_pivot, Vector3(0.16, 0.16, 0.6) * s, Vector3(0, 0, 0.3 * s), color)
+
+
+## A low, many-legged crawler: long segmented body close to the ground on three
+## pairs of short legs. Reads as something insectile rather than a shrunken
+## mammal, which is what the cave and land mixes were missing.
+func _build_crawler(s: float, color: Color, accent: Color) -> void:
+	var leg_len := 0.22 * s
+	var torso := Vector3(0.7, 0.34, 1.7) * s
+	var torso_y := leg_len + torso.y * 0.5
+	_mk_box(_model, torso, Vector3(0, torso_y, 0), color)
+	# a low domed head, set forward and slightly down
+	# Overlapping the front of the body, not perched off the end of it.
+	_mk_box(_model, Vector3(0.5, 0.32, 0.46) * s,
+		Vector3(0, torso_y - 0.01 * s, -torso.z * 0.5 - 0.08 * s), accent)
+	var hx := torso.x * 0.5
+	for pair in 3:
+		var pz := (float(pair) - 1.0) * torso.z * 0.32
+		for sx in [-1, 1]:
+			# splayed out to the side, the way a many-legged thing actually stands
+			var pivot := _mk_pivot(_model, Vector3(sx * hx, leg_len * 1.1, pz))
+			pivot.rotation.z = -0.5 * float(sx)
+			_mk_box(pivot, Vector3(0.13, leg_len * 1.6, 0.13) * s,
+				Vector3(0, -leg_len * 0.8, 0), accent)
+			_legs.append(pivot)
+	# a pair of feelers, so the front end reads as a front end
+	for sx in [-1, 1]:
+		_mk_box(_model, Vector3(0.06, 0.06, 0.5) * s,
+			Vector3(sx * 0.16 * s, torso_y + 0.1 * s, -torso.z * 0.5 - 0.32 * s), accent)
+
+
+## A hopper: heavy hind legs, small forelimbs, upright tail for balance. Built
+## with its legs in the _legs list so the existing walk cycle drives the hop.
+func _build_hopper(s: float, color: Color, accent: Color) -> void:
+	var leg_len := 0.55 * s
+	var torso := Vector3(0.55, 0.75, 0.7) * s
+	var torso_y := leg_len + torso.y * 0.5
+	_mk_box(_model, torso, Vector3(0, torso_y, 0), color)
+	_mk_box(_model, Vector3(0.42, 0.42, 0.46) * s,
+		Vector3(0, torso_y + torso.y * 0.55, -0.1 * s), accent)
+	# tall ears -- cheap, and they sell the silhouette at a distance
+	for sx in [-1, 1]:
+		_mk_box(_model, Vector3(0.09, 0.42, 0.09) * s,
+			Vector3(sx * 0.13 * s, torso_y + torso.y * 0.55 + 0.36 * s, -0.1 * s), accent)
+	for sx in [-1, 1]:
+		var hind := _mk_pivot(_model, Vector3(sx * 0.22 * s, leg_len, 0.12 * s))
+		_mk_box(hind, Vector3(0.24, leg_len, 0.3) * s, Vector3(0, -leg_len * 0.5, 0), accent)
+		_legs.append(hind)
+	for sx in [-1, 1]:
+		# On the FRONT face, not inside the torso -- at -0.22 they were buried in
+		# the body and never read as forelimbs at all.
+		var fore := _mk_pivot(_model, Vector3(sx * 0.17 * s, torso_y + 0.02 * s,
+			-torso.z * 0.5 + 0.06 * s))
+		_mk_box(fore, Vector3(0.11, 0.3, 0.11) * s, Vector3(0, -0.15 * s, 0), accent)
+		_legs.append(fore)
+	# Rooted ON the back of the torso rather than below and behind it, which is
+	# what left the tail hanging in the air clear of the body.
+	_tail_pivot = _mk_pivot(_model, Vector3(0, torso_y - torso.y * 0.25, torso.z * 0.5 - 0.05 * s))
+	_tail_pivot.rotation.x = -0.6
+	_mk_box(_tail_pivot, Vector3(0.18, 0.18, 0.85) * s, Vector3(0, 0, 0.42 * s), color)
+
+
+## A long-necked grazer: tall body on straight legs with a neck that carries the
+## head well above it. The one build in the set whose head is nowhere near the
+## ground, so a herd of them is visible across a valley.
+func _build_grazer(s: float, color: Color, accent: Color) -> void:
+	var leg_len := 1.05 * s
+	var torso := Vector3(0.8, 0.72, 1.6) * s
+	var torso_y := leg_len + torso.y * 0.5
+	_mk_box(_model, torso, Vector3(0, torso_y, 0), color)
+	var neck_len := 1.1 * s
+	var neck_base := Vector3(0, torso_y + torso.y * 0.35, -torso.z * 0.5 + 0.1 * s)
+	_neck_pivot = _mk_pivot(_model, neck_base)
+	_neck_pivot.rotation.x = -0.45
+	_mk_box(_neck_pivot, Vector3(0.28, neck_len, 0.28) * s, Vector3(0, neck_len * 0.5, 0), color)
+	_mk_box(_neck_pivot, Vector3(0.36, 0.34, 0.6) * s,
+		Vector3(0, neck_len + 0.1 * s, -0.16 * s), accent)
+	var hx := torso.x * 0.5 - 0.06 * s
+	var hz := torso.z * 0.5 - 0.2 * s
+	for sx in [-1, 1]:
+		for sz in [-1, 1]:
+			var pivot := _mk_pivot(_model, Vector3(sx * hx, leg_len, sz * hz))
+			_mk_box(pivot, Vector3(0.19, leg_len, 0.19) * s, Vector3(0, -leg_len * 0.5, 0), accent)
+			_legs.append(pivot)
+	_tail_pivot = _mk_pivot(_model, Vector3(0, torso_y + torso.y * 0.2, torso.z * 0.5))
+	_tail_pivot.rotation.x = -0.3
+	_mk_box(_tail_pivot, Vector3(0.1, 0.1, 0.7) * s, Vector3(0, 0, 0.35 * s), color)
 
 
 func _build_biped(s: float, color: Color, accent: Color) -> void:
@@ -1716,6 +1832,17 @@ func _animate(delta: float) -> void:
 	# Its orientation is now a fixed, anatomy-derived offset on the hand bone
 	# (see _grip_basis), so it simply rides the hand like a real strapped
 	# shield -- nothing per-frame to do, and nothing left to fight.
+	# Grazers put their heads down when they stop. Nothing else about the AI
+	# changes -- an animal that pauses to feed and lifts its head when it moves on
+	# reads as alive, and it costs one lerp on a pivot that already exists.
+	if _neck_pivot != null:
+		var feeding: bool = bool(species.get("graze", false)) and moving < 0.25
+		# The neck's rest angle is already NEGATIVE (tilted forward, toward -Z),
+		# so feeding means going further negative. A positive angle swung the head
+		# up and back, which is a creature staring at the sky, not grazing.
+		var want: float = -1.35 if feeding else -0.45
+		_neck_pivot.rotation.x = lerpf(_neck_pivot.rotation.x, want,
+			clampf(delta * 2.2, 0.0, 1.0))
 	if _tail_pivot != null:
 		var amp := 0.5 if species.get("kind") == "fish" else 0.25
 		_tail_pivot.rotation.y = sin(_phase * 0.6) * amp * maxf(moving, 0.3)
@@ -1751,6 +1878,7 @@ func take_hit(dmg: float, stagger: float = 0.0) -> bool:
 			if _stagger <= 0.0:
 				_apply_stagger_interrupt()
 	if _health <= 0.0:
+		_grant_drops()
 		# Play the death clip through before disappearing, instead of the old
 		# instant queue_free(). Collision and AI are switched off immediately so
 		# a corpse can't keep fighting or block the player mid-animation.
@@ -1802,6 +1930,30 @@ func _become_corpse() -> void:
 	# off -- this way a lingering corpse burns no per-frame work at all.
 	var t := get_tree().create_timer(CORPSE_LINGER)
 	t.timeout.connect(queue_free)
+
+
+## Hand this creature's drops straight to the player, the same way mining a
+## block does -- this game has no dropped-item entities, so a corpse you have to
+## walk over to loot would be the odd one out.
+func _grant_drops() -> void:
+	if _dropped:
+		return
+	_dropped = true
+	var drops: Array = species.get("drops", [])
+	if drops.is_empty() or world == null or world.player == null:
+		return
+	var got: Array = []
+	for d in drops:
+		var lo := int(d.get("min", 1))
+		var hi := maxi(lo, int(d.get("max", lo)))
+		var n := randi_range(lo, hi)
+		if n <= 0:
+			continue
+		var id := int(d["id"])
+		world.player.grant_item(id, n)
+		got.append("%s x%d" % [Blocks.name_of(id), n])
+	if not got.is_empty():
+		world.player.notify("%s: %s" % [species.get("name", "Creature"), ", ".join(got)])
 
 
 func _apply_stagger_interrupt() -> void:

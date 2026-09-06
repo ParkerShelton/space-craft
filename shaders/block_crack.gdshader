@@ -16,8 +16,16 @@ uniform float progress = 0.0;   // 0 = untouched, 1 = about to break
 // face a line one cell wide is a row of fat dashes, which read as streaky noise
 // rather than a break. The blocky look still comes through at 16.
 uniform float texels = 16.0;
+// One number per block, set by the miner (see Player._update_crack). In block
+// space every block looks alike, so the variety has to be handed in.
+uniform float block_seed = 0.0;
 
-varying vec3 v_world;
+// The pattern is laid out in the BLOCK's own space, not the world's. World
+// coordinates out here are ~1300 units from the origin, and at that magnitude a
+// 32-bit float cannot resolve sixteen texels per block -- the cell grid
+// collapsed into noise, which is the graininess this overlay kept showing on a
+// real planet while looking perfect on a test quad next to the origin.
+varying vec3 v_local;
 varying vec3 v_normal;
 
 float hash21(vec2 p) {
@@ -44,68 +52,45 @@ float seg_d(vec2 p, vec2 a, vec2 b) {
 }
 
 void vertex() {
-	v_world = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	v_local = VERTEX;
 	v_normal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 }
 
 void fragment() {
 	vec3 n = normalize(v_normal);
-	vec2 fc = face_coord(v_world, n);
+	vec2 fc = face_coord(v_local, n);
 
-	// Cells, so damage stays blocky and on-style. Everything below is decided
-	// per CELL (from the cell's own centre) rather than per pixel, which is what
-	// keeps the edges hard instead of smoothly antialiased.
+	// One decision per CELL, and nothing else.
+	//
+	// This used to build a distance field to line-segment "arms" and threshold it.
+	// It looked right in isolation and kept shattering into streaks on a real
+	// block, through several rounds of trying to save it. A cell grid with a hash
+	// per cell has no such failure mode: there are no derivatives, no distance
+	// field, and no way for a value to vary within a cell. Blocks crumble from the
+	// point of impact outward, which is what a break reads as.
 	vec2 cell = floor(fc * texels);
 	vec2 cpos = (cell + 0.5) / texels;
-	vec2 lp = fract(cpos) - 0.5;          // -0.5 .. 0.5 across the face
+	// +8 keeps fract() clear of zero: the shell is inflated slightly outward, so
+	// its local coordinates dip below zero at every edge, and fract() would wrap a
+	// negative straight to the far side of the cell.
+	vec2 lp = fract(cpos + 8.0) - 0.5;
 
-	// Seeded from the face's own NORMAL as well as its position. Opposite faces
-	// project to the same two world axes, so without the normal every block wore
-	// the identical crack on both sides of it.
-	float seed = hash21(floor(fc) + 0.5 + n.xy * 37.0 + vec2(n.z * 53.0));
+	// Distance from the middle of the face, 0 at the centre and ~1 at a corner.
+	float r = length(lp) * 2.0;
+	// Per-cell, and per-FACE: opposite faces project to the same two axes, so
+	// without the normal in here every block wore the same break on both sides.
+	float h = hash21(cell + vec2(block_seed * 61.7, block_seed * 29.3)
+		+ n.xy * 17.0 + vec2(n.z * 23.0));
 
-	// Each arm is a two-segment polyline from the impact point: one kink gives it
-	// a fracture's dog-leg instead of a ruler-straight ray, and arms are placed at
-	// their own random angles rather than evenly spaced (even spacing drew a tidy
-	// pinwheel -- four arms with a consistent bend make a shape nobody wants).
-	float arms = 3.0 + floor(hash21(vec2(seed, 4.0)) * 3.0);   // 3-5
-	float d = 99.0;
-	for (int i = 0; i < 5; i++) {
-		if (float(i) >= arms) { break; }
-		float fi = float(i);
-		// Arms appear one after another as the block gives way, so the break
-		// spreads rather than every line growing in lockstep.
-		float birth = fi * 0.13;
-		float grow = clamp((progress - birth) / max(1.0 - birth, 0.001), 0.0, 1.0);
-		if (grow <= 0.0) { continue; }
-		float a0 = hash21(vec2(seed * 31.0, fi)) * 6.28318;
-		float len = grow * (0.30 + hash21(vec2(seed * 17.0, fi + 9.0)) * 0.24);
-		float bend = (hash21(vec2(seed * 7.0, fi + 3.0)) - 0.5) * 1.2;
-		vec2 mid = vec2(cos(a0), sin(a0)) * len * 0.55;
-		vec2 tip = mid + vec2(cos(a0 + bend), sin(a0 + bend)) * len * 0.55;
-		d = min(d, seg_d(lp, vec2(0.0), mid));
-		d = min(d, seg_d(lp, mid, tip));
-	}
-	// A wobble well under one texel, so the line edge is ragged without the
-	// line itself breaking up into scattered cells.
-	d += (hash21(cell + 11.0) - 0.5) * (0.5 / texels);
+	// Damage spreads outward: near the centre a cell needs almost no progress to
+	// give way, out at the rim it needs nearly all of it. The hash decides the
+	// order within each ring, so the break is ragged rather than a growing circle.
+	float reach = progress * 1.75 - r * 1.05;
+	float broken = step(h, clamp(reach, 0.0, 1.0));
+	// A rim one step behind the break: cells that are ALMOST gone. On a dark block
+	// in a cave the bright rim is the only part that reads at all.
+	float halo = step(h, clamp(reach + 0.30, 0.0, 1.0)) - broken;
 
-	// Constant width, in texels -- a crack thinner than a texel cannot draw a
-	// continuous line on a cell grid, it just quantises into dashes.
-	float w = 1.0 / texels;
-	// The impact point itself always gives way, and widens as mining goes on.
-	float core = 0.04 + progress * 0.05;
-	float dark = min(d - w, length(lp) - core);
-
-	float broken = step(dark, 0.0);
-	// A dark crack is invisible on a dark block, which is exactly where mining
-	// happens most -- caves, night, anywhere the sun does not reach. So the crack
-	// is drawn as a dark line with a BRIGHT rim exactly one texel outside it: the
-	// line reads against lit rock, the rim reads against black, and neither needs
-	// to know what is behind it.
-	float halo = step(dark, 1.0 / texels) - broken;
-
-	ALBEDO = mix(vec3(0.02), vec3(0.9), halo);
-	// A faint wash over the whole face late on reads as the block being strained.
-	ALPHA = broken * 0.9 + halo * 0.5 + smoothstep(0.75, 1.0, progress) * 0.1;
+	ALBEDO = mix(vec3(0.03), vec3(0.92), halo);
+	ALPHA = broken * 0.92 + halo * 0.55;
 }
