@@ -38,6 +38,11 @@ var _sun: DirectionalLight3D
 var _atmo := 0.0
 var _day := 1.0                    # 0 = night, 1 = full day (eased, see _process)
 var _menu_layer: CanvasLayer
+var _net: Net
+var _join_ip: LineEdit
+var _net_mode := "single"
+var _client_seed := 0
+var _client_system := 0
 var _menu_vb: VBoxContainer
 
 func _notification(what: int) -> void:
@@ -46,7 +51,9 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		# only autosave once a world has actually started (not from the menu), and
 		# never headless
-		if _world != null and _world.player != null and DisplayServer.get_name() != "headless":
+		# Never from a networked session: co-op runs on a throwaway world and has
+		# no business overwriting the single-player one.
+		if _world != null and _world.player != null and _net_mode == "single" 				and DisplayServer.get_name() != "headless":
 			_world.save_game()
 		get_tree().quit()
 
@@ -59,6 +66,13 @@ func _ready() -> void:
 	add_child(world)
 	_world = world
 	world.planet_generator = Callable(self, "_generate_planets")
+	# Fixed name: an RPC is addressed by NODE PATH, so both machines have to agree
+	# on where this node lives before a single message can be sent.
+	_net = Net.new()
+	_net.name = "Net"
+	add_child(_net)
+	_net.bind_world(world)
+	_net.world_ready.connect(_on_world_ready)
 	_build_menu()
 
 
@@ -122,7 +136,54 @@ func _menu_populate(confirm_delete: bool) -> void:
 		_menu_button("New World", func(): _menu_populate(true))
 	else:
 		_menu_button("New World", func(): _start_world(false))
+	# Co-op. A multiplayer session always uses a FRESH world and never touches the
+	# single-player save, so a networking bug cannot damage the world you have.
+	_menu_label(" ", 10)
+	_menu_button("Host Co-op Game", func(): _start_world(false, "host"))
+	_menu_button("Join Co-op Game", func(): _menu_join())
 	_menu_button("Quit", func(): get_tree().quit())
+
+
+## The join screen: somewhere to type the host's address.
+func _menu_join() -> void:
+	for c in _menu_vb.get_children():
+		c.queue_free()
+	_menu_label("Join a game", 30)
+	_menu_label("the host's IP address on your network", 15, 0.55)
+	_join_ip = LineEdit.new()
+	_join_ip.text = "127.0.0.1"
+	_join_ip.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_join_ip.custom_minimum_size = Vector2(280, 40)
+	_menu_vb.add_child(_join_ip)
+	_menu_button("Connect", func():
+		var ip: String = _join_ip.text.strip_edges()
+		if ip.is_empty():
+			return
+		if not _net.join(ip):
+			_menu_label(_net.last_error, 15, 0.9)
+			return
+		_start_world(false, "client"))
+	_menu_button("Back", func(): _menu_populate(false))
+
+
+## Connected, waiting to be told which world to build. Nothing can be generated
+## until the seed arrives -- a client that guessed would render a different
+## planet from everyone else.
+func _await_host() -> void:
+	for c in _menu_vb.get_children():
+		c.queue_free()
+	_menu_label("Connecting...", 26)
+	_menu_label("waiting for the host's world", 15, 0.55)
+	_menu_button("Cancel", func():
+		_net.leave()
+		_menu_populate(false))
+
+
+func _on_world_ready(seed_value: int, system_index: int) -> void:
+	_net_mode = "client"
+	_client_seed = seed_value
+	_client_system = system_index
+	_start_world(false, "joined")
 
 
 func _delete_save() -> void:
@@ -170,18 +231,26 @@ func _grant_test_fuel(world: WorldManager, player) -> void:
 
 # --- start the actual world (from Continue or New World) -----------------------
 
-func _start_world(load_existing: bool) -> void:
+## `mode` is "single", "host" or "client". A client cannot choose its own seed:
+## it has to build the same world the host already has, so it waits on the wire
+## for one (see _on_world_ready) instead of generating anything.
+func _start_world(load_existing: bool, mode: String = "single") -> void:
+	if mode == "client":
+		_await_host()
+		return
+	_net_mode = "client" if mode == "joined" else mode
 	if _menu_layer != null:
 		_menu_layer.queue_free()
 		_menu_layer = null
 	_show_loading_screen()
 
 	var world := _world
-	var wseed := world.saved_world_seed() if load_existing else _rand_seed()
+	var wseed := _client_seed if mode == "joined" 		else (world.saved_world_seed() if load_existing else _rand_seed())
 	if wseed < 0:
 		wseed = _rand_seed()
 	world.world_seed = wseed
 	Chunk.set_texture_seed(wseed)  # re-roll procedural block texturing per world
+
 
 	var galaxy := Galaxy.new()
 	galaxy.generate(wseed)
@@ -190,6 +259,9 @@ func _start_world(load_existing: bool) -> void:
 	# so a new game always starts somewhere with intelligent life nearby -- not
 	# necessarily system 0. No warp travel yet, so this is also just "the" system.
 	world.current_system_index = galaxy.home_system_index()
+	if _net_mode == "host" and not _net.host(wseed, world.current_system_index):
+		_net_mode = "single"
+		push_warning("could not host: " + _net.last_error)
 	var sysdef: Dictionary = galaxy.systems[world.current_system_index]
 	print("[galaxy] %d systems generated -- starting in %s (%s, %d planets)" % [
 		galaxy.systems.size(), sysdef["name"], Galaxy.civ_name(sysdef["civ_tier"]), sysdef["planet_count"]])
