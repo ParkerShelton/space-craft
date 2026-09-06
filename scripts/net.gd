@@ -31,6 +31,12 @@ var peers: Dictionary = {}
 var _world: WorldManager
 var _seed := 0
 var _system := 0
+## Edits that arrived before this client had finished building its world. A
+## joining client is sent the world's changes immediately, but generating the
+## planets takes tens of seconds -- so anything landing in that window has
+## nowhere to go yet and would simply be lost.
+var _pending: Array = []
+var _world_built := false
 
 
 func _ready() -> void:
@@ -86,6 +92,15 @@ func leave() -> void:
 	peers.clear()
 
 
+## Called once the planets actually exist. Everything that arrived while this
+## client was still generating them is applied now, in the order it came in.
+func world_built() -> void:
+	_world_built = true
+	for e in _pending:
+		_apply_bulk(e[0], e[1], e[2])
+	_pending.clear()
+
+
 func my_id() -> int:
 	return multiplayer.get_unique_id() if active else 1
 
@@ -100,6 +115,20 @@ func _on_peer_connected(id: int) -> void:
 	# Hand the newcomer the world it has to build. Nothing else can happen until
 	# it has this: its terrain would not match ours.
 	world_info.rpc_id(id, _seed, _system)
+	# ...and everything that has been built or dug since the world was made.
+	# Without this a late joiner sees the world as it was GENERATED: it would
+	# generate the same terrain from the seed and then be missing every change
+	# anyone had made, which on a server that has been up for a while is most of
+	# what there is to see.
+	for p in _world.planets if _world != null else []:
+		var cells := PackedVector3Array()
+		var ids := PackedInt32Array()
+		for cc in p._edits_by_chunk:
+			for v in p._edits_by_chunk[cc]:
+				cells.append(Vector3(v))
+				ids.append(int(p._edits_by_chunk[cc][v]))
+		if not ids.is_empty():
+			world_edits.rpc_id(id, p.planet_name, cells, ids)
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -132,6 +161,29 @@ func world_info(seed_value: int, system_index: int) -> void:
 	_system = system_index
 	joining = false
 	world_ready.emit(seed_value, system_index)
+
+
+## Host -> a joining client: every edit made to one planet so far.
+##
+## Sent as two flat arrays rather than the nested dictionary the planet keeps,
+## because packed arrays go over the wire far more compactly than a Dictionary of
+## Dictionaries keyed by vectors.
+@rpc("authority", "call_remote", "reliable")
+func world_edits(planet_name: String, cells: PackedVector3Array, ids: PackedInt32Array) -> void:
+	if not _world_built:
+		_pending.append([planet_name, cells, ids])
+		return
+	_apply_bulk(planet_name, cells, ids)
+
+
+func _apply_bulk(planet_name: String, cells: PackedVector3Array, ids: PackedInt32Array) -> void:
+	var p := _planet(planet_name)
+	if p == null:
+		return
+	for i in mini(cells.size(), ids.size()):
+		var c: Vector3 = cells[i]
+		p.set_block(Vector3i(roundi(c.x), roundi(c.y), roundi(c.z)), ids[i])
+	print("[net] caught up on %d changes to %s" % [ids.size(), planet_name])
 
 
 # --- block edits ----------------------------------------------------------
@@ -167,6 +219,9 @@ func request_edit(planet_name: String, v: Vector3i, id: int) -> void:
 ## Host -> clients.
 @rpc("authority", "call_remote", "reliable")
 func apply_edit(planet_name: String, v: Vector3i, id: int) -> void:
+	if not _world_built:
+		_pending.append([planet_name, PackedVector3Array([Vector3(v)]), PackedInt32Array([id])])
+		return
 	var p := _planet(planet_name)
 	if p != null:
 		p.set_block(v, id)

@@ -76,6 +76,12 @@ func _ready() -> void:
 	_net.bind_world(world)
 	world.net = _net
 	_net.world_ready.connect(_on_world_ready)
+	# A dedicated server never shows a menu: it builds a world, opens a port and
+	# waits. Started with:  godot --headless -- --server [--port=N] [--seed=N]
+	var ded := _server_args()
+	if not ded.is_empty():
+		_start_dedicated(int(ded["port"]), int(ded["seed"]))
+		return
 	_build_menu()
 
 
@@ -194,6 +200,68 @@ func _delete_save() -> void:
 	DirAccess.remove_absolute(WorldManager.SAVE_BAK)
 
 
+## Command-line options for running as a dedicated server.
+##
+## Godot swallows arguments it does not recognise, so the game's own options are
+## meant to go after a bare "--". Both forms are read anyway, because getting
+## that wrong otherwise launches the ordinary game and looks like a crash.
+func _server_args() -> Dictionary:
+	var argv: Array = []
+	argv.append_array(OS.get_cmdline_user_args())
+	argv.append_array(OS.get_cmdline_args())
+	var wanted := false
+	var port := Net.PORT
+	var seed_value := -1
+	for a in argv:
+		var arg := str(a)
+		if arg == "--server" or arg == "--dedicated":
+			wanted = true
+		elif arg.begins_with("--port="):
+			port = int(arg.substr(7))
+		elif arg.begins_with("--seed="):
+			seed_value = int(arg.substr(7))
+	if not wanted:
+		return {}
+	return {"port": port, "seed": seed_value}
+
+
+## Build the world, open the port, and do nothing else.
+##
+## There is no player here, and that is what makes it cheap: WorldManager only
+## streams and meshes chunks around a player, so with none there is no terrain
+## work at all. The server holds the seed and the authoritative record of every
+## edit, and relays. Everything a client sees, it generates for itself.
+func _start_dedicated(port: int, seed_value: int) -> void:
+	_net_mode = "server"
+	var world := _world
+	var wseed := seed_value if seed_value >= 0 else _rand_seed()
+	world.world_seed = wseed
+	Chunk.set_texture_seed(wseed)
+
+	var galaxy := Galaxy.new()
+	galaxy.generate(wseed)
+	world.galaxy = galaxy
+	world.current_system_index = galaxy.home_system_index()
+	var sysdef: Dictionary = galaxy.systems[world.current_system_index]
+	_generate_planets(world, sysdef)
+	_net.world_built()
+
+	if not _net.host(wseed, world.current_system_index, port):
+		print("[server] FAILED: ", _net.last_error)
+		get_tree().quit(1)
+		return
+	_net.roster_changed.connect(_on_server_roster)
+	print("[server] listening on port %d" % port)
+	print("[server] world seed %d -- pass --seed=%d to reopen this same world" % [wseed, wseed])
+	print("[server] system %s, %d planets, home world %s" % [
+		sysdef["name"], world.planets.size(), world.planets[0].planet_name])
+	print("[server] ready")
+
+
+func _on_server_roster() -> void:
+	print("[server] players connected: %d" % _net.peers.size())
+
+
 func _rand_seed() -> int:
 	var r := RandomNumberGenerator.new()
 	r.randomize()
@@ -235,6 +303,9 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	print("[galaxy] %d systems generated -- starting in %s (%s, %d planets)" % [
 		galaxy.systems.size(), sysdef["name"], Galaxy.civ_name(sysdef["civ_tier"]), sysdef["planet_count"]])
 	_generate_planets(world, sysdef)
+	# The planets exist from here, so anything the network buffered while they
+	# were being built can be applied now.
+	_net.world_built()
 
 	# player: drop in just above dry land on the home world
 	var home: Planet = world.planets[0]
