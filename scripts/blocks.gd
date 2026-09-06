@@ -1202,6 +1202,9 @@ const HARDNESS := {
 	WOOD: 0.6, WOOD_PALE: 0.6, WOOD_DARK: 0.6,
 	PLANK: 0.5, PLANK_PALE: 0.5, PLANK_DARK: 0.5,
 	WIRE: 0.3,
+	# Faster than leaves: grass is the one thing you brush aside constantly, and
+	# anything you touch that often should not cost you a mining animation.
+	TALL_GRASS: 0.05,
 	TORCH: 0.1, GLOW_LAMP: 0.3, EMBER_TORCH: 0.1, MACHINE_CORE: 1.2,
 	ICE: 0.7, ROCK: 0.9, CRYSTAL: 1.2, CORE: 1.6,
 	IRON_ORE: 1.3, COPPER_ORE: 1.3, GOLD_ORE: 1.6,

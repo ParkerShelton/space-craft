@@ -2289,8 +2289,18 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 			if t != Blocks.AIR:
 				return t
 		# Ground cover, in the ONE cell above the surface and only over soil.
-		if grass_density > 0.0 and d - surf <= 1.0 and pal_top == Blocks.GRASS 				and (water_style == WATER_NONE or surf > water_level + 0.5) 				and _hash01(Vector3i(gx, gy, gz), 91) < grass_density:
-			return Blocks.TALL_GRASS
+		if grass_density > 0.0 and d - surf <= 1.0 and pal_top == Blocks.GRASS \
+				and (water_style == WATER_NONE or surf > water_level + 0.5) \
+				and _hash01(Vector3i(gx, gy, gz), 91) < grass_density:
+			# And only where there is actually SOIL under it. "One cell above the
+			# surface" is a nominal height, not a promise that anything is there --
+			# where a cave breaks through the ground has been carved away, and the
+			# grass was left standing in mid-air over the hole.
+			var gup := _axis_of(dir) if shape_cube else dir
+			var under := generation_sample(gx - roundi(gup.x), gy - roundi(gup.y),
+					gz - roundi(gup.z), tcache)
+			if under != Blocks.AIR and under != Blocks.WATER:
+				return Blocks.TALL_GRASS
 		return Blocks.AIR
 
 	var depth := surf - d
