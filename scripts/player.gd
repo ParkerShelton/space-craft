@@ -35,8 +35,8 @@ const HEALTH_REGEN := 3.0         # health/sec while safe and oxygenated
 # Slow enough that food is an errand rather than a chore: a full meter lasts
 # roughly twelve minutes of ordinary play, less if you are working hard.
 const MAX_HUNGER := 100.0
-const HUNGER_DRAIN := 0.14        # hunger/sec standing still
-const HUNGER_EXERTION := 0.22     # extra hunger/sec while actually moving
+const HUNGER_DRAIN := 0.07        # hunger/sec standing still
+const HUNGER_EXERTION := 0.10     # extra hunger/sec while actually moving
 const STARVE_DMG := 1.1           # health/sec at zero hunger -- slow, not sudden
 const STARVE_SPEED_MULT := 0.62   # and you drag your feet once you are empty
 const HUNGER_REGEN_MIN := 25.0    # below this you stop healing
@@ -336,20 +336,7 @@ func _init_inventory() -> void:
 	inv.clear()
 	for i in SLOTS:
 		inv.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}})
-	# TEST KIT: everything needed to build and run the machines, and nothing
-	# else. Fuel ore is NOT granted here -- ore properties are invented per
-	# planet, so it is handed out in main._start_world once a world exists and
-	# can be sampled for real Combustion values.
-	# Every bench you can simply place:
-	for st in [Blocks.SMELTER, Blocks.FABRICATOR, Blocks.SHIPWORKS,
-			Blocks.CARPENTER, Blocks.CHEST, Blocks.SHAPER, Blocks.CLIMATE_UNIT]:
-		_add_item(st, 1)
-	# Materials for the built machines. The Generator is a stone firebox in a
-	# metal frame; the Forge is solid metal. Machine Cores are what declare
-	# "a machine goes here", so a few spares to experiment with.
-	_add_item(Blocks.MACHINE_CORE, 4)
-	_add_item(Blocks.METAL, 128)
-	_add_item(Blocks.ROCK, 128)
+	# You start with NOTHING. Everything comes out of the world.
 
 
 # Add n of an item; fills matching stacks first, then empty slots. Returns leftover.

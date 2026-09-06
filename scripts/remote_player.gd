@@ -17,18 +17,24 @@ var _label: Label3D
 func setup(id: int) -> void:
 	peer_id = id
 	# A stable colour per player, so the same person is the same colour all
-	# session and two players are never nearly the same shade.
+	# session and no two are nearly the same shade.
 	var hue := fposmod(float(id) * 0.618034, 1.0)
 	var body := Color.from_hsv(hue, 0.55, 0.85)
 	var trim := Color.from_hsv(hue, 0.65, 0.55)
-	_box(Vector3(0.62, 0.90, 0.38), Vector3(0, 0.95, 0), body)      # torso
-	_box(Vector3(0.46, 0.42, 0.42), Vector3(0, 1.62, 0), trim)      # head
+	# EVERY height here is measured from the body CENTRE, not from the feet,
+	# because that is where a player's origin sits: its collision capsule is 1.8
+	# tall and centred on the node. Building this figure from the feet up left it
+	# hovering half a metre above the ground.
+	const FEET := -0.9
+	_box(Vector3(0.24, 0.78, 0.28), Vector3(-0.17, FEET + 0.39, 0), trim)
+	_box(Vector3(0.24, 0.78, 0.28), Vector3(0.17, FEET + 0.39, 0), trim)
+	_box(Vector3(0.62, 0.72, 0.38), Vector3(0, FEET + 1.14, 0), body)      # torso
+	_box(Vector3(0.46, 0.42, 0.42), Vector3(0, FEET + 1.71, 0), trim)      # head
 	for sx in [-1.0, 1.0]:
-		_box(Vector3(0.20, 0.80, 0.24), Vector3(sx * 0.41, 0.98, 0), trim)   # arms
-		_box(Vector3(0.24, 0.90, 0.28), Vector3(sx * 0.17, 0.05, 0), trim)   # legs
+		_box(Vector3(0.18, 0.66, 0.26), Vector3(sx * 0.40, FEET + 1.14, 0), trim)
 	# eyes, so you can tell which way someone is facing at a glance
 	for sx in [-1.0, 1.0]:
-		_box(Vector3(0.10, 0.10, 0.06), Vector3(sx * 0.11, 1.68, -0.22),
+		_box(Vector3(0.10, 0.10, 0.06), Vector3(sx * 0.11, FEET + 1.77, -0.22),
 			Color(0.05, 0.05, 0.06))
 	_label = Label3D.new()
 	_label.text = "Player %d" % id
@@ -36,9 +42,8 @@ func setup(id: int) -> void:
 	_label.pixel_size = 0.006
 	_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	_label.no_depth_test = true
-	_label.position = Vector3(0, 2.15, 0)
+	_label.position = Vector3(0, FEET + 2.25, 0)
 	add_child(_label)
-
 
 func _box(size: Vector3, pos: Vector3, col: Color) -> void:
 	var mi := MeshInstance3D.new()

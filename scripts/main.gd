@@ -200,40 +200,6 @@ func _rand_seed() -> int:
 	return int(r.randi() & 0x7fffffff)
 
 
-## Hands out raw ore to test the Generator with. It has to happen HERE rather
-## than in the starting kit because an ore's Combustion is invented per planet,
-## so there is nothing meaningful to grant until a world exists. Gives the home
-## world's best and worst burning ore, so the difference between them is
-## immediately visible in a generator.
-func _grant_test_fuel(world: WorldManager, player) -> void:
-	if world.planets.is_empty():
-		return
-	var home: Planet = world.planets[0]
-	var best := {}
-	var worst := {}
-	for oid in Blocks.ORE_SLOT_IDS:
-		var d: Dictionary = home.ore_def(oid)
-		if d.is_empty():
-			continue
-		var c := Blocks.combustion_of(d.get("props", {}))
-		if best.is_empty() or c > Blocks.combustion_of(best.get("props", {})):
-			best = d
-		if worst.is_empty() or c < Blocks.combustion_of(worst.get("props", {})):
-			worst = d
-	for d in [best, worst]:
-		if d.is_empty():
-			continue
-		player._add_item(int(d["block"]), 32, d.get("props", {}), home.planet_name,
-			{"name": d.get("name", "Ore"), "color": d.get("color", Color.WHITE),
-				"tier": int(d.get("tier", 0))})
-		print("[kit] %s ore: Combustion %d -- burns %.1fs at %.1f power/sec" % [
-			d.get("name", "?"), Blocks.combustion_of(d.get("props", {})),
-			Blocks.fuel_burn_time(d.get("props", {})),
-			Blocks.fuel_power_rate(d.get("props", {}))])
-
-
-# --- start the actual world (from Continue or New World) -----------------------
-
 ## `mode` is "single", "host" or "client". A client cannot choose its own seed:
 ## it has to build the same world the host already has, so it waits on the wire
 ## for one (see _on_world_ready) instead of generating anything.
@@ -279,8 +245,6 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	add_child(player)
 	world.player = player
 
-	if not load_existing:
-		_grant_test_fuel(world, player)
 
 	if load_existing:
 		world.load_game()
