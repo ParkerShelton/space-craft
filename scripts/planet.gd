@@ -127,6 +127,9 @@ var rock_grain := 1.0
 var rock_contrast := 1.0
 
 var tree_density := 0.0       # 0 = desert (no trees), up to ~0.6 = dense forest
+## How thickly this world carpets its soil with tall grass. Rolled per planet, so
+## some are lush and some are close-cropped.
+var grass_density := 0.0
 var flora_leaves: Array = []  # this planet's leaf-color palette (subset of Blocks.LEAF_IDS)
 var flora_wood := Blocks.WOOD
 var flora_shape := 0          # 0 round, 1 pine, 2 wide, 3 giant, 4 coral
@@ -270,6 +273,9 @@ func configure(cfg: Dictionary) -> void:
 	alien_palette = cfg.get("alien", false)
 	_derive_palette()
 	_derive_flora(cfg.get("tree_density", 0.0))
+	var grng := RandomNumberGenerator.new()
+	grng.seed = _seed + 3131
+	grass_density = 0.0 if grng.randf() < 0.25 else grng.randf_range(0.15, 0.5)
 	_derive_ores()
 	_derive_caves(cfg.get("cave_amount", -1.0))
 	_derive_water(cfg)
@@ -565,6 +571,10 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		# banding -- while people stay plain, because a striped settler would read
 		# as an animal wearing clothes.
 		"skin": (0 if kind == "npc" else rng.randi() % 6),
+		# Roughly half of warm-blooded land life is furred. Fish, flyers and the
+		# insectile crawlers are not -- scales and chitin are their own look.
+		"fur": (kind in ["land", "cave"] and body in ["quad", "grazer", "hopper"]
+			and rng.randf() < 0.55),
 		"skin_scale": rng.randf_range(0.6, 2.2),
 		# Herds are what make a planet's wildlife read as alive rather than as lone
 		# animals wandering past. Grazers and quads travel together; serpents and
@@ -1804,11 +1814,11 @@ func _derive_caves(amount: float) -> void:
 	# ~6% across the whole range), so it is the lever to reach for: at a 22-block
 	# scale only 62% of floor spots had standing headroom and the average passage
 	# was 3.0 wide, which is a crawl. At 40 it is 80% and 4.4 wide.
-	var room_size := lerpf(80.0, 55.0, a)
-	var tunnel_size := lerpf(46.0, 34.0, a)
+	var room_size := lerpf(105.0, 72.0, a)
+	var tunnel_size := lerpf(60.0, 44.0, a)
 	if cave_style == "cavern":
-		room_size = lerpf(150.0, 100.0, a)
-		tunnel_size = lerpf(52.0, 40.0, a)
+		room_size = lerpf(190.0, 130.0, a)
+		tunnel_size = lerpf(68.0, 52.0, a)
 
 	# BIG network: sparse, wide -> the rooms. More amount -> lower threshold
 	# (denser) and lower frequency (bigger rooms).
@@ -1817,10 +1827,13 @@ func _derive_caves(amount: float) -> void:
 	# 1.5%-7% for the tunnels, so a warren world lands near 2%-10% open. The old
 	# values opened 32% of every planet's rock, which is what made caves read as
 	# endless connected voids rather than as passages through stone.
-	cave_threshold = lerpf(0.82, 0.72, a)
+	cave_threshold = lerpf(0.80, 0.70, a)
 	if cave_style == "cavern":
-		cave_threshold = lerpf(0.78, 0.66, a)
-	cave_breach_threshold = minf(cave_threshold + 0.09, 0.985)
+		cave_threshold = lerpf(0.76, 0.64, a)
+	# A smaller margin over the base threshold means more of the network is
+	# allowed to break the surface, so cave mouths you can walk into are something
+	# you actually come across rather than a rarity.
+	cave_breach_threshold = minf(cave_threshold + 0.05, 0.985)
 	var freq := 1.0 / room_size
 	cave_noise.seed = _seed + 2020
 	cave_noise.frequency = freq
@@ -1837,11 +1850,11 @@ func _derive_caves(amount: float) -> void:
 	# straight shaft dug down from almost any spot eventually breaks into one,
 	# without requiring you to stumble on a rare big cavern. Present even on
 	# "barely-there" (low amount) worlds so digging down always has a decent shot.
-	cave_threshold_fine = lerpf(0.76, 0.66, a)
+	cave_threshold_fine = lerpf(0.74, 0.63, a)
 	# breach uses a near-absolute bar (NOT a small margin over the base threshold,
 	# which is tuned low for deep diggability and would make breaches everywhere)
 	# so surface entrances from the fine network stay rare regardless of density
-	cave_breach_threshold_fine = lerpf(0.965, 0.93, a)
+	cave_breach_threshold_fine = lerpf(0.935, 0.90, a)
 	var freq_fine := 1.0 / tunnel_size
 	cave_noise3.seed = _seed + 4040
 	cave_noise3.frequency = freq_fine
@@ -2272,7 +2285,12 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 		if water_style != WATER_NONE and d <= water_level:
 			return _water_block()
 		if tree_density > 0.0 and d <= surf + tree_reach:
-			return _tree_at(p, dir, surf, tcache)
+			var t := _tree_at(p, dir, surf, tcache)
+			if t != Blocks.AIR:
+				return t
+		# Ground cover, in the ONE cell above the surface and only over soil.
+		if grass_density > 0.0 and d - surf <= 1.0 and pal_top == Blocks.GRASS 				and (water_style == WATER_NONE or surf > water_level + 0.5) 				and _hash01(Vector3i(gx, gy, gz), 91) < grass_density:
+			return Blocks.TALL_GRASS
 		return Blocks.AIR
 
 	var depth := surf - d

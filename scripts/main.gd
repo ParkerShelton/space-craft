@@ -590,6 +590,10 @@ func _process(delta: float) -> void:
 				Vector3(amb.r, amb.g, amb.b))
 			pl2.block_material.set_shader_parameter("ambient_energy",
 				_env.ambient_light_energy)
+	# Ground cover is lit by the same rules, so it needs the same numbers.
+	var gm := Chunk._get_grass_material()
+	gm.set_shader_parameter("ambient_color", Vector3(amb.r, amb.g, amb.b))
+	gm.set_shader_parameter("ambient_energy", _env.ambient_light_energy)
 	# looking_at() is DEGENERATE when the direction is parallel to the up
 	# reference, which happens exactly at noon and midnight (the sun sits along
 	# the planet's up axis). That produced an invalid basis, and with it the

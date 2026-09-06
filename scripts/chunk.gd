@@ -117,6 +117,18 @@ static func set_texture_seed(world_seed: int) -> void:
 	_tex_seed = float(world_seed % 100000) * 0.013
 
 
+static var _grass_material: ShaderMaterial
+
+## Ground cover's own material. Separate from the terrain's on purpose: the blade
+## cutout needs a discard the terrain shader has no business carrying, and a
+## separate surface cannot corrupt the terrain mesh.
+static func _get_grass_material() -> ShaderMaterial:
+	if _grass_material == null:
+		_grass_material = ShaderMaterial.new()
+		_grass_material.shader = load("res://shaders/grass_blade.gdshader")
+	return _grass_material
+
+
 static func _get_water_material() -> StandardMaterial3D:
 	if _water_material == null:
 		_water_material = StandardMaterial3D.new()
@@ -190,6 +202,16 @@ func apply_mesh_data(data: Dictionary) -> void:
 		arr[Mesh.ARRAY_TEX_UV2] = data["uv2s"]
 		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
 		m.surface_set_material(m.get_surface_count() - 1, _get_material(planet))
+	var gverts: PackedVector3Array = data.get("gverts", PackedVector3Array())
+	if not gverts.is_empty():
+		var garr := []
+		garr.resize(Mesh.ARRAY_MAX)
+		garr[Mesh.ARRAY_VERTEX] = gverts
+		garr[Mesh.ARRAY_NORMAL] = data["gnormals"]
+		garr[Mesh.ARRAY_COLOR] = data["gcolors"]
+		garr[Mesh.ARRAY_TEX_UV] = data["guvs"]
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, garr)
+		m.surface_set_material(m.get_surface_count() - 1, _get_grass_material())
 	if not wverts.is_empty():
 		var warr := []
 		warr.resize(Mesh.ARRAY_MAX)
@@ -276,7 +298,8 @@ static func _static_init() -> void:
 		var full: bool = not (id == Blocks.AIR or id == Blocks.WATER
 			or id == Blocks.DOOR_OPEN or id == Blocks.ROOF_SLAB
 			or Blocks.is_slab(id) or Blocks.is_stair(id) or Blocks.is_light(id)
-			or Blocks.is_wire(id) or id == Blocks.PARTS)
+			or Blocks.is_wire(id) or id == Blocks.PARTS
+			or Blocks.is_plant(id))
 		_FULL[id] = 1 if full else 0
 		# Leaves are meshed AND see-through: they are drawn with cutout holes, so
 		# they must not hide the block behind them.
@@ -421,9 +444,17 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 	var uv2s := PackedVector2Array()
 	var wuv2s := PackedVector2Array()
 	var cverts := PackedVector3Array()  # collidable subset of `verts` (no leaves)
+	# Ground cover gets its OWN surface. It was previously appended into the
+	# terrain arrays, which corrupted that surface and stopped whole chunks
+	# rendering -- you could see straight through the world.
+	var gverts := PackedVector3Array()
+	var gnormals := PackedVector3Array()
+	var gcolors := PackedColorArray()
+	var guvs := PackedVector2Array()
 	if not any_solid:
 		return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s, "lights": PackedVector3Array(),
-			"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
+			"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors,
+			"gverts": gverts, "gnormals": gnormals, "gcolors": gcolors, "guvs": guvs}
 
 	# opaque terrain via greedy meshing (water is skipped here, handled below)
 	var strides := [1, CS, CS * CS]
@@ -574,6 +605,24 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 							_face_light(snap, gv, Vector3i.ZERO))
 				idx += 1
 
+	# tall grass: two quads crossed in an X per cell, the way every block game
+	# draws ground cover. Its own arrays, its own surface, no collision.
+	idx = 0
+	for z in CS:
+		for y in CS:
+			for x in CS:
+				if Blocks.bottom_of(ids[idx]) == Blocks.TALL_GRASS:
+					var ggv := Vector3i(base.x + x, base.y + y, base.z + z)
+					_emit_grass(Vector3(x, y, z),
+						planet._axis_of(Vector3(ggv) + Vector3(0.5, 0.5, 0.5)),
+						# The colour of the ground it stands on, not a fixed green: every
+						# planet tints its own soil, and grass that ignored that sat on
+						# the surface looking like it belonged to a different world.
+						planet.color_of(planet.pal_top), ggv,
+						_sky_depth(planet, snap, ggv),
+						gverts, gnormals, gcolors, guvs)
+				idx += 1
+
 	# campfire flames. Emissive geometry standing above the fuel, because four
 	# wood eighths on the ground do not read as a fire on their own -- and unlike
 	# the parts themselves these carry no collision, so you walk through the flame
@@ -630,7 +679,8 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 				idx += 1
 
 	return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s, "lights": lights,
-		"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors}
+		"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors,
+		"gverts": gverts, "gnormals": gnormals, "gcolors": gcolors, "guvs": guvs}
 
 
 const _WFACE := [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0),
@@ -665,6 +715,43 @@ static func _emit_free_box(lo: Vector3, hi: Vector3, base_col: Color, bid: int,
 ## on a flat surface. Only exposed faces grow them -- buried ore is invisible
 ## anyway, and skipping it keeps the extra geometry proportional to what is
 ## actually on screen.
+## Two vertical quads crossed through the middle of a cell. Both are drawn from
+## either side (the material never culls), so a tuft reads from every angle.
+static func _emit_grass(lo: Vector3, up: Vector3, col: Color, gv: Vector3i,
+		sky: float,
+		gverts: PackedVector3Array, gnormals: PackedVector3Array,
+		gcolors: PackedColorArray, guvs: PackedVector2Array) -> void:
+	var uq := Vector3(roundi(up.x), roundi(up.y), roundi(up.z))
+	if uq == Vector3.ZERO:
+		return
+	var t1 := Vector3(uq.y, uq.z, uq.x)
+	var t2 := Vector3(uq.z, uq.x, uq.y)
+	# sitting on the floor of the cell, nudged off-centre per cell so a field is
+	# not a grid of identical crosses
+	var c := lo + Vector3(0.5, 0.5, 0.5) - uq * 0.5
+	var h := 0.62 + _hash3(gv, 5) * 0.36
+	c += t1 * ((_hash3(gv, 6) - 0.5) * 0.34) + t2 * ((_hash3(gv, 7) - 0.5) * 0.34)
+	# UV.x is the position ACROSS the quad, UV.y the height up the blade. Both are
+	# per-vertex; the shader cuts the blades out of the quad using them.
+	var hs := [0.0, 0.0, 1.0, 0.0, 1.0, 1.0]
+	var xs := [0.0, 1.0, 1.0, 0.0, 1.0, 0.0]
+	for d in [t1 + t2, t1 - t2]:
+		var a: Vector3 = d.normalized() * 0.5
+		var p0: Vector3 = c - a
+		var p1: Vector3 = c + a
+		var p2: Vector3 = p1 + uq * h
+		var p3: Vector3 = p0 + uq * h
+		var nrm: Vector3 = a.cross(uq).normalized()
+		var quad := [p0, p1, p2, p0, p2, p3]
+		for k in 6:
+			gverts.append(quad[k])
+			gnormals.append(nrm)
+			# Alpha carries the skylight, the same channel and the same meaning the
+			# terrain uses, so grass lights identically to the ground under it.
+			gcolors.append(Color(col.r, col.g, col.b, sky))
+			guvs.append(Vector2(xs[k], hs[k]))
+
+
 static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 		snap: Dictionary, verts: PackedVector3Array, normals: PackedVector3Array,
 		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array) -> void:
@@ -953,29 +1040,70 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 # defined by the planet (each world's ores look different).
 ## How much daylight reaches this voxel, from depth below the terrain surface.
 ## Sampled per QUAD -- greedy meshing means one lookup covers a whole wall.
+## Does this cell actually stop daylight?
+##
+## FOLIAGE DOES NOT. Leaves are "full" blocks to the mesher, and treating them as
+## opaque here sealed off every square of ground under a tree -- which on a
+## wooded planet is most of the surface. At night, with no sky term, that left
+## the whole world rendering pitch black with the stars showing through the gaps.
+## A canopy dims what is under it; it does not put it in a cave.
+static func _blocks_sky(planet: Planet, snap: Dictionary, v: Vector3i) -> bool:
+	var low := _id_at(planet, snap, v) & Blocks.ID_MASK
+	return _FULL[low] == 1 and _LEAF[low] == 0
+
+
 static func _sky_depth(planet: Planet, snap: Dictionary, gv: Vector3i) -> float:
 	var c := Vector3(gv) + Vector3(0.5, 0.5, 0.5)
 	var ln := c.length()
 	var depth: float = planet.surface_radius(c / maxf(ln, 0.0001)) - planet._norm(c)
 	if depth <= SKY_FREE:
 		return 1.0
-	var f := clampf(1.0 - (depth - SKY_FREE) / SKY_FADE, 0.0, 1.0)
-	if f <= 0.0:
-		return 0.0
-	# Depth below the surface cannot tell a shallow cave from an open hillside:
-	# on depth alone a chamber ten blocks under solid rock comes out 80% daylit,
-	# which is why caves near the surface still read as lit by the sky. So look
-	# UP and see whether anything is actually in the way. Cells deep enough to
-	# have no daylight to lose returned above and never pay for this.
 	var up := planet._axis_of(c)
 	var uq := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
 	if uq == Vector3i.ZERO:
-		return f
-	var reach := int(depth) + 2
+		return 1.0
+	# Capped: a buried cell hits rock on its first step and costs nothing, while a
+	# genuinely open column is worth following a long way up.
+	var reach := mini(int(depth) + 2, 160)
+	var t1 := Vector3i(uq.y, uq.z, uq.x)
+	var t2 := Vector3i(uq.z, uq.x, uq.y)
+
+	# Can this cell see the sky at all, straight up?
+	var centre_clear := true
 	for i in range(1, reach):
-		if _FULL[_id_at(planet, snap, gv + uq * i) & Blocks.ID_MASK] == 1:
-			return 0.0
-	return f
+		if _blocks_sky(planet, snap, gv + uq * i):
+			centre_clear = false
+			break
+	if centre_clear:
+		# A shaft you dug is a LIGHT WELL. It has no business fading out on the
+		# same curve as rock that merely happens to be shallow -- and the old code
+		# cut every cell past 34 blocks to zero outright, which drew a hard line of
+		# darkness straight across the shaft at exactly that depth. Open columns dim
+		# gently instead and keep a floor, so digging down stays readable.
+		return clampf(1.0 - depth / 130.0, 0.30, 1.0)
+
+	# Roofed over. Now the depth fade applies, eased rather than linear so it
+	# arrives at darkness without a corner in it.
+	var f := 1.0 - smoothstep(0.0, 1.0, clampf((depth - SKY_FREE) / SKY_FADE, 0.0, 1.0))
+	if f <= 0.0:
+		return 0.0
+	# The four fanned rays only ever ADD light: they exist to soften the edge of a
+	# shadow, so a cell just under the lip of an opening still catches some sky
+	# rather than switching off between one block and the next.
+	var spill := 0
+	for r in 4:
+		var lat := t1
+		if r == 1: lat = -t1
+		elif r == 2: lat = t2
+		elif r == 3: lat = -t2
+		var clear := true
+		for i in range(1, reach):
+			if _blocks_sky(planet, snap, gv + uq * i + lat * (i / 3)):
+				clear = false
+				break
+		if clear:
+			spill += 1
+	return f * (float(spill) / 4.0) * 0.55
 
 
 static func _block_color(planet: Planet, id: int) -> Color:

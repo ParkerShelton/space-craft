@@ -504,6 +504,9 @@ const BONE := 110
 ## the cheapest structure in the game, because going hungry should not be
 ## gated behind a workshop.
 const CAMPFIRE := 111
+## Ground cover: thin blades standing on soil. Not something you stand on -- it
+## has no collision and you walk straight through it.
+const TALL_GRASS := 112
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
@@ -1097,6 +1100,7 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	PLANK, PLANK_PALE, PLANK_DARK]
 
 const NAMES := {
+	TALL_GRASS: "Tall Grass",
 	RAW_MEAT: "Raw Meat",
 	COOKED_MEAT: "Cooked Meat",
 	HIDE: "Hide",
@@ -1207,6 +1211,7 @@ const HARDNESS := {
 }
 
 const COLORS := {
+	TALL_GRASS: Color(0.42, 0.66, 0.28),
 	RAW_MEAT: Color(0.72, 0.26, 0.28),
 	COOKED_MEAT: Color(0.55, 0.34, 0.18),
 	HIDE: Color(0.60, 0.45, 0.30),
@@ -1305,6 +1310,11 @@ static func use_of(id: int) -> String:
 
 ## Leaves render with alpha cutouts and are deliberately NON-COLLIDABLE, so a
 ## canopy feels like foliage you brush through rather than a solid box.
+## Plants you walk through: no collision, and they never hide the block behind.
+static func is_plant(id: int) -> bool:
+	return bottom_of(id) == TALL_GRASS
+
+
 static func is_leaf(id: int) -> bool:
 	return id in LEAF_IDS
 

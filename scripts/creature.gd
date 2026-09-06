@@ -61,6 +61,7 @@ var _elbows: Array = []     # secondary arm joint (forearm), same idea as _knees
 var _tail_pivot: Node3D     # tail or fish tail-fin pivot, animated as a wag
 var _neck_pivot: Node3D     # grazer neck, lowered to the ground while grazing
 var _dropped := false       # drops are handed over once, on the killing blow
+var _body_height := 1.0     # approximate standing height, for counter-shading
 var _segments: Array = []   # serpent body segments, animated as a wiggle
 var _wings: Array = []      # flyer wing pivots, animated as a flap
 var _model: Node3D
@@ -395,6 +396,9 @@ func _build_body() -> void:
 	if species.get("pattern", "") == "lunger" and randf() < EXTRA_ARM_CHANCE:
 		_extra_arm_pairs = randi_range(1, EXTRA_ARM_MAX_PAIRS)
 	var s: float = float(species.get("scale", 1.0)) * _size
+	# Roughly how tall this animal stands. The skin shader uses it to pale the
+	# belly, which is the cheapest thing that stops a box reading as a box.
+	_body_height = 2.0 * s
 	var color: Color = species.get("color", Color.WHITE)
 	var accent: Color = species.get("accent", color)
 	match species.get("body", "quad"):
@@ -443,8 +447,67 @@ func _mk_box(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshI
 	mat.set_shader_parameter("pattern", int(species.get("skin", 0)))
 	mat.set_shader_parameter("pattern_scale", float(species.get("skin_scale", 1.0)))
 	mat.set_shader_parameter("part_origin", _part_origin(parent, pos))
+	mat.set_shader_parameter("body_height", _body_height)
+	mat.set_shader_parameter("furry", bool(species.get("fur", false)))
 	mi.material_override = mat
 	parent.add_child(mi)
+	return mi
+
+
+## A ridge of fur along the spine, for animals whose species carries fur. Boxes
+## are a poor way to draw fur, so this is not an attempt at strands -- it is a
+## broken SILHOUETTE, which is what actually distinguishes a furry animal from a
+## smooth one at any distance. The pile itself is in the skin shader.
+func _mk_ruff(parent: Node3D, torso: Vector3, torso_y: float, s: float, accent: Color) -> void:
+	if not bool(species.get("fur", false)):
+		return
+	var n := 5
+	for i in n:
+		var t := (float(i) / float(n - 1)) - 0.5
+		var h := (0.16 + 0.10 * cos(t * 3.0)) * s
+		var wob := (hash_unit(i * 37) - 0.5) * 0.12 * s
+		_mk_box(parent, Vector3(0.13 * s, h, torso.z * 0.19),
+			Vector3(wob, torso_y + torso.y * 0.5 + h * 0.35, t * torso.z * 0.72), accent)
+
+
+## A stable 0..1 value from an integer, for small build-time decisions.
+func hash_unit(v: int) -> float:
+	return fposmod(sin(float(v) * 12.9898) * 43758.5453, 1.0)
+
+
+## A pair of eyes on the front of a head box.
+##
+## Two boxes each: a dark eye set into the face, and a smaller pale glint on the
+## outer edge of it. Eyes are what make a shape read as an ANIMAL rather than as
+## a stack of blocks -- it is the cheapest possible change and by far the most
+## effective one.
+func _mk_eyes(parent: Node3D, head_pos: Vector3, head_size: Vector3, s: float) -> void:
+	var eye := maxf(head_size.x * 0.20, 0.05 * s)
+	# on the face (-Z is forward everywhere in this file), just proud of it
+	var fz := head_pos.z - head_size.z * 0.5 - eye * 0.25
+	var ey := head_pos.y + head_size.y * 0.14
+	var ex := head_size.x * 0.28
+	for sx in [-1.0, 1.0]:
+		_mk_plain(parent, Vector3(eye * 1.5, eye * 1.5, eye * 0.6),
+			Vector3(head_pos.x + sx * ex, ey, fz), Color(0.05, 0.045, 0.05))
+		_mk_plain(parent, Vector3(eye * 0.5, eye * 0.5, eye * 0.7),
+			Vector3(head_pos.x + sx * ex + eye * 0.35, ey + eye * 0.35, fz - eye * 0.06),
+			Color(0.95, 0.95, 0.92))
+
+
+## A box that is NOT skinned -- eyes must not take the body's markings, or a
+## striped animal ends up with striped eyeballs.
+func _mk_plain(parent: Node3D, size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	var m := BoxMesh.new()
+	m.size = size
+	mi.mesh = m
+	mi.position = pos
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.roughness = 0.5
+	parent.add_child(mi)
+	mi.material_override = mat
 	return mi
 
 
@@ -460,14 +523,24 @@ func _build_quad(s: float, color: Color, accent: Color) -> void:
 	var torso := Vector3(0.85, 0.6, 1.5) * s
 	var torso_y := leg_len + torso.y * 0.5
 	_mk_box(_model, torso, Vector3(0, torso_y, 0), color)
-	_mk_box(_model, Vector3(0.55, 0.5, 0.55) * s,
-		Vector3(0, torso_y + torso.y * 0.15, -torso.z * 0.5 - 0.22 * s), accent)
+	var qhead := Vector3(0.55, 0.5, 0.55) * s
+	var qhead_at := Vector3(0, torso_y + torso.y * 0.15, -torso.z * 0.5 - 0.22 * s)
+	_mk_box(_model, qhead, qhead_at, accent)
+	_mk_eyes(_model, qhead_at, qhead, s)
+	_mk_ruff(_model, torso, torso_y, s, accent)
 	var hx := torso.x * 0.5 - 0.08 * s
 	var hz := torso.z * 0.5 - 0.25 * s
+	var hip_sink := torso.y * 0.35
 	for sx in [-1, 1]:
 		for sz in [-1, 1]:
-			var pivot := _mk_pivot(_model, Vector3(sx * hx, leg_len, sz * hz))
-			_mk_box(pivot, Vector3(0.22, leg_len, 0.22) * s, Vector3(0, -leg_len * 0.5, 0), accent)
+			var pivot := _mk_pivot(_model, Vector3(sx * hx, leg_len + hip_sink, sz * hz))
+			# NOT (0.22, leg_len, 0.22) * s -- leg_len already carries the scale, so
+			# multiplying again made the leg s times too long. At scale 1 that is
+			# invisible; at 1.3 the leg overshoots its hip and the top of it pokes out
+			# through the body, which is what big animals were doing. The extra
+			# hip_sink buries the top inside the torso so a swinging leg keeps it hidden.
+			_mk_box(pivot, Vector3(0.22 * s, leg_len + hip_sink, 0.22 * s),
+				Vector3(0, -(leg_len + hip_sink) * 0.5, 0), accent)
 			_legs.append(pivot)
 	_tail_pivot = _mk_pivot(_model, Vector3(0, torso_y + torso.y * 0.1, torso.z * 0.5))
 	_tail_pivot.rotation.x = -0.5
@@ -484,17 +557,20 @@ func _build_crawler(s: float, color: Color, accent: Color) -> void:
 	_mk_box(_model, torso, Vector3(0, torso_y, 0), color)
 	# a low domed head, set forward and slightly down
 	# Overlapping the front of the body, not perched off the end of it.
-	_mk_box(_model, Vector3(0.5, 0.32, 0.46) * s,
-		Vector3(0, torso_y - 0.01 * s, -torso.z * 0.5 - 0.08 * s), accent)
+	var chead := Vector3(0.5, 0.32, 0.46) * s
+	var chead_at := Vector3(0, torso_y - 0.01 * s, -torso.z * 0.5 - 0.08 * s)
+	_mk_box(_model, chead, chead_at, accent)
+	_mk_eyes(_model, chead_at, chead, s)
 	var hx := torso.x * 0.5
+	var hip_sink := torso.y * 0.4
 	for pair in 3:
 		var pz := (float(pair) - 1.0) * torso.z * 0.32
 		for sx in [-1, 1]:
 			# splayed out to the side, the way a many-legged thing actually stands
-			var pivot := _mk_pivot(_model, Vector3(sx * hx, leg_len * 1.1, pz))
+			var pivot := _mk_pivot(_model, Vector3(sx * hx, leg_len * 1.1 + hip_sink, pz))
 			pivot.rotation.z = -0.5 * float(sx)
-			_mk_box(pivot, Vector3(0.13, leg_len * 1.6, 0.13) * s,
-				Vector3(0, -leg_len * 0.8, 0), accent)
+			_mk_box(pivot, Vector3(0.13 * s, leg_len * 1.6 + hip_sink, 0.13 * s),
+				Vector3(0, -(leg_len * 1.6 + hip_sink) * 0.5, 0), accent)
 			_legs.append(pivot)
 	# a pair of feelers, so the front end reads as a front end
 	for sx in [-1, 1]:
@@ -509,15 +585,19 @@ func _build_hopper(s: float, color: Color, accent: Color) -> void:
 	var torso := Vector3(0.55, 0.75, 0.7) * s
 	var torso_y := leg_len + torso.y * 0.5
 	_mk_box(_model, torso, Vector3(0, torso_y, 0), color)
-	_mk_box(_model, Vector3(0.42, 0.42, 0.46) * s,
-		Vector3(0, torso_y + torso.y * 0.55, -0.1 * s), accent)
+	var hhead := Vector3(0.42, 0.42, 0.46) * s
+	var hhead_at := Vector3(0, torso_y + torso.y * 0.55, -0.1 * s)
+	_mk_box(_model, hhead, hhead_at, accent)
+	_mk_eyes(_model, hhead_at, hhead, s)
 	# tall ears -- cheap, and they sell the silhouette at a distance
 	for sx in [-1, 1]:
 		_mk_box(_model, Vector3(0.09, 0.42, 0.09) * s,
 			Vector3(sx * 0.13 * s, torso_y + torso.y * 0.55 + 0.36 * s, -0.1 * s), accent)
 	for sx in [-1, 1]:
-		var hind := _mk_pivot(_model, Vector3(sx * 0.22 * s, leg_len, 0.12 * s))
-		_mk_box(hind, Vector3(0.24, leg_len, 0.3) * s, Vector3(0, -leg_len * 0.5, 0), accent)
+		var hsink := torso.y * 0.3
+		var hind := _mk_pivot(_model, Vector3(sx * 0.22 * s, leg_len + hsink, 0.12 * s))
+		_mk_box(hind, Vector3(0.24 * s, leg_len + hsink, 0.3 * s),
+			Vector3(0, -(leg_len + hsink) * 0.5, 0), accent)
 		_legs.append(hind)
 	for sx in [-1, 1]:
 		# On the FRONT face, not inside the torso -- at -0.22 they were buried in
@@ -546,14 +626,19 @@ func _build_grazer(s: float, color: Color, accent: Color) -> void:
 	_neck_pivot = _mk_pivot(_model, neck_base)
 	_neck_pivot.rotation.x = -0.45
 	_mk_box(_neck_pivot, Vector3(0.28, neck_len, 0.28) * s, Vector3(0, neck_len * 0.5, 0), color)
-	_mk_box(_neck_pivot, Vector3(0.36, 0.34, 0.6) * s,
-		Vector3(0, neck_len + 0.1 * s, -0.16 * s), accent)
+	var ghead := Vector3(0.36, 0.34, 0.6) * s
+	var ghead_at := Vector3(0, neck_len + 0.1 * s, -0.16 * s)
+	_mk_box(_neck_pivot, ghead, ghead_at, accent)
+	_mk_eyes(_neck_pivot, ghead_at, ghead, s)
+	_mk_ruff(_model, torso, torso_y, s, accent)
 	var hx := torso.x * 0.5 - 0.06 * s
 	var hz := torso.z * 0.5 - 0.2 * s
+	var hip_sink := torso.y * 0.35
 	for sx in [-1, 1]:
 		for sz in [-1, 1]:
-			var pivot := _mk_pivot(_model, Vector3(sx * hx, leg_len, sz * hz))
-			_mk_box(pivot, Vector3(0.19, leg_len, 0.19) * s, Vector3(0, -leg_len * 0.5, 0), accent)
+			var pivot := _mk_pivot(_model, Vector3(sx * hx, leg_len + hip_sink, sz * hz))
+			_mk_box(pivot, Vector3(0.19 * s, leg_len + hip_sink, 0.19 * s),
+				Vector3(0, -(leg_len + hip_sink) * 0.5, 0), accent)
 			_legs.append(pivot)
 	_tail_pivot = _mk_pivot(_model, Vector3(0, torso_y + torso.y * 0.2, torso.z * 0.5))
 	_tail_pivot.rotation.x = -0.3
@@ -1078,6 +1163,8 @@ func _build_serpent(s: float, color: Color, accent: Color) -> void:
 		var sz := lerpf(0.55, 0.28, float(i) / float(n - 1)) * s
 		var pos := Vector3(0, sz * 0.5, float(i) * seg_len)
 		_segments.append(_mk_box(_model, Vector3(sz, sz, seg_len * 1.05), pos, c))
+		if i == 0:
+			_mk_eyes(_model, pos, Vector3(sz, sz, seg_len * 1.05), s)
 
 
 func _build_flyer(s: float, color: Color, accent: Color) -> void:
