@@ -19,6 +19,15 @@ const MAX_PLAYERS := 8
 
 signal world_ready(seed_value: int, system_index: int)
 signal roster_changed()
+## The host recognised us and sent back what we were carrying last time.
+signal profile_restored(profile: Dictionary)
+
+## Where this installation's identity lives. A peer id is issued fresh on every
+## connection, so it cannot be what the server remembers a player by -- it would
+## hand you a stranger's backpack as often as your own. This is a random id
+## written once and kept, which is also why it is not a name: two friends both
+## called "Steve" must not share an inventory.
+const UID_PATH := "user://player_uid.txt"
 
 var active := false          ## networking is up at all
 var is_host := false
@@ -27,6 +36,13 @@ var last_error := ""
 
 ## peer id -> {"pos": Vector3, "yaw": float, "name": String}
 var peers: Dictionary = {}
+
+## uid -> that player's last known inventory. Host side only, and saved with the
+## world, so a server restart gives everyone their things back as well as their
+## buildings.
+var profiles: Dictionary = {}
+## This machine's identity, sent to the host on joining.
+var uid := ""
 
 var _world: WorldManager
 var _seed := 0
@@ -40,11 +56,33 @@ var _world_built := false
 
 
 func _ready() -> void:
+	uid = _local_uid()
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected)
 	multiplayer.connection_failed.connect(_on_connect_failed)
 	multiplayer.server_disconnected.connect(_on_server_gone)
+
+
+## Read this installation's id, making one the first time. Any failure falls back
+## to a throwaway id rather than refusing to play: the cost is starting empty on
+## a server, which is exactly what happened before any of this existed.
+func _local_uid() -> String:
+	if FileAccess.file_exists(UID_PATH):
+		var f := FileAccess.open(UID_PATH, FileAccess.READ)
+		if f != null:
+			var got := f.get_as_text().strip_edges()
+			f.close()
+			if got != "":
+				return got
+	var r := RandomNumberGenerator.new()
+	r.randomize()
+	var made := "%08x%08x" % [r.randi(), r.randi()]
+	var w := FileAccess.open(UID_PATH, FileAccess.WRITE)
+	if w != null:
+		w.store_string(made)
+		w.close()
+	return made
 
 
 func bind_world(w: WorldManager) -> void:
@@ -358,6 +396,55 @@ func player_state(pos: Vector3, facing: Vector3, action: int) -> void:
 	peers[id]["pos"] = pos
 	peers[id]["facing"] = facing
 	peers[id]["action"] = action
+
+
+# --- who you are, and what you were carrying --------------------------------
+
+## Client -> host, once the client's world is up: "this is me." The host answers
+## with whatever this player last had, if it has seen them before.
+func say_hello() -> void:
+	if active and not is_host:
+		hello.rpc_id(1, uid)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func hello(player_uid: String) -> void:
+	if not is_host:
+		return
+	var id := multiplayer.get_remote_sender_id()
+	if not peers.has(id):
+		peers[id] = {}
+	peers[id]["uid"] = player_uid
+	# ALWAYS answered, even with nothing, because the answer is also the client's
+	# permission to start pushing. Staying silent for an unknown player let the
+	# client's first push land before the reply did, overwriting the very
+	# inventory the host was about to send back.
+	restore_profile.rpc_id(id, profiles.get(player_uid, {}))
+
+
+@rpc("authority", "call_remote", "reliable")
+func restore_profile(prof: Dictionary) -> void:
+	profile_restored.emit(prof)
+
+
+## Client -> host, whenever what it is carrying changes. Pushed rather than
+## asked for on disconnect, because a player who crashes or pulls the plug is
+## never around to answer a question -- this way the host is at worst a few
+## seconds behind, instead of holding nothing at all.
+func push_profile(prof: Dictionary) -> void:
+	if active and not is_host:
+		store_profile.rpc_id(1, prof)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func store_profile(prof: Dictionary) -> void:
+	if not is_host:
+		return
+	var id := multiplayer.get_remote_sender_id()
+	var u := str(peers.get(id, {}).get("uid", ""))
+	if u == "":
+		return   # never said hello; nowhere to file this
+	profiles[u] = prof
 
 
 func broadcast_state(pos: Vector3, facing: Vector3, action: int) -> void:

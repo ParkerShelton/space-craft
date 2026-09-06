@@ -338,6 +338,35 @@ func _make_outline_mesh() -> ArrayMesh:
 
 # --- inventory ---------------------------------------------------------------
 
+## Everything a player carries between sessions, as plain data.
+##
+## The same set the single-player save keeps, gathered in one place because on a
+## server it has to travel over the wire as well as onto disk -- two callers
+## picking their own subsets is how a player ends up with their blocks but not
+## the recipes they learned to use them.
+func make_profile() -> Dictionary:
+	return {
+		"inv": inv,
+		"active_slot": active_slot,
+		"suit_slot": suit_slot,
+		"known_recipes": known_recipes,
+		"all_known": all_known,
+	}
+
+
+func apply_profile(d: Dictionary) -> void:
+	if d.is_empty():
+		return
+	if d.has("inv"):
+		inv = d["inv"]
+	if d.has("suit_slot"):
+		suit_slot = d["suit_slot"]
+	active_slot = int(d.get("active_slot", 0))
+	known_recipes = d.get("known_recipes", {})
+	all_known = bool(d.get("all_known", true))
+	_refresh_slots()
+
+
 func _init_inventory() -> void:
 	inv.clear()
 	for i in SLOTS:

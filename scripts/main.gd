@@ -45,7 +45,19 @@ var _client_seed := 0
 var _client_system := 0
 var _avatars := {}          # peer id -> RemotePlayer
 var _net_tick := 0.0
+var _profile_tick := 0.0
+var _profile_hash := 0
+## Nothing is sent up until the host has answered our hello. Until then we do not
+## know whether this empty inventory is a new player or one the host is about to
+## fill in, and pushing the wrong one destroys the saved copy.
+var _profile_ready := false
 var _menu_vb: VBoxContainer
+
+## How often a client checks whether its inventory has changed and, if so, tells
+## the host. Not every pickup: mining a stack of stone changes the inventory on
+## most frames, and the host only needs to be close enough that a crash costs a
+## couple of seconds of gathering.
+const PROFILE_RATE := 3.0
 
 ## How often a dedicated server writes its world down. Cheap -- the save is a
 ## sparse dictionary of edits, not terrain -- so this is short enough that a
@@ -62,6 +74,11 @@ func _notification(what: int) -> void:
 		# no business overwriting the single-player one.
 		if _world != null and _world.player != null and _net_mode == "single" 				and DisplayServer.get_name() != "headless":
 			_world.save_game()
+		# Leaving a server: send up what we are carrying before the connection goes,
+		# so quitting does not cost whatever was gathered since the last periodic
+		# push. Best effort -- a crash or a pulled cable still falls back to that.
+		if _net_mode == "client" and _world != null and _world.player != null:
+			_net.push_profile(_world.player.make_profile().duplicate(true))
 		get_tree().quit()
 
 
@@ -81,6 +98,7 @@ func _ready() -> void:
 	_net.bind_world(world)
 	world.net = _net
 	_net.world_ready.connect(_on_world_ready)
+	_net.profile_restored.connect(_on_profile_restored)
 	# A dedicated server never shows a menu: it builds a world, opens a port and
 	# waits. Started with:  godot --headless -- --server [--port=N] [--seed=N]
 	var ded := _server_args()
@@ -88,6 +106,14 @@ func _ready() -> void:
 		_start_dedicated(int(ded["port"]), int(ded["seed"]), str(ded["world"]))
 		return
 	_build_menu()
+	# --join=host[:port] goes straight into a server, skipping the menu. Handy for
+	# a shortcut that always joins the same one.
+	var auto := _join_arg()
+	if not auto.is_empty():
+		if _net.join(str(auto["host"]), int(auto["port"])):
+			_start_world(false, "client")
+		else:
+			print("[net] ", _net.last_error)
 
 
 # --- main menu ----------------------------------------------------------------
@@ -205,6 +231,26 @@ func _delete_save() -> void:
 	DirAccess.remove_absolute(WorldManager.SAVE_BAK)
 
 
+## --join=ADDRESS or --join=ADDRESS:PORT, if it was given.
+func _join_arg() -> Dictionary:
+	var argv: Array = []
+	argv.append_array(OS.get_cmdline_user_args())
+	argv.append_array(OS.get_cmdline_args())
+	for a in argv:
+		var arg := str(a)
+		if not arg.begins_with("--join="):
+			continue
+		var spec := arg.substr(7).strip_edges()
+		if spec == "":
+			continue
+		# Split on the LAST colon so an IPv6 literal keeps its own.
+		var i := spec.rfind(":")
+		if i > 0 and spec.substr(i + 1).is_valid_int():
+			return {"host": spec.substr(0, i), "port": int(spec.substr(i + 1))}
+		return {"host": spec, "port": Net.PORT}
+	return {}
+
+
 ## Command-line options for running as a dedicated server.
 ##
 ## Godot swallows arguments it does not recognise, so the game's own options are
@@ -282,8 +328,8 @@ func _start_dedicated(port: int, seed_value: int, slot: String = "server_world")
 				nedits += (pl._edits_by_chunk[cc] as Dictionary).size()
 			for cc in pl._parts_by_chunk:
 				nparts += (pl._parts_by_chunk[cc] as Dictionary).size()
-		print("[server] resumed world '%s': %d block changes, %d part cells" % [
-			slot, nedits, nparts])
+		print("[server] resumed world '%s': %d block changes, %d part cells, "
+			% [slot, nedits, nparts] + "%d player inventories" % _net.profiles.size())
 	elif world.has_save():
 		print("[server] NOTE: '%s' has a save but --seed was given, so it was not "
 			% slot + "loaded. Drop --seed to resume it; keeping it will overwrite it.")
@@ -306,6 +352,20 @@ func _start_dedicated(port: int, seed_value: int, slot: String = "server_world")
 	t.timeout.connect(_server_autosave)
 	add_child(t)
 	t.start()
+
+
+## The host knew us and sent back what we were carrying. Arrives shortly after
+## joining, so it lands on a freshly spawned empty inventory.
+func _on_profile_restored(prof: Dictionary) -> void:
+	if _world == null or _world.player == null:
+		return
+	if prof.is_empty():
+		print("[net] host has no inventory on record for you -- starting fresh")
+	else:
+		_world.player.apply_profile(prof)
+		print("[net] restored your inventory from the host")
+	_profile_hash = _world.player.make_profile().hash()
+	_profile_ready = true
 
 
 func _on_server_roster() -> void:
@@ -376,6 +436,9 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	# The planets exist from here, so anything the network buffered while they
 	# were being built can be applied now.
 	_net.world_built()
+	# ...and now there is somewhere to put an inventory, tell the host who we are
+	# so it can hand back whatever we left with.
+	_net.say_hello()
 
 	# player: drop in just above dry land on the home world
 	var home: Planet = world.planets[0]
@@ -692,6 +755,18 @@ func _sync_players(delta: float) -> void:
 		# the player's real forward direction, not a yaw angle -- see Net.player_state
 		_net.broadcast_state(_world.player.global_position,
 			-_world.player.global_transform.basis.z, _world.player.action_state())
+	# Send the inventory up only when it has actually changed. Comparing hashes
+	# rather than dictionaries because Dictionary == is identity, not contents:
+	# the live inventory IS the same object every time, so it would always
+	# compare equal and nothing would ever be sent.
+	_profile_tick -= delta
+	if _profile_ready and _profile_tick <= 0.0:
+		_profile_tick = PROFILE_RATE
+		var prof: Dictionary = _world.player.make_profile()
+		var h := prof.hash()
+		if h != _profile_hash:
+			_profile_hash = h
+			_net.push_profile(prof.duplicate(true))
 	for id in _net.peers:
 		var st: Dictionary = _net.peers[id]
 		if not st.has("pos"):

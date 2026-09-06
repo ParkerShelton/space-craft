@@ -199,6 +199,11 @@ func save_game() -> bool:
 			"known_recipes": pl.known_recipes,
 			"all_known": pl.all_known,
 		}
+	# What each player was carrying. Only a server has these (in single player the
+	# one player's inventory is saved above), and they travel with the world so a
+	# restart hands everyone their things back along with their buildings.
+	if net != null and not net.profiles.is_empty():
+		data["profiles"] = net.profiles
 	# Time of day travels with the save, so stepping away and coming back does
 	# not snap the world to a different hour.
 	data["day_phase"] = {}
@@ -266,6 +271,9 @@ func load_game() -> bool:
 	# current_system_index just tags along for now (no warp travel yet, so it can
 	# never actually differ from what was already generated in main._start_world)
 	current_system_index = data.get("current_system_index", 0)
+
+	if net != null:
+		net.profiles = data.get("profiles", {})
 
 	# planets: swap in the saved edits and re-mesh anything already loaded
 	var pedits: Dictionary = data.get("planets", {})

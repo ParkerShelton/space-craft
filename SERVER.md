@@ -72,6 +72,34 @@ than to how far they walk.
 A player joining is sent the seed and then every change made so far, so someone
 arriving hours later sees the world as it is, not as it was generated.
 
+## Player inventories
+
+The server remembers what each player is carrying, and gives it back when they
+return -- across a rejoin and across a server restart.
+
+Players are recognised by an id their game writes once into its own user data
+(`player_uid.txt`), not by peer id (issued fresh on every connection, so it
+would hand out the wrong backpack) and not by name (two friends both called
+Steve must not share one). Copying a game folder to a second machine and
+playing both at once therefore looks like the same player twice; delete that
+file on one of them to split them apart.
+
+Clients send their inventory up every few seconds when it has changed, and once
+more on the way out. A crash or a pulled cable costs at most a few seconds of
+gathering.
+
+Saved along with the inventory: the equipped suit, the hotbar slot in hand, and
+which recipes that player has learned. Not saved: where they were standing, so
+everyone spawns at the home world each session.
+
+## Joining from the command line
+
+    godot --path /path/to/space-craft -- --join=203.0.113.10
+    godot --path /path/to/space-craft -- --join=203.0.113.10:24566
+
+Skips the menu and connects straight to that server -- handy for a desktop
+shortcut. Without a port it uses 24565.
+
 ## On a cloud box (AWS or similar)
 
 1. Install Godot 4.6 and copy the project across.
