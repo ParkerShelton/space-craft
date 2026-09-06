@@ -15,6 +15,8 @@ const STREAM_MARGIN := 48.0       # extra reach (voxels) beyond a planet's surfa
 
 var planets: Array[Planet] = []
 var player: Node3D
+## Set by Main when a co-op session starts; null in single player.
+var net: Net
 var _ships: Array[Ship] = []
 var _stations: Array[Station] = []
 
@@ -127,6 +129,17 @@ func _read_save(path: String):
 ## Write the whole mutable world to disk. Terrain, ores, flora and water are all
 ## pure functions of each planet's seed (defined in code), so we only persist what
 ## the player changed: block edits per planet, the player's state, and any ships.
+## The ONE place a planet is edited from gameplay. Single player writes straight
+## through; in co-op it goes via the host, which is the only authority on what
+## the world contains. Routing every edit through here is what keeps two worlds
+## from drifting apart -- there is no second path to forget about.
+func edit_block(p: Planet, v: Vector3i, id: int) -> void:
+	if net != null and net.active:
+		net.edit_block(p.planet_name, v, id)
+	else:
+		p.set_block(v, id)
+
+
 func save_game() -> bool:
 	var data := {
 		"version": SAVE_VERSION,

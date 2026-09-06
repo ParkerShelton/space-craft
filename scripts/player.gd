@@ -2041,7 +2041,7 @@ func _edit_block(_break_it: bool) -> void:
 	# Slab-onto-slab lands in the cell you're POINTING AT, not the one beyond
 	# it, so it takes an early exit before the normal adjacent-cell path.
 	if tgt["kind"] == "planet" and plan["voxel"] != pv:
-		obj.set_block(plan["voxel"], plan["value"])
+		world.edit_block(obj as Planet, plan["voxel"], plan["value"])
 		_consume_active()
 		return
 	var placed_value: int = plan["value"]
@@ -2053,10 +2053,10 @@ func _edit_block(_break_it: bool) -> void:
 				var axis: Vector3i = Vector3i((obj as Planet)._axis_of(Vector3(pv) + Vector3(0.5, 0.5, 0.5)))
 				if axis == Vector3i.ZERO:
 					axis = Vector3i(0, 1, 0)
-				obj.set_block(pv, place_id)
-				obj.set_block(pv + axis, place_id)
+				world.edit_block(obj as Planet, pv, place_id)
+				world.edit_block(obj as Planet, pv + axis, place_id)
 			else:
-				obj.set_block(pv, placed_value)
+				world.edit_block(obj as Planet, pv, placed_value)
 			_consume_active()
 
 	elif tgt["kind"] == "ship":
@@ -2400,7 +2400,7 @@ func _process_mining(delta: float) -> void:
 				_crack.visible = false
 			return
 		if planet != null:
-			planet.set_block(v, Blocks.AIR)
+			world.edit_block(planet, v, Blocks.AIR)
 			planet.flow_water(v)  # let adjacent water pour into the gap
 			if is_ore:
 				_add_item(id, 1, od["props"], planet.planet_name,

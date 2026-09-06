@@ -43,6 +43,8 @@ var _join_ip: LineEdit
 var _net_mode := "single"
 var _client_seed := 0
 var _client_system := 0
+var _avatars := {}          # peer id -> RemotePlayer
+var _net_tick := 0.0
 var _menu_vb: VBoxContainer
 
 func _notification(what: int) -> void:
@@ -72,6 +74,7 @@ func _ready() -> void:
 	_net.name = "Net"
 	add_child(_net)
 	_net.bind_world(world)
+	world.net = _net
 	_net.world_ready.connect(_on_world_ready)
 	_build_menu()
 
@@ -570,7 +573,42 @@ func _setup_environment() -> void:
 # that fades in as you descend and out as you climb toward space.
 var _underground := 0.0   # smoothed "how far inside the planet the camera is"
 
+## Twenty updates a second. More than that is more than anyone can see on a body
+## that is being smoothed anyway, and position is the cheapest thing to overspend
+## bandwidth on.
+const NET_RATE := 1.0 / 20.0
+
+func _sync_players(delta: float) -> void:
+	if _net == null or not _net.active or _world == null or _world.player == null:
+		return
+	_net_tick -= delta
+	if _net_tick <= 0.0:
+		_net_tick = NET_RATE
+		_net.broadcast_state(_world.player.global_position, _world.player.rotation.y)
+	for id in _net.peers:
+		var st: Dictionary = _net.peers[id]
+		if not st.has("pos"):
+			continue
+		var av: RemotePlayer = _avatars.get(id)
+		if av == null or not is_instance_valid(av):
+			av = RemotePlayer.new()
+			add_child(av)
+			av.setup(int(id))
+			_avatars[id] = av
+		var pos: Vector3 = st["pos"]
+		var pl: Planet = _world.nearest_planet(pos)
+		var up: Vector3 = (pos - pl.global_position).normalized() if pl != null else Vector3.UP
+		av.remote_state(pos, float(st.get("yaw", 0.0)), up)
+	for id in _avatars.keys():
+		if not _net.peers.has(id):
+			var gone: RemotePlayer = _avatars[id]
+			if is_instance_valid(gone):
+				gone.queue_free()
+			_avatars.erase(id)
+
+
 func _process(delta: float) -> void:
+	_sync_players(delta)
 	if _world == null or _world.player == null or _sky_mat == null:
 		return
 	var ppos: Vector3 = _world.player.global_position
