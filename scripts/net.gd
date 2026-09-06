@@ -103,7 +103,15 @@ func leave() -> void:
 func world_built() -> void:
 	_world_built = true
 	for e in _pending:
-		_apply_bulk(e[0], e[1], e[2])
+		match e[0]:
+			"parts":
+				_apply_parts_bulk(e[1], e[2], e[3])
+			"part1":
+				var p := _planet(e[1])
+				if p != null:
+					_apply_part(p, e[2], e[3], e[4])
+			_:
+				_apply_bulk(e[1], e[2], e[3])
 	_pending.clear()
 
 
@@ -135,6 +143,17 @@ func _on_peer_connected(id: int) -> void:
 				ids.append(int(p._edits_by_chunk[cc][v]))
 		if not ids.is_empty():
 			world_edits.rpc_id(id, p.planet_name, cells, ids)
+		# Eighth-block builds live in their own store, not in _edits_by_chunk, so
+		# they need their own pass -- otherwise a newcomer sees PARTS markers with
+		# nothing in them where somebody's fine detail work should be.
+		var pcells := PackedVector3Array()
+		var pdata := PackedByteArray()
+		for cc in p._parts_by_chunk:
+			for v in p._parts_by_chunk[cc]:
+				pcells.append(Vector3(v))
+				pdata.append_array(p._parts_by_chunk[cc][v])
+		if not pcells.is_empty():
+			world_parts.rpc_id(id, p.planet_name, pcells, pdata)
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -177,7 +196,7 @@ func world_info(seed_value: int, system_index: int) -> void:
 @rpc("authority", "call_remote", "reliable")
 func world_edits(planet_name: String, cells: PackedVector3Array, ids: PackedInt32Array) -> void:
 	if not _world_built:
-		_pending.append([planet_name, cells, ids])
+		_pending.append(["blocks", planet_name, cells, ids])
 		return
 	_apply_bulk(planet_name, cells, ids)
 
@@ -190,6 +209,36 @@ func _apply_bulk(planet_name: String, cells: PackedVector3Array, ids: PackedInt3
 		var c: Vector3 = cells[i]
 		p.set_block(Vector3i(roundi(c.x), roundi(c.y), roundi(c.z)), ids[i])
 	print("[net] caught up on %d changes to %s" % [ids.size(), planet_name])
+
+
+## Host -> a joining client: every eighth-block cell on one planet.
+##
+## Eight bytes per cell, flat, matching the PackedByteArray the planet already
+## keeps -- a part id is a byte there, so this is the storage format going over
+## the wire unchanged rather than a conversion.
+@rpc("authority", "call_remote", "reliable")
+func world_parts(planet_name: String, cells: PackedVector3Array, data: PackedByteArray) -> void:
+	if not _world_built:
+		_pending.append(["parts", planet_name, cells, data])
+		return
+	_apply_parts_bulk(planet_name, cells, data)
+
+
+func _apply_parts_bulk(planet_name: String, cells: PackedVector3Array,
+		data: PackedByteArray) -> void:
+	var p := _planet(planet_name)
+	if p == null:
+		return
+	var n: int = Blocks.PART_COUNT
+	var count: int = mini(cells.size(), data.size() / n)
+	for i in count:
+		var c: Vector3 = cells[i]
+		var v := Vector3i(roundi(c.x), roundi(c.y), roundi(c.z))
+		for sub in n:
+			var id: int = int(data[i * n + sub])
+			if id != Blocks.AIR:
+				p.set_part(v, sub, id)
+	print("[net] caught up on %d part cells on %s" % [count, planet_name])
 
 
 # --- block edits ----------------------------------------------------------
@@ -209,6 +258,54 @@ func edit_block(planet_name: String, v: Vector3i, id: int) -> void:
 		request_edit.rpc_id(1, planet_name, v, id)
 
 
+## The eighth-block twin of edit_block. Parts cannot ride on the block path:
+## set_part writes a byte into a separate per-cell array and only THEN marks the
+## voxel as PARTS, so replicating the block id alone hands the other player a
+## marker with nothing inside it.
+func edit_part(planet_name: String, v: Vector3i, sub: int, id: int) -> void:
+	var p := _planet(planet_name)
+	if p != null:
+		_apply_part(p, v, sub, id)
+	if not active:
+		return
+	if is_host:
+		apply_part.rpc(planet_name, v, sub, id)
+	else:
+		request_part.rpc_id(1, planet_name, v, sub, id)
+
+
+## AIR means "take this eighth away", and the planet turns the cell back to air
+## once the last one is gone -- so one message covers both building and mining.
+func _apply_part(p: Planet, v: Vector3i, sub: int, id: int) -> void:
+	if id == Blocks.AIR:
+		p.clear_part(v, sub)
+	else:
+		p.set_part(v, sub, id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_part(planet_name: String, v: Vector3i, sub: int, id: int) -> void:
+	if not is_host:
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		_apply_part(p, v, sub, id)
+	apply_part.rpc(planet_name, v, sub, id)
+
+
+@rpc("authority", "call_remote", "reliable")
+func apply_part(planet_name: String, v: Vector3i, sub: int, id: int) -> void:
+	if not _world_built:
+		# Queued whole, not folded into a bulk array: a bulk payload cannot express
+		# "this eighth was REMOVED" -- it treats an AIR byte as an empty slot to
+		# skip -- so a removal arriving mid-load would leave a part behind forever.
+		_pending.append(["part1", planet_name, v, sub, id])
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		_apply_part(p, v, sub, id)
+
+
 ## Client -> host. The host is the only authority on what the world contains.
 @rpc("any_peer", "call_remote", "reliable")
 func request_edit(planet_name: String, v: Vector3i, id: int) -> void:
@@ -226,7 +323,8 @@ func request_edit(planet_name: String, v: Vector3i, id: int) -> void:
 @rpc("authority", "call_remote", "reliable")
 func apply_edit(planet_name: String, v: Vector3i, id: int) -> void:
 	if not _world_built:
-		_pending.append([planet_name, PackedVector3Array([Vector3(v)]), PackedInt32Array([id])])
+		_pending.append(["blocks", planet_name,
+			PackedVector3Array([Vector3(v)]), PackedInt32Array([id])])
 		return
 	var p := _planet(planet_name)
 	if p != null:

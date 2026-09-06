@@ -2041,7 +2041,7 @@ func _edit_block(_break_it: bool) -> void:
 	if plan.is_empty():
 		return
 	if plan.has("part") and tgt["kind"] == "planet":
-		(obj as Planet).set_part(plan["voxel"], int(plan["part"]), int(plan["value"]))
+		world.edit_part(obj as Planet, plan["voxel"], int(plan["part"]), int(plan["value"]))
 		_consume_active()
 		return
 	# Slab-onto-slab lands in the cell you're POINTING AT, not the one beyond
@@ -2398,7 +2398,7 @@ func _process_mining(delta: float) -> void:
 			var sp := _sub_split(_sub_hit(tgt))
 			var pid := planet.part_at(sp[0], int(sp[1]))
 			if pid != Blocks.AIR:
-				planet.clear_part(sp[0], int(sp[1]))
+				world.edit_part(planet, sp[0], int(sp[1]), Blocks.AIR)
 				_add_item(pid, 1)
 			_mine_key = ""
 			_mine_time = 0.0

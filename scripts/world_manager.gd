@@ -140,6 +140,18 @@ func edit_block(p: Planet, v: Vector3i, id: int) -> void:
 		p.set_block(v, id)
 
 
+## The eighth-block twin of edit_block, and the same reason for existing: one
+## choke point that every part change goes through, so nothing can quietly build
+## something only the builder can see. An AIR id removes that eighth.
+func edit_part(p: Planet, v: Vector3i, sub: int, id: int) -> void:
+	if net != null and net.active:
+		net.edit_part(p.planet_name, v, sub, id)
+	elif id == Blocks.AIR:
+		p.clear_part(v, sub)
+	else:
+		p.set_part(v, sub, id)
+
+
 func save_game() -> bool:
 	var data := {
 		"version": SAVE_VERSION,
