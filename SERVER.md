@@ -15,17 +15,48 @@ recognises before that:
 | --- | --- |
 | `--server` | run as a dedicated server (also accepts `--dedicated`) |
 | `--port=N` | listen on port N instead of the default 24565 |
-| `--seed=N` | reopen a specific world instead of generating a new one |
+| `--seed=N` | generate a specific world instead of resuming or making a new one |
+| `--world=NAME` | which saved world to use (default `server_world`) |
 
-On startup it prints the seed it chose:
+On startup it prints what it is doing:
 
+    [server] resumed world 'server_world': 412 block changes, 27 part cells
     [server] listening on port 24565
     [server] world seed 777001 -- pass --seed=777001 to reopen this same world
     [server] system Tauuna, 4 planets, home world Pyros
+    [server] saving to /home/you/.local/share/godot/app_userdata/SpaceCraft/server_world.dat every 60 seconds
     [server] ready
 
-Keep that seed. Passing it back with `--seed=` is what reopens the same world
-after a restart.
+## Saving
+
+The server saves its world to disk and reloads it on the next start, so
+restarting it does not lose what people have built. Nothing needs to be passed
+to make that happen — just start it the same way again.
+
+It writes:
+
+* every 60 seconds,
+* whenever a player joins or leaves (the end of a building session is the moment
+  most worth keeping), and
+* on a clean shutdown, including Ctrl+C on most platforms.
+
+A kill or a power cut falls back to the last periodic save, so at most a minute
+of building is at risk.
+
+The file lives beside the game's own saves under Godot's user data directory,
+named after `--world` — but it is never the single-player save, so running a
+server on the same machine you play on cannot touch your own world.
+
+**`--seed` overrides resuming.** It is for creating a *new* world with a chosen
+seed; passing it alongside an existing `--world` name generates fresh terrain and
+then overwrites that save. To start over deliberately, use a new `--world=` name
+or delete the old file. To reopen an existing world, pass nothing — the seed
+comes back out of the save.
+
+Run several worlds on one machine by giving each its own name and port:
+
+    godot --headless --path /path/to/space-craft -- --server --world=survival --port=24565
+    godot --headless --path /path/to/space-craft -- --server --world=creative --port=24566
 
 ## What the server does and does not do
 
@@ -53,12 +84,10 @@ The transport is ENet over UDP — make sure the rule is UDP, not TCP.
 
 ## Known limits
 
-World state currently lives in memory only: **stopping the server loses what has
-been built**. The seed reopens the same terrain, not the same buildings. Saving
-the edit record to disk is the obvious next step.
-
 Creatures, water flow, machines and ships are still simulated per-client and are
-not synchronised, so those will differ between players.
+not synchronised, so those will differ between players. Assembling parts into a
+working machine is likewise still local to whoever swung the wrench, though the
+parts themselves now replicate and save.
 
 ## "Port 24565 is already in use"
 

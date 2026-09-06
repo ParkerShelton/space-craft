@@ -24,6 +24,19 @@ const SAVE_PATH := "user://spacecraft_save.dat"
 const SAVE_BAK := "user://spacecraft_save.bak"
 const SAVE_VERSION := 1
 
+## Which file this world reads and writes. Empty means the single-player save.
+## A dedicated server sets its own slot, which is the whole point: the server may
+## well be running on the same machine as somebody's game, and a world with no
+## player in it must never be able to write over one that has.
+var save_slot := ""
+
+func save_path() -> String:
+	return SAVE_PATH if save_slot == "" else "user://%s.dat" % save_slot
+
+
+func bak_path() -> String:
+	return SAVE_BAK if save_slot == "" else "user://%s.bak" % save_slot
+
 var world_seed := 0   # master seed the planets were generated from (persisted)
 
 # --- galaxy + warp travel ---
@@ -103,16 +116,29 @@ func warp_to_system(index: int, warp_ship: Ship = null) -> Dictionary:
 ## Read just the saved world seed (so planets can be regenerated identically before
 ## the rest of the save is applied). Returns -1 if there is no save.
 func saved_world_seed() -> int:
-	var d = _read_save(SAVE_PATH)
+	var d = _read_save(save_path())
 	if typeof(d) != TYPE_DICTIONARY:
-		d = _read_save(SAVE_BAK)
+		d = _read_save(bak_path())
 	if typeof(d) == TYPE_DICTIONARY:
 		return int(d.get("world_seed", -1))
 	return -1
 
 
+## Which system the save is in, read WITHOUT applying the save. A server has to
+## know this before it generates anything: load_game overwrites the current
+## system index, so generating the home system first and loading afterwards
+## would leave the world claiming to be somewhere its planets are not.
+func saved_system_index() -> int:
+	var d = _read_save(save_path())
+	if typeof(d) != TYPE_DICTIONARY:
+		d = _read_save(bak_path())
+	if typeof(d) == TYPE_DICTIONARY:
+		return int(d.get("current_system_index", -1))
+	return -1
+
+
 func has_save() -> bool:
-	return FileAccess.file_exists(SAVE_PATH) or FileAccess.file_exists(SAVE_BAK)
+	return FileAccess.file_exists(save_path()) or FileAccess.file_exists(bak_path())
 
 
 func _read_save(path: String):
@@ -208,17 +234,17 @@ func save_game() -> bool:
 
 	# Keep the previous save as a backup before overwriting, so a bad/interrupted
 	# write can never lose the last good world.
-	if FileAccess.file_exists(SAVE_PATH):
-		var prev := FileAccess.get_file_as_bytes(SAVE_PATH)
+	if FileAccess.file_exists(save_path()):
+		var prev := FileAccess.get_file_as_bytes(save_path())
 		if prev.size() > 0:
-			var b := FileAccess.open(SAVE_BAK, FileAccess.WRITE)
+			var b := FileAccess.open(bak_path(), FileAccess.WRITE)
 			if b != null:
 				b.store_buffer(prev)
 				b.close()
 
-	var f := FileAccess.open(SAVE_PATH, FileAccess.WRITE)
+	var f := FileAccess.open(save_path(), FileAccess.WRITE)
 	if f == null:
-		push_warning("save_game: could not open " + SAVE_PATH)
+		push_warning("save_game: could not open " + save_path())
 		return false
 	f.store_var(data)  # binary Variant serialization handles Vector3i keys natively
 	f.close()
@@ -231,9 +257,9 @@ func load_game() -> bool:
 	if not has_save():
 		return false
 	# prefer the primary save; fall back to the backup if it's missing or corrupt
-	var data = _read_save(SAVE_PATH)
+	var data = _read_save(save_path())
 	if typeof(data) != TYPE_DICTIONARY:
-		data = _read_save(SAVE_BAK)
+		data = _read_save(bak_path())
 	if typeof(data) != TYPE_DICTIONARY:
 		return false
 

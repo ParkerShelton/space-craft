@@ -47,6 +47,11 @@ var _avatars := {}          # peer id -> RemotePlayer
 var _net_tick := 0.0
 var _menu_vb: VBoxContainer
 
+## How often a dedicated server writes its world down. Cheap -- the save is a
+## sparse dictionary of edits, not terrain -- so this is short enough that a
+## crash costs a minute of building rather than an evening of it.
+const SERVER_SAVE_EVERY := 60.0
+
 func _notification(what: int) -> void:
 	# Autosave when the window is closed (X button, Alt+F4, etc.). Never in a
 	# headless run -- that would let test/CI runs clobber the real save.
@@ -80,7 +85,7 @@ func _ready() -> void:
 	# waits. Started with:  godot --headless -- --server [--port=N] [--seed=N]
 	var ded := _server_args()
 	if not ded.is_empty():
-		_start_dedicated(int(ded["port"]), int(ded["seed"]))
+		_start_dedicated(int(ded["port"]), int(ded["seed"]), str(ded["world"]))
 		return
 	_build_menu()
 
@@ -212,6 +217,9 @@ func _server_args() -> Dictionary:
 	var wanted := false
 	var port := Net.PORT
 	var seed_value := -1
+	# Named so one machine can run more than one world, and so the file is never
+	# the single-player save (see WorldManager.save_slot).
+	var slot := "server_world"
 	for a in argv:
 		var arg := str(a)
 		if arg == "--server" or arg == "--dedicated":
@@ -220,9 +228,13 @@ func _server_args() -> Dictionary:
 			port = int(arg.substr(7))
 		elif arg.begins_with("--seed="):
 			seed_value = int(arg.substr(7))
+		elif arg.begins_with("--world="):
+			slot = arg.substr(8).strip_edges()
 	if not wanted:
 		return {}
-	return {"port": port, "seed": seed_value}
+	if slot == "":
+		slot = "server_world"
+	return {"port": port, "seed": seed_value, "world": slot}
 
 
 ## Build the world, open the port, and do nothing else.
@@ -231,10 +243,22 @@ func _server_args() -> Dictionary:
 ## streams and meshes chunks around a player, so with none there is no terrain
 ## work at all. The server holds the seed and the authoritative record of every
 ## edit, and relays. Everything a client sees, it generates for itself.
-func _start_dedicated(port: int, seed_value: int) -> void:
+func _start_dedicated(port: int, seed_value: int, slot: String = "server_world") -> void:
 	_net_mode = "server"
 	var world := _world
-	var wseed := seed_value if seed_value >= 0 else _rand_seed()
+	world.save_slot = slot
+	# Resuming beats generating: an explicit --seed still wins, but otherwise a
+	# server that has been run before comes back to the world people built in it.
+	# The seed has to be settled BEFORE the planets are made -- terrain is a pure
+	# function of it, so generating from a fresh seed and then loading the old
+	# edits would drop everyone's buildings onto unrecognisable ground.
+	var resumed := false
+	var wseed := seed_value
+	if wseed < 0 and world.has_save():
+		wseed = world.saved_world_seed()
+		resumed = wseed >= 0
+	if wseed < 0:
+		wseed = _rand_seed()
 	world.world_seed = wseed
 	Chunk.set_texture_seed(wseed)
 
@@ -242,8 +266,27 @@ func _start_dedicated(port: int, seed_value: int) -> void:
 	galaxy.generate(wseed)
 	world.galaxy = galaxy
 	world.current_system_index = galaxy.home_system_index()
+	if resumed:
+		var si := world.saved_system_index()
+		if si >= 0 and si < galaxy.systems.size():
+			world.current_system_index = si
 	var sysdef: Dictionary = galaxy.systems[world.current_system_index]
 	_generate_planets(world, sysdef)
+	# Loaded only now: load_game applies edits ONTO the planets, so they have to
+	# exist first.
+	if resumed and world.load_game():
+		var nedits := 0
+		var nparts := 0
+		for pl in world.planets:
+			for cc in pl._edits_by_chunk:
+				nedits += (pl._edits_by_chunk[cc] as Dictionary).size()
+			for cc in pl._parts_by_chunk:
+				nparts += (pl._parts_by_chunk[cc] as Dictionary).size()
+		print("[server] resumed world '%s': %d block changes, %d part cells" % [
+			slot, nedits, nparts])
+	elif world.has_save():
+		print("[server] NOTE: '%s' has a save but --seed was given, so it was not "
+			% slot + "loaded. Drop --seed to resume it; keeping it will overwrite it.")
 	_net.world_built()
 
 	if not _net.host(wseed, world.current_system_index, port):
@@ -255,11 +298,38 @@ func _start_dedicated(port: int, seed_value: int) -> void:
 	print("[server] world seed %d -- pass --seed=%d to reopen this same world" % [wseed, wseed])
 	print("[server] system %s, %d planets, home world %s" % [
 		sysdef["name"], world.planets.size(), world.planets[0].planet_name])
+	print("[server] saving to %s every %d seconds" % [
+		ProjectSettings.globalize_path(world.save_path()), int(SERVER_SAVE_EVERY)])
 	print("[server] ready")
+	var t := Timer.new()
+	t.wait_time = SERVER_SAVE_EVERY
+	t.timeout.connect(_server_autosave)
+	add_child(t)
+	t.start()
 
 
 func _on_server_roster() -> void:
 	print("[server] players connected: %d" % _net.peers.size())
+	# Somebody just arrived or left. Leaving is the moment most worth capturing:
+	# it is usually the end of a building session, and it costs nothing when
+	# nothing changed.
+	_server_autosave()
+
+
+func _server_autosave() -> void:
+	if _net_mode != "server" or _world == null:
+		return
+	if not _world.save_game():
+		print("[server] WARNING: save failed")
+
+
+## Last chance to write the world down. Reached on a clean shutdown and, on most
+## platforms, on Ctrl+C -- but not on a kill or a power cut, which is what the
+## periodic save above is really for.
+func _exit_tree() -> void:
+	if _net_mode == "server" and _world != null:
+		_world.save_game()
+		print("[server] saved on shutdown")
 
 
 func _rand_seed() -> int:
