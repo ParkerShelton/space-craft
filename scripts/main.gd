@@ -621,7 +621,7 @@ func _sync_players(delta: float) -> void:
 		_net_tick = NET_RATE
 		# the player's real forward direction, not a yaw angle -- see Net.player_state
 		_net.broadcast_state(_world.player.global_position,
-			-_world.player.global_transform.basis.z)
+			-_world.player.global_transform.basis.z, _world.player.action_state())
 	for id in _net.peers:
 		var st: Dictionary = _net.peers[id]
 		if not st.has("pos"):
@@ -635,7 +635,7 @@ func _sync_players(delta: float) -> void:
 		var pos: Vector3 = st["pos"]
 		var pl: Planet = _world.nearest_planet(pos)
 		var up: Vector3 = (pos - pl.global_position).normalized() if pl != null else Vector3.UP
-		av.remote_state(pos, st.get("facing", Vector3.FORWARD), up)
+		av.remote_state(pos, st.get("facing", Vector3.FORWARD), up, int(st.get("action", 0)))
 	for id in _avatars.keys():
 		if not _net.peers.has(id):
 			var gone: RemotePlayer = _avatars[id]

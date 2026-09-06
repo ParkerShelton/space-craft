@@ -64,11 +64,14 @@ var _ranged_cd := 0.0
 
 # --- held item view-model ---
 const HAND_IDLE_ROT := Vector3(-0.15, 0.35, -0.12)
+const HAND_IDLE_POS := Vector3(0.34, -0.28, -0.55)
 const SWING_DURATION := 0.28
 var _hand_pivot: Node3D
 var _held_root: Node3D        # current item mesh, child of _hand_pivot
 var _held_key := ""           # cache key; only rebuild the model when this changes
 var _swing_t := 999.0         # counts up from 0 during a swing; >=SWING_DURATION = idle
+var _bob_phase := 0.0         # walk-cycle position for the held-item bob
+var _bob_amp := 0.0           # smoothed 0..1 "how much am I walking"
 
 var world: WorldManager           # set by main.gd
 var grounded := false
@@ -94,6 +97,9 @@ var suit_slot: Dictionary = {"id": Blocks.AIR, "count": 0, "props": {}, "src": "
 # mining (hold left-click to break; harder blocks take longer)
 var _mine_key := ""               # identifies the block currently being mined
 var _mine_time := 0.0             # seconds spent mining the current block
+## Briefly non-zero after placing something. Placing is instant, so without a
+## short tail there would be nothing for other players to see.
+var _place_flash := 0.0
 var _mine_total := 1.0            # hardness of the current block
 var _look_name := ""              # name/use of the block under the crosshair (HUD)
 var piloting: Ship = null         # non-null while flying a ship
@@ -240,7 +246,7 @@ func _ready() -> void:
 	# your hand, so a melee weapon's bonus damage requires actually wielding it --
 	# not just carrying one somewhere in the pack.
 	_hand_pivot = Node3D.new()
-	_hand_pivot.position = Vector3(0.34, -0.28, -0.55)
+	_hand_pivot.position = HAND_IDLE_POS
 	_hand_pivot.rotation = HAND_IDLE_ROT
 	_camera.add_child(_hand_pivot)
 
@@ -461,7 +467,19 @@ func _selected_id() -> int:
 	return inv[active_slot]["id"] if inv[active_slot]["count"] > 0 else Blocks.AIR
 
 
+## What this player is visibly doing, so others can draw it (see Net.player_state).
+## 0 = nothing, 1 = mining, 2 = placing.
+func action_state() -> int:
+	if _place_flash > 0.0:
+		return 2
+	if _mine_time > 0.0:
+		return 1
+	return 0
+
+
 func _consume_active() -> void:
+	_place_flash = 0.3
+	_swing_t = 0.0   # same quick hand arc as a melee swing, so placing is visible
 	var s = inv[active_slot]
 	if s["count"] > 0:
 		s["count"] -= 1
@@ -1456,6 +1474,7 @@ func _process_survival(delta: float) -> void:
 	# Hunger drains all the time and faster while you are moving. It never stops
 	# you playing outright: an empty stomach costs you health slowly and slows
 	# you down, so running out is a problem you can still walk away from.
+	_place_flash = maxf(_place_flash - delta, 0.0)
 	var exerting := velocity.length() > 0.5
 	hunger = maxf(hunger - (HUNGER_DRAIN + (HUNGER_EXERTION if exerting else 0.0)) * delta, 0.0)
 	if hunger <= 0.0:
@@ -2545,18 +2564,49 @@ func _fire_ranged_weapon(shape: Dictionary, dmg: float) -> void:
 		float(shape.get("stagger", 0.0)), float(shape.get("range", 30.0)))
 
 
-## Advance the held-item swing animation: a quick chop-and-return arc, triggered
-## by _process_attack on each hit so you can actually see the attack happen.
+## Everything the hand in the corner of the screen does: it bobs when you walk,
+## chops on a loop while you are mining, and flicks once when you swing or place.
+##
+## In first person the hand is the ONLY part of yourself you can see, so it is
+## carrying the whole job of making an action feel like it happened -- hence a
+## continuous motion for the continuous action (mining) rather than one flick at
+## the moment the block finally breaks.
 func _update_swing(delta: float) -> void:
 	if _hand_pivot == null:
 		return
-	if _swing_t >= SWING_DURATION:
-		_hand_pivot.rotation = HAND_IDLE_ROT
-		return
-	_swing_t += delta
-	var t := clampf(_swing_t / SWING_DURATION, 0.0, 1.0)
-	var s := sin(t * PI)
-	_hand_pivot.rotation = HAND_IDLE_ROT + Vector3(-1.1, 0.5, -0.4) * s
+
+	# --- walk bob ---------------------------------------------------------
+	# Driven by actual speed rather than by the input keys, so it stops when you
+	# walk into a wall and slows when you are wading or starving.
+	var speed := velocity.length()
+	var walking := speed > 0.5 and is_on_floor()
+	_bob_amp = lerpf(_bob_amp, clampf(speed / WALK_SPEED, 0.0, 1.0) if walking else 0.0,
+		clampf(delta * 8.0, 0.0, 1.0))
+	# Phase advances with speed so steps land with the ground, not with the clock.
+	_bob_phase += delta * (3.0 + speed * 0.9)
+	# Twice the vertical frequency of the horizontal sway: one rise and fall per
+	# footfall, one side-to-side per full stride. That two-to-one is what makes a
+	# bob read as walking instead of as a floating hand.
+	var bob := Vector3(cos(_bob_phase) * 0.020, -absf(sin(_bob_phase)) * 0.024, 0.0) * _bob_amp
+	var bob_rot := Vector3(0.0, 0.0, cos(_bob_phase) * 0.05) * _bob_amp
+
+	# --- mining loop ------------------------------------------------------
+	# While a block is being chipped away, swing on repeat. _mine_time counts up
+	# for as long as the button is held on the same block, and resets the moment
+	# you let go or look away, so the loop stops on its own.
+	var chop := 0.0
+	if _mine_time > 0.0 and _swing_t >= SWING_DURATION:
+		chop = maxf(sin(_mine_time * 9.0), 0.0)
+
+	# --- one-shot swing ---------------------------------------------------
+	var s := 0.0
+	if _swing_t < SWING_DURATION:
+		_swing_t += delta
+		s = sin(clampf(_swing_t / SWING_DURATION, 0.0, 1.0) * PI)
+
+	var arc := maxf(s, chop * 0.75)
+	_hand_pivot.position = HAND_IDLE_POS + bob
+	_hand_pivot.rotation = HAND_IDLE_ROT + bob_rot + Vector3(-1.1, 0.5, -0.4) * arc
 
 
 func _pick_up_station(st: Station) -> void:

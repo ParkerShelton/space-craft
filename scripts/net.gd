@@ -252,15 +252,16 @@ func _planet(planet_name: String) -> Planet:
 ## different direction on the far side of a planet -- reconstructing it elsewhere
 ## produced a skewed body that leaned over.
 @rpc("any_peer", "call_remote", "unreliable_ordered")
-func player_state(pos: Vector3, facing: Vector3) -> void:
+func player_state(pos: Vector3, facing: Vector3, action: int) -> void:
 	var id := multiplayer.get_remote_sender_id()
 	if not peers.has(id):
 		peers[id] = {}
 		roster_changed.emit()
 	peers[id]["pos"] = pos
 	peers[id]["facing"] = facing
+	peers[id]["action"] = action
 
 
-func broadcast_state(pos: Vector3, facing: Vector3) -> void:
+func broadcast_state(pos: Vector3, facing: Vector3, action: int) -> void:
 	if active:
-		player_state.rpc(pos, facing)
+		player_state.rpc(pos, facing, action)
