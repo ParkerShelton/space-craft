@@ -59,7 +59,13 @@ func host(seed_value: int, system_index: int, port: int = PORT) -> bool:
 	var peer := ENetMultiplayerPeer.new()
 	var err := peer.create_server(port, MAX_PLAYERS)
 	if err != OK:
-		last_error = "Could not open port %d (error %d)" % [port, err]
+		# Almost always a server that is still running. The engine reports a bare
+		# ERR_CANT_CREATE for this, which tells whoever is starting it nothing.
+		if err == ERR_CANT_CREATE or err == ERR_ALREADY_IN_USE:
+			last_error = ("Port %d is already in use. Another server is probably "
+				+ "still running -- close it, or start this one with --port=%d.") % [port, port + 1]
+		else:
+			last_error = "Could not open port %d (error %d)" % [port, err]
 		return false
 	multiplayer.multiplayer_peer = peer
 	active = true

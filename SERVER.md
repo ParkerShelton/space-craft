@@ -59,3 +59,19 @@ the edit record to disk is the obvious next step.
 
 Creatures, water flow, machines and ships are still simulated per-client and are
 not synchronised, so those will differ between players.
+
+## "Port 24565 is already in use"
+
+A server is still running. Godot spawns two processes when you launch the
+console build, so closing the window you can see does not always end it.
+
+On Windows, find and stop it:
+
+    Get-Process SpaceCraftServer, Godot* | Stop-Process -Force
+
+Or check exactly what is holding the port:
+
+    Get-NetUDPEndpoint -LocalPort 24565 | ForEach-Object {
+        Get-Process -Id $_.OwningProcess }
+
+Or simply start the new one somewhere else with `--port=24566`.
