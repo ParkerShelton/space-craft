@@ -309,14 +309,16 @@ void fragment() {
 	// against it. Torches are EMISSION below and so still work down there.
 	float sky = clamp(v_sky, 0.0, 1.0);
 
-	// COLOUR NEEDS LIGHT. An alien world tints its stone magenta or blue, and
-	// dimming a saturated colour just gives a dark saturated colour -- so an
-	// unlit cave read as blue and magenta rather than as unlit rock. Real stone
-	// in the dark goes grey, because there is not enough light to see hue by.
-	// Torchlight counts as light, so a lit cave gets its colour back.
-	float litness = max(sky, clamp(v_block_light, 0.0, 1.0));
-	float lum = dot(base, vec3(0.299, 0.587, 0.114));
-	base = mix(vec3(lum), base, mix(0.15, 1.0, litness));
+	// A block keeps its own colour however dark it gets: dim rock is the same
+	// rock, just less of it reaching your eye.
+	//
+	// This used to slide toward grey as the light went, on the reasoning that
+	// real stone in the dark has too little light to see hue by. Whatever that
+	// is worth as physics, it looks like the block CHANGING as you walk into a
+	// cave, and one thing being two colours is worse than a colour being
+	// unrealistic. Anything that dims here now multiplies the colour rather
+	// than mixing something else into it, so the hue is the same at every
+	// brightness -- see EMISSION below, where every term is `base * <scalar>`.
 
 	ALBEDO = base;
 	// Push well past 1.0 so the glow survives tonemapping and reads as a flame
