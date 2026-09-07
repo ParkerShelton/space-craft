@@ -167,6 +167,24 @@ func world_built() -> void:
 				var pg := _planet(e[1])
 				if pg != null:
 					pg.grow_station(e[2], e[3])
+			"plant":
+				var pp := _planet(e[1])
+				if pp != null:
+					pp.plant(e[2], str(e[3][0]), bool(e[3][1]))
+			"harvest":
+				var ph := _planet(e[1])
+				if ph != null:
+					ph.harvest(e[2])
+					ph.clear_crop(e[2])
+			"stages":
+				var ps := _planet(e[1])
+				if ps != null:
+					for c in e[2]:
+						ps.set_crop_stage(c[0], int(c[1]))
+			"crops":
+				var pc := _planet(e[1])
+				if pc != null:
+					pc.load_crops(e[2])
 			_:
 				_apply_bulk(e[1], e[2], e[3])
 	_pending.clear()
@@ -223,6 +241,9 @@ func _on_peer_connected(id: int) -> void:
 				# say once a station could have grown into several things.
 				mk.append(int(p.machine_kinds.get(c, -1)))
 			world_machines.rpc_id(id, p.planet_name, mc, mk)
+		var crows: Array = p.crops_snapshot()
+		if not crows.is_empty():
+			world_crops.rpc_id(id, p.planet_name, crows)
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -463,6 +484,101 @@ func apply_grow(planet_name: String, v: Vector3i, to: int) -> void:
 	var p := _planet(planet_name)
 	if p != null:
 		p.grow_station(v, to)
+
+
+# --- planted things --------------------------------------------------------
+#
+# Growth is the HOST's to run. Every machine ticking its own clock would have
+# the same field at a different height on every screen, and a crop that is ripe
+# for one player and not for another is a race over who gets to pull it. So a
+# client sows and reaps by asking, and hears back what happened.
+
+func planted(planet_name: String, v: Vector3i, key: String, tree: bool) -> void:
+	if not active:
+		return
+	if is_host:
+		apply_plant.rpc(planet_name, v, key, tree)
+	else:
+		request_plant.rpc_id(1, planet_name, v, key, tree)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_plant(planet_name: String, v: Vector3i, key: String, tree: bool) -> void:
+	if not is_host:
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		p.plant(v, key, tree)
+	apply_plant.rpc(planet_name, v, key, tree)
+
+
+@rpc("authority", "call_remote", "reliable")
+func apply_plant(planet_name: String, v: Vector3i, key: String, tree: bool) -> void:
+	if not _world_built:
+		_pending.append(["plant", planet_name, v, [key, tree]])
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		p.plant(v, key, tree)
+
+
+func harvested(planet_name: String, v: Vector3i) -> void:
+	if not active:
+		return
+	if is_host:
+		apply_harvest.rpc(planet_name, v)
+	else:
+		request_harvest.rpc_id(1, planet_name, v)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_harvest(planet_name: String, v: Vector3i) -> void:
+	if not is_host:
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		p.harvest(v)
+	apply_harvest.rpc(planet_name, v)
+
+
+@rpc("authority", "call_remote", "reliable")
+func apply_harvest(planet_name: String, v: Vector3i) -> void:
+	if not _world_built:
+		_pending.append(["harvest", planet_name, v, null])
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		p.harvest(v)
+		p.clear_crop(v)
+
+
+## Host -> everyone: crops that moved a stage this tick, batched.
+func crops_grew(planet_name: String, changes: Array) -> void:
+	if active and is_host and not changes.is_empty():
+		crop_stages.rpc(planet_name, changes)
+
+
+@rpc("authority", "call_remote", "reliable")
+func crop_stages(planet_name: String, changes: Array) -> void:
+	if not _world_built:
+		_pending.append(["stages", planet_name, changes, null])
+		return
+	var p := _planet(planet_name)
+	if p == null:
+		return
+	for c in changes:
+		p.set_crop_stage(c[0], int(c[1]))
+
+
+## Host -> a joining client: the whole field, however far along it is.
+@rpc("authority", "call_remote", "reliable")
+func world_crops(planet_name: String, rows: Array) -> void:
+	if not _world_built:
+		_pending.append(["crops", planet_name, rows, null])
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		p.load_crops(rows)
 
 
 ## Host -> a joining client: which builds are working machines.

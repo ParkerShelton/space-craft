@@ -1090,6 +1090,16 @@ func _sync_players(delta: float) -> void:
 func _process(delta: float) -> void:
 	_sync_players(delta)
 	_fade_chat(delta)
+	# Crops grow on every world at once, not just the one underfoot: a field you
+	# left behind should have come on while you were away, which is most of what
+	# makes planting somewhere worth doing.
+	#
+	# BEFORE the guard below, which wants a player and a sky. A dedicated server
+	# has neither, and it is the one machine whose clock everybody else is
+	# waiting on -- putting this after that return meant a field on a server
+	# would never grow at all.
+	if _world != null:
+		_world.tick_crops(delta)
 	if _world == null or _world.player == null or _sky_mat == null:
 		return
 	var ppos: Vector3 = _world.player.global_position
@@ -1114,10 +1124,7 @@ func _process(delta: float) -> void:
 	# day, which is indistinguishable from the ground turning.
 	for pl in _world.planets:
 		pl.day_phase = fposmod(pl.day_phase + delta / maxf(pl.day_length, 1.0), 1.0)
-		# Crops grow on every world at once, not just the one underfoot: a field
-		# you left behind should have come on while you were away, which is most
-		# of what makes planting somewhere worth doing.
-		pl.grow_crops(delta)
+
 	var sun_dir := Vector3(0.3, -0.8, 0.4).normalized()   # fixed light in space
 	var daylight := 1.0
 	var sun_height := 1.0   # 1 overhead, 0 at the horizon, negative at night

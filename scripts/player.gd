@@ -640,6 +640,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			return  # no building while flying
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			# right-click: open a station, or open/close a door, otherwise place a block
+			#
+			# Holding SHIFT means "I want to build here", and skips every one of
+			# those. Once a bench is a bench, right-clicking it is the only way
+			# to open it -- but it is also a flat surface at waist height with a
+			# wall behind it, which is exactly where you want to keep building.
+			if Input.is_physical_key_pressed(KEY_SHIFT):
+				_edit_block(false)
+				return
 			var st := _looked_at_station()
 			if st != null and not eva:
 				_open_station(st)
@@ -2395,7 +2403,7 @@ func _try_plant(tgt: Dictionary) -> bool:
 	elif ground != Blocks.TILLED:
 		_toast("Crops need soil worked with a hoe")
 		return true
-	if not planet.plant(v, str(props.get("species", "meadow")), tree):
+	if not world.plant(planet, v, str(props.get("species", "meadow")), tree):
 		return true
 	_consume_active()
 	return true
@@ -2409,7 +2417,7 @@ func _try_harvest(tgt: Dictionary) -> bool:
 	var v: Vector3i = tgt["voxel"]
 	if not planet.crop_ripe(v):
 		return false
-	var got := planet.harvest(v)
+	var got := world.harvest_crop(planet, v)
 	if got.is_empty():
 		return false
 	var sp := Blocks.flora_by_key(str(got["key"]))

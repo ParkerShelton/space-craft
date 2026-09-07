@@ -200,6 +200,35 @@ func grow(p: Planet, v: Vector3i, to: int) -> Dictionary:
 	return res
 
 
+## Sowing, reaping, and the clock they run on.
+##
+## Growth belongs to the host alone: two machines counting the same seconds
+## arrive at different answers, and a crop that is ripe on one screen and not on
+## another is a race over who gets to pull it.
+func plant(p: Planet, v: Vector3i, key: String, tree: bool) -> bool:
+	var ok := p.plant(v, key, tree)
+	if ok and net != null and net.active:
+		net.planted(p.planet_name, v, key, tree)
+	return ok
+
+
+func harvest_crop(p: Planet, v: Vector3i) -> Dictionary:
+	var got := p.harvest(v)
+	if not got.is_empty() and net != null and net.active:
+		net.harvested(p.planet_name, v)
+	return got
+
+
+func tick_crops(delta: float) -> void:
+	# A client is told what its crops are doing; it does not decide.
+	if net != null and net.active and not net.is_host:
+		return
+	for p in planets:
+		var changed: Array = p.grow_crops(delta)
+		if not changed.is_empty() and net != null and net.active:
+			net.crops_grew(p.planet_name, changed)
+
+
 func save_game() -> bool:
 	var data := {
 		"version": SAVE_VERSION,
@@ -245,6 +274,11 @@ func save_game() -> bool:
 		# the blocks only up to the point where the player had a choice.
 		if not p.machine_kinds.is_empty():
 			data.get_or_add("machine_kinds", {})[p.planet_name] = p.machine_kinds.duplicate()
+		# A field has to still be there tomorrow, or planting is a waste of an
+		# afternoon.
+		var crows: Array = p.crops_snapshot()
+		if not crows.is_empty():
+			data.get_or_add("crops", {})[p.planet_name] = crows
 	var ship_index := {}
 	for s in _ships:
 		if is_instance_valid(s) and not s.blocks.is_empty():
@@ -310,6 +344,7 @@ func load_game() -> bool:
 		p.day_phase = float(pphase.get(p.planet_name, p.day_phase))
 		p.machine_cores = (data.get("machines", {}).get(p.planet_name, []) as Array).duplicate()
 		p.machine_kinds = (data.get("machine_kinds", {}).get(p.planet_name, {}) as Dictionary).duplicate()
+		p.load_crops((data.get("crops", {}).get(p.planet_name, []) as Array))
 		# Re-check each saved machine against the blocks actually present, so a
 		# structure someone dismantled while it was unloaded comes back damaged
 		# rather than silently still working.

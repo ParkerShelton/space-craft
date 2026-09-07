@@ -1248,15 +1248,51 @@ func clear_crop(v: Vector3i) -> void:
 	_crops.erase(v)
 
 
+## Put a crop at a stage somebody else decided. Growth is the host's to run --
+## every machine ticking its own clock would have the same field at a different
+## height on every screen -- so a client only ever hears the answer.
+func set_crop_stage(v: Vector3i, stage: int) -> void:
+	if stage < 0:
+		_grow_tree_at(v)
+		return
+	var c: Dictionary = _crops.get(v, {})
+	if c.is_empty():
+		return
+	c["stage"] = stage
+	c["t"] = 0.0
+	_remesh_at(v)
+
+
+## Everything planted here, flat, for saving and for handing to a new arrival.
+func crops_snapshot() -> Array:
+	var out: Array = []
+	for v in _crops:
+		var c: Dictionary = _crops[v]
+		out.append([v, str(c["key"]), int(c["stage"]), bool(c.get("tree", false)),
+			float(c.get("t", 0.0))])
+	return out
+
+
+func load_crops(rows: Array) -> void:
+	_crops.clear()
+	for r in rows:
+		_crops[r[0]] = {"key": str(r[1]), "stage": int(r[2]), "tree": bool(r[3]),
+			"t": float(r[4]) if r.size() > 4 else 0.0}
+		_remesh_at(r[0])
+
+
 ## Advance everything planted. Called once a frame by the world.
 ##
 ## Walked in full rather than kept in a queue: a planet holds a few dozen
 ## planted cells at most -- a field is small, and it is the only thing on the
 ## planet that grows -- so the simple version costs less than the bookkeeping
 ## that would avoid it.
-func grow_crops(delta: float) -> void:
+## Returns what changed: [[voxel, stage], ...] for crops that moved a stage, so
+## the caller can put it on the wire. A tree that matured reports stage -1.
+func grow_crops(delta: float) -> Array:
+	var changed: Array = []
 	if _crops.is_empty():
-		return
+		return changed
 	var done: Array = []
 	for v in _crops:
 		var c: Dictionary = _crops[v]
@@ -1273,9 +1309,12 @@ func grow_crops(delta: float) -> void:
 		if float(c["t"]) >= per:
 			c["t"] = 0.0
 			c["stage"] = int(c["stage"]) + 1
+			changed.append([v, int(c["stage"])])
 			_remesh_at(v)
 	for v in done:
 		_grow_tree_at(v)
+		changed.append([v, -1])
+	return changed
 
 
 ## A young tree becomes a real one: the trunk and canopy the generator would
