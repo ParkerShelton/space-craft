@@ -537,7 +537,10 @@ func _remove_item(id: int, n: int) -> int:
 
 
 func _selected_id() -> int:
-	return inv[active_slot]["id"] if inv[active_slot]["count"] > 0 else Blocks.AIR
+	# Change counts as carrying it: a slot holding five eighths of a rock can
+	# still place four more eighths, and reading as empty would strand them.
+	var s = inv[active_slot]
+	return s["id"] if (int(s["count"]) > 0 or int(s.get("eighths", 0)) > 0) else Blocks.AIR
 
 
 ## What this player is visibly doing, so others can draw it (see Net.player_state).
@@ -548,6 +551,66 @@ func action_state() -> int:
 	if _mine_time > 0.0:
 		return 1
 	return 0
+
+
+# --- eighths ------------------------------------------------------------------
+#
+# A block placed as an eighth costs an EIGHTH, not the whole block. The change
+# it leaves rides in the slot itself as a remainder of 0 to 7, so a stack is
+# really `count` blocks plus `eighths`/8 of another one -- no second item type,
+# no separate currency, and it saves and travels with the inventory it is part
+# of because it IS the inventory.
+
+## Spend one eighth of the active stack. Breaks a whole block open when there is
+## no change left, which is what leaves you holding seven.
+func _consume_eighth() -> bool:
+	var s = inv[active_slot]
+	var left := int(s.get("eighths", 0))
+	if left > 0:
+		s["eighths"] = left - 1
+	elif int(s["count"]) > 0:
+		s["count"] = int(s["count"]) - 1
+		s["eighths"] = 7
+	else:
+		return false
+	# An empty stack with no change left is an empty slot, not a slot holding
+	# nothing in particular.
+	if int(s["count"]) <= 0 and int(s.get("eighths", 0)) <= 0:
+		_clear_slot(s)
+	_refresh_slots()
+	return true
+
+
+## Put one eighth back, wherever the rest of that material already is. Eight of
+## them make a block again.
+func _add_eighth(id: int) -> void:
+	for i in inv.size():
+		var s = inv[i]
+		if int(s.get("id", Blocks.AIR)) != id:
+			continue
+		if int(s["count"]) <= 0 and int(s.get("eighths", 0)) <= 0:
+			continue
+		var e := int(s.get("eighths", 0)) + 1
+		if e >= 8:
+			e -= 8
+			s["count"] = int(s["count"]) + 1
+		s["eighths"] = e
+		_refresh_slots()
+		return
+	# None of that material carried: start a stack holding nothing but change.
+	for i in inv.size():
+		var s2 = inv[i]
+		if int(s2["count"]) > 0 or int(s2.get("eighths", 0)) > 0:
+			continue
+		s2["id"] = id
+		s2["count"] = 0
+		s2["eighths"] = 1
+		s2["props"] = {}
+		s2["src"] = ""
+		s2["mat"] = {}
+		_refresh_slots()
+		return
+	_toast("Inventory full")
 
 
 func _consume_active() -> void:
@@ -2170,7 +2233,7 @@ func _edit_block(_break_it: bool) -> void:
 		return
 	if plan.has("part") and tgt["kind"] == "planet":
 		world.edit_part(obj as Planet, plan["voxel"], int(plan["part"]), int(plan["value"]))
-		_consume_active()
+		_consume_eighth()
 		return
 	# Slab-onto-slab lands in the cell you're POINTING AT, not the one beyond
 	# it, so it takes an early exit before the normal adjacent-cell path.
@@ -2624,7 +2687,7 @@ func _process_mining(delta: float) -> void:
 			var pid := planet.part_at(sp[0], int(sp[1]))
 			if pid != Blocks.AIR:
 				world.edit_part(planet, sp[0], int(sp[1]), Blocks.AIR)
-				_add_item(pid, 1)
+				_add_eighth(pid)
 			_mine_key = ""
 			_mine_time = 0.0
 			if _crack != null:
@@ -3522,10 +3585,16 @@ func _max_oxygen() -> float:
 func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 	var swatch: ColorRect = cell["swatch"]
 	var count: Label = cell["count"]
-	if not slot.is_empty() and slot["count"] > 0:
+	var eighths := int(slot.get("eighths", 0)) if not slot.is_empty() else 0
+	if not slot.is_empty() and (slot["count"] > 0 or eighths > 0):
 		var mat: Dictionary = slot.get("mat", {})
 		swatch.color = mat["color"] if mat.has("color") else Blocks.color_of(slot["id"])
-		count.text = str(slot["count"])
+		# Change shown as a real fraction rather than a second number: eighths
+		# land exactly on the glyphs a font already has.
+		const EIGHTH_GLYPH := ["", "⅛", "¼", "⅜", "½",
+			"⅝", "¾", "⅞"]
+		var whole: int = int(slot["count"])
+		count.text = ("%d%s" % [whole, EIGHTH_GLYPH[eighths]]) if whole > 0 			else EIGHTH_GLYPH[eighths]
 		cell["root"].tooltip_text = _item_tooltip(slot)
 	else:
 		swatch.color = Color(0.15, 0.15, 0.18, 0.6)

@@ -533,22 +533,10 @@ static func is_partable(id: int) -> bool:
 # Whole-block patterns. Only the power core is built this way now: the Oxygen
 # Plant, Heater and Cooler are GROWN from it by packing material around it, and
 # the Forge is grown from a Smelter (see STATION_GROWTH).
-const STRUCTURES := [
-	{
-		"name": "Generator",
-		"result": GENERATOR,
-		"size": Vector3i(3, 3, 3),
-		"legend": {"#": METAL, "R": ROCK, "C": MACHINE_CORE, ".": AIR},
-		# A stone firebox in a metal frame: rock floor and walls around the
-		# burn chamber, metal above, and the core on the front face where you
-		# feed it.
-		"layers": [
-			["RRR", "RRR", "RRR"],
-			["#C#", "R.R", "RRR"],
-			["###", "###", "###"],
-		],
-	},
-]
+# Whole-block patterns. Empty: every station is either one of the eighth-block
+# cores below or grown from one. Kept as the hook it is -- a machine that wants
+# to be described in whole blocks can be added here without new code.
+const STRUCTURES := []
 
 
 # --- growing a station --------------------------------------------------------
@@ -640,6 +628,7 @@ const PART_CLASSES := {
 	"A": [ALLOY],
 	"C": [CIRCUIT],
 	"G": [GLASS],
+	"K": [MACHINE_CORE],                 # the works inside a machine
 }
 
 # Eighth-block patterns. These are the CORE stations -- the only ones with a
@@ -663,6 +652,19 @@ const PART_STRUCTURES := [
 		"size": Vector3i(2, 1, 2),        # a single block, one eighth-layer tall
 		"layers": [
 			["WW", "WW"],
+		],
+	},
+	{
+		# The power core: a metal casing with the works packed on top of it,
+		# the whole thing inside a single block. Small on purpose -- it is the
+		# root of the whole power line, and everything else in that line grows
+		# by packing material around THIS.
+		"name": "Generator",
+		"result": GENERATOR,
+		"size": Vector3i(2, 2, 2),       # one block, in eighths
+		"layers": [
+			["MM", "MM"],                # casing underneath
+			["KK", "KK"],                # works on top
 		],
 	},
 	{
