@@ -270,13 +270,6 @@ func _open_game_menu() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 30)
 	vb.add_child(title)
-	var sub := Label.new()
-	sub.text = "the world keeps running while this is open"
-	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	sub.add_theme_font_size_override("font_size", 14)
-	sub.modulate = Color(1, 1, 1, 0.55)
-	vb.add_child(sub)
-
 	# Continue FIRST, because the commonest reason to be looking at this screen
 	# is having pressed Escape by mistake.
 	_game_menu_button(vb, "Continue", _close_game_menu)

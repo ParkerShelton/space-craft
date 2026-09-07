@@ -31,6 +31,25 @@ const EYE_HEIGHT := 0.7
 ## in the block and you see through it. The eye is pulled down to keep this much
 ## clear of anything overhead, which costs one short raycast per frame.
 const EYE_CLEARANCE := 0.25
+
+# The placement preview, and how much of it you see.
+#
+# One alpha cannot serve both distances. A face across the room is a small patch
+# of screen and needs to be solid enough to notice; the same face an arm's length
+# away is a pane of colour across your whole view, and in a corridor it sits
+# between you and the block you are trying to break. So it thins out as it comes
+# closer: same preview, out of the way when it would otherwise be in your face.
+const GHOST_COLOR := Color(0.6, 0.9, 1.0)
+const GHOST_COLOR_FINE := Color(1.0, 0.78, 0.30)
+const GHOST_ALPHA := 0.11
+const GHOST_ALPHA_FINE := 0.16
+## Distance to the previewed block, centre to eye, over which it fades up.
+const GHOST_FADE_NEAR := 1.4
+const GHOST_FADE_FAR := 3.4
+## What is left of the alpha at point blank. Not zero: it still has to say WHERE
+## the block would go, it just has no business being the brightest thing on
+## screen while you are trying to see past it.
+const GHOST_ALPHA_NEAR := 0.22
 const ALIGN_SPEED := 2.5          # how fast we stand upright when captured (lower = smoother)
 const FLIGHT_THRESHOLD := 3.0     # gravity (m/s^2) below which we float
 const REACH := 6.0                # block interaction distance
@@ -141,6 +160,7 @@ var _diff: MeshInstance3D          # what is wrong with a build the wrench refus
 var _diff_t := 0.0
 var _ghost_sig := ""
 var _ghost_mat: StandardMaterial3D               # shape key, so the mesh is only rebuilt when it changes
+var _ghost_dist := 99.0            # eye to previewed block, drives how faint it is
 var _crack: MeshInstance3D         # progressive break-up drawn over the block being mined
 var _crack_mat: ShaderMaterial
 var _crack_sig := ""
@@ -295,7 +315,7 @@ func _ready() -> void:
 	# box showing, so the blend happens twice and any alpha reads as roughly
 	# double what the number says -- it was closer to a solid block sitting over
 	# the world than to a preview of one.
-	gm.albedo_color = Color(0.6, 0.9, 1.0, 0.11)
+	gm.albedo_color = Color(GHOST_COLOR.r, GHOST_COLOR.g, GHOST_COLOR.b, GHOST_ALPHA)
 	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	gm.cull_mode = BaseMaterial3D.CULL_DISABLED
 	# Draw over the world: a preview sunk inside terrain is worse than useless.
@@ -644,8 +664,7 @@ func _apply_place_mode_ui() -> void:
 	if _crosshair != null:
 		_crosshair.text = "+ 1/8" if fine_place else "+"
 		_crosshair.modulate = Color(1.0, 0.78, 0.30) if fine_place else Color(1, 1, 1)
-	if _ghost_mat != null:
-		_ghost_mat.albedo_color = Color(1.0, 0.78, 0.30, 0.16) if fine_place 			else Color(0.6, 0.9, 1.0, 0.11)
+	_apply_ghost_alpha()
 
 
 func _toggle_book() -> void:
@@ -2006,6 +2025,22 @@ func _update_ghost(tgt: Dictionary) -> void:
 		_ghost.mesh = _make_ghost_mesh(boxes)
 	_ghost.global_transform = Transform3D(obj.global_transform.basis, obj.to_global(Vector3(v)))
 	_ghost.visible = true
+	if _camera != null:
+		_ghost_dist = _camera.global_position.distance_to(
+			obj.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)))
+		_apply_ghost_alpha()
+
+
+## Colour the preview for the mode you are in, thinned by how close it is.
+func _apply_ghost_alpha() -> void:
+	if _ghost_mat == null:
+		return
+	var t := clampf((_ghost_dist - GHOST_FADE_NEAR)
+		/ (GHOST_FADE_FAR - GHOST_FADE_NEAR), 0.0, 1.0)
+	t = t * t * (3.0 - 2.0 * t)   # ease, so it does not visibly step as you walk
+	var col := GHOST_COLOR_FINE if fine_place else GHOST_COLOR
+	var a := (GHOST_ALPHA_FINE if fine_place else GHOST_ALPHA) 		* lerpf(GHOST_ALPHA_NEAR, 1.0, t)
+	_ghost_mat.albedo_color = Color(col.r, col.g, col.b, a)
 
 
 ## Draws the break-up overlay on the block being mined, in that block's real
