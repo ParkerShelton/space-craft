@@ -1322,28 +1322,38 @@ func grow_crops(delta: float) -> Array:
 func _grow_tree_at(v: Vector3i) -> void:
 	_crops.erase(v)
 	set_block(v, Blocks.AIR)
-	var up := _axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5)) if shape_cube 		else (Vector3(v) + Vector3(0.5, 0.5, 0.5)).normalized()
-	var uq := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
-	if uq == Vector3i.ZERO:
-		uq = Vector3i(0, 1, 0)
-	var wood: int = flora_wood if flora_wood != Blocks.AIR else Blocks.WOOD
-	var leaf: int = int(flora_leaves[0]) if not flora_leaves.is_empty() else Blocks.LEAF_IDS[0]
-	var h := trunk_min + (trunk_max - trunk_min) / 2
-	for i in h:
-		set_block(v + uq * i, wood)
-	# A crown around the top, thinned at the corners so it is not a cube.
-	var r := 2
-	var top := v + uq * (h - 1)
-	for dx in range(-r, r + 1):
-		for dy in range(-r, r + 1):
-			for dz in range(-r, r + 1):
-				var o := Vector3i(dx, dy, dz)
-				if absi(dx) + absi(dy) + absi(dz) > r + 1:
+	var centre := Vector3(v) + Vector3(0.5, 0.5, 0.5)
+	var up := _axis_of(centre) if shape_cube else centre.normalized()
+	if up == Vector3.ZERO:
+		up = Vector3(0, 1, 0)
+	# Built by the SAME code that grows the wild ones. A tree definition is a
+	# base, an up, a trunk height and a canopy radius -- so a planted tree is one
+	# of those, made at the spot you planted it, with the heights this world's
+	# trees actually use. Writing a canopy by hand instead produced a diamond of
+	# leaves on a planet whose trees are pines: right wood, right leaf colour,
+	# wrong tree.
+	var cell := Vector3i(floori(centre.x / float(tree_cell)),
+		floori(centre.y / float(tree_cell)), floori(centre.z / float(tree_cell)))
+	var th := trunk_min + int(_hash01(cell, 1) * float(trunk_max - trunk_min + 1))
+	var cr := canopy_min + _hash01(cell, 2) * (canopy_max - canopy_min)
+	var info: Array = [Vector3(v) + Vector3(0.5, 0.0, 0.5), up, th, cr, cell]
+	# Everything the tree can reach. Generous, and clipped by the shape code
+	# itself -- a box that is too small crops the canopy, and one that is too
+	# big only costs a few thousand cheap misses once.
+	var reach := int(ceil(maxf(cr * 1.6, trunk_rad * 2.0))) + 2
+	var high := th + int(ceil(cr * 2.0)) + 2
+	for dx in range(-reach, reach + 1):
+		for dz in range(-reach, reach + 1):
+			for dy in range(-2, high):
+				var q := v + Vector3i(dx, dy, dz)
+				var got := _tree_block_for(Vector3(q) + Vector3(0.5, 0.5, 0.5), info)
+				if got == Blocks.AIR:
 					continue
-				var c := top + o
-				if get_id(c) == Blocks.AIR:
-					set_block(c, leaf)
-
+				# Never carve into what is already there: a tree grows around the
+				# ground, not through it.
+				if get_id(q) != Blocks.AIR:
+					continue
+				set_block(q, got)
 
 ## Nudge the chunk holding `v` to redraw, without changing a block.
 func _remesh_at(v: Vector3i) -> void:
@@ -2964,103 +2974,117 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float, tcache = null) -> i
 		if lists != null:
 			lists[scell] = near
 	for info in near:
-				var base: Vector3 = info[0]
-				var up: Vector3 = info[1]
-				var th: int = info[2]
-				var cr: float = info[3]
-				var cc: Vector3i = info[4]
-				var rel := p - base
-				var along := rel.dot(up)
-				var horiz := (rel - up * along).length()
-				# Trunk. It starts BELOW the surface point, because a thick trunk
-				# spans several ground columns and on any slope some of them sit
-				# lower -- without this the uphill side floats and the tree stops
-				# reading as rooted in anything.
-				var sink := 1.0 + trunk_rad * 2.0
-				if along >= -sink and along <= float(th) and horiz < trunk_rad:
-					return flora_wood
-				# Nothing else in this tree can reach p, so skip the canopy and
-				# coral-lobe work outright. That work is the expensive half of
-				# terrain generation -- a coral tree walks every lobe with trig
-				# and hashing, once per candidate cell -- and most candidate
-				# cells are nowhere near the voxel being asked about. The bounds
-				# are deliberately loose; they are verified to reproduce the
-				# previous terrain voxel-for-voxel.
-				if horiz > cr * 1.3 + trunk_rad + 1.0 						or along > float(th) * 1.15 + cr * 1.6 + 1.0 						or along < minf(-sink - 1.0, float(th) - cr * 2.2 - 1.0):
-					continue
-				if flora_shape == 4:
-					# CORAL: lobes budding off the stem at different heights and
-					# bearings. Each is joined to the stem by a real BRANCH --
-					# without one the lobes hang in mid-air well clear of the
-					# trunk, which is what made the leaves look unattached.
-					var ax := up.cross(Vector3(1, 0, 0))
-					if ax.length_squared() < 0.01:
-						ax = up.cross(Vector3(0, 0, 1))
-					ax = ax.normalized()
-					var bx := up.cross(ax).normalized()
-					# One lobe sits ON the stem rather than beside it. Every other
-					# lobe is thrown clear of the axis by 0.3 to 0.7 of the canopy
-					# radius while being only 0.3 to 0.45 wide, so the top of the
-					# stem itself was usually left uncovered: measured, 71% of
-					# coral stems had nothing at all directly overhead. From the
-					# ground that reads as a bare post with foliage floating
-					# around it, which is what "trees with no leaves" turns out
-					# to be on these worlds.
-					if (p - (base + up * (float(th) + cr * 0.15))).length() 							< cr * (0.45 + _hash01(cc, 70) * 0.20):
-						return flora_leaves[int(_hash01(cc, 71)
-							* flora_leaves.size()) % flora_leaves.size()]
-					var lobes := 3 + int(_hash01(cc, 8) * 3.0)
-					var arms: Array = []
-					for lb in lobes:
-						var a := _hash01(cc, 20 + lb) * TAU
-						var hgt := float(th) * (0.5 + _hash01(cc, 30 + lb) * 0.6)
-						# Lobe centre and radius are kept so that centre+radius
-						# stays inside the reach the neighbour scan actually
-						# covers (1.15x the canopy). They used to sum to 2.2x, so
-						# the outer half of every lobe fell in cells no voxel ever
-						# consulted and was simply missing.
-						var reach := cr * (0.30 + _hash01(cc, 40 + lb) * 0.40)
-						var lc := base + up * hgt + (ax * cos(a) + bx * sin(a)) * reach
-						var lr := cr * (0.30 + _hash01(cc, 50 + lb) * 0.15)
-						if (p - lc).length() < lr:
-							return flora_leaves[int(_hash01(cc, 60 + lb)
-								* flora_leaves.size()) % flora_leaves.size()]
-						arms.append([base + up * (hgt * 0.55), lc])
-					for arm in arms:
-						if _dist_to_segment(p, arm[0], arm[1]) < maxf(trunk_rad * 0.55, 0.75):
-							return flora_wood
-					continue
-				# canopy (ellipsoid, shape-dependent, with lumpy edge)
-				var vscale := 1.5 if flora_shape == 1 else (0.7 if flora_shape == 2 else 1.0)
-				if flora_shape == 3:
-					vscale = 0.55     # a giant spreads far wider than it is deep
-				var ch := cr * vscale
-				# Overlap the crown with the top of the trunk rather than
-				# balancing it above: a gap there is what makes leaves and log
-				# look like separate objects.
-				var center := base + up * (float(th) - ch * 0.25)
-				var rc := p - center
-				var cvert := rc.dot(up)
-				var choriz := (rc - up * cvert).length()
-				var rad := cr
-				if flora_shape == 1:  # pine: taper toward the top
-					var t := clampf((cvert + ch) / (2.0 * ch), 0.0, 1.0)
-					rad = cr * (1.0 - t * 0.8)
-				var e := (choriz * choriz) / maxf(rad * rad, 0.01) + (cvert * cvert) / maxf(ch * ch, 0.01)
-				# Lumpy canopy edge, but COARSE: a per-voxel roll speckles single
-				# leaves off the rim, and a leaf one voxel clear of the canopy
-				# reads as not belonging to the tree. Sampling at half
-				# resolution makes the wobble happen in clumps that stay
-				# attached, and the range is tighter for the same reason.
-				# ADDITIVE only. A lump that can also bite INTO the canopy carves
-				# notches in its surface, and a notch deep enough to cut a rim
-				# voxel loose leaves foliage floating clear of the tree. Adding
-				# outward can only ever hang a clump off a face it touches.
-				var lump := maxf(0.0, _hash01(Vector3i(floori(p.x * 0.5),
-					floori(p.y * 0.5), floori(p.z * 0.5)), 7) * 0.26 - 0.09)
-				if e < 1.0 + lump:
-					var li: int = flora_leaves[int(_hash01(cc, 3) * flora_leaves.size()) % flora_leaves.size()]
-					return li
+		var got := _tree_block_for(p, info)
+		if got != Blocks.AIR:
+			return got
+	return Blocks.AIR
+
+
+## What one tree puts at `p`, given that tree's own definition.
+##
+## Split out of _tree_at so a tree GROWN from a sapling can be the same tree as
+## one the world put there. A second description of a canopy is a second
+## canopy: the one written by hand for saplings was a diamond of leaves, on
+## planets whose trees are pines.
+func _tree_block_for(p: Vector3, info: Array) -> int:
+	var base: Vector3 = info[0]
+	var up: Vector3 = info[1]
+	var th: int = info[2]
+	var cr: float = info[3]
+	var cc: Vector3i = info[4]
+	var rel := p - base
+	var along := rel.dot(up)
+	var horiz := (rel - up * along).length()
+	# Trunk. It starts BELOW the surface point, because a thick trunk
+	# spans several ground columns and on any slope some of them sit
+	# lower -- without this the uphill side floats and the tree stops
+	# reading as rooted in anything.
+	var sink := 1.0 + trunk_rad * 2.0
+	if along >= -sink and along <= float(th) and horiz < trunk_rad:
+		return flora_wood
+	# Nothing else in this tree can reach p, so skip the canopy and
+	# coral-lobe work outright. That work is the expensive half of
+	# terrain generation -- a coral tree walks every lobe with trig
+	# and hashing, once per candidate cell -- and most candidate
+	# cells are nowhere near the voxel being asked about. The bounds
+	# are deliberately loose; they are verified to reproduce the
+	# previous terrain voxel-for-voxel.
+	if horiz > cr * 1.3 + trunk_rad + 1.0 						or along > float(th) * 1.15 + cr * 1.6 + 1.0 						or along < minf(-sink - 1.0, float(th) - cr * 2.2 - 1.0):
+		return Blocks.AIR
+	if flora_shape == 4:
+		# CORAL: lobes budding off the stem at different heights and
+		# bearings. Each is joined to the stem by a real BRANCH --
+		# without one the lobes hang in mid-air well clear of the
+		# trunk, which is what made the leaves look unattached.
+		var ax := up.cross(Vector3(1, 0, 0))
+		if ax.length_squared() < 0.01:
+			ax = up.cross(Vector3(0, 0, 1))
+		ax = ax.normalized()
+		var bx := up.cross(ax).normalized()
+		# One lobe sits ON the stem rather than beside it. Every other
+		# lobe is thrown clear of the axis by 0.3 to 0.7 of the canopy
+		# radius while being only 0.3 to 0.45 wide, so the top of the
+		# stem itself was usually left uncovered: measured, 71% of
+		# coral stems had nothing at all directly overhead. From the
+		# ground that reads as a bare post with foliage floating
+		# around it, which is what "trees with no leaves" turns out
+		# to be on these worlds.
+		if (p - (base + up * (float(th) + cr * 0.15))).length() 							< cr * (0.45 + _hash01(cc, 70) * 0.20):
+			return flora_leaves[int(_hash01(cc, 71)
+				* flora_leaves.size()) % flora_leaves.size()]
+		var lobes := 3 + int(_hash01(cc, 8) * 3.0)
+		var arms: Array = []
+		for lb in lobes:
+			var a := _hash01(cc, 20 + lb) * TAU
+			var hgt := float(th) * (0.5 + _hash01(cc, 30 + lb) * 0.6)
+			# Lobe centre and radius are kept so that centre+radius
+			# stays inside the reach the neighbour scan actually
+			# covers (1.15x the canopy). They used to sum to 2.2x, so
+			# the outer half of every lobe fell in cells no voxel ever
+			# consulted and was simply missing.
+			var reach := cr * (0.30 + _hash01(cc, 40 + lb) * 0.40)
+			var lc := base + up * hgt + (ax * cos(a) + bx * sin(a)) * reach
+			var lr := cr * (0.30 + _hash01(cc, 50 + lb) * 0.15)
+			if (p - lc).length() < lr:
+				return flora_leaves[int(_hash01(cc, 60 + lb)
+					* flora_leaves.size()) % flora_leaves.size()]
+			arms.append([base + up * (hgt * 0.55), lc])
+		for arm in arms:
+			if _dist_to_segment(p, arm[0], arm[1]) < maxf(trunk_rad * 0.55, 0.75):
+				return flora_wood
+		return Blocks.AIR
+	# canopy (ellipsoid, shape-dependent, with lumpy edge)
+	var vscale := 1.5 if flora_shape == 1 else (0.7 if flora_shape == 2 else 1.0)
+	if flora_shape == 3:
+		vscale = 0.55     # a giant spreads far wider than it is deep
+	var ch := cr * vscale
+	# Overlap the crown with the top of the trunk rather than
+	# balancing it above: a gap there is what makes leaves and log
+	# look like separate objects.
+	var center := base + up * (float(th) - ch * 0.25)
+	var rc := p - center
+	var cvert := rc.dot(up)
+	var choriz := (rc - up * cvert).length()
+	var rad := cr
+	if flora_shape == 1:  # pine: taper toward the top
+		var t := clampf((cvert + ch) / (2.0 * ch), 0.0, 1.0)
+		rad = cr * (1.0 - t * 0.8)
+	var e := (choriz * choriz) / maxf(rad * rad, 0.01) + (cvert * cvert) / maxf(ch * ch, 0.01)
+	# Lumpy canopy edge, but COARSE: a per-voxel roll speckles single
+	# leaves off the rim, and a leaf one voxel clear of the canopy
+	# reads as not belonging to the tree. Sampling at half
+	# resolution makes the wobble happen in clumps that stay
+	# attached, and the range is tighter for the same reason.
+	# ADDITIVE only. A lump that can also bite INTO the canopy carves
+	# notches in its surface, and a notch deep enough to cut a rim
+	# voxel loose leaves foliage floating clear of the tree. Adding
+	# outward can only ever hang a clump off a face it touches.
+	var lump := maxf(0.0, _hash01(Vector3i(floori(p.x * 0.5),
+		floori(p.y * 0.5), floori(p.z * 0.5)), 7) * 0.26 - 0.09)
+	if e < 1.0 + lump:
+		var li: int = flora_leaves[int(_hash01(cc, 3) * flora_leaves.size()) % flora_leaves.size()]
+		return li
+	return Blocks.AIR
 	return Blocks.AIR
 
 
