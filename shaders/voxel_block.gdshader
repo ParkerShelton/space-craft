@@ -304,6 +304,23 @@ void fragment() {
 
 	base *= mix(1.0, shade, texture_strength);
 
+	// A hairline of shadow where one block meets the next.
+	//
+	// Greedy meshing turns a whole hillside of grass into a handful of large
+	// quads, so there is nothing in the GEOMETRY to say where one block ends and
+	// the next begins -- at any distance the ground reads as one flat sheet and
+	// the layers of a terrace melt into each other. fract() of the position along
+	// the face gives where we are inside the block whatever quad it landed in,
+	// which puts the grid back for the cost of two instructions.
+	//
+	// Widened by fwidth as it recedes: a seam thinner than a pixel does not
+	// vanish quietly, it shimmers. Letting it soften with distance is what keeps
+	// it from crawling across the hills as you walk.
+	vec2 inblock = fract(fc);
+	float edge = min(min(inblock.x, 1.0 - inblock.x), min(inblock.y, 1.0 - inblock.y));
+	float ew = max(fwidth(fc.x), fwidth(fc.y));
+	base *= mix(0.87, 1.0, smoothstep(0.0, 0.06 + ew, edge));
+
 	// Underground the surface stops returning daylight, so a cave is dark at
 	// noon. Never fully black: torchlight and the mining overlay have to read
 	// against it. Torches are EMISSION below and so still work down there.

@@ -2560,6 +2560,17 @@ func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float, tcache = null) -> i
 						ax = up.cross(Vector3(0, 0, 1))
 					ax = ax.normalized()
 					var bx := up.cross(ax).normalized()
+					# One lobe sits ON the stem rather than beside it. Every other
+					# lobe is thrown clear of the axis by 0.3 to 0.7 of the canopy
+					# radius while being only 0.3 to 0.45 wide, so the top of the
+					# stem itself was usually left uncovered: measured, 71% of
+					# coral stems had nothing at all directly overhead. From the
+					# ground that reads as a bare post with foliage floating
+					# around it, which is what "trees with no leaves" turns out
+					# to be on these worlds.
+					if (p - (base + up * (float(th) + cr * 0.15))).length() 							< cr * (0.45 + _hash01(cc, 70) * 0.20):
+						return flora_leaves[int(_hash01(cc, 71)
+							* flora_leaves.size()) % flora_leaves.size()]
 					var lobes := 3 + int(_hash01(cc, 8) * 3.0)
 					var arms: Array = []
 					for lb in lobes:

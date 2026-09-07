@@ -1411,12 +1411,24 @@ static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector
 ## style bias that gives faces definition, and the real DirectionalLight3D
 ## supplies the actual direction. Widening this range again would re-break
 ## night lighting.
+## Fixed shading per face direction, baked into the vertex colour.
+##
+## This is what makes a blocky world READ as blocky. The old values spanned 0.86
+## to 1.0, which is a 14% difference between a floor and a wall -- at any
+## distance the ground turned into one flat sheet and a terrace edge or a step
+## disappeared into it. Every block game uses a much wider spread than looks
+## reasonable written down, and the two horizontal axes differ from each other on
+## purpose: it is the only cue that tells you which way a corner turns.
+##
+## The sun's own directional light is on top of this, but it cannot do the job
+## alone -- it moves, and half the time it is somewhere that leaves the faces you
+## are looking at equally lit.
 static func _face_shade(d: int, dir: int) -> float:
-	if d == 1:  # Y axis
-		return 1.0 if dir > 0 else 0.86
+	if d == 1:  # Y axis: sky above, ground below
+		return 1.0 if dir > 0 else 0.55
 	if d == 0:  # X axis
-		return 0.94 if dir > 0 else 0.92
-	return 0.96 if dir > 0 else 0.90  # Z axis
+		return 0.74 if dir > 0 else 0.70
+	return 0.88 if dir > 0 else 0.82  # Z axis
 
 
 static func _corner(d: int, u: int, v: int, wc: int, uu: int, vv: int) -> Vector3:
