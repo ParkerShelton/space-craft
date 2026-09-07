@@ -1203,6 +1203,114 @@ func machine_station_at(v: Vector3i) -> Station:
 	return st if st != null and is_instance_valid(st) else null
 
 
+# --- growing things -----------------------------------------------------------
+#
+# A planted cell keeps its species and how far along it is in a table beside the
+# blocks, the way eighth-blocks and campfires already do. The block id says only
+# CROP or YOUNG_TREE; there is no room in a byte for a species, and the mesher
+# needs both to draw the thing at the right height.
+var _crops: Dictionary = {}    # voxel -> {"key": species, "stage": int, "t": seconds into this stage}
+
+
+## Put a plant in the ground. Returns false if that cell will not take it.
+func plant(v: Vector3i, key: String, tree: bool) -> bool:
+	if get_id(v) != Blocks.AIR:
+		return false
+	_crops[v] = {"key": key, "stage": 0, "t": 0.0, "tree": tree}
+	set_block(v, Blocks.YOUNG_TREE if tree else Blocks.CROP)
+	return true
+
+
+func crop_at(v: Vector3i) -> Dictionary:
+	return _crops.get(v, {})
+
+
+## Is this cell a plant that has finished growing?
+func crop_ripe(v: Vector3i) -> bool:
+	var c: Dictionary = _crops.get(v, {})
+	if c.is_empty() or bool(c.get("tree", false)):
+		return false
+	return int(c["stage"]) >= Blocks.crop_growth(str(c["key"]))["stages"] - 1
+
+
+## Pull a ripe crop up. Returns what it gave, or {}.
+func harvest(v: Vector3i) -> Dictionary:
+	if not crop_ripe(v):
+		return {}
+	var c: Dictionary = _crops[v]
+	var g: Dictionary = Blocks.crop_growth(str(c["key"]))
+	_crops.erase(v)
+	set_block(v, Blocks.AIR)
+	return {"key": str(c["key"]), "n": int(g["yield_n"])}
+
+
+func clear_crop(v: Vector3i) -> void:
+	_crops.erase(v)
+
+
+## Advance everything planted. Called once a frame by the world.
+##
+## Walked in full rather than kept in a queue: a planet holds a few dozen
+## planted cells at most -- a field is small, and it is the only thing on the
+## planet that grows -- so the simple version costs less than the bookkeeping
+## that would avoid it.
+func grow_crops(delta: float) -> void:
+	if _crops.is_empty():
+		return
+	var done: Array = []
+	for v in _crops:
+		var c: Dictionary = _crops[v]
+		if bool(c.get("tree", false)):
+			c["t"] = float(c["t"]) + delta
+			if float(c["t"]) >= Blocks.SAPLING_TIME:
+				done.append(v)
+			continue
+		var g: Dictionary = Blocks.crop_growth(str(c["key"]))
+		var per: float = float(g["time"]) / maxf(float(g["stages"]), 1.0)
+		if int(c["stage"]) >= int(g["stages"]) - 1:
+			continue        # ripe, and waiting for you
+		c["t"] = float(c["t"]) + delta
+		if float(c["t"]) >= per:
+			c["t"] = 0.0
+			c["stage"] = int(c["stage"]) + 1
+			_remesh_at(v)
+	for v in done:
+		_grow_tree_at(v)
+
+
+## A young tree becomes a real one: the trunk and canopy the generator would
+## have put here, written in as edits.
+func _grow_tree_at(v: Vector3i) -> void:
+	_crops.erase(v)
+	set_block(v, Blocks.AIR)
+	var up := _axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5)) if shape_cube 		else (Vector3(v) + Vector3(0.5, 0.5, 0.5)).normalized()
+	var uq := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
+	if uq == Vector3i.ZERO:
+		uq = Vector3i(0, 1, 0)
+	var wood: int = flora_wood if flora_wood != Blocks.AIR else Blocks.WOOD
+	var leaf: int = int(flora_leaves[0]) if not flora_leaves.is_empty() else Blocks.LEAF_IDS[0]
+	var h := trunk_min + (trunk_max - trunk_min) / 2
+	for i in h:
+		set_block(v + uq * i, wood)
+	# A crown around the top, thinned at the corners so it is not a cube.
+	var r := 2
+	var top := v + uq * (h - 1)
+	for dx in range(-r, r + 1):
+		for dy in range(-r, r + 1):
+			for dz in range(-r, r + 1):
+				var o := Vector3i(dx, dy, dz)
+				if absi(dx) + absi(dy) + absi(dz) > r + 1:
+					continue
+				var c := top + o
+				if get_id(c) == Blocks.AIR:
+					set_block(c, leaf)
+
+
+## Nudge the chunk holding `v` to redraw, without changing a block.
+func _remesh_at(v: Vector3i) -> void:
+	_edit_remesh(chunk_of(v))
+
+
 # --- eighth-block parts -------------------------------------------------------
 #
 # A PARTS voxel's eight sub-cells live here rather than in the voxel int: eight
@@ -3625,6 +3733,17 @@ func _edits_snapshot(cc: Vector3i) -> Dictionary:
 			var f: Vector3i = fv
 			if f.x >= lo.x and f.y >= lo.y and f.z >= lo.z 					and f.x < hi.x and f.y < hi.y and f.z < hi.z:
 				fires.append(f)
+	# Planted cells near this chunk: the mesher needs the species and stage to
+	# draw a crop at the right height, and neither is in the block id.
+	var crops := {}
+	if not _crops.is_empty():
+		var clo := (cc - Vector3i.ONE) * CS
+		var chi := (cc + Vector3i.ONE * 2) * CS
+		for cv in _crops:
+			var q: Vector3i = cv
+			if q.x >= clo.x and q.y >= clo.y and q.z >= clo.z 					and q.x < chi.x and q.y < chi.y and q.z < chi.z:
+				crops[q] = (_crops[q] as Dictionary).duplicate()
+	snap[Chunk.CROP_KEY] = crops
 	snap[Chunk.FIRE_KEY] = fires
 	snap[Chunk.PARTS_KEY] = parts
 	return snap

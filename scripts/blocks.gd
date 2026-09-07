@@ -518,6 +518,21 @@ const SEEDS := 113
 ## A young tree. Like SEEDS, one id for every species -- which one it is rides
 ## in its props.
 const SAPLING := 114
+## Soil worked for planting. Crops will only take root in it, which is what
+## makes a farm a place you built rather than a patch of ground you found.
+const TILLED := 115
+## A planted crop, at whatever stage it has reached. Which plant it is and how
+## far along it has come live in the planet's crop table, not in the id -- the
+## same arrangement eighth-blocks and campfires already use, and for the same
+## reason: there is no room in a byte for a species.
+const CROP := 116
+## A tree on its way up. Skinny, and deliberately not breakable yet.
+const YOUNG_TREE := 117
+## Worked wood on a handle. Turns ground into something you can plant in.
+const HOE := 118
+## A meal made of what you grew. One dish for now -- later, which plants went
+## into it is what will separate a good meal from a filling one.
+const COOKED_CROP := 119
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
@@ -622,6 +637,10 @@ static func growth_parent(kind: int) -> int:
 const FOOD_VALUE := {
 	RAW_MEAT: 9.0,
 	COOKED_MEAT: 38.0,
+	# Raw off the plant keeps you going; cooked is a meal. The same gap meat
+	# has, and for the same reason -- a fire should always be worth lighting.
+	CROP: 7.0,
+	COOKED_CROP: 30.0,
 }
 
 static func is_food(raw: int) -> bool:
@@ -1038,6 +1057,8 @@ static func is_smelter_kind(kind: int) -> bool:
 const STATION_CRAFTS := {
 	CAMPFIRE: [
 		{"label": "Cooked Meat", "out": COOKED_MEAT, "n": 1, "reqs": [{"id": RAW_MEAT, "n": 1}]},
+		{"label": "Cooked Vegetables", "out": COOKED_CROP, "n": 1,
+			"reqs": [{"id": CROP, "n": 2}]},
 	],
 	SMELTER: [
 		# Cast refined ingots into plain hull plate -- the step that turns what
@@ -1080,6 +1101,8 @@ const STATION_CRAFTS := {
 		# Deliberately cheap and made from the most common material there is: a
 		# light source gates cave exploration and surviving the first night, so
 		# putting it behind rare drops would just make the early game dark.
+		{"label": "Hoe", "out": HOE, "n": 1,
+			"reqs": [{"any": WOOD_IDS, "n": 3, "label": "Wood"}]},
 		{"label": "Torch x4", "out": TORCH, "n": 4,
 			"reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
 		# Burns the ore itself: how bright and how far comes from that ore's
@@ -1112,6 +1135,11 @@ const NAMES := {
 	TALL_GRASS: "Tall Grass",
 	SEEDS: "Seeds",
 	SAPLING: "Sapling",
+	TILLED: "Tilled Soil",
+	CROP: "Crop",
+	YOUNG_TREE: "Young Tree",
+	HOE: "Hoe",
+	COOKED_CROP: "Cooked Vegetables",
 	RAW_MEAT: "Raw Meat",
 	COOKED_MEAT: "Cooked Meat",
 	HIDE: "Hide",
@@ -1216,6 +1244,8 @@ const HARDNESS := {
 	# Faster than leaves: grass is the one thing you brush aside constantly, and
 	# anything you touch that often should not cost you a mining animation.
 	TALL_GRASS: 0.05,
+	CROP: 0.05,
+	TILLED: 0.4,
 	TORCH: 0.1, GLOW_LAMP: 0.3, EMBER_TORCH: 0.1, MACHINE_CORE: 1.2,
 	ICE: 0.7, ROCK: 0.9, CRYSTAL: 1.2, CORE: 1.6,
 	IRON_ORE: 1.3, COPPER_ORE: 1.3, GOLD_ORE: 1.6,
@@ -1228,6 +1258,11 @@ const COLORS := {
 	TALL_GRASS: Color(0.42, 0.66, 0.28),
 	SEEDS: Color(0.78, 0.70, 0.34),
 	SAPLING: Color(0.36, 0.58, 0.30),
+	TILLED: Color(0.30, 0.21, 0.14),
+	CROP: Color(0.46, 0.68, 0.30),
+	YOUNG_TREE: Color(0.44, 0.33, 0.20),
+	HOE: Color(0.72, 0.58, 0.34),
+	COOKED_CROP: Color(0.78, 0.55, 0.24),
 	RAW_MEAT: Color(0.72, 0.26, 0.28),
 	COOKED_MEAT: Color(0.55, 0.34, 0.18),
 	HIDE: Color(0.60, 0.45, 0.30),
@@ -1328,7 +1363,8 @@ static func use_of(id: int) -> String:
 ## canopy feels like foliage you brush through rather than a solid box.
 ## Plants you walk through: no collision, and they never hide the block behind.
 static func is_plant(id: int) -> bool:
-	return bottom_of(id) == TALL_GRASS
+	var b := bottom_of(id)
+	return b == TALL_GRASS or b == CROP
 
 
 # --- flora ---------------------------------------------------------------
@@ -1360,6 +1396,35 @@ const FLORA := [
 	{"key": "coralbush", "name": "Coral Bush", "kind": "bush", "classes": ["O"]},
 	# nothing lives on a class D world. That is what makes it barren.
 ]
+
+
+## How a crop grows, and what it gives you.
+##
+## Stages and time are per species on purpose: a plant you can turn round in a
+## couple of minutes and one that takes a quarter of an hour are different
+## decisions about what to put in your field, and that is the whole game of
+## farming. Times are seconds for the WHOLE plant; each stage takes an equal
+## share of it.
+const CROP_GROWTH := {
+	"meadow":     {"stages": 3, "time": 150.0, "yield_n": 2, "food": 3.0},
+	"frostgrass": {"stages": 4, "time": 260.0, "yield_n": 2, "food": 4.0},
+	"duneweed":   {"stages": 3, "time": 200.0, "yield_n": 1, "food": 3.5},
+	"ashgrass":   {"stages": 5, "time": 320.0, "yield_n": 2, "food": 5.0},
+	"kelpvine":   {"stages": 2, "time": 120.0, "yield_n": 3, "food": 2.5},
+	"clover":     {"stages": 3, "time": 170.0, "yield_n": 2, "food": 3.0},
+	"snowberry":  {"stages": 4, "time": 240.0, "yield_n": 3, "food": 4.5},
+	"thornbush":  {"stages": 4, "time": 280.0, "yield_n": 2, "food": 4.0},
+	"coralbush":  {"stages": 3, "time": 190.0, "yield_n": 3, "food": 3.5},
+}
+
+## Everything a crop needs to know, with sane numbers for a species that has no
+## entry of its own yet.
+static func crop_growth(key: String) -> Dictionary:
+	return CROP_GROWTH.get(key, {"stages": 3, "time": 180.0, "yield_n": 1, "food": 3.0})
+
+
+## How long a young tree stands before it becomes a tree, in seconds.
+const SAPLING_TIME := 240.0
 
 
 ## Every species that could live on a world of this class.

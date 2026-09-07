@@ -1114,6 +1114,10 @@ func _process(delta: float) -> void:
 	# day, which is indistinguishable from the ground turning.
 	for pl in _world.planets:
 		pl.day_phase = fposmod(pl.day_phase + delta / maxf(pl.day_length, 1.0), 1.0)
+		# Crops grow on every world at once, not just the one underfoot: a field
+		# you left behind should have come on while you were away, which is most
+		# of what makes planting somewhere worth doing.
+		pl.grow_crops(delta)
 	var sun_dir := Vector3(0.3, -0.8, 0.4).normalized()   # fixed light in space
 	var daylight := 1.0
 	var sun_height := 1.0   # 1 overhead, 0 at the horizon, negative at night

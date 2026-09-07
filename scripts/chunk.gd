@@ -286,6 +286,7 @@ static func _static_init() -> void:
 			or id == Blocks.DOOR_OPEN or id == Blocks.ROOF_SLAB
 			or Blocks.is_slab(id) or Blocks.is_stair(id) or Blocks.is_light(id)
 			or Blocks.is_wire(id) or id == Blocks.PARTS
+			or id == Blocks.YOUNG_TREE
 			or Blocks.is_plant(id))
 		_FULL[id] = 1 if full else 0
 		# Leaves are meshed AND see-through: they are drawn with cutout holes, so
@@ -318,6 +319,9 @@ static func _id_at(planet: Planet, snap: Dictionary, v: Vector3i) -> int:
 ## Planet._edits_snapshot). A fire is not a block, so it cannot be found by
 ## walking block ids the way a torch can.
 const FIRE_KEY := "fires"
+## Planted cells near this chunk: voxel -> {key, stage, tree}. A crop's height
+## comes from how far along it is, and that is not in its block id.
+const CROP_KEY := "crops"
 ## Per-build memo of which tree cells hold a tree (see Planet.generation_sample).
 ## Lives in the snapshot because the snapshot is already private to one worker
 ## task, which is exactly the lifetime and the isolation this needs.
@@ -842,9 +846,41 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 						# planet tints its own soil, and grass that ignored that sat on
 						# the surface looking like it belonged to a different world.
 						planet.color_of(planet.pal_top), ggv,
-						_sky_depth(snap, ggv),
+						_sky_depth(snap, ggv), 1.0,
 						gverts, gnormals, gcolors, guvs)
 				idx += 1
+
+	# planted cells: a crop is grass whose height is how far along it is, and a
+	# young tree is a skinny post -- thinner than a log on purpose, so a sapling
+	# coming up never reads as something you could have built.
+	var planted: Dictionary = snap.get(CROP_KEY, {})
+	for pv in planted:
+		var pl: Vector3i = (pv as Vector3i) - base
+		if pl.x < 0 or pl.y < 0 or pl.z < 0 or pl.x >= CS or pl.y >= CS or pl.z >= CS:
+			continue
+		var info: Dictionary = planted[pv]
+		var gpv: Vector3i = pv
+		var pup: Vector3 = planet._axis_of(Vector3(gpv) + Vector3(0.5, 0.5, 0.5))
+		if bool(info.get("tree", false)):
+			var uq2 := Vector3(roundi(pup.x), roundi(pup.y), roundi(pup.z))
+			var flo := Vector3(pl)
+			var lo2: Vector3 = flo + Vector3(0.42, 0.0, 0.42)
+			var hi2: Vector3 = flo + Vector3(0.58, 0.9, 0.58)
+			if absf(uq2.x) > 0.5:
+				lo2 = flo + Vector3(0.0, 0.42, 0.42)
+				hi2 = flo + Vector3(0.9, 0.58, 0.58)
+			elif absf(uq2.z) > 0.5:
+				lo2 = flo + Vector3(0.42, 0.42, 0.0)
+				hi2 = flo + Vector3(0.58, 0.58, 0.9)
+			_emit_free_box(lo2, hi2, planet.color_of(planet.flora_wood),
+				Blocks.YOUNG_TREE, verts, normals, colors, uvs, uv2s,
+				_face_light(snap, gpv, Vector3i.ZERO))
+		else:
+			var st := float(int(info.get("stage", 0)) + 1)
+			var total := float(Blocks.crop_growth(str(info.get("key", ""))) ["stages"])
+			_emit_grass(Vector3(pl), pup, planet.color_of(Blocks.CROP), gpv,
+				_sky_depth(snap, gpv), clampf(st / maxf(total, 1.0), 0.3, 1.0),
+				gverts, gnormals, gcolors, guvs)
 
 	# campfire flames. Emissive geometry standing above the fuel, because four
 	# wood eighths on the ground do not read as a fire on their own -- and unlike
@@ -941,7 +977,7 @@ static func _emit_free_box(lo: Vector3, hi: Vector3, base_col: Color, bid: int,
 ## Two vertical quads crossed through the middle of a cell. Both are drawn from
 ## either side (the material never culls), so a tuft reads from every angle.
 static func _emit_grass(lo: Vector3, up: Vector3, col: Color, gv: Vector3i,
-		sky: float,
+		sky: float, scale: float,
 		gverts: PackedVector3Array, gnormals: PackedVector3Array,
 		gcolors: PackedColorArray, guvs: PackedVector2Array) -> void:
 	var uq := Vector3(roundi(up.x), roundi(up.y), roundi(up.z))
@@ -953,6 +989,8 @@ static func _emit_grass(lo: Vector3, up: Vector3, col: Color, gv: Vector3i,
 	# not a grid of identical crosses
 	var c := lo + Vector3(0.5, 0.5, 0.5) - uq * 0.5
 	var h := 0.62 + _hash3(gv, 5) * 0.36
+	if scale < 1.0:
+		h *= scale
 	c += t1 * ((_hash3(gv, 6) - 0.5) * 0.34) + t2 * ((_hash3(gv, 7) - 0.5) * 0.34)
 	# UV.x is the position ACROSS the quad, UV.y the height up the blade. Both are
 	# per-vertex; the shader cuts the blades out of the quad using them.

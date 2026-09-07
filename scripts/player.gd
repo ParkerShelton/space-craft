@@ -645,6 +645,15 @@ func _unhandled_input(event: InputEvent) -> void:
 				_open_station(st)
 			elif _try_eat():
 				pass
+			# Farming comes before building: with a hoe or a seed in hand, the
+			# ground under the crosshair is what you mean, and a block placed
+			# instead of a row sown is a whole minute undone.
+			elif _try_harvest(_raycast_voxel()):
+				pass
+			elif _try_plant(_raycast_voxel()):
+				pass
+			elif _try_till(_raycast_voxel()):
+				pass
 			elif _try_assemble_machine():
 				pass
 			elif _try_toggle_door():
@@ -2325,6 +2334,92 @@ func _drop_flora_seed(planet: Planet, kind: String, item: int) -> void:
 	_toast("Found " + label)
 
 
+# --- farming ------------------------------------------------------------------
+
+## How far from water ground can be worked. Two blocks: close enough that a farm
+## has to be somewhere, far enough that it does not have to be a shoreline.
+const TILL_RANGE := 3
+
+## Work the ground under the crosshair, if it is soil and there is water nearby.
+func _try_till(tgt: Dictionary) -> bool:
+	if _selected_id() != Blocks.HOE or tgt.get("kind", "") != "planet":
+		return false
+	var planet := tgt["obj"] as Planet
+	var v: Vector3i = tgt["voxel"]
+	var id := Blocks.bottom_of(planet.get_id(v))
+	if id != Blocks.GRASS and id != Blocks.DIRT:
+		_toast("Only grass and dirt can be worked")
+		return true
+	if not _water_within(planet, v, TILL_RANGE):
+		_toast("Too dry -- soil has to be worked near water")
+		return true
+	world.edit_block(planet, v, Blocks.TILLED)
+	return true
+
+
+func _water_within(planet: Planet, v: Vector3i, r: int) -> bool:
+	for dx in range(-r, r + 1):
+		for dy in range(-r, r + 1):
+			for dz in range(-r, r + 1):
+				if Blocks.bottom_of(planet.get_id(v + Vector3i(dx, dy, dz))) == Blocks.WATER:
+					return true
+	return false
+
+
+## Put a seed or a sapling in the ground.
+##
+## Crops want soil somebody has worked; a tree or a bush will take any ground it
+## would have grown on by itself. And nothing takes root on a world that cannot
+## keep it alive, which is what the planet classes are for.
+func _try_plant(tgt: Dictionary) -> bool:
+	var held := _active_item()
+	var item := int(held.get("id", Blocks.AIR))
+	if item != Blocks.SEEDS and item != Blocks.SAPLING:
+		return false
+	if tgt.get("kind", "") != "planet":
+		return false
+	var planet := tgt["obj"] as Planet
+	var props: Dictionary = held.get("props", {})
+	var want: String = str(props.get("class", ""))
+	if want != "" and want != planet.planet_class():
+		_toast("%s needs a class %s world -- this is %s"
+			% [Blocks.name_of(item), want, planet.class_title()])
+		return true
+	var v: Vector3i = tgt["place"]
+	var ground := Blocks.bottom_of(planet.get_id(tgt["voxel"]))
+	var tree := item == Blocks.SAPLING
+	if tree:
+		if ground != Blocks.GRASS and ground != Blocks.DIRT and ground != Blocks.TILLED:
+			_toast("Plant that on grass or dirt")
+			return true
+	elif ground != Blocks.TILLED:
+		_toast("Crops need soil worked with a hoe")
+		return true
+	if not planet.plant(v, str(props.get("species", "meadow")), tree):
+		return true
+	_consume_active()
+	return true
+
+
+## Pull up whatever is ripe under the crosshair.
+func _try_harvest(tgt: Dictionary) -> bool:
+	if tgt.get("kind", "") != "planet":
+		return false
+	var planet := tgt["obj"] as Planet
+	var v: Vector3i = tgt["voxel"]
+	if not planet.crop_ripe(v):
+		return false
+	var got := planet.harvest(v)
+	if got.is_empty():
+		return false
+	var sp := Blocks.flora_by_key(str(got["key"]))
+	var nm: String = str(sp.get("name", "Crop")) if not sp.is_empty() else "Crop"
+	_add_item(Blocks.CROP, int(got["n"]), {"species": str(got["key"])}, planet.planet_name,
+		{"name": nm, "color": Blocks.color_of(Blocks.CROP)})
+	_toast("Harvested %d %s" % [int(got["n"]), nm])
+	return true
+
+
 ## Paint the cells a refused build got wrong, in place, for a few seconds.
 func _show_build_diff(planet: Planet, wrong: Array) -> void:
 	if _diff == null:
@@ -2784,6 +2879,25 @@ func _process_mining(delta: float) -> void:
 			if pid != Blocks.AIR:
 				world.edit_part(planet, sp[0], int(sp[1]), Blocks.AIR)
 				_add_eighth(pid)
+			_mine_key = ""
+			_mine_time = 0.0
+			if _crack != null:
+				_crack.visible = false
+			return
+		if planet != null and Blocks.bottom_of(id) == Blocks.YOUNG_TREE:
+			# Deliberately immovable for now: a tree part way up is neither a
+			# sapling you could put back nor a log worth having.
+			_toast("It is still growing")
+			_mine_key = ""
+			_mine_time = 0.0
+			if _crack != null:
+				_crack.visible = false
+			return
+		if planet != null and Blocks.bottom_of(id) == Blocks.CROP:
+			# Ripe comes up as a harvest; anything earlier is just trampled.
+			if not _try_harvest(tgt):
+				planet.clear_crop(v)
+				world.edit_block(planet, v, Blocks.AIR)
 			_mine_key = ""
 			_mine_time = 0.0
 			if _crack != null:
