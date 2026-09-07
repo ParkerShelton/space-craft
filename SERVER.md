@@ -165,10 +165,14 @@ The transport is ENet over UDP — make sure the rule is UDP, not TCP.
 
 ## Known limits
 
-Creatures, water flow, machines and ships are still simulated per-client and are
-not synchronised, so those will differ between players. Assembling parts into a
-working machine is likewise still local to whoever swung the wrench, though the
-parts themselves now replicate and save.
+Assembling a build into a working machine now replicates: everyone re-runs the
+assembly against blocks they already have, and a joining player is handed the
+list of what is assembled and rebuilds it the same way a save does.
+
+What a machine CONTAINS does not. Two players opening the same smelter see
+their own copy of its contents, and only the host's is saved. Creatures, water
+flow and ships are likewise still simulated per client and will differ between
+players.
 
 ## "Port 24565 is already in use"
 

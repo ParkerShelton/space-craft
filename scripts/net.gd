@@ -157,6 +157,12 @@ func world_built() -> void:
 				var p := _planet(e[1])
 				if p != null:
 					_apply_part(p, e[2], e[3], e[4])
+			"asm":
+				var pa := _planet(e[1])
+				if pa != null:
+					_do_assemble(pa, e[2], e[3])
+			"machines":
+				_apply_machines(e[1], e[2])
 			_:
 				_apply_bulk(e[1], e[2], e[3])
 	_pending.clear()
@@ -202,6 +208,13 @@ func _on_peer_connected(id: int) -> void:
 				pdata.append_array(p._parts_by_chunk[cc][v])
 		if not pcells.is_empty():
 			world_parts.rpc_id(id, p.planet_name, pcells, pdata)
+		# After the blocks and the parts, never before: rebuilding a machine
+		# means re-reading the blocks it is made of.
+		if not p.machine_cores.is_empty():
+			var mc := PackedVector3Array()
+			for c in p.machine_cores:
+				mc.append(Vector3(c))
+			world_machines.rpc_id(id, p.planet_name, mc)
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -369,6 +382,74 @@ func apply_part(planet_name: String, v: Vector3i, sub: int, id: int) -> void:
 	var p := _planet(planet_name)
 	if p != null:
 		_apply_part(p, v, sub, id)
+
+
+# --- machines --------------------------------------------------------------
+
+## Somebody finished a build and it came to life. Same shape as a block edit:
+## the host is the authority, and everyone re-runs the assembly for themselves.
+func assembled(planet_name: String, v: Vector3i, parts: bool) -> void:
+	if not active:
+		return
+	if is_host:
+		apply_assemble.rpc(planet_name, v, parts)
+	else:
+		request_assemble.rpc_id(1, planet_name, v, parts)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_assemble(planet_name: String, v: Vector3i, parts: bool) -> void:
+	if not is_host:
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		_do_assemble(p, v, parts)
+	apply_assemble.rpc(planet_name, v, parts)
+
+
+@rpc("authority", "call_remote", "reliable")
+func apply_assemble(planet_name: String, v: Vector3i, parts: bool) -> void:
+	if not _world_built:
+		_pending.append(["asm", planet_name, v, parts])
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		_do_assemble(p, v, parts)
+
+
+func _do_assemble(p: Planet, v: Vector3i, parts: bool) -> void:
+	var r: Dictionary = p.assemble_parts(v) if parts else p.assemble_machine(v)
+	if not r.get("ok", false):
+		# The blocks are replicated and arrive before this does, so this should
+		# not happen -- but a machine that silently fails to appear for one player
+		# is exactly the bug this whole path exists to fix, so say so.
+		push_warning("[net] assembly at %s on %s did not take: %s"
+			% [v, p.planet_name, r.get("reason", "no reason given")])
+
+
+## Host -> a joining client: which builds are working machines.
+##
+## Only the anchor of each one travels. Planet.revalidate_machines rebuilds
+## every station from that list by re-reading the blocks, which is the same path
+## loading a save takes.
+@rpc("authority", "call_remote", "reliable")
+func world_machines(planet_name: String, cores: PackedVector3Array) -> void:
+	if not _world_built:
+		_pending.append(["machines", planet_name, cores, null])
+		return
+	_apply_machines(planet_name, cores)
+
+
+func _apply_machines(planet_name: String, cores: PackedVector3Array) -> void:
+	var p := _planet(planet_name)
+	if p == null:
+		return
+	var list: Array = []
+	for c in cores:
+		list.append(Vector3i(roundi(c.x), roundi(c.y), roundi(c.z)))
+	p.machine_cores = list
+	p.revalidate_machines()
+	print("[net] caught up on %d machines on %s" % [list.size(), planet_name])
 
 
 ## Client -> host. The host is the only authority on what the world contains.

@@ -2381,7 +2381,7 @@ func _try_assemble_machine() -> bool:
 		return false
 	# Sub-cell builds first: they are what the wrench is mostly for. Fall back to
 	# the older whole-block patterns, which still want their Machine Core.
-	var pres := planet.assemble_parts(v)
+	var pres := world.assemble(planet, v, true)
 	if pres.get("ok", false):
 		_toast("%s assembled" % pres.get("name", "Station"))
 		var pst := planet.machine_station_at(v)
@@ -2392,7 +2392,7 @@ func _try_assemble_machine() -> bool:
 		_show_build_diff(planet, pres.get("wrong", []))
 		_toast(str(pres.get("reason", "That is not a station yet")))
 		return true
-	var res := planet.assemble_machine(v)
+	var res := world.assemble(planet, v, false)
 	if res.get("ok", false):
 		_toast("%s assembled" % res.get("name", "Machine"))
 		var st := planet.machine_station_at(v)
