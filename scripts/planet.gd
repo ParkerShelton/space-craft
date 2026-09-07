@@ -1204,7 +1204,17 @@ func _sub_matches_cached(sv: Vector3i, ch: String, cache: Dictionary) -> bool:
 	var got := _sub_id_cached(sv, cache)
 	if ch == ".":
 		return got == Blocks.AIR
-	return Blocks.class_set(ch).has(got)
+	if not Blocks.class_set(ch).has(got):
+		return false
+	# ...and it has to be an EIGHTH somebody placed, not a whole block.
+	#
+	# A solid block reads as eight filled sub-cells, which is what makes one
+	# pattern language describe cubes and parts alike -- but it also meant a log
+	# in a tree satisfied the campfire's four eighths of wood, and right-clicking
+	# a trunk offered to make it a campfire. These patterns are fine work by
+	# definition; a log is a log.
+	var v := Vector3i(floori(sv.x / 2.0), floori(sv.y / 2.0), floori(sv.z / 2.0))
+	return int(cache.get(v, Blocks.AIR)) == Blocks.PARTS
 
 
 ## Does what is at `sv` satisfy this pattern character?

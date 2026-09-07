@@ -169,6 +169,7 @@ var _ghost_mat: StandardMaterial3D               # shape key, so the mesh is onl
 var _ghost_dist := 99.0            # eye to previewed block, drives how faint it is
 var _commission_panel: Control     # "make this a Smelter?" confirmation
 var _prospect_name := ""           # what the crosshair is currently offering
+var _prospect_key := Vector3i(9999, 9999, 9999)   # block the answer above is about
 ## Off hides the placement preview entirely. Some people would rather judge the
 ## placement from the crosshair and the block face than have anything drawn over
 ## the world at all.
@@ -2048,7 +2049,7 @@ func _update_outline(tgt: Dictionary) -> void:
 	_outline.global_transform = Transform3D(b, origin)
 	_outline.visible = true
 	_update_ghost(tgt)
-	_update_prospect()
+	_update_prospect(tgt)
 
 
 ## Translucent preview of the block about to be placed, in its ACTUAL shape --
@@ -2206,6 +2207,11 @@ func _make_ghost_mesh(boxes: Array) -> ArrayMesh:
 # Breaking is handled by hold-to-mine in _process_mining.
 
 func _edit_block(_break_it: bool) -> void:
+	# Anything you build or mine can change what the block you are looking at
+	# would become -- laying the last eighth of a campfire, banking one more rock
+	# against a fire -- and the cursor is answered once per block, so that answer
+	# has to be thrown away when the world under it moves.
+	_prospect_key = Vector3i(9999, 9999, 9999)
 	var place_id := _selected_id()
 	if place_id == Blocks.AIR:
 		return  # nothing selected / none left in this slot
@@ -2424,10 +2430,18 @@ func _try_eat() -> bool:
 ## With the Wrench item gone this is the ONLY thing that tells you a build is
 ## finished -- there is nothing in your hand to notice it for you -- so it runs
 ## off the same raycast the placement ghost already does.
-func _update_prospect() -> void:
+func _update_prospect(tgt: Dictionary = {}) -> void:
 	if _crosshair == null:
 		return
-	var p := station_prospect()
+	# Asked once per BLOCK looked at, not once per frame. Turning on the spot
+	# crosses a lot of blocks, but standing still crosses none, and it is the
+	# standing-still case that was paying for a raycast and a pattern search
+	# sixty times a second.
+	var key: Vector3i = tgt.get("voxel", Vector3i(9999, 9999, 9999)) if not tgt.is_empty() 		else Vector3i(9999, 9999, 9999)
+	if key == _prospect_key and not tgt.is_empty():
+		return
+	_prospect_key = key
+	var p := station_prospect(tgt)
 	var on := not p.is_empty()
 	var mark := "wrench" if on else ("fine" if fine_place else "plain")
 	if mark == _prospect_name:
@@ -2528,8 +2542,9 @@ func _confirm_commission(prospect: Dictionary, to: int) -> void:
 ## Cheap enough to run whenever the target changes, which is what lets the
 ## crosshair turn into a wrench the moment you look at one -- there is no tool to
 ## carry any more, so the cursor is the only thing that can tell you.
-func station_prospect() -> Dictionary:
-	var tgt := _raycast_voxel()
+func station_prospect(tgt: Dictionary = {}) -> Dictionary:
+	if tgt.is_empty():
+		tgt = _raycast_voxel()
 	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "planet":
 		return {}
 	var planet := tgt["obj"] as Planet
@@ -2540,16 +2555,17 @@ func station_prospect() -> Dictionary:
 		if not opts.is_empty():
 			return {"mode": "grow", "planet": planet, "voxel": anchor, "options": opts}
 		return {}
-	# Not part of a station yet: is what is here a finished pattern?
+	# Nothing but a cell of EIGHTHS can be a pattern, so anything else is
+	# answered by one comparison. This is the whole cost of the check on the
+	# terrain you actually spend your time looking at: without it, every frame
+	# ran the full matcher -- four patterns by four rotations by every offset --
+	# against whatever rock happened to be under the crosshair.
+	if int(tgt.get("id", Blocks.AIR)) & Blocks.ID_MASK != Blocks.PARTS:
+		return {}
 	var dry := planet.assemble_parts(v, -1, true)
 	if dry.get("ok", false):
 		return {"mode": "build", "planet": planet, "voxel": v, "parts": true,
 			"options": [{"to": int(dry["result"]), "name": str(dry["name"])}]}
-	if int(tgt.get("id", Blocks.AIR)) == Blocks.MACHINE_CORE:
-		var dryw := planet.assemble_machine(v, true)
-		if dryw.get("ok", false):
-			return {"mode": "build", "planet": planet, "voxel": v, "parts": false,
-				"options": [{"to": int(dryw["result"]), "name": str(dryw["name"])}]}
 	return {}
 
 
