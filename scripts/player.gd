@@ -2299,6 +2299,32 @@ func _edit_block(_break_it: bool) -> void:
 			_consume_active()
 
 
+## Hand over a seed for something that grows on this world.
+##
+## Mostly the plant you just broke; now and then a different one that lives here
+## too, which is what stops finding a species being a search for the one bush
+## that carries it. Everything green is a slow lottery ticket for everything
+## else green nearby.
+func _drop_flora_seed(planet: Planet, kind: String, item: int) -> void:
+	var sp: Dictionary = planet.flora_of_kind(kind)
+	if randf() < Blocks.CROSS_SEED_CHANCE:
+		var other: Dictionary = planet.random_flora(randf())
+		if not other.is_empty():
+			sp = other
+	if sp.is_empty():
+		return          # nothing grows here to have seeded it
+	# A sapling only makes sense for a tree; anything else seeds.
+	var give: int = Blocks.SAPLING if str(sp["kind"]) == "tree" else Blocks.SEEDS
+	var label: String = "%s %s" % [str(sp["name"]),
+		"Sapling" if give == Blocks.SAPLING else "Seeds"]
+	# The class rides along, not the planet: what matters when you come to plant
+	# it is the kind of world it needs, and that travels between worlds while a
+	# planet name does not.
+	_add_item(give, 1, {"species": str(sp["key"]), "class": planet.planet_class()},
+		planet.planet_name, {"name": label, "color": Blocks.color_of(give)})
+	_toast("Found " + label)
+
+
 ## Paint the cells a refused build got wrong, in place, for a few seconds.
 func _show_build_diff(planet: Planet, wrong: Array) -> void:
 	if _diff == null:
@@ -2786,12 +2812,13 @@ func _process_mining(delta: float) -> void:
 				_add_item(Blocks.WIRE, maxi(runs, 1))
 			elif Blocks.is_plant(id):
 				# Grass is cleared, not harvested: a handful of blades is not a
-				# thing to carry around. What it sometimes leaves is a seed, and
-				# the seed remembers the world it came off -- which is what the
-				# planet types will hang off when farming arrives.
+				# thing to carry around. What it sometimes leaves is a seed.
 				if randf() < Blocks.SEED_DROP_CHANCE:
-					_add_item(Blocks.SEEDS, 1, {}, planet.planet_name)
-					_toast("Found seeds")
+					_drop_flora_seed(planet, "grass", Blocks.SEEDS)
+			elif Blocks.is_leaf(Blocks.bottom_of(id)):
+				# Leaves give you the tree, not a pile of leaves.
+				if randf() < Blocks.SAPLING_DROP_CHANCE:
+					_drop_flora_seed(planet, "tree", Blocks.SAPLING)
 			else:
 				# Strip any packed orientation before it becomes an item: a
 				# rotated stair or an axis-aligned log would otherwise come back

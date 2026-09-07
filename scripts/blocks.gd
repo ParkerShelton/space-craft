@@ -515,6 +515,9 @@ const TALL_GRASS := 112
 ## What tall grass sometimes leaves behind. Not placeable: it is planted, which
 ## is a different verb and will want its own rules (see farming).
 const SEEDS := 113
+## A young tree. Like SEEDS, one id for every species -- which one it is rides
+## in its props.
+const SAPLING := 114
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
@@ -1108,6 +1111,7 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 const NAMES := {
 	TALL_GRASS: "Tall Grass",
 	SEEDS: "Seeds",
+	SAPLING: "Sapling",
 	RAW_MEAT: "Raw Meat",
 	COOKED_MEAT: "Cooked Meat",
 	HIDE: "Hide",
@@ -1223,6 +1227,7 @@ const HARDNESS := {
 const COLORS := {
 	TALL_GRASS: Color(0.42, 0.66, 0.28),
 	SEEDS: Color(0.78, 0.70, 0.34),
+	SAPLING: Color(0.36, 0.58, 0.30),
 	RAW_MEAT: Color(0.72, 0.26, 0.28),
 	COOKED_MEAT: Color(0.55, 0.34, 0.18),
 	HIDE: Color(0.60, 0.45, 0.30),
@@ -1326,9 +1331,63 @@ static func is_plant(id: int) -> bool:
 	return bottom_of(id) == TALL_GRASS
 
 
+# --- flora ---------------------------------------------------------------
+#
+# Every plant that can exist, and the planet classes it can live on (see
+# Planet.planet_class). A world grows the species whose class it matches -- more
+# than one, usually, and sometimes none at all, which is what makes a green
+# planet worth walking around.
+#
+# Seeds are not an item per species: they are all SEEDS or SAPLING carrying the
+# species in their props, the same way an ore carries which ore it is. Sixty
+# plants would otherwise be sixty block ids for things that are never blocks.
+const FLORA := [
+	# class M -- temperate
+	{"key": "meadow", "name": "Meadow Grass", "kind": "grass", "classes": ["M"]},
+	{"key": "clover", "name": "Clover", "kind": "bush", "classes": ["M"]},
+	{"key": "broadleaf", "name": "Broadleaf", "kind": "tree", "classes": ["M"]},
+	# class P -- frozen
+	{"key": "frostgrass", "name": "Frost Grass", "kind": "grass", "classes": ["P"]},
+	{"key": "snowberry", "name": "Snowberry", "kind": "bush", "classes": ["P"]},
+	{"key": "icepine", "name": "Ice Pine", "kind": "tree", "classes": ["P"]},
+	# class H -- arid
+	{"key": "duneweed", "name": "Dune Weed", "kind": "grass", "classes": ["H"]},
+	{"key": "thornbush", "name": "Thorn Bush", "kind": "bush", "classes": ["H", "Y"]},
+	# class Y -- scorched
+	{"key": "ashgrass", "name": "Ash Grass", "kind": "grass", "classes": ["Y"]},
+	# class O -- ocean
+	{"key": "kelpvine", "name": "Kelp Vine", "kind": "grass", "classes": ["O"]},
+	{"key": "coralbush", "name": "Coral Bush", "kind": "bush", "classes": ["O"]},
+	# nothing lives on a class D world. That is what makes it barren.
+]
+
+
+## Every species that could live on a world of this class.
+static func flora_for_class(cls: String) -> Array:
+	var out: Array = []
+	for f in FLORA:
+		if cls in (f["classes"] as Array):
+			out.append(f)
+	return out
+
+
+static func flora_by_key(key: String) -> Dictionary:
+	for f in FLORA:
+		if str(f["key"]) == key:
+			return f
+	return {}
+
+
 ## How often clearing tall grass leaves a seed behind. Low enough that seeds are
 ## worth going out for, high enough that a field is a reliable way to get them.
 const SEED_DROP_CHANCE := 0.12
+## How often clearing leaves gives a sapling of that tree.
+const SAPLING_DROP_CHANCE := 0.08
+## And how often what drops is some OTHER plant that lives on this world instead
+## of the one you just broke. This is the whole reason you can find a plant
+## without hunting for the one bush that has it: everything green is a slow
+## lottery ticket for everything else green nearby.
+const CROSS_SEED_CHANCE := 0.25
 
 
 static func is_leaf(id: int) -> bool:

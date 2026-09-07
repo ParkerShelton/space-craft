@@ -130,7 +130,82 @@ var atmo_height := 90.0  # how far above the surface the sky fades to space
 
 # --- environmental hazard (survival) ---
 var hazard := "none"     # "none" / "cold" / "heat"
+
+# --- planet class -------------------------------------------------------------
+#
+# DERIVED, never stored. A world's class is the name for what it already is --
+# whether it holds air, what its water is doing, and whether it is trying to
+# freeze or cook you -- so it can never disagree with the world it describes. A
+# player can work out a planet's class by standing on it and looking around,
+# which is the whole point of having classes at all.
+const CLASS_NAMES := {
+	"M": "temperate", "P": "frozen", "H": "arid",
+	"Y": "scorched", "O": "ocean", "D": "barren",
+}
+
+func planet_class() -> String:
+	if not has_atmosphere:
+		# No air: what is left to tell them apart is whether there is water.
+		return "O" if water_style == WATER_LIQUID else "D"
+	if hazard == "cold":
+		return "P"
+	if hazard == "heat":
+		# Scorched worlds are the ones actively cooking you, not merely dry.
+		return "Y" if hazard_dps >= 3.0 else "H"
+	return "M" if water_style == WATER_LIQUID else "H"
+
+
+## Which plants actually grow on this world.
+##
+## Not every species its class allows: each one is rolled for, so two temperate
+## worlds are not the same meadow, and a world can quite legitimately come up
+## empty. Derived from the seed, so it is the same for everybody without being
+## stored or sent.
+func flora_here() -> Array:
+	if not _flora_here.is_empty() or _flora_rolled:
+		return _flora_here
+	_flora_rolled = true
+	var pool := Blocks.flora_for_class(planet_class())
+	if pool.is_empty():
+		return _flora_here
+	var fr := RandomNumberGenerator.new()
+	fr.seed = _seed + 8123
+	# A world with no life at all is a real outcome, not an accident.
+	if fr.randf() < 0.18:
+		return _flora_here
+	for f in pool:
+		if fr.randf() < 0.7:
+			_flora_here.append(f)
+	# ...but if the dice took everything, keep one: an empty world should be the
+	# roll above saying so, not the leftovers of this one.
+	if _flora_here.is_empty():
+		_flora_here.append(pool[fr.randi() % pool.size()])
+	return _flora_here
+
+
+## One of this world's plants, chosen at random. Empty on a dead world.
+func random_flora(rng_v: float) -> Dictionary:
+	var here := flora_here()
+	if here.is_empty():
+		return {}
+	return here[int(rng_v * here.size()) % here.size()]
+
+
+## The species of a given kind growing here ("grass", "tree", "bush"), or {}.
+func flora_of_kind(kind: String) -> Dictionary:
+	for f in flora_here():
+		if str(f["kind"]) == kind:
+			return f
+	return {}
+
+
+func class_title() -> String:
+	var c := planet_class()
+	return "Class %s (%s)" % [c, CLASS_NAMES.get(c, "unknown")]
+
 var hazard_dps := 0.0    # health/sec when exposed on the surface without protection
+var _flora_here: Array = []   # memo for flora_here()
+var _flora_rolled := false
 
 # --- flora (derived from seed in configure) ---
 const TREE_CELL := 7          # default spacing grid for tree placement
