@@ -57,6 +57,15 @@ var _menu_vb: VBoxContainer
 ## server carry on while it is up. Calling it "pause" would be a promise the
 ## game does not keep.
 var _game_menu: CanvasLayer
+var _chat_layer: CanvasLayer
+var _chat_label: Label
+var _chat_entry: LineEdit
+var _chat_lines: Array[String] = []
+var _chat_fade := 0.0
+## How many lines stay on screen, and how long after the last one before they
+## fade. Long enough to read something you were not looking at when it arrived.
+const CHAT_LINES := 8
+const CHAT_HOLD := 12.0
 ## Cleared once --join has been acted on, so leaving a server to the main menu
 ## does not walk straight back into it. Static because it has to outlive the
 ## scene reload that exiting performs.
@@ -108,6 +117,10 @@ func _ready() -> void:
 	world.net = _net
 	_net.world_ready.connect(_on_world_ready)
 	_net.profile_restored.connect(_on_profile_restored)
+	# Connected here rather than with the chat box, which does not exist until the
+	# world has finished generating -- a good twenty seconds during which the
+	# host may well have said something, or announced you joining.
+	_net.chat_received.connect(_on_chat_line)
 	# A dedicated server never shows a menu: it builds a world, opens a port and
 	# waits. Started with:  godot --headless -- --server [--port=N] [--seed=N]
 	var ded := _server_args()
@@ -234,6 +247,113 @@ func _on_world_ready(seed_value: int, system_index: int) -> void:
 	_client_seed = seed_value
 	_client_system = system_index
 	_start_world(false, "joined")
+
+
+# --- chat ---------------------------------------------------------------------
+
+## Built only for a networked session: there is nobody to talk to in single
+## player, and an empty chat box in the corner would just be furniture.
+## Old chat fades out rather than sitting on screen forever, but never while you
+## are typing -- reading back what was said is most of the reason to open it.
+func _fade_chat(delta: float) -> void:
+	if _chat_label == null:
+		return
+	if _chat_entry != null and _chat_entry.visible:
+		_chat_label.modulate.a = 1.0
+		return
+	if _chat_fade > 0.0:
+		_chat_fade -= delta
+	_chat_label.modulate.a = clampf(_chat_fade, 0.0, 1.0)
+
+
+func _build_chat() -> void:
+	if _chat_layer != null or _net == null or not _net.active:
+		return
+	_chat_layer = CanvasLayer.new()
+	_chat_layer.layer = 9      # under the game menu, over the world
+	add_child(_chat_layer)
+	var box := VBoxContainer.new()
+	box.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	# Clear of the hotbar, which sits along the bottom middle.
+	box.position = Vector2(16, -230)
+	box.custom_minimum_size = Vector2(560, 0)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_chat_layer.add_child(box)
+	_chat_label = Label.new()
+	_chat_label.add_theme_font_size_override("font_size", 15)
+	_chat_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	_chat_label.add_theme_constant_override("outline_size", 4)
+	_chat_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(_chat_label)
+	_chat_entry = LineEdit.new()
+	_chat_entry.placeholder_text = "say something -- Enter to send, Esc to cancel"
+	_chat_entry.custom_minimum_size = Vector2(560, 30)
+	_chat_entry.max_length = Net.CHAT_MAX
+	_chat_entry.visible = false
+	box.add_child(_chat_entry)
+	# Whatever arrived while the world was still being built.
+	_chat_label.text = "
+".join(_chat_lines)
+	_chat_fade = CHAT_HOLD
+
+
+func _on_chat_line(line: String) -> void:
+	print("[chat] ", line)   # a headless server's console is its chat window
+	_chat_lines.append(line)
+	while _chat_lines.size() > CHAT_LINES:
+		_chat_lines.remove_at(0)
+	if _chat_label == null:
+		return   # still loading; _build_chat will show what has piled up
+	_chat_label.text = "
+".join(_chat_lines)
+	_chat_fade = CHAT_HOLD
+
+
+func _open_chat() -> void:
+	if _chat_entry == null:
+		return
+	_chat_entry.visible = true
+	_chat_entry.text = ""
+	_chat_entry.grab_focus()
+	_chat_fade = CHAT_HOLD
+	# The mouse stays captured so you can still look around; what has to stop is
+	# the body, which is driven by polling the keyboard directly and would
+	# otherwise walk you across the room as you typed.
+	if _world != null and _world.player != null:
+		_world.player.ui_typing = true
+
+
+func _close_chat(send: bool) -> void:
+	if _chat_entry == null:
+		return
+	if send:
+		_net.say(_chat_entry.text)
+	_chat_entry.text = ""
+	_chat_entry.visible = false
+	_chat_entry.release_focus()
+	if _world != null and _world.player != null:
+		_world.player.ui_typing = false
+
+
+## Enter opens chat and sends it; Escape backs out without saying anything.
+##
+## Handled in _input rather than _unhandled_input so the keys are taken before
+## anything else sees them: Escape would otherwise reach the player and open the
+## game menu on top of the half-typed message.
+func _input(event: InputEvent) -> void:
+	if _chat_entry == null or not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	var k := (event as InputEventKey).keycode
+	if _chat_entry.visible:
+		if k == KEY_ENTER or k == KEY_KP_ENTER:
+			_close_chat(true)
+			get_viewport().set_input_as_handled()
+		elif k == KEY_ESCAPE:
+			_close_chat(false)
+			get_viewport().set_input_as_handled()
+	elif (k == KEY_ENTER or k == KEY_KP_ENTER) and _game_menu == null:
+		_open_chat()
+		get_viewport().set_input_as_handled()
 
 
 ## Escape, while playing. Opens if nothing is up, closes if it already is, so
@@ -435,6 +555,8 @@ func _start_dedicated(port: int, seed_value: int, slot: String = "server_world")
 	print("[server] world seed %d -- pass --seed=%d to reopen this same world" % [wseed, wseed])
 	print("[server] system %s, %d planets, home world %s" % [
 		sysdef["name"], world.planets.size(), world.planets[0].planet_name])
+	_net.chat_log_path = "user://%s_chat_logs.txt" % slot
+	print("[server] chat log at %s" % ProjectSettings.globalize_path(_net.chat_log_path))
 	print("[server] saving to %s every %d seconds" % [
 		ProjectSettings.globalize_path(world.save_path()), int(SERVER_SAVE_EVERY)])
 	print("[server] ready")
@@ -531,6 +653,7 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	# ...and now there is somewhere to put an inventory, tell the host who we are
 	# so it can hand back whatever we left with.
 	_net.say_hello()
+	_build_chat()
 
 	# player: drop in just above dry land on the home world
 	var home: Planet = world.planets[0]
@@ -890,6 +1013,7 @@ func _sync_players(delta: float) -> void:
 
 func _process(delta: float) -> void:
 	_sync_players(delta)
+	_fade_chat(delta)
 	if _world == null or _world.player == null or _sky_mat == null:
 		return
 	var ppos: Vector3 = _world.player.global_position

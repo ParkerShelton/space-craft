@@ -21,6 +21,8 @@ signal world_ready(seed_value: int, system_index: int)
 signal roster_changed()
 ## The host recognised us and sent back what we were carrying last time.
 signal profile_restored(profile: Dictionary)
+## One line of chat, already formatted and ready to show.
+signal chat_received(line: String)
 
 ## Where this installation's identity lives. A peer id is issued fresh on every
 ## connection, so it cannot be what the server remembers a player by -- it would
@@ -43,6 +45,13 @@ var peers: Dictionary = {}
 var profiles: Dictionary = {}
 ## This machine's identity, sent to the host on joining.
 var uid := ""
+## Where the host writes chat to. Empty on a client, and on a host that is not
+## keeping a log.
+var chat_log_path := ""
+## Longest message accepted. Anything longer is cut rather than refused -- the
+## point is that one player cannot flood everyone else's screen with a single
+## line, not to police what people type.
+const CHAT_MAX := 240
 
 var _world: WorldManager
 var _seed := 0
@@ -164,6 +173,7 @@ func _on_peer_connected(id: int) -> void:
 		return
 	peers[id] = {"pos": Vector3.ZERO, "yaw": 0.0}
 	roster_changed.emit()
+	_post("* %s joined" % player_label(id))
 	# Hand the newcomer the world it has to build. Nothing else can happen until
 	# it has this: its terrain would not match ours.
 	world_info.rpc_id(id, _seed, _system)
@@ -197,6 +207,8 @@ func _on_peer_connected(id: int) -> void:
 func _on_peer_disconnected(id: int) -> void:
 	peers.erase(id)
 	roster_changed.emit()
+	if is_host:
+		_post("* %s left" % player_label(id))
 
 
 func _on_connected() -> void:
@@ -445,6 +457,80 @@ func store_profile(prof: Dictionary) -> void:
 	if u == "":
 		return   # never said hello; nowhere to file this
 	profiles[u] = prof
+
+
+# --- chat ------------------------------------------------------------------
+#
+# Everything goes through the host, including the sender's own line: it comes
+# back to them like anyone else's. That costs a round trip on your own messages
+# and buys one ordering that everybody sees, instead of each player seeing their
+# own line jump ahead of the one it was answering.
+
+## What to call a player in chat. Peer ids are large and change every session, so
+## the last four digits are what is shown -- the same name their avatar wears
+## over its head, so you can tell who said it by looking at them.
+static func player_label(id: int) -> String:
+	return "Player %04d" % (id % 10000)
+
+
+## Say something. On a client this asks the host to post it; on a host it posts.
+func say(text: String) -> void:
+	if not active:
+		return
+	var t := text.strip_edges()
+	if t.is_empty():
+		return
+	if t.length() > CHAT_MAX:
+		t = t.substr(0, CHAT_MAX)
+	if is_host:
+		_post("%s: %s" % [player_label(my_id()), t])
+	else:
+		chat_send.rpc_id(1, t)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func chat_send(text: String) -> void:
+	if not is_host:
+		return   # only the host posts; a client cannot put words in mouths
+	var t := text.strip_edges()
+	if t.is_empty():
+		return
+	if t.length() > CHAT_MAX:
+		t = t.substr(0, CHAT_MAX)
+	_post("%s: %s" % [player_label(multiplayer.get_remote_sender_id()), t])
+
+
+## Host side: send one finished line to everyone, show it here, write it down.
+func _post(line: String) -> void:
+	if active:
+		chat_push.rpc(line)
+	chat_received.emit(line)
+	_write_chat_log(line)
+
+
+@rpc("authority", "call_remote", "reliable")
+func chat_push(line: String) -> void:
+	chat_received.emit(line)
+
+
+## Appended as it happens rather than held in memory and written out at the end.
+## A log that only exists once the server shuts down cleanly is missing exactly
+## the conversation you would want to read after it did not.
+func _write_chat_log(line: String) -> void:
+	if chat_log_path == "":
+		return
+	var f: FileAccess
+	if FileAccess.file_exists(chat_log_path):
+		f = FileAccess.open(chat_log_path, FileAccess.READ_WRITE)
+		if f != null:
+			f.seek_end()
+	else:
+		f = FileAccess.open(chat_log_path, FileAccess.WRITE)
+	if f == null:
+		push_warning("chat log: could not open " + chat_log_path)
+		return
+	f.store_line("[%s] %s" % [Time.get_datetime_string_from_system(false, true), line])
+	f.close()
 
 
 func broadcast_state(pos: Vector3, facing: Vector3, action: int) -> void:

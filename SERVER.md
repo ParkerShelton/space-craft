@@ -77,6 +77,31 @@ than to how far they walk.
 A player joining is sent the seed and then every change made so far, so someone
 arriving hours later sees the world as it is, not as it was generated.
 
+## Chat
+
+Players press **Enter** to type and Enter again to send; Escape backs out
+without saying anything. Messages are named after the last four digits of the
+sender's connection id -- the same name their avatar wears over its head, so
+you can tell who said it by looking at them. Joining and leaving are announced
+in the same stream.
+
+Everything goes through the server, including the sender's own line: it comes
+back to them like anybody else's. That costs a round trip on your own messages
+and buys one ordering that everyone sees.
+
+The server keeps a log next to its world save, named after `--world`:
+
+    [server] chat log at .../server_world_chat_logs.txt
+
+    [2026-09-07 13:09:01] * Player 5774 joined
+    [2026-09-07 13:09:11] Player 5774: found iron down here
+
+Lines are appended as they are said, not held in memory and written out at
+shutdown -- a log that only survives a clean shutdown is missing exactly the
+conversation you would want to read after one that was not. The server's own
+console prints the same lines, so `journalctl -u spacecraft -f` follows the
+chat live.
+
 ## Publishing a build
 
     powershell -ExecutionPolicy Bypass -File tools\publish.ps1

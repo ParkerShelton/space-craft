@@ -126,6 +126,10 @@ var inv_open := false
 ## pauses -- but this body stops taking orders from the keyboard, because walking
 ## off a cliff while reading a menu is nobody's idea of an option.
 var menu_open := false
+## Set while a text field has the keyboard (chat). The mouse stays captured so
+## you can still look around; what stops is the body, which polls the keyboard
+## directly and would otherwise walk you across the room as you typed.
+var ui_typing := false
 # dedicated 2-slot-tall equip slot: a Suit only protects you once it's WORN here,
 # not just carried in the general grid (unlike the Drill, which stays
 # passively equipped from anywhere). Same slot shape as an `inv` entry.
@@ -562,7 +566,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_look += event.relative
 	elif event is InputEventMouseButton and event.pressed:
-		if inv_open or book_open or _station_open != null or menu_open:
+		if inv_open or book_open or _station_open != null or menu_open or ui_typing:
 			return  # a panel is open: clicks go to the UI
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -1064,7 +1068,7 @@ func _pilot_physics(delta: float) -> void:
 		_exit_pilot()
 		return
 	var ascend := 0.0
-	if not menu_open and Input.is_physical_key_pressed(KEY_SPACE): ascend += 1.0
+	if not menu_open and not ui_typing and Input.is_physical_key_pressed(KEY_SPACE): ascend += 1.0
 	if Input.is_physical_key_pressed(KEY_SHIFT): ascend -= 1.0
 	var roll := 0.0
 	if Input.is_physical_key_pressed(KEY_Q): roll += 1.0
@@ -1398,7 +1402,7 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	if is_on_floor():
 		if v_up < 0.0:
 			v_up = 0.0
-		if not menu_open and Input.is_physical_key_pressed(KEY_SPACE):
+		if not menu_open and not ui_typing and Input.is_physical_key_pressed(KEY_SPACE):
 			v_up = JUMP_SPEED
 	# No thrust once your feet leave the ground: a jump is a jump. There is no
 	# jetpack in the game yet, and being able to hold jump and climb was standing
@@ -1678,7 +1682,7 @@ func _swim(delta: float, up: Vector3) -> void:
 	if wish.length() > 0.01:
 		desired = wish.normalized() * SWIM_SPEED
 	var vy := 0.0
-	if not menu_open and Input.is_physical_key_pressed(KEY_SPACE): vy += 1.0
+	if not menu_open and not ui_typing and Input.is_physical_key_pressed(KEY_SPACE): vy += 1.0
 	if Input.is_physical_key_pressed(KEY_SHIFT): vy -= 1.0
 	if vy != 0.0:
 		desired += up * vy * SWIM_SPEED
@@ -1706,7 +1710,7 @@ func _process_float(delta: float) -> void:
 	var right := cam.x
 	var up := cam.y
 	var vertical := 0.0
-	if not menu_open and Input.is_physical_key_pressed(KEY_SPACE):
+	if not menu_open and not ui_typing and Input.is_physical_key_pressed(KEY_SPACE):
 		vertical += 1.0
 	if Input.is_physical_key_pressed(KEY_SHIFT):
 		vertical -= 1.0
@@ -1737,7 +1741,7 @@ func _snap_to_axis(v: Vector3) -> Vector3:
 
 
 func _move_input() -> Vector2:
-	if menu_open:
+	if menu_open or ui_typing:
 		return Vector2.ZERO
 	var x := 0.0
 	var y := 0.0
