@@ -27,6 +27,28 @@ const HOSTILES_DISABLED := true
 var planet_name := "Planet"
 var radius := 64.0          # nominal surface radius in voxels
 var terrain_amp := 6.0      # +/- surface variation from noise
+
+# --- mountains ----------------------------------------------------------------
+#
+# A second height layer, on top of the rolling hills, using RIDGED noise rather
+# than more octaves of the same smooth noise. More octaves make the whole surface
+# bumpier; ridged noise makes lines of high ground with valleys between them,
+# which is what a mountain range is. Everything under a cutoff contributes
+# nothing at all, so ranges turn up here and there instead of the entire planet
+# rising -- which is what "a few mountains" has to mean.
+var mountain_noise := FastNoiseLite.new()
+var mountain_amp := 0.0     # 0 disables the layer entirely (and its noise lookup)
+## Below this the layer is silent. Tuned against the noise's own distribution,
+## which is not symmetric -- its median is 0.31, so a cutoff that sounds high
+## still leaves plenty. Measured: 0.58 puts mountains on about a fifth of the
+## surface, 0.30 would have put them on half of it, which is a mountain planet
+## rather than a planet with mountains.
+const MOUNTAIN_CUTOFF := 0.18
+## Terracing is what turns a steep slope into a CLIFF. A slope voxelises into a
+## staircase you can walk up; a bench voxelises into a wall you have to climb
+## around. Only the mountain layer is terraced, so the plains stay smooth.
+const TERRACE_STEP := 6.0
+const TERRACE_MIX := 0.6
 var surface_gravity := 23.0 # m/s^2 at the surface; drives walk-vs-float feel
 
 # block palette
@@ -271,6 +293,15 @@ func configure(cfg: Dictionary) -> void:
 	surface_noise.frequency = 3.0 / maxf(radius, 1.0)
 	surface_noise.fractal_octaves = 4
 	surface_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+
+	mountain_noise.seed = _seed + 9001
+	mountain_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
+	mountain_noise.fractal_type = FastNoiseLite.FRACTAL_RIDGED
+	mountain_noise.fractal_octaves = 3
+	# Three times the base frequency: ranges are smaller than the continents of
+	# rolling hills they sit on, so you can see one from end to end.
+	mountain_noise.frequency = 3.0 / maxf(radius, 1.0)
+	mountain_amp = cfg.get("mountains", terrain_amp * 2.4)
 
 	ore_noise.seed = _seed + 777
 	ore_noise.frequency = 0.14
@@ -862,7 +893,11 @@ func _spawn_at(world_pos: Vector3, sp: Dictionary, world: WorldManager) -> void:
 
 # How far from center anything (terrain, trees, buildings, or water) can possibly exist.
 func _max_reach() -> float:
-	return maxf(radius + terrain_amp + maxf(tree_reach, settlement_reach), water_level)
+	# Mountains count: without them in here, every peak is sliced off flat at
+	# whatever height this returns, because generation_sample treats anything
+	# past it as air.
+	return maxf(radius + terrain_amp + mountain_amp
+		+ maxf(tree_reach, settlement_reach), water_level)
 
 
 # Each planet gets a random ore mix + abundance from its seed: which ores it holds,
@@ -2182,7 +2217,28 @@ func surface_radius(dir: Vector3) -> float:
 
 
 func _surf(dir: Vector3) -> float:
-	return radius + surface_noise.get_noise_3d(dir.x * radius, dir.y * radius, dir.z * radius) * terrain_amp
+	var x := dir.x * radius
+	var y := dir.y * radius
+	var z := dir.z * radius
+	var h := radius + surface_noise.get_noise_3d(x, y, z) * terrain_amp
+	if mountain_amp <= 0.0:
+		return h
+	# Ranges only rise where the land is ALREADY high. Ridged noise on its own
+	# webs the entire planet with ridges, which makes a mountain world rather
+	# than a world with mountains in it; gating on the rolling-hills height that
+	# has just been computed gathers them into the high country and leaves the
+	# basins rolling. It costs nothing -- the number is already here.
+	var hill := (h - radius) / maxf(terrain_amp, 0.001)
+	var where := smoothstep(0.0, 0.65, hill)
+	if where <= 0.0:
+		return h
+	var m := mountain_noise.get_noise_3d(x, y, z)
+	if m <= MOUNTAIN_CUTOFF:
+		return h
+	# Squared, so a range rises out of foothills instead of out of a kerb.
+	var t := (m - MOUNTAIN_CUTOFF) / (1.0 - MOUNTAIN_CUTOFF)
+	var mh := t * t * mountain_amp * where
+	return h + lerpf(mh, floorf(mh / TERRACE_STEP) * TERRACE_STEP, TERRACE_MIX)
 
 
 # Distance-from-center metric that defines the planet's shape: Euclidean = sphere,
