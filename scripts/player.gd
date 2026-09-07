@@ -2033,19 +2033,45 @@ func _update_outline(tgt: Dictionary) -> void:
 	var v: Vector3i = tgt["voxel"]
 	var b: Basis = obj.global_transform.basis
 	var origin: Vector3 = obj.to_global(Vector3(v))
-	# A slab only fills half its voxel, so the box has to be squashed along the
-	# local up -- a full cube outline around a slab is misleading about what you
-	# are actually pointing at. A stacked pair fills the voxel, so it stays full.
+	# The outline hugs what is actually THERE, not the cell it sits in.
+	#
+	# A full cube drawn around a torch or a single eighth says you are pointing
+	# at a block, when what you would break is a stick on a wall. The box comes
+	# from the same shape table the mesher builds from, so the two cannot
+	# disagree; a shape made of several boxes (a stair) is outlined by their
+	# union, which is the cell it genuinely fills.
 	var raw: int = obj.get_id(v)
-	if obj is Planet and Blocks.is_slab(raw) and not Blocks.is_stacked_slab(raw):
-		var up := (obj as Planet)._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
-		var axis := Vector3(absf(up.x), absf(up.y), absf(up.z))
-		var scl := Vector3.ONE - axis * 0.5
-		b = b.scaled(scl)
-		# A slab sits on the local DOWN side, so a negative-up axis needs the
-		# box shifted to the far half of the cell.
-		if up.x < -0.5 or up.y < -0.5 or up.z < -0.5:
-			origin = obj.to_global(Vector3(v) + axis * 0.5)
+	var lo := Vector3.ZERO
+	var hi := Vector3.ONE
+	if obj is Planet:
+		var pl := obj as Planet
+		var up: Vector3 = pl._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+		if Blocks.bottom_of(raw) == Blocks.PARTS:
+			# One eighth, and specifically the one under the crosshair.
+			var sv := _sub_hit(tgt)
+			var o: Vector3i = sv - Vector3i(floori(sv.x / 2.0), floori(sv.y / 2.0),
+				floori(sv.z / 2.0)) * 2
+			lo = Vector3(o) * 0.5
+			hi = lo + Vector3(0.5, 0.5, 0.5)
+		elif Blocks.is_light(Blocks.bottom_of(raw)) 				and Blocks.bottom_of(raw) != Blocks.GLOW_LAMP:
+			# A torch is a post on a wall, not a cube.
+			var tb: Array = Chunk.torch_box(up)
+			lo = tb[0]
+			hi = tb[1]
+		else:
+			var boxes: Array = Chunk.shape_boxes(raw, up)
+			if not boxes.is_empty():
+				lo = boxes[0][0]
+				hi = boxes[0][1]
+				for bx in boxes:
+					lo = Vector3(minf(lo.x, (bx[0] as Vector3).x),
+						minf(lo.y, (bx[0] as Vector3).y), minf(lo.z, (bx[0] as Vector3).z))
+					hi = Vector3(maxf(hi.x, (bx[1] as Vector3).x),
+						maxf(hi.y, (bx[1] as Vector3).y), maxf(hi.z, (bx[1] as Vector3).z))
+	var span := hi - lo
+	if span.x > 0.001 and span.y > 0.001 and span.z > 0.001:
+		b = b.scaled(span)
+		origin = obj.to_global(Vector3(v) + lo)
 	_outline.global_transform = Transform3D(b, origin)
 	_outline.visible = true
 	_update_ghost(tgt)

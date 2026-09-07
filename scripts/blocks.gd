@@ -215,12 +215,17 @@ static func is_light(id: int) -> bool:
 ## blocks its light carries before it dies out.
 static func light_level(raw: int) -> int:
 	var id := bottom_of(raw)
+	# Light falls off a level per block, so these ARE the reach in blocks: a
+	# torch at 11 lit a room you could cross in four strides, which is not what
+	# a torch is for. Fifteen is the ceiling the flood fill can carry (it is a
+	# byte per cell, and Chunk.LIGHT_PAD is sized to match), so a torch now
+	# reaches nearly as far as light can go and the better lights edge past it.
 	if id == EMBER_TORCH:
-		return 11 + torch_tier_of(raw)     # 11..14, brighter ore burns further
+		return 12 + torch_tier_of(raw)     # 12..15, brighter ore burns further
 	if id == TORCH:
-		return 11
-	if id == GLOW_LAMP:
 		return 14
+	if id == GLOW_LAMP:
+		return 15
 	return 0
 
 

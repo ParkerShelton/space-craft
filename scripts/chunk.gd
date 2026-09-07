@@ -786,16 +786,10 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 					var lo := Vector3(x, y, z)
 					if Blocks.bottom_of(lid) != Blocks.GLOW_LAMP:
 						var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
-						var a := _half_toward(lo, lo + Vector3.ONE, -up)
-						var a0: Vector3 = a[0]
-						var a1: Vector3 = a[1]
-						# thin it on both flat axes so it reads as a post
-						var mid: Vector3 = (a0 + a1) * 0.5
-						var thin := Vector3(0.16, 0.16, 0.16)
-						if absf(up.x) > 0.5: thin.x = (a1.x - a0.x) * 0.5
-						elif absf(up.y) > 0.5: thin.y = (a1.y - a0.y) * 0.5
-						else: thin.z = (a1.z - a0.z) * 0.5
-						_emit_free_box(mid - thin, mid + thin, planet.color_of(lid),
+						var tb := torch_box(up)
+						var mid: Vector3 = lo + (tb[0] as Vector3)
+						var thin: Vector3 = lo + (tb[1] as Vector3)
+						_emit_free_box(mid, thin, planet.color_of(lid),
 							lid, verts, normals, colors, uvs, uv2s, 1.0)
 					else:
 						_emit_solid_box_cell(lo, lo + Vector3.ONE, gv, lid,
@@ -1122,6 +1116,23 @@ static func _wire_boxes(lo: Vector3, hi: Vector3, mount: Vector3, arms: int) -> 
 
 ## The half of a box lying toward `dir`, where `dir` is one of the six unit
 ## axes. Returned rather than mutated because Vector3 is a value type.
+## The box a torch actually occupies inside its cell, in cell-local space.
+##
+## Shared with the selection outline so the highlight hugs the post rather than
+## the cell it stands in -- and shared rather than copied, because two
+## descriptions of the same stick drift apart the first time one is tuned.
+static func torch_box(up: Vector3) -> Array:
+	var a := _half_toward(Vector3.ZERO, Vector3.ONE, -up)
+	var a0: Vector3 = a[0]
+	var a1: Vector3 = a[1]
+	var mid: Vector3 = (a0 + a1) * 0.5
+	var thin := Vector3(0.16, 0.16, 0.16)
+	if absf(up.x) > 0.5: thin.x = (a1.x - a0.x) * 0.5
+	elif absf(up.y) > 0.5: thin.y = (a1.y - a0.y) * 0.5
+	else: thin.z = (a1.z - a0.z) * 0.5
+	return [mid - thin, mid + thin]
+
+
 static func _half_toward(lo: Vector3, hi: Vector3, dir: Vector3) -> Array:
 	var l := lo
 	var h := hi
