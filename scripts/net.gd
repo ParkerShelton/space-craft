@@ -162,7 +162,11 @@ func world_built() -> void:
 				if pa != null:
 					_do_assemble(pa, e[2], e[3])
 			"machines":
-				_apply_machines(e[1], e[2])
+				_apply_machines(e[1], e[2], e[3])
+			"grow":
+				var pg := _planet(e[1])
+				if pg != null:
+					pg.grow_station(e[2], e[3])
 			_:
 				_apply_bulk(e[1], e[2], e[3])
 	_pending.clear()
@@ -212,9 +216,13 @@ func _on_peer_connected(id: int) -> void:
 		# means re-reading the blocks it is made of.
 		if not p.machine_cores.is_empty():
 			var mc := PackedVector3Array()
+			var mk := PackedInt32Array()
 			for c in p.machine_cores:
 				mc.append(Vector3(c))
-			world_machines.rpc_id(id, p.planet_name, mc)
+				# What it was commissioned INTO, which the blocks alone cannot
+				# say once a station could have grown into several things.
+				mk.append(int(p.machine_kinds.get(c, -1)))
+			world_machines.rpc_id(id, p.planet_name, mc, mk)
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -427,26 +435,62 @@ func _do_assemble(p: Planet, v: Vector3i, parts: bool) -> void:
 			% [v, p.planet_name, r.get("reason", "no reason given")])
 
 
+## Somebody grew a station into something bigger.
+func grown(planet_name: String, v: Vector3i, to: int) -> void:
+	if not active:
+		return
+	if is_host:
+		apply_grow.rpc(planet_name, v, to)
+	else:
+		request_grow.rpc_id(1, planet_name, v, to)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_grow(planet_name: String, v: Vector3i, to: int) -> void:
+	if not is_host:
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		p.grow_station(v, to)
+	apply_grow.rpc(planet_name, v, to)
+
+
+@rpc("authority", "call_remote", "reliable")
+func apply_grow(planet_name: String, v: Vector3i, to: int) -> void:
+	if not _world_built:
+		_pending.append(["grow", planet_name, v, to])
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		p.grow_station(v, to)
+
+
 ## Host -> a joining client: which builds are working machines.
 ##
 ## Only the anchor of each one travels. Planet.revalidate_machines rebuilds
 ## every station from that list by re-reading the blocks, which is the same path
 ## loading a save takes.
 @rpc("authority", "call_remote", "reliable")
-func world_machines(planet_name: String, cores: PackedVector3Array) -> void:
+func world_machines(planet_name: String, cores: PackedVector3Array,
+		kinds: PackedInt32Array) -> void:
 	if not _world_built:
-		_pending.append(["machines", planet_name, cores, null])
+		_pending.append(["machines", planet_name, cores, kinds])
 		return
-	_apply_machines(planet_name, cores)
+	_apply_machines(planet_name, cores, kinds)
 
 
-func _apply_machines(planet_name: String, cores: PackedVector3Array) -> void:
+func _apply_machines(planet_name: String, cores: PackedVector3Array,
+		kinds: PackedInt32Array) -> void:
 	var p := _planet(planet_name)
 	if p == null:
 		return
 	var list: Array = []
-	for c in cores:
-		list.append(Vector3i(roundi(c.x), roundi(c.y), roundi(c.z)))
+	for i in cores.size():
+		var c: Vector3 = cores[i]
+		var cv := Vector3i(roundi(c.x), roundi(c.y), roundi(c.z))
+		list.append(cv)
+		if i < kinds.size() and kinds[i] >= 0:
+			p.machine_kinds[cv] = kinds[i]
 	p.machine_cores = list
 	p.revalidate_machines()
 	print("[net] caught up on %d machines on %s" % [list.size(), planet_name])

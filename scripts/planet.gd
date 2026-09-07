@@ -83,7 +83,12 @@ const MORNING_PHASE := 0.05
 # controller on load costs one pattern check per machine you built (a handful),
 # while keeping the world blocks as the single source of truth. Saving the whole
 # footprint instead would be larger and could drift out of sync with the blocks.
-var machine_cores: Array = []              # Array[Vector3i], saved
+var machine_cores: Array = []
+## Which station each anchor was commissioned INTO, when it has been grown past
+## what its pattern alone makes. Remembered rather than derived, because a
+## Generator packed in metal could become several different things and the
+## player picked one -- see Blocks.STATION_GROWTH.
+var machine_kinds := {}              # Array[Vector3i], saved
 var _world_ref: WorldManager               # for headless machine stations
 var _machines: Dictionary = {}             # controller -> {def, rot, online, missing}
 var _machine_at: Dictionary = {}           # voxel -> controller
@@ -980,7 +985,7 @@ func _pattern_to_world(off: Vector3i, axes: Array) -> Vector3i:
 	return (axes[0] as Vector3i) * off.x + (axes[1] as Vector3i) * off.y 		+ (axes[2] as Vector3i) * off.z
 
 
-func assemble_machine(c: Vector3i) -> Dictionary:
+func assemble_machine(c: Vector3i, dry: bool = false) -> Dictionary:
 	if get_id(c) != Blocks.MACHINE_CORE:
 		return {"ok": false, "reason": "No machine core here"}
 	# Track the closest near-miss across every structure and rotation, so a
@@ -1006,8 +1011,12 @@ func assemble_machine(c: Vector3i) -> Dictionary:
 					if first_missing == Blocks.AIR:
 						first_missing = want
 			if missing == 0:
+				if dry:
+					return {"ok": true, "name": str(def["name"]),
+						"result": int(def["result"])}
 				_register_machine(c, def, rot, origin)
-				return {"ok": true, "name": str(def["name"])}
+				return {"ok": true, "name": str(def["name"]),
+					"result": int(def["result"])}
 			if missing < best_missing:
 				best_missing = missing
 				best_name = str(def["name"])
@@ -1052,6 +1061,14 @@ func _register_machine(c: Vector3i, def: Dictionary, rot: int, origin: Vector3i)
 ## until THAT block is put back -- a brick for a brick, the core for the core --
 ## rather than disbanding the structure, so a raid damages your base instead of
 ## deleting it.
+## Re-settle one station after something around it changed.
+func _settle_kind_at(anchor: Vector3i) -> void:
+	var m: Dictionary = _machines.get(anchor, {})
+	if m.is_empty():
+		return
+	_settle_kind(anchor, int((m["def"] as Dictionary)["result"]))
+
+
 func _machine_block_changed(v: Vector3i) -> void:
 	var c = _machine_at.get(v)
 	if c == null:
@@ -1080,6 +1097,11 @@ func _machine_block_changed(v: Vector3i) -> void:
 
 
 ## The headless Station backing the machine covering `v`, or null.
+## Which station, if any, this voxel belongs to -- its anchor, or null.
+func machine_anchor_at(v: Vector3i):
+	return _machine_at.get(v)
+
+
 func machine_station_at(v: Vector3i) -> Station:
 	var c = _machine_at.get(v)
 	if c == null:
@@ -1230,7 +1252,9 @@ func _rot_extent(size: Vector3i, rot: int) -> Vector3i:
 ## for the bare-handed case: the Carpenter's Bench can be brought to life without
 ## a Wrench, and nothing else can, and the check has to happen BEFORE the machine
 ## is registered rather than by undoing it afterwards.
-func assemble_parts(v: Vector3i, require: int = -1) -> Dictionary:
+## `dry` reports what would be commissioned without commissioning it, which is
+## what the crosshair asks several times a second.
+func assemble_parts(v: Vector3i, require: int = -1, dry: bool = false) -> Dictionary:
 	var cache := {}
 	# PASS 1 -- is it finished? Bail on the first cell that does not fit, which
 	# kills almost every candidate placement immediately.
@@ -1251,10 +1275,13 @@ func assemble_parts(v: Vector3i, require: int = -1) -> Dictionary:
 								break
 						if fits:
 							var fdef: Dictionary = Blocks.PART_STRUCTURES[di]
+							if dry:
+								return {"ok": true, "name": str(fdef["name"]),
+									"result": int(fdef["result"])}
 							if require >= 0 and int(fdef["result"]) != require:
 								return {"ok": false, "built": true,
 									"name": str(fdef["name"]),
-									"reason": "%s is finished -- commission it with a Wrench"
+									"reason": "%s is finished -- right-click to commission it"
 										% str(fdef["name"])}
 							return _register_part_machine(v, fdef, rot, origin)
 	# PASS 2 -- nothing fits, so work out what to TELL them. Only reached on a
@@ -1446,11 +1473,163 @@ func _register_part_machine(anchor: Vector3i, def: Dictionary, rot: int,
 		_machine_at[pv] = anchor
 	if not machine_cores.has(anchor):
 		machine_cores.append(anchor)
+	_settle_kind(anchor, int(def["result"]))
 	_grid_cache.clear()
 	if int(def["result"]) == Blocks.CAMPFIRE and not _fire_cells.has(anchor):
 		_fire_cells[anchor] = true
 		_relight_around(anchor)
 	return {"ok": true, "name": str(def["name"])}
+
+
+# --- growing a station --------------------------------------------------------
+
+## Bring a station's kind into line with what is packed around it. Whatever it
+## was commissioned as, if the material that made it that is gone it drops back
+## down the chain until it reaches something that still holds up.
+func _settle_kind(anchor: Vector3i, base_kind: int) -> void:
+	var m: Dictionary = _machines.get(anchor, {})
+	if m.is_empty():
+		return
+	var want := int(machine_kinds.get(anchor, base_kind))
+	want = station_settled_kind(anchor, want)
+	if want != int(machine_kinds.get(anchor, base_kind)):
+		if want == base_kind:
+			machine_kinds.erase(anchor)
+		else:
+			machine_kinds[anchor] = want
+	m["kind"] = want
+	var st: Station = m.get("station")
+	if st != null and is_instance_valid(st) and st.kind != want:
+		st.configure(want, _world_ref)
+
+
+## Commission a station into something bigger. `to` must be one of the options
+## station_growth_options offered, which is the same check the caller showed the
+## player -- taking it on trust would let a client grow anything it liked.
+func grow_station(anchor: Vector3i, to: int) -> Dictionary:
+	var ok := false
+	for o in station_growth_options(anchor):
+		if int(o["to"]) == to:
+			ok = true
+			break
+	if not ok:
+		return {"ok": false, "reason": "Not enough material around it"}
+	machine_kinds[anchor] = to
+	var m: Dictionary = _machines.get(anchor, {})
+	m["kind"] = to
+	var st: Station = m.get("station")
+	if st != null and is_instance_valid(st):
+		st.configure(to, _world_ref)
+	return {"ok": true, "name": Blocks.name_of(to)}
+
+
+## What this station currently IS, which is not always what its pattern says.
+func machine_kind_at(anchor: Vector3i) -> int:
+	var m: Dictionary = _machines.get(anchor, {})
+	if m.is_empty():
+		return Blocks.AIR
+	return int(m.get("kind", int((m["def"] as Dictionary)["result"])))
+
+
+
+## Every voxel this station is made of.
+func machine_voxels(anchor: Vector3i) -> Array:
+	var m: Dictionary = _machines.get(anchor, {})
+	if m.is_empty():
+		return []
+	if bool(m.get("parts", false)):
+		return _part_machine_voxels(m["def"], int(m["rot"]), m["origin"])
+	var out: Array = []
+	for v in _machine_at:
+		if _machine_at[v] == anchor:
+			out.append(v)
+	return out
+
+
+## What is packed around this station: block id -> how many blocks of it share a
+## face with the station. Its own cells do not count, and neither does the same
+## block counted twice from two different sides.
+func machine_surround(anchor: Vector3i) -> Dictionary:
+	var own := {}
+	for v in machine_voxels(anchor):
+		own[v] = true
+	var seen := {}
+	var tally := {}
+	# Everything in the shell around it -- corners and edges included, not only
+	# the six faces. A campfire is ONE voxel: counting faces alone left it six
+	# possible neighbours, so "bank eight rock around the fire" was a thing the
+	# world could not physically hold. The shell of a single block is 26 cells,
+	# which is what a hearth actually looks like.
+	for v in own:
+		for dx in [-1, 0, 1]:
+			for dy in [-1, 0, 1]:
+				for dz in [-1, 0, 1]:
+					if dx == 0 and dy == 0 and dz == 0:
+						continue
+					var n: Vector3i = (v as Vector3i) + Vector3i(dx, dy, dz)
+					if own.has(n) or seen.has(n):
+						continue
+					seen[n] = true
+					var id := Blocks.bottom_of(get_id(n) & Blocks.ID_MASK)
+					if id == Blocks.AIR:
+						continue
+					tally[id] = int(tally.get(id, 0)) + 1
+	return tally
+
+
+## Does what is packed around this station satisfy one growth entry?
+func _growth_met(tally: Dictionary, g: Dictionary) -> bool:
+	for req in g["needs"]:
+		var have := 0
+		if req.has("any"):
+			for id in req["any"]:
+				have += int(tally.get(int(id), 0))
+		else:
+			have = int(tally.get(int(req["id"]), 0))
+		if have < int(req["n"]):
+			return false
+	return true
+
+
+## Everything the station at `anchor` could be commissioned into right now.
+## Returns [{to, name, def}], possibly empty.
+func station_growth_options(anchor: Vector3i) -> Array:
+	var m: Dictionary = _machines.get(anchor, {})
+	if m.is_empty() or not bool(m.get("online", true)):
+		return []
+	var kind := int((m["def"] as Dictionary)["result"])
+	var opts := Blocks.growth_from(kind)
+	if opts.is_empty():
+		return []
+	var tally := machine_surround(anchor)
+	var out: Array = []
+	for g in opts:
+		if _growth_met(tally, g):
+			out.append({"to": int(g["to"]), "name": Blocks.name_of(int(g["to"]))})
+	return out
+
+
+## The highest thing this station still qualifies as, walking back down the chain
+## from what it is now. Returns its own kind when nothing has been taken away.
+func station_settled_kind(anchor: Vector3i, kind: int) -> int:
+	var tally := machine_surround(anchor)
+	var at := kind
+	# Bounded rather than `while true`: the chain is data, and a table someone
+	# edits into a loop should degrade a station, not hang the game.
+	for _step in Blocks.STATION_GROWTH.size() + 1:
+		var parent := Blocks.growth_parent(at)
+		if parent < 0:
+			return at        # a core: built from a pattern, not grown into
+		# Still holding up? Then this is what it is.
+		var ok := false
+		for g in Blocks.STATION_GROWTH:
+			if int(g["from"]) == parent and int(g["to"]) == at and _growth_met(tally, g):
+				ok = true
+				break
+		if ok:
+			return at
+		at = parent
+	return at
 
 
 ## Is a sub-cell-built machine still whole?
@@ -3496,8 +3675,19 @@ func set_block(v: Vector3i, id: int) -> void:
 	var was := get_id(v)
 	# A built machine only works while every one of its blocks is present, so
 	# any edit inside a footprint re-checks it (see _machine_block_changed).
-	if not _machine_at.is_empty() and _machine_at.has(v):
-		call_deferred("_machine_block_changed", v)
+	if not _machine_at.is_empty():
+		if _machine_at.has(v):
+			call_deferred("_machine_block_changed", v)
+		else:
+			# A block BESIDE a station is part of what it is now: rock banked
+			# against a fire is the smelter, so mining that rock has to be
+			# noticed the same way mining the fire itself is.
+			for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+					Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+				var a = _machine_at.get(v + d)
+				if a != null:
+					call_deferred("_settle_kind_at", a)
+					break
 	var cc := chunk_of(v)
 	if not _edits_by_chunk.has(cc):
 		_edits_by_chunk[cc] = {}

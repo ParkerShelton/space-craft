@@ -530,6 +530,9 @@ static func is_partable(id: int) -> bool:
 ## maps characters to the block that must be there. Exactly one cell is the
 ## controller, and the pattern is matched in all four rotations about local up,
 ## so orientation never has to be guessed.
+# Whole-block patterns. Only the power core is built this way now: the Oxygen
+# Plant, Heater and Cooler are GROWN from it by packing material around it, and
+# the Forge is grown from a Smelter (see STATION_GROWTH).
 const STRUCTURES := [
 	{
 		"name": "Generator",
@@ -545,56 +548,63 @@ const STRUCTURES := [
 			["###", "###", "###"],
 		],
 	},
-	{
-		"name": "Oxygen Plant",
-		"result": OXYGEN_PLANT,
-		"size": Vector3i(3, 3, 3),
-		"legend": {"#": METAL, "G": GLASS, "C": MACHINE_CORE, ".": AIR},
-		# A glass scrubber column in a metal frame -- the glass is what makes it
-		# readable as an AIR machine from across the room.
-		"layers": [
-			["###", "###", "###"],
-			["#C#", "G.G", "#G#"],
-			["###", "###", "###"],
-		],
-	},
-	{
-		"name": "Heater",
-		"result": HEATER,
-		"size": Vector3i(3, 3, 3),
-		"legend": {"#": METAL, "R": ROCK, "C": MACHINE_CORE, ".": AIR},
-		# A stone mass that holds heat, banded with metal.
-		"layers": [
-			["RRR", "RRR", "RRR"],
-			["#C#", "R.R", "R#R"],
-			["RRR", "R#R", "RRR"],
-		],
-	},
-	{
-		"name": "Cooler",
-		"result": COOLER,
-		"size": Vector3i(3, 3, 3),
-		"legend": {"#": METAL, "G": GLASS, "C": MACHINE_CORE, ".": AIR},
-		# Radiator fins in glass: the mirror of the Heater, for worlds that are
-		# trying to cook you rather than freeze you.
-		"layers": [
-			["###", "###", "###"],
-			["#C#", "G.G", "###"],
-			["#G#", "###", "###"],
-		],
-	},
-	{
-		"name": "Forge",
-		"result": FORGE,
-		"size": Vector3i(3, 3, 3),
-		"legend": {"#": METAL, "C": MACHINE_CORE, ".": AIR},
-		"layers": [
-			["###", "###", "###"],
-			["#C#", "#.#", "###"],
-			["###", "###", "###"],
-		],
-	},
 ]
+
+
+# --- growing a station --------------------------------------------------------
+#
+# Only a few stations are BUILT from an exact pattern. The rest are GROWN: you
+# pack the right material around one you already have and commission it again.
+# Rock banked around a campfire is a smelter; the same fire with metal in the
+# rock is a forge. That is a shape you arrive at by building something that
+# looks right, rather than a diagram you copy.
+#
+# `needs` counts blocks TOUCHING the station -- sharing a face with any of the
+# cells it is made of. Not a radius: a pile of rock in the corner of the room
+# should not turn your fire into a smelter, and a ring around it should.
+#
+# Every entry names what it grows FROM, so the chain is the data. Nothing here
+# is consumed: the rock you bank around a fire IS the smelter, which is why
+# taking it away again drops the station back down the chain (see
+# Planet.revalidate_machines).
+const STATION_GROWTH := [
+	# --- fire: the campfire line ---
+	{"from": CAMPFIRE, "to": SMELTER, "needs": [{"any": STONE_IDS, "n": 8, "label": "Rock"}]},
+	{"from": SMELTER, "to": FORGE,
+		"needs": [{"any": STONE_IDS, "n": 8, "label": "Rock"}, {"id": METAL, "n": 6}]},
+	# --- the workbench line ---
+	{"from": CARPENTER, "to": FABRICATOR,
+		"needs": [{"id": METAL, "n": 6}, {"id": CIRCUIT, "n": 2}]},
+	{"from": FABRICATOR, "to": SHIPWORKS, "needs": [{"id": ALLOY, "n": 6}]},
+	# --- the generator line ---
+	{"from": GENERATOR, "to": POWER_BAY, "needs": [{"id": METAL, "n": 8}]},
+	{"from": GENERATOR, "to": OXYGEN_PLANT,
+		"needs": [{"id": GLASS, "n": 6}, {"id": METAL, "n": 4}]},
+	{"from": GENERATOR, "to": HEATER,
+		"needs": [{"any": STONE_IDS, "n": 10, "label": "Rock"}, {"id": METAL, "n": 4}]},
+	{"from": GENERATOR, "to": COOLER,
+		"needs": [{"id": GLASS, "n": 4}, {"id": METAL, "n": 8}]},
+	{"from": GENERATOR, "to": CLIMATE_UNIT,
+		"needs": [{"id": METAL, "n": 6}, {"any": WOOD_IDS, "n": 4, "label": "Wood"}]},
+]
+
+
+## Everything a station of `kind` could become, given enough material.
+static func growth_from(kind: int) -> Array:
+	var out: Array = []
+	for g in STATION_GROWTH:
+		if int(g["from"]) == kind:
+			out.append(g)
+	return out
+
+
+## What a station of `kind` falls back to when its material is taken away, or
+## -1 if it is a core that was built rather than grown.
+static func growth_parent(kind: int) -> int:
+	for g in STATION_GROWTH:
+		if int(g["to"]) == kind:
+			return int(g["from"])
+	return -1
 
 
 # --- buildable stations -------------------------------------------------------
@@ -632,6 +642,8 @@ const PART_CLASSES := {
 	"G": [GLASS],
 }
 
+# Eighth-block patterns. These are the CORE stations -- the only ones with a
+# shape you have to copy. Everything else grows out of one of them.
 const PART_STRUCTURES := [
 	{
 		"name": "Carpenter's Bench",
@@ -640,21 +652,6 @@ const PART_STRUCTURES := [
 		"layers": [
 			["W..W", "W..W"],            # a leg at each end
 			["WWWW", "WWWW"],            # worktop across the top
-		],
-	},
-	{
-		# A forge hearth built from EIGHTHS: a stone shell two blocks wide and
-		# two tall, one block deep, with a mouth cut into its face. At this
-		# resolution it reads as a fireplace rather than a stack of cubes, which
-		# is the whole reason parts exist.
-		"name": "Smelter",
-		"result": SMELTER,
-		"size": Vector3i(4, 4, 2),        # 2 x 2 blocks, one deep, in eighths
-		"layers": [
-			["SSSS", "SSSS"],             # hearth floor
-			["S..S", "SSSS"],             # fire chamber, open at the front
-			["S..S", "SSSS"],
-			["SSSS", "SSSS"],             # lintel across the top
 		],
 	},
 	{
@@ -669,16 +666,14 @@ const PART_STRUCTURES := [
 		],
 	},
 	{
-		# A metal box with its control panel built from real parts: circuit board
-		# below, alloy casing above, in the one block at the front left.
-		"name": "Fabricator",
-		"result": FABRICATOR,
-		"size": Vector3i(4, 4, 4),
+		# The bench that reshapes blocks: stone legs under a metal top, so it
+		# reads as heavier work than the all-wood bench next to it.
+		"name": "Block Shaper",
+		"result": SHAPER,
+		"size": Vector3i(4, 2, 2),
 		"layers": [
-			["MMMM", "MMMM", "MMMM", "MMMM"],     # metal base
-			["MMMM", "MMMM", "MMMM", "MMMM"],
-			["CCMM", "CCMM", "MMMM", "MMMM"],     # circuit boards
-			["AAMM", "AAMM", "MMMM", "MMMM"],     # alloy facing over them
+			["S..S", "S..S"],
+			["MMMM", "MMMM"],
 		],
 	},
 ]
@@ -831,7 +826,7 @@ static func part_structure_diagram(def: Dictionary, with_name := true) -> String
   rows run front to back, seen from above"
 	# Say the quiet part: nothing here becomes a station until you tell it to.
 	out += "
-  build it, then right-click with a Wrench"
+  build it, then right-click it and confirm"
 	var key := PackedStringArray()
 	var seen := {}
 	for lay in layers:
@@ -1069,8 +1064,6 @@ const STATION_CRAFTS := {
 	# gathered material for the same reason: this is the bench you reach with
 	# nothing but what you picked up off the ground.
 	CARPENTER: [
-		{"label": "Wrench", "out": WRENCH, "n": 1,
-			"reqs": [{"id": ROCK, "n": 4}, {"any": WOOD_IDS, "n": 2, "label": "Wood"}]},
 		# Deliberately cheap and made from the most common material there is: a
 		# light source gates cave exploration and surviving the first night, so
 		# putting it behind rare drops would just make the early game dark.
@@ -1084,8 +1077,6 @@ const STATION_CRAFTS := {
 			"reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
 		{"label": "Door", "out": DOOR, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 6}, {"id": METAL, "n": 2}]},
 		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": METAL, "n": 1}]},
-		{"label": "Block Shaper", "out": SHAPER, "n": 1,
-			"reqs": [{"id": ROCK, "n": 10}, {"id": METAL, "n": 2}]},
 		{"label": "Climate Unit", "out": CLIMATE_UNIT, "n": 1,
 			"reqs": [{"any": WOOD_IDS, "n": 10, "label": "Wood"}, {"id": METAL, "n": 6}]},
 	],

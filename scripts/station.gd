@@ -81,8 +81,16 @@ func _ensure_storage() -> void:
 	var cap := capacity()
 	while storage.size() < cap:
 		storage.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}})
+	# Never shrink past something that is IN there. A station can now change kind
+	# under your feet -- a Forge whose metal you mined drops back to a Smelter --
+	# and a smaller capacity must not be a way to delete what you had stored.
 	if storage.size() > cap:
-		storage.resize(cap)
+		var keep := cap
+		for i in range(storage.size() - 1, cap - 1, -1):
+			if int((storage[i] as Dictionary).get("count", 0)) > 0:
+				keep = i + 1
+				break
+		storage.resize(keep)
 
 
 func configure(k: int, w: WorldManager) -> void:

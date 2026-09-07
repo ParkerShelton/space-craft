@@ -191,6 +191,15 @@ func assemble(p: Planet, v: Vector3i, parts: bool, require: int = -1) -> Diction
 	return res
 
 
+## Commissioning a station into something bigger. Like assembly, only the fact
+## travels: every machine re-runs it against blocks it already has.
+func grow(p: Planet, v: Vector3i, to: int) -> Dictionary:
+	var res := p.grow_station(v, to)
+	if res.get("ok", false) and net != null and net.active:
+		net.grown(p.planet_name, v, to)
+	return res
+
+
 func save_game() -> bool:
 	var data := {
 		"version": SAVE_VERSION,
@@ -232,6 +241,10 @@ func save_game() -> bool:
 		# stays tiny and can never disagree with the world it describes.
 		if not p.machine_cores.is_empty():
 			data["machines"][p.planet_name] = p.machine_cores.duplicate()
+		# Which of several things each one was commissioned INTO. Derivable from
+		# the blocks only up to the point where the player had a choice.
+		if not p.machine_kinds.is_empty():
+			data.get_or_add("machine_kinds", {})[p.planet_name] = p.machine_kinds.duplicate()
 	var ship_index := {}
 	for s in _ships:
 		if is_instance_valid(s) and not s.blocks.is_empty():
@@ -296,6 +309,7 @@ func load_game() -> bool:
 		p.load_edits(pedits.get(p.planet_name, {}))
 		p.day_phase = float(pphase.get(p.planet_name, p.day_phase))
 		p.machine_cores = (data.get("machines", {}).get(p.planet_name, []) as Array).duplicate()
+		p.machine_kinds = (data.get("machine_kinds", {}).get(p.planet_name, {}) as Dictionary).duplicate()
 		# Re-check each saved machine against the blocks actually present, so a
 		# structure someone dismantled while it was unloaded comes back damaged
 		# rather than silently still working.

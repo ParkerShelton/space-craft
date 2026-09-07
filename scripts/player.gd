@@ -165,6 +165,8 @@ var _diff_t := 0.0
 var _ghost_sig := ""
 var _ghost_mat: StandardMaterial3D               # shape key, so the mesh is only rebuilt when it changes
 var _ghost_dist := 99.0            # eye to previewed block, drives how faint it is
+var _commission_panel: PanelContainer   # "make this a Smelter?" confirmation
+var _prospect_name := ""           # what the crosshair is currently offering
 ## Off hides the placement preview entirely. Some people would rather judge the
 ## placement from the crosshair and the block face than have anything drawn over
 ## the world at all.
@@ -1980,6 +1982,7 @@ func _update_outline(tgt: Dictionary) -> void:
 	_outline.global_transform = Transform3D(b, origin)
 	_outline.visible = true
 	_update_ghost(tgt)
+	_update_prospect()
 
 
 ## Translucent preview of the block about to be placed, in its ACTUAL shape --
@@ -2349,6 +2352,126 @@ func _try_eat() -> bool:
 	return true
 
 
+## Turn the crosshair into a wrench when what you are looking at could be
+## commissioned, and name it beside the crosshair.
+##
+## With the Wrench item gone this is the ONLY thing that tells you a build is
+## finished -- there is nothing in your hand to notice it for you -- so it runs
+## off the same raycast the placement ghost already does.
+func _update_prospect() -> void:
+	if _crosshair == null:
+		return
+	var p := station_prospect()
+	var name := ""
+	if not p.is_empty():
+		var opts: Array = p["options"]
+		name = str(opts[0]["name"]) if opts.size() == 1 else "%d options" % opts.size()
+	if name == _prospect_name:
+		return
+	_prospect_name = name
+	if name == "":
+		_crosshair.text = "+ 1/8" if fine_place else "+"
+		_crosshair.modulate = Color(1.0, 0.78, 0.30) if fine_place else Color(1, 1, 1)
+	else:
+		# A wrench, drawn with what a font can be relied on to have.
+		_crosshair.text = "+
+⚒ %s" % name
+		_crosshair.modulate = Color(0.65, 1.0, 0.72)
+
+
+## The confirmation. Nothing changes until it is answered, and it names what you
+## are about to make -- there is no tool in your hand to tell you any more, and a
+## pile of rock round a fire could reasonably be several things.
+func _open_commission(prospect: Dictionary) -> void:
+	if _commission_panel != null:
+		return
+	var opts: Array = prospect["options"]
+	_commission_panel = PanelContainer.new()
+	_commission_panel.set_anchors_preset(Control.PRESET_CENTER)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	_commission_panel.add_child(vb)
+	var head := Label.new()
+	head.text = "Commission this build as:" if opts.size() > 1 else "Commission this build?"
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(head)
+	for o in opts:
+		var b := Button.new()
+		b.text = str(o["name"])
+		b.custom_minimum_size = Vector2(240, 38)
+		b.pressed.connect(_confirm_commission.bind(prospect, int(o["to"])))
+		vb.add_child(b)
+	var cancel := Button.new()
+	cancel.text = "Cancel"
+	cancel.custom_minimum_size = Vector2(240, 32)
+	cancel.pressed.connect(_close_commission)
+	vb.add_child(cancel)
+	_ui_layer.add_child(_commission_panel)
+	_commission_panel.position = -_commission_panel.size * 0.5
+	menu_open = true      # the world runs on; this body just stops taking orders
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _close_commission() -> void:
+	if _commission_panel != null:
+		_commission_panel.queue_free()
+		_commission_panel = null
+	menu_open = false
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _confirm_commission(prospect: Dictionary, to: int) -> void:
+	var planet: Planet = prospect["planet"]
+	var v: Vector3i = prospect["voxel"]
+	_close_commission()
+	var res: Dictionary
+	if str(prospect["mode"]) == "grow":
+		res = world.grow(planet, v, to)
+	else:
+		res = world.assemble(planet, v, bool(prospect.get("parts", true)))
+	if res.get("ok", false):
+		_toast("%s commissioned" % res.get("name", "Station"))
+		var st := planet.machine_station_at(v)
+		if st != null:
+			_open_station(st)
+	else:
+		_toast(str(res.get("reason", "Cannot commission that")))
+
+
+## What right-clicking the block you are looking at would COMMISSION, if
+## anything: a finished pattern waiting to be brought to life, or a station with
+## enough material packed around it to become something bigger.
+##
+## Cheap enough to run whenever the target changes, which is what lets the
+## crosshair turn into a wrench the moment you look at one -- there is no tool to
+## carry any more, so the cursor is the only thing that can tell you.
+func station_prospect() -> Dictionary:
+	var tgt := _raycast_voxel()
+	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "planet":
+		return {}
+	var planet := tgt["obj"] as Planet
+	var v: Vector3i = tgt["voxel"]
+	var anchor = planet.machine_anchor_at(v)
+	if anchor != null:
+		var opts: Array = planet.station_growth_options(anchor)
+		if not opts.is_empty():
+			return {"mode": "grow", "planet": planet, "voxel": anchor, "options": opts}
+		return {}
+	# Not part of a station yet: is what is here a finished pattern?
+	var dry := planet.assemble_parts(v, -1, true)
+	if dry.get("ok", false):
+		return {"mode": "build", "planet": planet, "voxel": v, "parts": true,
+			"options": [{"to": int(dry["result"]), "name": str(dry["name"])}]}
+	if int(tgt.get("id", Blocks.AIR)) == Blocks.MACHINE_CORE:
+		var dryw := planet.assemble_machine(v, true)
+		if dryw.get("ok", false):
+			return {"mode": "build", "planet": planet, "voxel": v, "parts": false,
+				"options": [{"to": int(dryw["result"]), "name": str(dryw["name"])}]}
+	return {}
+
+
+## Right-click on something commissionable. Opens a station you already have,
+## or puts up the confirmation naming what you are about to make.
 func _try_assemble_machine() -> bool:
 	var tgt := _raycast_voxel()
 	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "planet":
@@ -2357,62 +2480,25 @@ func _try_assemble_machine() -> bool:
 	var v: Vector3i = tgt["voxel"]
 	var is_core := int(tgt.get("id", Blocks.AIR)) == Blocks.MACHINE_CORE
 	var existing := planet.machine_station_at(v)
-	# Holding a Wrench is what MAKES something a station. Opening one you already
-	# built needs no tool -- only the act of commissioning it does, so nobody
-	# turns a shelf they liked the look of into a Fabricator by accident.
-	var wrench := _selected_id() == Blocks.WRENCH
 	# ANY block of a working machine opens it: the structure is the machine, so
 	# clicking its wall should do what clicking the core does. While it is
 	# damaged only the core opens -- the other blocks go back to being blocks so
 	# you can right-click to put the missing one back.
+	#
+	# Growing it comes FIRST, though: once there is rock banked around your fire,
+	# right-clicking it means "make this a smelter", and you can still open the
+	# fire from the confirmation or by cancelling it.
+	var prospect := station_prospect()
+	if not prospect.is_empty():
+		_open_commission(prospect)
+		return true
 	if existing != null and (is_core or planet.machine_online_at(v)):
 		if not planet.machine_online_at(v):
 			_toast("%s is damaged -- replace the missing block" % existing.title())
 		_open_station(existing)
 		return true
-	# The Carpenter's Bench is the one exception, and the game depends on it: the
-	# Wrench is made AT a bench now, so a world where every bench needs a Wrench
-	# to commission is a world you can never build anything in. Planks and pegs
-	# do not need a spanner. Everything else still does.
-	if not wrench:
-		var bare := world.assemble(planet, v, true, Blocks.CARPENTER)
-		if bare.get("ok", false):
-			_toast("%s assembled" % bare.get("name", "Station"))
-			var bst := planet.machine_station_at(v)
-			if bst != null:
-				_open_station(bst)
-			return true
-		if bare.get("built", false):
-			_toast(str(bare["reason"]))   # finished, but needs the tool
-			return true
-		return false
-	# Sub-cell builds first: they are what the wrench is mostly for. Fall back to
-	# the older whole-block patterns, which still want their Machine Core.
-	var pres := world.assemble(planet, v, true)
-	if pres.get("ok", false):
-		_toast("%s assembled" % pres.get("name", "Station"))
-		var pst := planet.machine_station_at(v)
-		if pst != null:
-			_open_station(pst)
-		return true
-	if not is_core:
-		_show_build_diff(planet, pres.get("wrong", []))
-		_toast(str(pres.get("reason", "That is not a station yet")))
-		return true
-	var res := world.assemble(planet, v, false)
-	if res.get("ok", false):
-		_toast("%s assembled" % res.get("name", "Machine"))
-		var st := planet.machine_station_at(v)
-		if st != null:
-			_open_station(st)
-	else:
-		_toast(str(res.get("reason", "Cannot assemble")))
-	return true
+	return false
 
-
-## Place a crafting station in the empty cell you're aiming at -- on a planet
-## surface OR on a ship (where it rides along, so bigger ships become mobile bases).
-## Consumes it from the active slot.
 func _place_station(id: int) -> void:
 	if world == null:
 		return
