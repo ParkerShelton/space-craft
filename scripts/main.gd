@@ -60,6 +60,7 @@ var _menu_vb: VBoxContainer
 ## server carry on while it is up. Calling it "pause" would be a promise the
 ## game does not keep.
 var _game_menu: CanvasLayer
+var _game_menu_vb: VBoxContainer
 var _chat_layer: CanvasLayer
 var _chat_label: Label
 var _chat_entry: LineEdit
@@ -85,6 +86,11 @@ const PROFILE_RATE := 3.0
 ## crash costs a minute of building rather than an evening of it.
 const SERVER_SAVE_EVERY := 60.0
 
+## Player preferences, kept apart from the world save: they belong to the person,
+## not to the world, and should survive starting a new one.
+const SETTINGS_PATH := "user://settings.cfg"
+var _settings := ConfigFile.new()
+
 func _notification(what: int) -> void:
 	# Autosave when the window is closed (X button, Alt+F4, etc.). Never in a
 	# headless run -- that would let test/CI runs clobber the real save.
@@ -105,6 +111,7 @@ func _notification(what: int) -> void:
 
 func _ready() -> void:
 	get_tree().set_auto_accept_quit(false)  # route window-close through _notification
+	_settings.load(SETTINGS_PATH)   # absent on a first run, which is not an error
 	_setup_environment()
 	var world := WorldManager.new()
 	world.name = "World"
@@ -253,6 +260,26 @@ func _on_world_ready(seed_value: int, system_index: int, phases: PackedFloat32Ar
 	_start_world(false, "joined")
 
 
+# --- settings -----------------------------------------------------------------
+
+func setting(key: String, dflt):
+	return _settings.get_value("game", key, dflt)
+
+
+## Written on every change rather than at shutdown, for the same reason the chat
+## log is: a preference that only survives a clean exit is a preference you get
+## to set twice.
+func set_setting(key: String, value) -> void:
+	_settings.set_value("game", key, value)
+	_settings.save(SETTINGS_PATH)
+	_apply_settings()
+
+
+func _apply_settings() -> void:
+	if _world != null and _world.player != null:
+		_world.player.ghost_enabled = bool(setting("placement_ghost", true))
+
+
 # --- chat ---------------------------------------------------------------------
 
 ## Built only for a networked session: there is nobody to talk to in single
@@ -384,28 +411,61 @@ func _open_game_menu() -> void:
 	var center := CenterContainer.new()
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_game_menu.add_child(center)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 14)
-	vb.alignment = BoxContainer.ALIGNMENT_CENTER
-	center.add_child(vb)
+	_game_menu_vb = VBoxContainer.new()
+	_game_menu_vb.add_theme_constant_override("separation", 14)
+	_game_menu_vb.alignment = BoxContainer.ALIGNMENT_CENTER
+	center.add_child(_game_menu_vb)
+	_populate_game_menu()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_world.player.menu_open = true
 
+
+func _menu_page(title_text: String) -> VBoxContainer:
+	for c in _game_menu_vb.get_children():
+		_game_menu_vb.remove_child(c)
+		c.queue_free()
 	var title := Label.new()
-	title.text = "Game Menu"
+	title.text = title_text
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 30)
-	vb.add_child(title)
+	_game_menu_vb.add_child(title)
+	return _game_menu_vb
+
+
+func _populate_game_menu() -> void:
+	var vb := _menu_page("Game Menu")
 	# Continue FIRST, because the commonest reason to be looking at this screen
 	# is having pressed Escape by mistake.
 	_game_menu_button(vb, "Continue", _close_game_menu)
-	var settings := Button.new()
-	settings.text = "Settings  (not yet)"
-	settings.custom_minimum_size = Vector2(280, 44)
-	settings.disabled = true
-	vb.add_child(settings)
+	_game_menu_button(vb, "Settings", _populate_settings_menu)
 	_game_menu_button(vb, "Save and Exit to Main Menu" if _net_mode == "single"
 		else "Leave Game", _exit_to_main_menu)
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	_world.player.menu_open = true
+
+
+func _populate_settings_menu() -> void:
+	var vb := _menu_page("Settings")
+	_game_menu_check(vb, "Placement preview",
+		"the ghost block showing where a block would go",
+		"placement_ghost", true)
+	_game_menu_button(vb, "Back", _populate_game_menu)
+
+
+## A labelled on/off row. Takes effect and is written to disk the moment it is
+## clicked -- there is no OK button to forget to press.
+func _game_menu_check(vb: VBoxContainer, text: String, hint: String,
+		key: String, dflt: bool) -> void:
+	var c := CheckButton.new()
+	c.text = text
+	c.button_pressed = bool(setting(key, dflt))
+	c.custom_minimum_size = Vector2(280, 40)
+	c.toggled.connect(func(on: bool): set_setting(key, on))
+	vb.add_child(c)
+	var l := Label.new()
+	l.text = hint
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.add_theme_font_size_override("font_size", 13)
+	l.modulate = Color(1, 1, 1, 0.5)
+	vb.add_child(l)
 
 
 func _game_menu_button(vb: VBoxContainer, text: String, cb: Callable) -> void:
@@ -676,6 +736,7 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	player.name = "Player"
 	player.world = world
 	player.menu_requested.connect(_toggle_game_menu)
+	player.ghost_enabled = bool(setting("placement_ghost", true))
 	player.position = home.find_spawn_point(Vector3.UP)
 	add_child(player)
 	world.player = player

@@ -165,6 +165,10 @@ var _diff_t := 0.0
 var _ghost_sig := ""
 var _ghost_mat: StandardMaterial3D               # shape key, so the mesh is only rebuilt when it changes
 var _ghost_dist := 99.0            # eye to previewed block, drives how faint it is
+## Off hides the placement preview entirely. Some people would rather judge the
+## placement from the crosshair and the block face than have anything drawn over
+## the world at all.
+var ghost_enabled := true
 var _crack: MeshInstance3D         # progressive break-up drawn over the block being mined
 var _crack_mat: ShaderMaterial
 var _crack_sig := ""
@@ -1991,6 +1995,9 @@ func _update_outline(tgt: Dictionary) -> void:
 ## committing: you can see the result and turn or press R until it looks right.
 func _update_ghost(tgt: Dictionary) -> void:
 	if _ghost == null:
+		return
+	if not ghost_enabled:
+		_ghost.visible = false
 		return
 	var place_id := _selected_id()
 	if place_id == Blocks.AIR or not (Blocks.is_placeable_block(place_id)
