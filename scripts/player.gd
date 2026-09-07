@@ -2270,8 +2270,9 @@ func _edit_block(_break_it: bool) -> void:
 		world.edit_part(obj as Planet, plan["voxel"], int(plan["part"]), int(plan["value"]))
 		_consume_eighth()
 		return
-	# Slab-onto-slab lands in the cell you're POINTING AT, not the one beyond
-	# it, so it takes an early exit before the normal adjacent-cell path.
+	# Some placements land in the cell you're POINTING AT rather than the one
+	# beyond it -- a slab stacking onto a slab, or a block replacing tall grass --
+	# so they take an early exit before the normal adjacent-cell path.
 	if tgt["kind"] == "planet" and plan["voxel"] != pv:
 		world.edit_block(obj as Planet, plan["voxel"], plan["value"])
 		_consume_active()
@@ -2349,6 +2350,13 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 	var pv: Vector3i = tgt["place"]
 	if tgt.get("kind", "") != "planet":
 		return {"voxel": pv, "value": place_id}
+	# Tall grass is REPLACED, not built around. It is a wisp with no collision
+	# that you walk straight through, so treating it as a surface to stack
+	# against put your block a cell off from where you aimed -- beside the grass
+	# or on top of it -- for the sake of something that gets trampled anyway.
+	var aim_v: Vector3i = tgt["voxel"]
+	if Blocks.is_plant((obj as Planet).get_id(aim_v)):
+		pv = aim_v
 	# A slab landing on a slab fills the same cell's upper half instead of
 	# opening a new cell above it.
 	if Blocks.is_slab(place_id):
@@ -2776,6 +2784,14 @@ func _process_mining(delta: float) -> void:
 					if (fm & (1 << f)) != 0:
 						runs += 1
 				_add_item(Blocks.WIRE, maxi(runs, 1))
+			elif Blocks.is_plant(id):
+				# Grass is cleared, not harvested: a handful of blades is not a
+				# thing to carry around. What it sometimes leaves is a seed, and
+				# the seed remembers the world it came off -- which is what the
+				# planet types will hang off when farming arrives.
+				if randf() < Blocks.SEED_DROP_CHANCE:
+					_add_item(Blocks.SEEDS, 1, {}, planet.planet_name)
+					_toast("Found seeds")
 			else:
 				# Strip any packed orientation before it becomes an item: a
 				# rotated stair or an axis-aligned log would otherwise come back

@@ -512,6 +512,9 @@ const CAMPFIRE := 111
 ## Ground cover: thin blades standing on soil. Not something you stand on -- it
 ## has no collision and you walk straight through it.
 const TALL_GRASS := 112
+## What tall grass sometimes leaves behind. Not placeable: it is planted, which
+## is a different verb and will want its own rules (see farming).
+const SEEDS := 113
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
@@ -1104,6 +1107,7 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 
 const NAMES := {
 	TALL_GRASS: "Tall Grass",
+	SEEDS: "Seeds",
 	RAW_MEAT: "Raw Meat",
 	COOKED_MEAT: "Cooked Meat",
 	HIDE: "Hide",
@@ -1218,6 +1222,7 @@ const HARDNESS := {
 
 const COLORS := {
 	TALL_GRASS: Color(0.42, 0.66, 0.28),
+	SEEDS: Color(0.78, 0.70, 0.34),
 	RAW_MEAT: Color(0.72, 0.26, 0.28),
 	COOKED_MEAT: Color(0.55, 0.34, 0.18),
 	HIDE: Color(0.60, 0.45, 0.30),
@@ -1319,6 +1324,11 @@ static func use_of(id: int) -> String:
 ## Plants you walk through: no collision, and they never hide the block behind.
 static func is_plant(id: int) -> bool:
 	return bottom_of(id) == TALL_GRASS
+
+
+## How often clearing tall grass leaves a seed behind. Low enough that seeds are
+## worth going out for, high enough that a field is a reliable way to get them.
+const SEED_DROP_CHANCE := 0.12
 
 
 static func is_leaf(id: int) -> bool:
