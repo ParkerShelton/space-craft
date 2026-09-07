@@ -1239,8 +1239,18 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 					else:
 						nid = _id_at(planet, snap, _global_coord(base, d, u, v, na, k, j))
 					var nlow := nid & Blocks.ID_MASK
+					# Leaf against leaf draws ONE quad, not none and not two.
+					#
+					# Two coplanar quads at the same depth under cull_disabled
+					# z-fight across the whole canopy, so this used to drop both --
+					# which hollowed every tree out, leaving a shell one block thick
+					# with nothing behind the gaps in it. Keeping only the face from
+					# the lower cell of the pair (dir > 0) leaves exactly one quad
+					# per boundary: no z-fighting, and the leaves inside the canopy
+					# show through the holes in the ones outside it.
 					if _SEETHRU[nlow] == 1 and not (
-							_LEAF[nlow] == 1 and _LEAF[oid & Blocks.ID_MASK] == 1):
+							_LEAF[nlow] == 1 and _LEAF[oid & Blocks.ID_MASK] == 1
+							and dir < 0):
 						val = oid
 				mask[k + j * CS] = val
 				smask[k + j * CS] = 15

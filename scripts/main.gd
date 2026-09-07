@@ -780,7 +780,13 @@ func _sync_players(delta: float) -> void:
 			_avatars[id] = av
 		var pos: Vector3 = st["pos"]
 		var pl: Planet = _world.nearest_planet(pos)
-		var up: Vector3 = (pos - pl.global_position).normalized() if pl != null else Vector3.UP
+		# SNAPPED to an axis, because that is how a player stands: Player._walk is
+		# given -_snap_to_axis(gravity), not gravity itself. The raw direction away
+		# from the planet's centre only agrees with it in the middle of a cube
+		# face, and drifts from it all the way to the edges -- which is why other
+		# players stood very slightly tilted, and more so the further they walked
+		# from the middle of a face.
+		var up: Vector3 = pl._axis_of(pos - pl.global_position) if pl != null else Vector3.UP
 		av.remote_state(pos, st.get("facing", Vector3.FORWARD), up, int(st.get("action", 0)))
 	for id in _avatars.keys():
 		if not _net.peers.has(id):

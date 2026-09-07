@@ -274,7 +274,11 @@ func _ready() -> void:
 	_ghost_mat = StandardMaterial3D.new()
 	var gm := _ghost_mat
 	gm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	gm.albedo_color = Color(0.6, 0.9, 1.0, 0.35)
+	# Faint on purpose. It is drawn with no depth test and with both faces of the
+	# box showing, so the blend happens twice and any alpha reads as roughly
+	# double what the number says -- it was closer to a solid block sitting over
+	# the world than to a preview of one.
+	gm.albedo_color = Color(0.6, 0.9, 1.0, 0.17)
 	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	gm.cull_mode = BaseMaterial3D.CULL_DISABLED
 	# Draw over the world: a preview sunk inside terrain is worse than useless.
@@ -624,7 +628,7 @@ func _apply_place_mode_ui() -> void:
 		_crosshair.text = "+ 1/8" if fine_place else "+"
 		_crosshair.modulate = Color(1.0, 0.78, 0.30) if fine_place else Color(1, 1, 1)
 	if _ghost_mat != null:
-		_ghost_mat.albedo_color = Color(1.0, 0.78, 0.30, 0.45) if fine_place 			else Color(0.6, 0.9, 1.0, 0.35)
+		_ghost_mat.albedo_color = Color(1.0, 0.78, 0.30, 0.24) if fine_place 			else Color(0.6, 0.9, 1.0, 0.17)
 
 
 func _toggle_book() -> void:
