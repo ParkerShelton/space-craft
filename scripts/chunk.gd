@@ -265,23 +265,6 @@ func apply_mesh_data(data: Dictionary) -> void:
 ## parts table (voxel -> PackedByteArray of eight sub-cell ids).
 const PARTS_KEY := "__parts"
 
-# Daylight fades with how deeply a face is buried. Depth ALONE, deliberately:
-# earlier versions also probed upward for a roof and took the darker of the two,
-# and the two signals fell off at different rates, so one cavern wall snapped to
-# black while the wall beside it stayed lit. One smooth term cannot blotch.
-#
-# SKY_FREE is slack for voxel stepping -- blocky ground means a cliff face in
-# full daylight still sits a few blocks under the smooth noise surface.
-const SKY_FREE := 4.0
-# Shorter than it was, because the fade is now the ONLY thing darkening a cave:
-# there is no roof test any more to black one out early, so a long ramp left
-# somewhere ten blocks down looking like an overcast afternoon. At 16 a cave
-# mouth is lit, a few blocks in is dim, and twenty down is dark.
-const SKY_FADE := 16.0
-
-# How far below the surface daylight stops reaching, in blocks. Below this a
-# face is lit only by whatever the player brought with them.
-
 static var _FULL: PackedByteArray
 static var _SEETHRU: PackedByteArray
 # Leaves are see-through, so without this two adjacent leaves would EACH draw a
@@ -417,12 +400,254 @@ static func _compute_block_light(planet: Planet, snap: Dictionary, base: Vector3
 	return lv
 
 
+# --- daylight ---------------------------------------------------------------
+#
+# Skylight is flood-filled from the open sky, the same way torch light is
+# flood-filled from a torch, and for the same reason: it is the only model that
+# is smooth AND knows about roofs.
+#
+# What came before was a function of how deep a cell sits below the terrain
+# surface. Depth alone cannot tell a cave with ten blocks of rock over it from
+# open ground ten blocks down a hillside, so a roofed cave was lit like a field.
+# Every attempt to fix that by asking "can this cell see the sky" put a
+# VISIBILITY test in the middle of a smooth field: two cells side by side in one
+# wall answer differently, greedy meshing hands each answer to a whole flat
+# quad, and the wall comes out in patches.
+#
+# A flood fill has neither problem. Light starts at the sky, spreads only
+# through what it can pass through, and loses a level per block -- so a roof
+# stops it, and neighbouring cells can never differ by more than one level. The
+# patchwork and the daylit cave are the same bug, and this is the one fix.
+const SKY_PAD := 15
+const SKY_DIM := CS + SKY_PAD * 2
+const SKY_MAX := 15
+## Where the finished map and its corner ride along in the snapshot.
+const SKY_KEY := "__skylight"
+const SKY_ORG := "__skyorigin"
+## How far down a column is followed from the surface before giving up. Only a
+## shaft ever gets far: ordinary ground stops it on the first or second block,
+## which is what keeps this affordable for a chunk that is a long way down.
+const SKY_COLUMN_STEPS := 224
+## Below this depth a chunk that nobody has touched is simply dark, and the
+## whole pass is skipped. Daylight only gets that far down a straight shaft, and
+## a straight shaft that deep is something a player DUG -- which puts edits in
+## the snapshot and takes the full path below. Natural caves reach further than
+## this, but never with a clear column above them: their light arrives along
+## winding tunnels, and fifteen levels of falloff has long since spent it.
+const SKY_DEEP := 24.0
+
+
+static func _sky_index(x: int, y: int, z: int) -> int:
+	return x + y * SKY_DIM + z * SKY_DIM * SKY_DIM
+
+
+## Does daylight get through this cell? Leaves and water do not stop it -- a
+## canopy dims what is under it rather than putting it in a cave, and treating
+## foliage as opaque here used to seal off most of the ground on a wooded planet.
+static func _sky_open(planet: Planet, snap: Dictionary, v: Vector3i) -> bool:
+	var low := _id_at(planet, snap, v) & Blocks.ID_MASK
+	return _FULL[low] == 0 or _LEAF[low] == 1
+
+
+## Blocks below the terrain surface, at this exact cell.
+static func _depth_of(planet: Planet, gv: Vector3i) -> float:
+	var c := Vector3(gv) + Vector3(0.5, 0.5, 0.5)
+	return planet.surface_radius(c / maxf(c.length(), 0.0001)) - planet._norm(c)
+
+
+## Daylight for the chunk at `base` and the padding around it, 0..15 per cell.
+static func _compute_skylight(planet: Planet, snap: Dictionary, base: Vector3i) -> PackedByteArray:
+	var origin := base - Vector3i(SKY_PAD, SKY_PAD, SKY_PAD)
+	var sky := PackedByteArray()
+	sky.resize(SKY_DIM * SKY_DIM * SKY_DIM)
+
+	# Whether anyone has built anything around here at all. Almost never, and
+	# knowing it up front is what lets a buried chunk skip out below, and what
+	# turns the per-step "did somebody put a block in this patch of open sky"
+	# question into a boolean instead of a dictionary lookup for every one of the
+	# ten-odd blocks of air a surface column crosses.
+	var edited := false
+	for k in snap:
+		if k is Vector3i:
+			edited = true
+			break
+	# Deep, untouched rock is dark, and finding that out the long way costs a
+	# terrain sample for every column in the region. Half the chunks a player
+	# streams in are this, so it is worth the one probe: the chunk's own centre,
+	# less its half-diagonal, is the shallowest any of its cells can be.
+	var mid_depth := _depth_of(planet, base + Vector3i(CS / 2, CS / 2, CS / 2))
+	if not edited and mid_depth - float(CS) * 0.87 > SKY_DEEP:
+		return sky
+
+	# Which way is up for this whole region. On a cube planet that is the face
+	# normal, not the direction away from the centre -- the two disagree
+	# everywhere except the middle of a face.
+	var centre := Vector3(base) + Vector3.ONE * (float(CS) * 0.5)
+	var up: Vector3 = planet._axis_of(centre) if planet.shape_cube else centre.normalized()
+	var uq := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
+	if uq == Vector3i.ZERO:
+		for i in sky.size():
+			sky[i] = SKY_MAX
+		return sky
+
+	var ax := 0 if uq.x != 0 else (1 if uq.y != 0 else 2)
+	var sgn := uq[ax]
+	var la := (ax + 1) % 3
+	var lb := (ax + 2) % 3
+	var strides := [1, SKY_DIM, SKY_DIM * SKY_DIM]
+	var s_ax: int = strides[ax]
+	var s_la: int = strides[la]
+	var s_lb: int = strides[lb]
+	# d counts DOWNWARD from the top of the region, so the two cube-face
+	# directions can share one loop instead of being mirrored by hand.
+	var t_top := SKY_DIM - 1 if sgn > 0 else 0
+	var down := -sgn
+
+	# --- pass one: every cell with nothing but sky above it ------------------
+	# Done per COLUMN rather than per cell, and it stops at the first solid
+	# block, so a chunk hundreds of blocks down still costs about one terrain
+	# sample per column: the ground right under the surface stops it at once.
+	var lip := PackedInt32Array()
+	lip.resize(SKY_DIM * SKY_DIM)
+	for i in lip.size():
+		lip[i] = -1
+	for a in SKY_DIM:
+		for b in SKY_DIM:
+			var gv := origin
+			gv[ax] += t_top
+			gv[la] += a
+			gv[lb] += b
+			# Start at the surface, which for a buried region is above the top of
+			# it. Depth falls by one per block climbed, so where it reaches zero is
+			# one subtraction rather than a walk.
+			var depth := _depth_of(planet, gv)
+			var d := 0
+			if depth > 0.0:
+				var climb := int(ceil(depth))
+				if climb > SKY_COLUMN_STEPS:
+					continue      # far too deep for daylight to reach by any route
+				gv += uq * climb
+				d = -climb
+			var deepest := -1
+			var steps := 0
+			# `depth` is carried along rather than recomputed: one step down is one
+			# block deeper, and the terrain sample it saves is the expensive part.
+			var dep := depth
+			# Everything above the terrain surface is air by definition, so the run
+			# from the top of the region down to the surface is written straight in
+			# rather than walked a block at a time. At the surface that is a dozen
+			# cells per column and the walk around them was the single most
+			# expensive thing in the build.
+			if dep < -1.0 and not edited:
+				var air := mini(int(floor(-dep)), SKY_DIM - maxi(d, 0))
+				if air > 0:
+					var dd := maxi(d, 0)
+					var stop := dd + air
+					while dd < stop:
+						sky[(t_top + dd * down) * s_ax + a * s_la + b * s_lb] = SKY_MAX
+						dd += 1
+					deepest = stop - 1
+					gv -= uq * (stop - maxi(d, 0))
+					dep += float(stop - maxi(d, 0))
+					d = stop
+			while steps < SKY_COLUMN_STEPS:
+				# Above the terrain surface there is nothing to ask the generator
+				# about -- it is air by definition. Only a cell somebody has BUILT
+				# up there can prove otherwise, and the snapshot already knows which
+				# those are. Skipping the sample here is most of what this costs at
+				# the surface, where a column crosses twelve blocks of open sky
+				# before it reaches the ground.
+				if dep > -0.5 or (edited and snap.has(gv)):
+					if not _sky_open(planet, snap, gv):
+						break
+				if d >= 0:
+					if d >= SKY_DIM:
+						break
+					sky[(t_top + d * down) * s_ax + a * s_la + b * s_lb] = SKY_MAX
+					deepest = d
+				gv -= uq
+				dep += 1.0
+				d += 1
+				steps += 1
+			lip[a + b * SKY_DIM] = deepest
+
+	# --- pass two: spread it sideways ---------------------------------------
+	# Started at the DARK cells beside an open column rather than at the open
+	# cells themselves: a cave mouth, an overhang, the shaded side of a boulder.
+	# Seeding the open cells instead meant asking each of them about all six of
+	# its neighbours, and on rolling ground almost every one of those neighbours
+	# is either open sky already or solid rock -- thousands of terrain samples to
+	# discover there was nowhere for the light to go.
+	# Seeded only where daylight actually has somewhere to go: the bottom of each
+	# open column, and the cells of a column that reach past a neighbour's. Those
+	# are the cave mouths and the overhangs. Seeding every open cell instead
+	# would push tens of thousands of cells that are already fully lit and
+	# surrounded by cells that are already fully lit.
+	var frontier: Array = []
+	for a in SKY_DIM:
+		for b in SKY_DIM:
+			var lc: int = lip[a + b * SKY_DIM]
+			if lc < 0:
+				continue
+			for e in 4:
+				var na := a + (1 if e == 0 else (-1 if e == 1 else 0))
+				var nb := b + (1 if e == 2 else (-1 if e == 3 else 0))
+				if na < 0 or nb < 0 or na >= SKY_DIM or nb >= SKY_DIM:
+					continue
+				var ln: int = lip[na + nb * SKY_DIM]
+				if ln >= lc:
+					continue
+				for dd in range(maxi(ln + 1, 0), lc + 1):
+					var cell := _sky_cell(na, nb, dd, t_top, down, ax, la, lb)
+					var ci := _sky_index(cell.x, cell.y, cell.z)
+					if sky[ci] >= SKY_MAX - 1:
+						continue
+					if not _sky_open(planet, snap, origin + cell):
+						continue
+					sky[ci] = SKY_MAX - 1
+					frontier.append(cell)
+
+	var nb6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+		Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	while not frontier.is_empty():
+		var nxt: Array = []
+		for c in frontier:
+			var here: int = sky[_sky_index(c.x, c.y, c.z)]
+			if here <= 1:
+				continue
+			for dv in nb6:
+				var n: Vector3i = c + dv
+				if n.x < 0 or n.y < 0 or n.z < 0 						or n.x >= SKY_DIM or n.y >= SKY_DIM or n.z >= SKY_DIM:
+					continue
+				var ni := _sky_index(n.x, n.y, n.z)
+				if sky[ni] >= here - 1:
+					continue
+				if not _sky_open(planet, snap, origin + n):
+					continue
+				sky[ni] = here - 1
+				nxt.append(n)
+		frontier = nxt
+	return sky
+
+
+## One cell of a column, as local coordinates in the padded region.
+static func _sky_cell(a: int, b: int, d: int, t_top: int, down: int,
+		ax: int, la: int, lb: int) -> Vector3i:
+	var v := Vector3i.ZERO
+	v[ax] = t_top + d * down
+	v[la] = a
+	v[lb] = b
+	return v
+
+
 static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsnap: Dictionary = {}) -> Dictionary:
 	var base := cc * CS
 	snap[LB_KEY] = base
 	if not snap.has(TCACHE_KEY):
 		snap[TCACHE_KEY] = {}
 	snap[LM_KEY] = _compute_block_light(planet, snap, base)
+	snap[SKY_ORG] = base - Vector3i(SKY_PAD, SKY_PAD, SKY_PAD)
+	snap[SKY_KEY] = _compute_skylight(planet, snap, base)
 	var ids := PackedInt32Array()
 	ids.resize(CS * CS * CS)
 	var any_solid := false
@@ -623,7 +848,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 						# planet tints its own soil, and grass that ignored that sat on
 						# the surface looking like it belonged to a different world.
 						planet.color_of(planet.pal_top), ggv,
-						_sky_depth(planet, ggv),
+						_sky_depth(snap, ggv),
 						gverts, gnormals, gcolors, guvs)
 				idx += 1
 
@@ -780,7 +1005,7 @@ static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 				                     # so it grows OUT of the rock rather than
 				                     # sitting on top of it like a dropped cube
 			_emit_free_box(c - Vector3.ONE * sz, c + Vector3.ONE * sz,
-				Color(ore_col.r, ore_col.g, ore_col.b, _sky_depth(planet, gv + n)),
+				Color(ore_col.r, ore_col.g, ore_col.b, _sky_depth(snap, gv + n)),
 				ORE_CHUNK_ID, verts, normals, colors, uvs, uv2s,
 				_face_light(snap, gv, n))
 
@@ -928,7 +1153,7 @@ static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Pla
 		#
 		# Daylight still gets to darken deep or roofed-over water; it just does it
 		# through the COLOUR rather than through the alpha.
-		var sky := _sky_depth(planet, gv + n)
+		var sky := _sky_depth(snap, gv + n)
 		var lit := s * lerpf(0.4, 1.0, sky)
 		var col := Color(base.r * lit, base.g * lit, base.b * lit, base.a)
 		var nrm := Vector3(n)
@@ -1025,7 +1250,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 					# it: measuring from inside the block meant the wall of a shaft
 					# you dug found its own solid neighbours overhead and went pitch
 					# black, while the open shaft it faced was letting light down.
-					smask[k + j * CS] = int(round(_sky_depth(planet,
+					smask[k + j * CS] = int(round(_sky_depth(snap,
 						_global_coord(base, d, u, v, a, k, j)
 						+ Vector3i(int(narr[0]), int(narr[1]), int(narr[2]))) * 15.0))
 				lmask[k + j * CS] = 0
@@ -1042,30 +1267,16 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 
 # Opaque blocks use their registry colour, except procedural ores, whose colour is
 # defined by the planet (each world's ores look different).
-## How much daylight reaches this voxel, from depth below the terrain surface.
-## Sampled per QUAD -- greedy meshing means one lookup covers a whole wall.
-static func _sky_depth(planet: Planet, gv: Vector3i) -> float:
-	var c := Vector3(gv) + Vector3(0.5, 0.5, 0.5)
-	var depth: float = planet.surface_radius(c / maxf(c.length(), 0.0001)) - planet._norm(c)
-	# One smooth curve on depth, and nothing else. Everything that ever went in
-	# here besides depth was a VISIBILITY test -- is the column above this cell
-	# clear, do any of four fanned rays escape -- and every one of them answers
-	# differently for two cells side by side in the same wall. Greedy meshing then
-	# hands each answer to a whole flat quad, which is the patchwork of lighter
-	# and darker slabs you see on a cave wall that is all one rock.
-	#
-	# The last version was the worst case of it: a cell four blocks down was full
-	# daylight, and its neighbour one block deeper dropped straight to black
-	# whenever no ray happened to escape, because the ray count MULTIPLIED the
-	# depth term rather than nudging it. Fifteen levels of brightness between two
-	# adjacent blocks.
-	#
-	# A function of depth alone cannot do that: depth changes by about a block
-	# between neighbours, so brightness does too. Caves still go dark, just over
-	# SKY_FADE blocks instead of in one step -- which is also what removed the
-	# hard line of darkness that used to cut across a shaft you dug.
-	return 1.0 - smoothstep(0.0, 1.0,
-		clampf((depth - SKY_FREE) / SKY_FADE, 0.0, 1.0))
+## How much daylight reaches this voxel: a lookup into the map flood-filled by
+## _compute_skylight, which the build fills in before any meshing happens.
+static func _sky_depth(snap: Dictionary, gv: Vector3i) -> float:
+	var sk = snap.get(SKY_KEY)
+	if sk == null:
+		return 1.0
+	var l: Vector3i = gv - (snap[SKY_ORG] as Vector3i)
+	if l.x < 0 or l.y < 0 or l.z < 0 			or l.x >= SKY_DIM or l.y >= SKY_DIM or l.z >= SKY_DIM:
+		return 0.0
+	return float((sk as PackedByteArray)[_sky_index(l.x, l.y, l.z)]) / float(SKY_MAX)
 
 
 static func _block_color(planet: Planet, id: int) -> Color:
