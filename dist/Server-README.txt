@@ -24,8 +24,9 @@ The server saves its world and reloads it next time it starts, so restarting it
 does not lose what anyone has built. Nothing needs passing to make that happen:
 just start it the same way again.
 
-It writes every 60 seconds, whenever somebody joins or leaves, and on a clean
-shutdown. A crash or a power cut costs at most a minute of building.
+It writes every 60 seconds, and whenever somebody joins or leaves. It tries
+once more on the way out, but a crash or a power cut costs at most a minute of
+building either way.
 
 It also remembers what each player is carrying and hands it back when they
 return. Players are recognised by an id their game writes once into its own

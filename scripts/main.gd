@@ -383,9 +383,10 @@ func _server_autosave() -> void:
 		print("[server] WARNING: save failed")
 
 
-## Last chance to write the world down. Reached on a clean shutdown and, on most
-## platforms, on Ctrl+C -- but not on a kill or a power cut, which is what the
-## periodic save above is really for.
+## Last chance to write the world down, on the way out through the game's own
+## exit path. Treat it as a bonus rather than a guarantee: a signal may end the
+## process before the tree is ever torn down, which is what the periodic save
+## above is really for.
 func _exit_tree() -> void:
 	if _net_mode == "server" and _world != null:
 		_world.save_game()

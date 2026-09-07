@@ -38,7 +38,12 @@ It writes:
 * every 60 seconds,
 * whenever a player joins or leaves (the end of a building session is the moment
   most worth keeping), and
-* on a clean shutdown, including Ctrl+C on most platforms.
+* when the process quits through the game's own exit path.
+
+That last one is a bonus rather than a guarantee: a signal from `kill`, Ctrl+C
+or `systemctl stop` may end the process before it gets that far, and a power
+cut certainly will. The periodic save is what actually protects the world, so
+at most a minute of building is ever at risk.
 
 A kill or a power cut falls back to the last periodic save, so at most a minute
 of building is at risk.
@@ -102,11 +107,23 @@ shortcut. Without a port it uses 24565.
 
 ## On a cloud box (AWS or similar)
 
-1. Install Godot 4.6 and copy the project across.
-2. Open the port (default UDP **24565**) in the instance's security group.
-3. Run the command above, ideally under `systemd`, `screen` or `tmux` so it
-   survives you logging out.
-4. Players choose **Join Co-op Game** and enter the instance's public IP.
+There is no need to install Godot or copy the project. `tools\publish.ps1`
+exports a self-contained Linux server binary (the game data is embedded, so it
+is one file); copy that across and run it.
+
+1. `scp SpaceCraftServer.x86_64 you@box:/opt/spacecraft/`
+2. `chmod +x SpaceCraftServer.x86_64` — the executable bit does not survive
+   coming from a Windows filesystem or a sync folder.
+3. Open the port (default UDP **24565**) in the instance's security group.
+4. `./SpaceCraftServer.x86_64 --headless -- --server`, ideally under `systemd`,
+   `screen` or `tmux` so it survives you logging out. The Server-Linux README in
+   a published build carries a ready-made systemd unit.
+5. Players choose **Join Co-op Game** and enter the instance's public IP, or
+   launch with `--join=<ip>`.
+
+The world is saved under the user the server runs as, in
+`~/.local/share/godot/app_userdata/SpaceCraft/` — worth knowing before backing
+it up or going looking for it.
 
 The transport is ENet over UDP — make sure the rule is UDP, not TCP.
 

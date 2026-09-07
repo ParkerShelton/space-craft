@@ -23,7 +23,13 @@ Write-Host "exporting..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path "$build\client", "$build\server" | Out-Null
 & $Godot --headless --path $proj --export-release "Windows Desktop" "$build\client\SpaceCraft.exe" | Out-Null
 & $Godot --headless --path $proj --export-release "Windows Server" "$build\server\SpaceCraftServer.exe" | Out-Null
-foreach ($f in "$build\client\SpaceCraft.exe", "$build\server\SpaceCraftServer.exe") {
+# The Linux server is one self-contained file (the pack is embedded), because it
+# gets copied onto a box by hand and a binary that needs its .pck beside it is a
+# thing to get wrong at the far end.
+New-Item -ItemType Directory -Force -Path "$build\linux" | Out-Null
+& $Godot --headless --path $proj --export-release "Linux Server" "$build\linux\SpaceCraftServer.x86_64" | Out-Null
+foreach ($f in "$build\client\SpaceCraft.exe", "$build\server\SpaceCraftServer.exe",
+        "$build\linux\SpaceCraftServer.x86_64") {
     if (-not (Test-Path $f)) { throw "export produced nothing at $f" }
 }
 
@@ -34,16 +40,22 @@ $subject = (& git -C $proj log -1 --format=%s)
 $stamp = Get-Date -Format "yyyy-MM-dd HH:mm"
 
 Write-Host "publishing to $To" -ForegroundColor Cyan
-New-Item -ItemType Directory -Force -Path "$To\Game", "$To\Server" | Out-Null
+New-Item -ItemType Directory -Force -Path "$To\Game", "$To\Server", "$To\Server-Linux" | Out-Null
 Copy-Item "$build\client\SpaceCraft.exe", "$build\client\SpaceCraft.pck" "$To\Game" -Force
 Copy-Item "$build\server\SpaceCraftServer.exe", "$build\server\SpaceCraftServer.pck" "$To\Server" -Force
+Copy-Item "$build\linux\SpaceCraftServer.x86_64" "$To\Server-Linux" -Force
 Copy-Item "$proj\SERVER.md" "$To\Server" -Force
+Copy-Item "$proj\SERVER.md" "$To\Server-Linux" -Force
 # The hand-written docs live in the repo (dist\), so this script never has to
 # hold a copy of them and they can be reviewed like anything else.
 Copy-Item "$proj\dist\Game-README.txt" "$To\Game\README.txt" -Force
 Copy-Item "$proj\dist\Server-README.txt" "$To\Server\README.txt" -Force
 Copy-Item "$proj\dist\START-HERE.txt" "$To\START-HERE.txt" -Force
-Copy-Item "$proj\dist\start-server.bat", "$proj\dist\start-server.sh" "$To\Server" -Force
+Copy-Item "$proj\dist\Server-Linux-README.txt" "$To\Server-Linux\README.txt" -Force
+# .bat with the Windows build, .sh with the Linux one: shipping both in both
+# folders is how somebody ends up running the script that cannot work.
+Copy-Item "$proj\dist\start-server.bat" "$To\Server" -Force
+Copy-Item "$proj\dist\start-server.sh" "$To\Server-Linux" -Force
 
 "SpaceCraft build $stamp`r`n$commit  $subject`r`n" | Set-Content "$To\VERSION.txt" -Encoding utf8
 
