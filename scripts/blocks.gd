@@ -637,9 +637,9 @@ static func growth_parent(kind: int) -> int:
 const FOOD_VALUE := {
 	RAW_MEAT: 9.0,
 	COOKED_MEAT: 38.0,
-	# Raw off the plant keeps you going; cooked is a meal. The same gap meat
-	# has, and for the same reason -- a fire should always be worth lighting.
-	CROP: 7.0,
+	# A crop is an INGREDIENT, not a snack. Meat you can gnaw raw and regret;
+	# a handful of grain is not a meal until somebody cooks it, so the only way
+	# a field feeds you is through a fire.
 	COOKED_CROP: 30.0,
 }
 
@@ -1425,6 +1425,12 @@ static func crop_growth(key: String) -> Dictionary:
 
 ## How long a young tree stands before it becomes a tree, in seconds.
 const SAPLING_TIME := 240.0
+
+## Colours a crop by how far along it is: green while it is coming, gold when it
+## is ready. A field you can read across from the far side of it is worth more
+## than a name you have to walk up to.
+static func crop_color(ripe: bool) -> Color:
+	return Color(0.86, 0.72, 0.24) if ripe else Color(0.46, 0.68, 0.30)
 
 
 ## Every species that could live on a world of this class.

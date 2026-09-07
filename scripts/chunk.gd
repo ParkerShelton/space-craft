@@ -878,7 +878,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 		else:
 			var st := float(int(info.get("stage", 0)) + 1)
 			var total := float(Blocks.crop_growth(str(info.get("key", ""))) ["stages"])
-			_emit_grass(Vector3(pl), pup, planet.color_of(Blocks.CROP), gpv,
+			_emit_grass(Vector3(pl), pup, Blocks.crop_color(st >= total), gpv,
 				_sky_depth(snap, gpv), clampf(st / maxf(total, 1.0), 0.3, 1.0),
 				gverts, gnormals, gcolors, guvs)
 

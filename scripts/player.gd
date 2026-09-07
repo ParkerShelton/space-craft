@@ -2833,6 +2833,22 @@ func _process_mining(delta: float) -> void:
 		var use := Blocks.use_of(id)
 		# Named by the planet, so a retinted leaf reports the colour it IS.
 		var nm := planet.name_of(id) if planet != null else Blocks.name_of(id)
+		if planet != null and Blocks.bottom_of(id) == Blocks.CROP:
+			# A crop is two different things to a player -- something to leave
+			# alone, or something to come back for -- and "Crop" told them
+			# neither. The species goes in it too: a field of one green wisp
+			# looks much like a field of another.
+			var c: Dictionary = planet.crop_at(v)
+			var sp: Dictionary = Blocks.flora_by_key(str(c.get("key", "")))
+			var who: String = str(sp.get("name", "Crop")) if not sp.is_empty() else "Crop"
+			if planet.crop_ripe(v):
+				nm = "%s  -- ready to harvest" % who
+				use = ""
+			else:
+				var g: Dictionary = Blocks.crop_growth(str(c.get("key", "")))
+				nm = "%s  (growing, %d of %d)" % [who,
+					int(c.get("stage", 0)) + 1, int(g["stages"])]
+				use = ""
 		_look_name = nm + ("  (" + use + ")" if use != "" else "")
 	# Every block of an assembled machine reports the MACHINE, so a hand-built
 	# structure reads as one object instead of the bricks it is made of. Only
