@@ -20,6 +20,12 @@ $build = Join-Path $proj "build"
 if (-not (Test-Path $Godot)) { throw "Godot not found at $Godot -- pass -Godot <path>" }
 
 Write-Host "exporting..." -ForegroundColor Cyan
+# Every target, every time. Publishing a stale binary alongside fresh ones is
+# the worst outcome here -- the folder looks updated, and whoever is running the
+# server is on old code with no way to tell -- so the old outputs are DELETED
+# first and their absence afterwards is treated as a failed build.
+$started = Get-Date
+Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$build\client", "$build\server", "$build\linux"
 New-Item -ItemType Directory -Force -Path "$build\client", "$build\server" | Out-Null
 & $Godot --headless --path $proj --export-release "Windows Desktop" "$build\client\SpaceCraft.exe" | Out-Null
 & $Godot --headless --path $proj --export-release "Windows Server" "$build\server\SpaceCraftServer.exe" | Out-Null
@@ -31,6 +37,10 @@ New-Item -ItemType Directory -Force -Path "$build\linux" | Out-Null
 foreach ($f in "$build\client\SpaceCraft.exe", "$build\server\SpaceCraftServer.exe",
         "$build\linux\SpaceCraftServer.x86_64") {
     if (-not (Test-Path $f)) { throw "export produced nothing at $f" }
+    $age = (Get-Item $f).LastWriteTime
+    if ($age -lt $started) {
+        throw "$f was not rebuilt by this run (written $age). Refusing to publish a stale build."
+    }
 }
 
 # Written into the folder so anyone can see whether they have the newest build
@@ -60,5 +70,8 @@ Copy-Item "$proj\dist\start-server.sh" "$To\Server-Linux" -Force
 "SpaceCraft build $stamp`r`n$commit  $subject`r`n" | Set-Content "$To\VERSION.txt" -Encoding utf8
 
 Write-Host "done -- $stamp ($commit)" -ForegroundColor Green
+# Timestamps included so a glance at the summary shows all three binaries were
+# refreshed together, rather than leaving it to be taken on trust.
 Get-ChildItem $To -Recurse -File | Select-Object @{n='file';e={$_.FullName.Substring($To.Length+1)}},
-    @{n='MB';e={[math]::Round($_.Length/1MB,2)}} | Format-Table -AutoSize
+    @{n='MB';e={[math]::Round($_.Length/1MB,2)}},
+    @{n='written';e={$_.LastWriteTime.ToString('MM-dd HH:mm')}} | Format-Table -AutoSize

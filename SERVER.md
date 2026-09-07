@@ -77,6 +77,17 @@ than to how far they walk.
 A player joining is sent the seed and then every change made so far, so someone
 arriving hours later sees the world as it is, not as it was generated.
 
+## Publishing a build
+
+    powershell -ExecutionPolicy Bypass -File tools\publish.ps1
+
+Builds all three targets -- the Windows game, the Windows server and the Linux
+server -- and lays them out in the shared folder with a VERSION.txt naming the
+date and commit. All three every time: publishing a stale binary beside fresh
+ones is the worst outcome, because the folder looks updated and whoever is
+running the server is on old code with no way to tell. The previous outputs are
+deleted first and the script refuses to publish anything it did not just build.
+
 ## Player inventories
 
 The server remembers what each player is carrying, and gives it back when they
