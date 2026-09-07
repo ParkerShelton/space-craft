@@ -1,6 +1,10 @@
 class_name Player
 extends CharacterBody3D
 
+## Escape, with nothing else open. Main puts the game menu on screen; the player
+## has no business knowing what that looks like.
+signal menu_requested
+
 ## Hybrid controller.
 ##
 ## GROUND mode (gravity strong): the body smoothly stands up so its "up" points
@@ -18,6 +22,15 @@ const FLY_SPEED := 16.0
 const FLY_ACCEL := 6.0
 const FLY_DAMP := 3.0
 const MOUSE_SENS := 0.0025
+## Eye height above the body's centre. The collision capsule is 1.8 tall, so its
+## top is at 0.9 and the eye normally sits well inside it.
+const EYE_HEIGHT := 0.7
+## ...but "well inside" is not "always inside". Jumping into a ceiling closes
+## that 0.2 of headroom in a single frame at jump speed, and the solver only
+## pushes the capsule back out afterwards -- for the frame in between, the eye is
+## in the block and you see through it. The eye is pulled down to keep this much
+## clear of anything overhead, which costs one short raycast per frame.
+const EYE_CLEARANCE := 0.25
 const ALIGN_SPEED := 2.5          # how fast we stand upright when captured (lower = smoother)
 const FLIGHT_THRESHOLD := 3.0     # gravity (m/s^2) below which we float
 const REACH := 6.0                # block interaction distance
@@ -90,6 +103,10 @@ const INV_CELL_STEP := INV_CELL + INV_CELL_GAP
 var inv: Array = []
 var active_slot := 0              # which slot we place from
 var inv_open := false
+## Set by Main while the game menu is up. The world keeps running -- nothing here
+## pauses -- but this body stops taking orders from the keyboard, because walking
+## off a cliff while reading a menu is nobody's idea of an option.
+var menu_open := false
 # dedicated 2-slot-tall equip slot: a Suit only protects you once it's WORN here,
 # not just carried in the general grid (unlike the Drill, which stays
 # passively equipped from anywhere). Same slot shape as an `inv` entry.
@@ -233,7 +250,7 @@ func _ready() -> void:
 	add_child(_body_shape)
 
 	_camera = Camera3D.new()
-	_camera.position = Vector3(0, 0.7, 0)  # eye height above body center
+	_camera.position = Vector3(0, EYE_HEIGHT, 0)  # eye height above body center
 	_camera.far = 14000.0
 	add_child(_camera)
 
@@ -278,7 +295,7 @@ func _ready() -> void:
 	# box showing, so the blend happens twice and any alpha reads as roughly
 	# double what the number says -- it was closer to a solid block sitting over
 	# the world than to a preview of one.
-	gm.albedo_color = Color(0.6, 0.9, 1.0, 0.17)
+	gm.albedo_color = Color(0.6, 0.9, 1.0, 0.11)
 	gm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	gm.cull_mode = BaseMaterial3D.CULL_DISABLED
 	# Draw over the world: a preview sunk inside terrain is worse than useless.
@@ -525,7 +542,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_look += event.relative
 	elif event is InputEventMouseButton and event.pressed:
-		if inv_open or book_open or _station_open != null:
+		if inv_open or book_open or _station_open != null or menu_open:
 			return  # a panel is open: clicks go to the UI
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -560,7 +577,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif _starmap_panel != null and _starmap_panel.visible:
 				_close_starmap()
 			else:
-				Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+				menu_requested.emit()
 		elif event.keycode == KEY_F5:
 			if world != null and world.save_game():
 				_toast("Saved")
@@ -628,7 +645,7 @@ func _apply_place_mode_ui() -> void:
 		_crosshair.text = "+ 1/8" if fine_place else "+"
 		_crosshair.modulate = Color(1.0, 0.78, 0.30) if fine_place else Color(1, 1, 1)
 	if _ghost_mat != null:
-		_ghost_mat.albedo_color = Color(1.0, 0.78, 0.30, 0.24) if fine_place 			else Color(0.6, 0.9, 1.0, 0.17)
+		_ghost_mat.albedo_color = Color(1.0, 0.78, 0.30, 0.16) if fine_place 			else Color(0.6, 0.9, 1.0, 0.11)
 
 
 func _toggle_book() -> void:
@@ -915,7 +932,41 @@ func _on_warp_pressed() -> void:
 		_system_label.text = "%s system\n%s" % [sysdef["name"], Galaxy.civ_name(sysdef["civ_tier"])]
 
 
+## Pull the eye down if there is something directly overhead.
+##
+## Cheaper and more exact than making the capsule taller: a taller capsule
+## changes what gaps you fit through, which is a movement change nobody asked
+## for, while this only moves the camera and only when a ceiling is actually
+## there. It drops instantly (being late is the bug) and eases back up (so
+## clearing a doorway does not snap the view).
+func _update_eye_clearance(delta: float) -> void:
+	if _camera == null:
+		return
+	if piloting != null:
+		# Flying: the view belongs to the cockpit, and a hull panel a few
+		# centimetres over your head is not a ceiling you are about to headbutt.
+		_camera.position.y = move_toward(_camera.position.y, EYE_HEIGHT, delta * 3.0)
+		return
+	var want := EYE_HEIGHT
+	var space := get_world_3d().direct_space_state
+	if space != null:
+		var up := global_transform.basis.y
+		var q := PhysicsRayQueryParameters3D.create(global_position,
+			global_position + up * (EYE_HEIGHT + EYE_CLEARANCE))
+		q.exclude = [get_rid()]
+		q.collide_with_areas = false
+		var hit := space.intersect_ray(q)
+		if not hit.is_empty():
+			var d: float = global_position.distance_to(hit["position"])
+			want = clampf(d - EYE_CLEARANCE, 0.0, EYE_HEIGHT)
+	if want < _camera.position.y:
+		_camera.position.y = want
+	else:
+		_camera.position.y = move_toward(_camera.position.y, want, delta * 3.0)
+
+
 func _physics_process(delta: float) -> void:
+	_update_eye_clearance(delta)
 	# The build diff fades on its own; it is a hint, not a mode.
 	if _diff != null and _diff.visible:
 		_diff_t -= delta
@@ -994,7 +1045,7 @@ func _pilot_physics(delta: float) -> void:
 		_exit_pilot()
 		return
 	var ascend := 0.0
-	if Input.is_physical_key_pressed(KEY_SPACE): ascend += 1.0
+	if not menu_open and Input.is_physical_key_pressed(KEY_SPACE): ascend += 1.0
 	if Input.is_physical_key_pressed(KEY_SHIFT): ascend -= 1.0
 	var roll := 0.0
 	if Input.is_physical_key_pressed(KEY_Q): roll += 1.0
@@ -1328,7 +1379,7 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	if is_on_floor():
 		if v_up < 0.0:
 			v_up = 0.0
-		if Input.is_physical_key_pressed(KEY_SPACE):
+		if not menu_open and Input.is_physical_key_pressed(KEY_SPACE):
 			v_up = JUMP_SPEED
 	# No thrust once your feet leave the ground: a jump is a jump. There is no
 	# jetpack in the game yet, and being able to hold jump and climb was standing
@@ -1608,7 +1659,7 @@ func _swim(delta: float, up: Vector3) -> void:
 	if wish.length() > 0.01:
 		desired = wish.normalized() * SWIM_SPEED
 	var vy := 0.0
-	if Input.is_physical_key_pressed(KEY_SPACE): vy += 1.0
+	if not menu_open and Input.is_physical_key_pressed(KEY_SPACE): vy += 1.0
 	if Input.is_physical_key_pressed(KEY_SHIFT): vy -= 1.0
 	if vy != 0.0:
 		desired += up * vy * SWIM_SPEED
@@ -1636,7 +1687,7 @@ func _process_float(delta: float) -> void:
 	var right := cam.x
 	var up := cam.y
 	var vertical := 0.0
-	if Input.is_physical_key_pressed(KEY_SPACE):
+	if not menu_open and Input.is_physical_key_pressed(KEY_SPACE):
 		vertical += 1.0
 	if Input.is_physical_key_pressed(KEY_SHIFT):
 		vertical -= 1.0
@@ -1667,6 +1718,8 @@ func _snap_to_axis(v: Vector3) -> Vector3:
 
 
 func _move_input() -> Vector2:
+	if menu_open:
+		return Vector2.ZERO
 	var x := 0.0
 	var y := 0.0
 	if Input.is_physical_key_pressed(KEY_W): y += 1.0

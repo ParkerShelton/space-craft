@@ -52,6 +52,15 @@ var _profile_hash := 0
 ## fill in, and pushing the wrong one destroys the saved copy.
 var _profile_ready := false
 var _menu_vb: VBoxContainer
+## The Escape screen. Called the GAME MENU rather than a pause menu, because it
+## does not pause anything: the world, the creatures and everyone else on the
+## server carry on while it is up. Calling it "pause" would be a promise the
+## game does not keep.
+var _game_menu: CanvasLayer
+## Cleared once --join has been acted on, so leaving a server to the main menu
+## does not walk straight back into it. Static because it has to outlive the
+## scene reload that exiting performs.
+static var _auto_joined := false
 
 ## How often a client checks whether its inventory has changed and, if so, tells
 ## the host. Not every pickup: mining a stack of stone changes the inventory on
@@ -109,7 +118,8 @@ func _ready() -> void:
 	# --join=host[:port] goes straight into a server, skipping the menu. Handy for
 	# a shortcut that always joins the same one.
 	var auto := _join_arg()
-	if not auto.is_empty():
+	if not auto.is_empty() and not _auto_joined:
+		_auto_joined = true
 		if _net.join(str(auto["host"]), int(auto["port"])):
 			_start_world(false, "client")
 		else:
@@ -224,6 +234,94 @@ func _on_world_ready(seed_value: int, system_index: int) -> void:
 	_client_seed = seed_value
 	_client_system = system_index
 	_start_world(false, "joined")
+
+
+## Escape, while playing. Opens if nothing is up, closes if it already is, so
+## the same key that opened it by accident puts it away again.
+func _toggle_game_menu() -> void:
+	if _game_menu != null:
+		_close_game_menu()
+	else:
+		_open_game_menu()
+
+
+func _open_game_menu() -> void:
+	if _world == null or _world.player == null:
+		return
+	_game_menu = CanvasLayer.new()
+	_game_menu.layer = 12
+	add_child(_game_menu)
+	# Dimmed rather than hidden: it stays clear that the world is still there and
+	# still running behind it.
+	var bg := ColorRect.new()
+	bg.color = Color(0.03, 0.04, 0.08, 0.72)
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_game_menu.add_child(bg)
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_game_menu.add_child(center)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 14)
+	vb.alignment = BoxContainer.ALIGNMENT_CENTER
+	center.add_child(vb)
+
+	var title := Label.new()
+	title.text = "Game Menu"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 30)
+	vb.add_child(title)
+	var sub := Label.new()
+	sub.text = "the world keeps running while this is open"
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.add_theme_font_size_override("font_size", 14)
+	sub.modulate = Color(1, 1, 1, 0.55)
+	vb.add_child(sub)
+
+	# Continue FIRST, because the commonest reason to be looking at this screen
+	# is having pressed Escape by mistake.
+	_game_menu_button(vb, "Continue", _close_game_menu)
+	var settings := Button.new()
+	settings.text = "Settings  (not yet)"
+	settings.custom_minimum_size = Vector2(280, 44)
+	settings.disabled = true
+	vb.add_child(settings)
+	_game_menu_button(vb, "Save and Exit to Main Menu" if _net_mode == "single"
+		else "Leave Game", _exit_to_main_menu)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_world.player.menu_open = true
+
+
+func _game_menu_button(vb: VBoxContainer, text: String, cb: Callable) -> void:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(280, 44)
+	b.pressed.connect(cb)
+	vb.add_child(b)
+
+
+func _close_game_menu() -> void:
+	if _game_menu != null:
+		_game_menu.queue_free()
+		_game_menu = null
+	if _world != null and _world.player != null:
+		_world.player.menu_open = false
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## Back to the title screen. Reloads the scene rather than unpicking the world by
+## hand: planets, chunks, ships, stations, creatures and the network session all
+## go at once, and none of them can be left half torn down.
+func _exit_to_main_menu() -> void:
+	if _net_mode == "single" and _world != null and _world.player != null:
+		_world.save_game()
+	elif _net_mode == "client" and _world != null and _world.player != null:
+		# Same courtesy the window-close path does: hand the server what we are
+		# carrying before the connection goes.
+		_net.push_profile(_world.player.make_profile().duplicate(true))
+	if _net != null:
+		_net.leave()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	get_tree().reload_current_scene()
 
 
 func _delete_save() -> void:
@@ -446,6 +544,7 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	var player := Player.new()
 	player.name = "Player"
 	player.world = world
+	player.menu_requested.connect(_toggle_game_menu)
 	player.position = home.find_spawn_point(Vector3.UP)
 	add_child(player)
 	world.player = player
