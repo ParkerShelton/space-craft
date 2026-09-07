@@ -31,6 +31,8 @@ const EYE_HEIGHT := 0.7
 ## in the block and you see through it. The eye is pulled down to keep this much
 ## clear of anything overhead, which costs one short raycast per frame.
 const EYE_CLEARANCE := 0.25
+## See _update_prospect: compensation for where the wrench glyph draws.
+const WRENCH_NUDGE_Y := 4.0
 
 # The placement preview, and how much of it you see.
 #
@@ -165,7 +167,7 @@ var _diff_t := 0.0
 var _ghost_sig := ""
 var _ghost_mat: StandardMaterial3D               # shape key, so the mesh is only rebuilt when it changes
 var _ghost_dist := 99.0            # eye to previewed block, drives how faint it is
-var _commission_panel: PanelContainer   # "make this a Smelter?" confirmation
+var _commission_panel: Control     # "make this a Smelter?" confirmation
 var _prospect_name := ""           # what the crosshair is currently offering
 ## Off hides the placement preview entirely. Some people would rather judge the
 ## placement from the crosshair and the block face than have anything drawn over
@@ -730,6 +732,7 @@ func _apply_place_mode_ui() -> void:
 	if _crosshair != null:
 		_crosshair.text = "+ 1/8" if fine_place else "+"
 		_crosshair.modulate = Color(1.0, 0.78, 0.30) if fine_place else Color(1, 1, 1)
+		_crosshair.position.y = 0.0
 	_apply_ghost_alpha()
 
 
@@ -2425,21 +2428,25 @@ func _update_prospect() -> void:
 	if _crosshair == null:
 		return
 	var p := station_prospect()
-	var name := ""
-	if not p.is_empty():
-		var opts: Array = p["options"]
-		name = str(opts[0]["name"]) if opts.size() == 1 else "%d options" % opts.size()
-	if name == _prospect_name:
+	var on := not p.is_empty()
+	var mark := "wrench" if on else ("fine" if fine_place else "plain")
+	if mark == _prospect_name:
 		return
-	_prospect_name = name
-	if name == "":
+	_prospect_name = mark
+	if on:
+		# The crosshair BECOMES the wrench and says nothing else. What it would
+		# make is named in the confirmation, where there is room for it and where
+		# it matters -- a caption stuck to the middle of the screen is just
+		# something else to read past while you are looking at the world.
+		_crosshair.text = "⚒"
+		_crosshair.modulate = Color(1, 1, 1)
+		# The wrench glyph's ink sits high in its line box -- measured 4px above
+		# where "+" draws at this size -- so the label is nudged down by exactly
+		# that, or the cursor jumps as it changes.
+		_crosshair.position.y = WRENCH_NUDGE_Y
+	else:
 		_crosshair.text = "+ 1/8" if fine_place else "+"
 		_crosshair.modulate = Color(1.0, 0.78, 0.30) if fine_place else Color(1, 1, 1)
-	else:
-		# A wrench, drawn with what a font can be relied on to have.
-		_crosshair.text = "+
-⚒ %s" % name
-		_crosshair.modulate = Color(0.65, 1.0, 0.72)
 
 
 ## The confirmation. Nothing changes until it is answered, and it names what you
@@ -2449,18 +2456,32 @@ func _open_commission(prospect: Dictionary) -> void:
 	if _commission_panel != null:
 		return
 	var opts: Array = prospect["options"]
-	_commission_panel = PanelContainer.new()
-	_commission_panel.set_anchors_preset(Control.PRESET_CENTER)
+	# Centred by a container that fills the screen, not by setting a position on
+	# something that has not been laid out yet: a panel's size is zero until the
+	# frame after it is added, so centring it by hand put it in the top-left
+	# corner with half of it off the edge.
+	_commission_panel = Control.new()
+	_commission_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_commission_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_commission_panel.add_child(center)
+	var box := PanelContainer.new()
+	center.add_child(box)
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 10)
-	_commission_panel.add_child(vb)
+	box.add_child(vb)
 	var head := Label.new()
-	head.text = "Commission this build as:" if opts.size() > 1 else "Commission this build?"
+	head.text = ("Commission this build as:" if opts.size() > 1
+		else "Make this a %s?" % str(opts[0]["name"]))
 	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	head.add_theme_font_size_override("font_size", 18)
 	vb.add_child(head)
 	for o in opts:
 		var b := Button.new()
-		b.text = str(o["name"])
+		# One option is a yes/no question, and the thing being made is already
+		# named above it; several is a menu, and then each has to say which.
+		b.text = "Confirm" if opts.size() == 1 else str(o["name"])
 		b.custom_minimum_size = Vector2(240, 38)
 		b.pressed.connect(_confirm_commission.bind(prospect, int(o["to"])))
 		vb.add_child(b)
@@ -2470,7 +2491,6 @@ func _open_commission(prospect: Dictionary) -> void:
 	cancel.pressed.connect(_close_commission)
 	vb.add_child(cancel)
 	_ui_layer.add_child(_commission_panel)
-	_commission_panel.position = -_commission_panel.size * 0.5
 	menu_open = true      # the world runs on; this body just stops taking orders
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
@@ -3010,9 +3030,15 @@ func _build_ui() -> void:
 	_crosshair = Label.new()
 	_crosshair.text = "+"
 	_crosshair.add_theme_font_size_override("font_size", 24)
-	_crosshair.set_anchors_preset(Control.PRESET_CENTER)
+	# Spans the screen and centres its own text, rather than being a small label
+	# pinned AT the centre. PRESET_CENTER anchors the top-left corner there, so
+	# the label grows right and down and a longer string drags the crosshair off
+	# the middle of the screen -- which is what happened the moment it had
+	# anything to say besides "+".
+	_crosshair.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_crosshair.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(_crosshair)
 
 	_hotbar_label = Label.new()
