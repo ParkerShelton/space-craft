@@ -48,6 +48,12 @@ var day_length := 240.0
 ## How far through the current day, 0..1. Advanced by main's environment update
 ## rather than by the planet, so it keeps ticking for planets you aren't on.
 var day_phase := 0.0
+## Where a brand new world starts its home planet. Sun height is sin(phase*TAU),
+## so 0 is sunrise, 0.25 noon and 0.5 sunset: this is early morning, with the sun
+## just clear of the horizon and most of the daylight still ahead of you.
+## Other planets keep the random phase they derive from the seed -- a system
+## where every world is at dawn at once would be a strange sight from orbit.
+const MORNING_PHASE := 0.05
 
 # --- built machines ----------------------------------------------------------
 # Machines that must be physically constructed. Only the CONTROLLER position is

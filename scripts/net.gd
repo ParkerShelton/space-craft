@@ -17,7 +17,7 @@ class_name Net
 const PORT := 24565
 const MAX_PLAYERS := 8
 
-signal world_ready(seed_value: int, system_index: int)
+signal world_ready(seed_value: int, system_index: int, phases: PackedFloat32Array)
 signal roster_changed()
 ## The host recognised us and sent back what we were carrying last time.
 signal profile_restored(profile: Dictionary)
@@ -176,7 +176,7 @@ func _on_peer_connected(id: int) -> void:
 	_post("* %s joined" % player_label(id))
 	# Hand the newcomer the world it has to build. Nothing else can happen until
 	# it has this: its terrain would not match ours.
-	world_info.rpc_id(id, _seed, _system)
+	world_info.rpc_id(id, _seed, _system, _day_phases())
 	# ...and everything that has been built or dug since the world was made.
 	# Without this a late joiner sees the world as it was GENERATED: it would
 	# generate the same terrain from the seed and then be missing every change
@@ -230,12 +230,27 @@ func _on_server_gone() -> void:
 
 # --- world handshake ------------------------------------------------------
 
+## Time of day on each planet, in planet order. Both machines generate the same
+## planets from the same seed, so the order is enough to say which is which.
+##
+## Without this a newcomer starts the world's day over from wherever the seed put
+## it, and stands in the morning sun arguing with somebody who is watching the
+## sun set. The clocks then run at the same rate on both, so one exchange at the
+## door is enough.
+func _day_phases() -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	if _world != null:
+		for p in _world.planets:
+			out.append(p.day_phase)
+	return out
+
+
 @rpc("authority", "call_remote", "reliable")
-func world_info(seed_value: int, system_index: int) -> void:
+func world_info(seed_value: int, system_index: int, phases: PackedFloat32Array) -> void:
 	_seed = seed_value
 	_system = system_index
 	joining = false
-	world_ready.emit(seed_value, system_index)
+	world_ready.emit(seed_value, system_index, phases)
 
 
 ## Host -> a joining client: every edit made to one planet so far.

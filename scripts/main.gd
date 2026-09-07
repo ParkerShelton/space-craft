@@ -43,6 +43,9 @@ var _join_ip: LineEdit
 var _net_mode := "single"
 var _client_seed := 0
 var _client_system := 0
+## The host's time of day for each planet, in planet order, handed over on
+## joining. Kept until the planets exist to put it on.
+var _client_phases := PackedFloat32Array()
 var _avatars := {}          # peer id -> RemotePlayer
 var _net_tick := 0.0
 var _profile_tick := 0.0
@@ -242,10 +245,11 @@ func _await_host() -> void:
 		_menu_populate(false))
 
 
-func _on_world_ready(seed_value: int, system_index: int) -> void:
+func _on_world_ready(seed_value: int, system_index: int, phases: PackedFloat32Array) -> void:
 	_net_mode = "client"
 	_client_seed = seed_value
 	_client_system = system_index
+	_client_phases = phases
 	_start_world(false, "joined")
 
 
@@ -529,6 +533,8 @@ func _start_dedicated(port: int, seed_value: int, slot: String = "server_world")
 			world.current_system_index = si
 	var sysdef: Dictionary = galaxy.systems[world.current_system_index]
 	_generate_planets(world, sysdef)
+	if not resumed and not world.planets.is_empty():
+		world.planets[0].day_phase = Planet.MORNING_PHASE
 	# Loaded only now: load_game applies edits ONTO the planets, so they have to
 	# exist first.
 	if resumed and world.load_game():
@@ -647,6 +653,15 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	print("[galaxy] %d systems generated -- starting in %s (%s, %d planets)" % [
 		galaxy.systems.size(), sysdef["name"], Galaxy.civ_name(sysdef["civ_tier"]), sysdef["planet_count"]])
 	_generate_planets(world, sysdef)
+	if mode == "joined":
+		# Someone else's world, already part way through its day: take their clock
+		# rather than starting our own (see Net.world_info).
+		for i in mini(_client_phases.size(), world.planets.size()):
+			world.planets[i].day_phase = _client_phases[i]
+	elif not load_existing and not world.planets.is_empty():
+		# A new world opens in the morning, so the first thing you do is a full
+		# day's worth rather than twenty minutes before dark.
+		world.planets[0].day_phase = Planet.MORNING_PHASE
 	# The planets exist from here, so anything the network buffered while they
 	# were being built can be applied now.
 	_net.world_built()
