@@ -33,6 +33,15 @@ const EYE_HEIGHT := 0.7
 const EYE_CLEARANCE := 0.25
 ## See _update_prospect: compensation for where the wrench glyph draws.
 const WRENCH_NUDGE_Y := 4.0
+## Crouching. Slower, because a careful step is a slow one -- and because the
+## speed is what tells you the ledge guard is on without a word on screen.
+const CROUCH_SPEED_MULT := 0.45
+## How far past the step to probe for floor, and how far down. The lookahead has
+## to reach past your own edge or you stop with your heels over nothing; the
+## drop is the capsule's half-height plus a little, so a stair down still counts
+## as ground.
+const CROUCH_LOOKAHEAD := 0.45
+const CROUCH_PROBE := 1.25
 
 # The placement preview, and how much of it you see.
 #
@@ -1456,6 +1465,50 @@ func _align_up(up: Vector3, delta: float) -> void:
 	global_transform.basis = global_transform.basis.orthonormalized()
 
 
+## Trim a step that would take you off the edge.
+##
+## Each axis is tested on its own, not just the pair: walking diagonally at a
+## corner, the move as a whole leaves the ledge while one of its halves does
+## not, and stopping dead there feels like catching on nothing. Keeping the half
+## that still has ground under it is what lets you run a wall edge.
+func _hold_the_ledge(horiz: Vector3, up: Vector3, delta: float) -> Vector3:
+	if horiz.length_squared() < 0.0001:
+		return horiz
+	if _ground_ahead(horiz * delta, up):
+		return horiz
+	# Split along the two directions you are actually steering in.
+	var fwd := -global_transform.basis.z
+	fwd = (fwd - up * fwd.dot(up)).normalized()
+	var right := up.cross(fwd).normalized()
+	var a := fwd * horiz.dot(fwd)
+	var b := right * horiz.dot(right)
+	if a.length_squared() > 0.0001 and _ground_ahead(a * delta, up):
+		return a
+	if b.length_squared() > 0.0001 and _ground_ahead(b * delta, up):
+		return b
+	return Vector3.ZERO
+
+
+## Is there something to stand on a step from here?
+##
+## Probed a little PAST where the step lands, because the check has to fail
+## while there is still floor under your feet -- testing the exact landing spot
+## lets you creep out to the very edge and then stop with your heels over
+## nothing, which reads as a bug rather than as caution.
+func _ground_ahead(step: Vector3, up: Vector3) -> bool:
+	var space := get_world_3d().direct_space_state
+	if space == null:
+		return true
+	var lead: Vector3 = step
+	if lead.length() > 0.0001:
+		lead = lead.normalized() * maxf(lead.length(), CROUCH_LOOKAHEAD)
+	var from: Vector3 = global_position + lead
+	var q := PhysicsRayQueryParameters3D.create(from, from - up * CROUCH_PROBE)
+	q.exclude = [get_rid()]
+	q.collide_with_areas = false
+	return not space.intersect_ray(q).is_empty()
+
+
 func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	_align_up(up, delta)
 
@@ -1490,6 +1543,10 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	# No thrust once your feet leave the ground: a jump is a jump. There is no
 	# jetpack in the game yet, and being able to hold jump and climb was standing
 	# in for one -- if you are down a hole, the way out is to build your way out.
+
+	# Crouching: hold shift and you will not walk off what you are standing on.
+	if not menu_open and not ui_typing and Input.is_physical_key_pressed(KEY_SHIFT) 			and is_on_floor():
+		horiz = _hold_the_ledge(horiz, up, delta) * CROUCH_SPEED_MULT
 
 	velocity = horiz + up * v_up
 	up_direction = up
