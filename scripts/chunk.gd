@@ -273,7 +273,11 @@ const PARTS_KEY := "__parts"
 # SKY_FREE is slack for voxel stepping -- blocky ground means a cliff face in
 # full daylight still sits a few blocks under the smooth noise surface.
 const SKY_FREE := 4.0
-const SKY_FADE := 30.0
+# Shorter than it was, because the fade is now the ONLY thing darkening a cave:
+# there is no roof test any more to black one out early, so a long ramp left
+# somewhere ten blocks down looking like an overcast afternoon. At 16 a cave
+# mouth is lit, a few blocks in is dim, and twenty down is dark.
+const SKY_FADE := 16.0
 
 # How far below the surface daylight stops reaching, in blocks. Below this a
 # face is lit only by whatever the player brought with them.
@@ -619,7 +623,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 						# planet tints its own soil, and grass that ignored that sat on
 						# the surface looking like it belonged to a different world.
 						planet.color_of(planet.pal_top), ggv,
-						_sky_depth(planet, snap, ggv),
+						_sky_depth(planet, ggv),
 						gverts, gnormals, gcolors, guvs)
 				idx += 1
 
@@ -776,7 +780,7 @@ static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 				                     # so it grows OUT of the rock rather than
 				                     # sitting on top of it like a dropped cube
 			_emit_free_box(c - Vector3.ONE * sz, c + Vector3.ONE * sz,
-				Color(ore_col.r, ore_col.g, ore_col.b, _sky_depth(planet, snap, gv + n)),
+				Color(ore_col.r, ore_col.g, ore_col.b, _sky_depth(planet, gv + n)),
 				ORE_CHUNK_ID, verts, normals, colors, uvs, uv2s,
 				_face_light(snap, gv, n))
 
@@ -924,7 +928,7 @@ static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Pla
 		#
 		# Daylight still gets to darken deep or roofed-over water; it just does it
 		# through the COLOUR rather than through the alpha.
-		var sky := _sky_depth(planet, snap, gv + n)
+		var sky := _sky_depth(planet, gv + n)
 		var lit := s * lerpf(0.4, 1.0, sky)
 		var col := Color(base.r * lit, base.g * lit, base.b * lit, base.a)
 		var nrm := Vector3(n)
@@ -1021,7 +1025,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 					# it: measuring from inside the block meant the wall of a shaft
 					# you dug found its own solid neighbours overhead and went pitch
 					# black, while the open shaft it faced was letting light down.
-					smask[k + j * CS] = int(round(_sky_depth(planet, snap,
+					smask[k + j * CS] = int(round(_sky_depth(planet,
 						_global_coord(base, d, u, v, a, k, j)
 						+ Vector3i(int(narr[0]), int(narr[1]), int(narr[2]))) * 15.0))
 				lmask[k + j * CS] = 0
@@ -1040,70 +1044,28 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 # defined by the planet (each world's ores look different).
 ## How much daylight reaches this voxel, from depth below the terrain surface.
 ## Sampled per QUAD -- greedy meshing means one lookup covers a whole wall.
-## Does this cell actually stop daylight?
-##
-## FOLIAGE DOES NOT. Leaves are "full" blocks to the mesher, and treating them as
-## opaque here sealed off every square of ground under a tree -- which on a
-## wooded planet is most of the surface. At night, with no sky term, that left
-## the whole world rendering pitch black with the stars showing through the gaps.
-## A canopy dims what is under it; it does not put it in a cave.
-static func _blocks_sky(planet: Planet, snap: Dictionary, v: Vector3i) -> bool:
-	var low := _id_at(planet, snap, v) & Blocks.ID_MASK
-	return _FULL[low] == 1 and _LEAF[low] == 0
-
-
-static func _sky_depth(planet: Planet, snap: Dictionary, gv: Vector3i) -> float:
+static func _sky_depth(planet: Planet, gv: Vector3i) -> float:
 	var c := Vector3(gv) + Vector3(0.5, 0.5, 0.5)
-	var ln := c.length()
-	var depth: float = planet.surface_radius(c / maxf(ln, 0.0001)) - planet._norm(c)
-	if depth <= SKY_FREE:
-		return 1.0
-	var up := planet._axis_of(c)
-	var uq := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
-	if uq == Vector3i.ZERO:
-		return 1.0
-	# Capped: a buried cell hits rock on its first step and costs nothing, while a
-	# genuinely open column is worth following a long way up.
-	var reach := mini(int(depth) + 2, 160)
-	var t1 := Vector3i(uq.y, uq.z, uq.x)
-	var t2 := Vector3i(uq.z, uq.x, uq.y)
-
-	# Can this cell see the sky at all, straight up?
-	var centre_clear := true
-	for i in range(1, reach):
-		if _blocks_sky(planet, snap, gv + uq * i):
-			centre_clear = false
-			break
-	if centre_clear:
-		# A shaft you dug is a LIGHT WELL. It has no business fading out on the
-		# same curve as rock that merely happens to be shallow -- and the old code
-		# cut every cell past 34 blocks to zero outright, which drew a hard line of
-		# darkness straight across the shaft at exactly that depth. Open columns dim
-		# gently instead and keep a floor, so digging down stays readable.
-		return clampf(1.0 - depth / 130.0, 0.30, 1.0)
-
-	# Roofed over. Now the depth fade applies, eased rather than linear so it
-	# arrives at darkness without a corner in it.
-	var f := 1.0 - smoothstep(0.0, 1.0, clampf((depth - SKY_FREE) / SKY_FADE, 0.0, 1.0))
-	if f <= 0.0:
-		return 0.0
-	# The four fanned rays only ever ADD light: they exist to soften the edge of a
-	# shadow, so a cell just under the lip of an opening still catches some sky
-	# rather than switching off between one block and the next.
-	var spill := 0
-	for r in 4:
-		var lat := t1
-		if r == 1: lat = -t1
-		elif r == 2: lat = t2
-		elif r == 3: lat = -t2
-		var clear := true
-		for i in range(1, reach):
-			if _blocks_sky(planet, snap, gv + uq * i + lat * (i / 3)):
-				clear = false
-				break
-		if clear:
-			spill += 1
-	return f * (float(spill) / 4.0) * 0.55
+	var depth: float = planet.surface_radius(c / maxf(c.length(), 0.0001)) - planet._norm(c)
+	# One smooth curve on depth, and nothing else. Everything that ever went in
+	# here besides depth was a VISIBILITY test -- is the column above this cell
+	# clear, do any of four fanned rays escape -- and every one of them answers
+	# differently for two cells side by side in the same wall. Greedy meshing then
+	# hands each answer to a whole flat quad, which is the patchwork of lighter
+	# and darker slabs you see on a cave wall that is all one rock.
+	#
+	# The last version was the worst case of it: a cell four blocks down was full
+	# daylight, and its neighbour one block deeper dropped straight to black
+	# whenever no ray happened to escape, because the ray count MULTIPLIED the
+	# depth term rather than nudging it. Fifteen levels of brightness between two
+	# adjacent blocks.
+	#
+	# A function of depth alone cannot do that: depth changes by about a block
+	# between neighbours, so brightness does too. Caves still go dark, just over
+	# SKY_FADE blocks instead of in one step -- which is also what removed the
+	# hard line of darkness that used to cut across a shaft you dug.
+	return 1.0 - smoothstep(0.0, 1.0,
+		clampf((depth - SKY_FREE) / SKY_FADE, 0.0, 1.0))
 
 
 static func _block_color(planet: Planet, id: int) -> Color:
