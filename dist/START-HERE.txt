@@ -1,0 +1,33 @@
+SpaceCraft
+==========
+
+This folder syncs, so it updates itself. When there is a new build it just
+appears here -- there is nothing to download and nothing to unzip. Close the
+game before playing again if it happens to be open while an update lands.
+
+VERSION.txt says which build is currently here.
+
+
+To play
+-------
+
+Open the Game folder and run SpaceCraft.exe.
+
+Windows will probably say it does not recognise the publisher. That is because
+the game is not signed by a company, not because anything is wrong with it:
+click "More info" and then "Run anyway".
+
+
+To play together
+----------------
+
+One of you needs to be the host. Either:
+
+  * From the game's main menu, choose "Host Co-op Game" and keep playing. The
+    others choose "Join Co-op Game" and type your address.
+
+  * Or run the dedicated server in the Server folder, and everyone -- including
+    whoever started it -- joins that instead. This one keeps the world safe:
+    it saves, so the world is still there tomorrow.
+
+See the README.txt in each folder.
