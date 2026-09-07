@@ -250,18 +250,36 @@ var _load_queue_set := {}  # mirrors _load_queue's contents for O(1) membership 
 # while it's shown -- frame smoothness doesn't matter behind an opaque
 # loading screen, so we can push far more chunks through at once to shorten
 # the wait, then drop back to the normal pacing once gameplay is visible.
-var MAX_INFLIGHT := 24        # concurrent worker tasks in flight
+var MAX_INFLIGHT := _normal_inflight()   # concurrent worker tasks in flight
 var APPLY_PER_FRAME := 6      # results turned into meshes per frame (main-thread cost)
 const MAX_INFLIGHT_NORMAL := 24
 const APPLY_PER_FRAME_NORMAL := 6
 const MAX_INFLIGHT_FAST_LOAD := 64
+
+
+## How many chunks may be building at once during play.
+##
+## Not the old flat 24. Godot's worker pool runs about one thread per core, so
+## queueing two dozen builds hands every core to chunk generation and the frame
+## has to fight for what is left -- which is felt as a stutter while looking
+## around, since the camera is the thing that needs the main thread most often.
+## Half the cores keeps terrain arriving while leaving the game somewhere to
+## run. The loading screen still uses the number above: there is no frame to
+## protect behind it.
+static func _normal_inflight() -> int:
+	return maxi(2, OS.get_processor_count() / 2)
 const APPLY_PER_FRAME_FAST_LOAD := 24
+## How long a frame may spend turning finished chunks into meshes and collision
+## shapes. Six dense chunks in one frame is a hitch you can see; this spends the
+## same effort over as many frames as it takes. Ignored during the loading
+## screen, where there is no frame to protect and the count above is the point.
+const APPLY_BUDGET_US := 4000
 
 ## Called by main.gd's loading screen: push far more chunks through per frame
 ## while the screen hides any jank, then restore normal pacing once the world
 ## is revealed.
 func set_fast_loading(enabled: bool) -> void:
-	MAX_INFLIGHT = MAX_INFLIGHT_FAST_LOAD if enabled else MAX_INFLIGHT_NORMAL
+	MAX_INFLIGHT = MAX_INFLIGHT_FAST_LOAD if enabled else _normal_inflight()
 	APPLY_PER_FRAME = APPLY_PER_FRAME_FAST_LOAD if enabled else APPLY_PER_FRAME_NORMAL
 var _inflight := {}          # cc -> WorkerThreadPool task id
 var _ready_data := {}        # cc -> mesh data dict (filled by workers)
@@ -3399,9 +3417,20 @@ func process_load_queue(_budget: int) -> int:
 			else:
 				rest.append(cc)
 		ready_ccs = front + rest
+	# Applying a finished chunk is main-thread work -- an ArrayMesh and, worse, a
+	# cooked ConcavePolygonShape3D -- and how long it takes depends entirely on
+	# how much geometry came back. A fixed count per frame therefore costs
+	# whatever it costs: four dense chunks in one frame is a visible hitch, four
+	# empty ones is nothing. A time budget spends the same total effort while
+	# refusing to spend it all at once.
+	var budget_start := Time.get_ticks_usec()
 	var applied := 0
 	for cc in ready_ccs:
-		if applied >= APPLY_PER_FRAME:
+		# Always let ONE through, or a frame that is already slow could starve
+		# streaming entirely and never catch up.
+		if applied >= APPLY_PER_FRAME or (applied > 0
+				and APPLY_PER_FRAME != APPLY_PER_FRAME_FAST_LOAD
+				and Time.get_ticks_usec() - budget_start > APPLY_BUDGET_US):
 			break
 		_ready_mutex.lock()
 		var data: Dictionary = _ready_data.get(cc, {})
@@ -3671,6 +3700,16 @@ func _add_temp_collider(v: Vector3i) -> void:
 ## Drop the stand-ins for a chunk once its real collision exists.
 func _clear_temp_colliders(cc: Vector3i) -> void:
 	if _temp_solid.is_empty():
+		return
+	# Not while this chunk is still owed a rebuild.
+	#
+	# A build already in flight when you placed the block does not contain it --
+	# its snapshot was taken before the click. Dropping the stand-in the moment
+	# THAT build lands leaves the block with no collision at all until the real
+	# rebuild arrives, which is how you fall through the pillar you are standing
+	# on. It only happens when a chunk was busy for some other reason at the
+	# instant you placed, which is why it is intermittent.
+	if _dirty.has(cc):
 		return
 	for v in _temp_solid.keys():
 		if chunk_of(v) != cc:
