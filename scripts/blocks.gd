@@ -969,52 +969,21 @@ static func _rotate_offset(o: Vector3i, size: Vector3i, rot: int) -> Vector3i:
 		3: return Vector3i(o.z, o.y, size.x - 1 - o.x)
 		_: return o
 
-# Hand recipes: things you can assemble from carried materials with no station
-# (the bootstrap chain). Each: {out, n, reqs}. A requirement is {id, n} for a
-# specific item, or {refined:true, n} for any refined material -- so anything that
-# needs refined material can't be made until you've built a Smelter and smelted ore.
-# Only the bare essentials are hand-assembled (so you can never get stuck): a
-# Smelter to refine, Metal Hull to build with, and the Fabricator crafting hub.
-# Everything else is made at a station.
-# A requirement is {id,n} (specific item), {refined:true,n} (any refined material),
-# or {any:[ids],n} (any of a set, e.g. any wood).
-## Categories for the hand-crafting list. A flat list stops being usable long
-## before the recipe count gets interesting -- these let the panel filter, and a
-## new recipe only has to declare which drawer it lives in.
+## Categories for the recipe book. A flat list stops being usable long before the
+## recipe count gets interesting -- these let the panel filter, and a new recipe
+## only has to declare which drawer it lives in.
 const CRAFT_CATS := ["All", "Stations", "Light", "Building", "Materials"]
 
-# Stations are BUILT, not crafted: the Smelter, Fabricator and Carpenter's Bench
-# are laid out block by block and commissioned with a Wrench (see
-# PART_STRUCTURES). What is left here is gear that lives on your person.
-const HAND_RECIPES := [
-	{"cat": "Stations", "out": CHEST, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
-	{"cat": "Materials", "out": METAL, "n": 4, "reqs": [{"refined": true, "n": 1}]},        # cast ingots into hull plates
-	{"cat": "Stations", "out": SHIPWORKS, "n": 1, "reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
-	{"cat": "Stations", "out": MACHINE_CORE, "n": 1,
-		"reqs": [{"id": METAL, "n": 4}, {"refined": true, "n": 1}]},
-	{"cat": "Stations", "out": SHAPER, "n": 1, "reqs": [{"id": ROCK, "n": 10}, {"id": METAL, "n": 2}]},
-	# The tool that turns a pile of blocks into a machine. Deliberately makeable
-	# with nothing but what you can gather by hand: every station is built now,
-	# so a wrench you could not make would lock the whole game.
-	{"cat": "Materials", "out": WRENCH, "n": 1,
-		"reqs": [{"id": ROCK, "n": 4}, {"any": WOOD_IDS, "n": 2, "label": "Wood"}]},
-	# The base's nervous system: cheap, because a grid you cannot afford to run
-	# across your base is a grid you build around instead of with.
-	{"cat": "Building", "out": WIRE, "n": 8, "reqs": [{"id": METAL, "n": 1}, {"refined": true, "n": 1}]},
-	{"cat": "Stations", "out": BATTERY, "n": 1,
-		"reqs": [{"id": METAL, "n": 3}, {"refined": true, "n": 2}]},
-	{"cat": "Stations", "out": POWER_BAY, "n": 1,
-		"reqs": [{"id": METAL, "n": 8}, {"refined": true, "n": 3}]},
-	# Deliberately cheap and made from the most common material there is: a
-	# light source gates cave exploration and surviving the first night, so
-	# putting it behind rare drops would just make the early game dark.
-	{"cat": "Light", "out": TORCH, "n": 4, "reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
-	{"cat": "Light", "out": GLOW_LAMP, "n": 2, "reqs": [{"id": CRYSTAL, "n": 1}, {"id": METAL, "n": 1}]},
-	# Burns the ore itself: how bright and how far comes from that ore's
-	# Combustion, so which ore you feed it actually matters.
-	{"cat": "Light", "out": EMBER_TORCH, "n": 6, "carry_props": true,
-		"reqs": [{"refined": true, "n": 1}, {"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
-]
+# NOTHING is made by hand any more. Everything is made at a bench, which is why
+# the inventory no longer carries a crafting column.
+#
+# That leaves one thing to be careful about, and it is the whole game: a Wrench
+# is what commissions a station, and the Wrench is now made AT a station. Taken
+# literally that is a world you can never build anything in. The Carpenter's
+# Bench is the way out -- see Player._try_assemble_machine, which lets that one
+# bench be commissioned bare-handed. It is planks and pegs; you do not need a
+# spanner to nail a bench together, and every other station still does.
+const HAND_RECIPES := []
 
 # Which material TYPE a station builds from (see Blocks.id_matches_material).
 # The Smelter combines refined ore + a base resource into intermediates; the two
@@ -1063,10 +1032,27 @@ const STATION_CRAFTS := {
 		{"label": "Cooked Meat", "out": COOKED_MEAT, "n": 1, "reqs": [{"id": RAW_MEAT, "n": 1}]},
 	],
 	SMELTER: [
+		# Cast refined ingots into plain hull plate -- the step that turns what
+		# you dug up into something you can build with.
+		{"label": "Hull Plate x4", "out": METAL, "n": 4, "cost": 1},
 		{"label": "Alloy Plating x2", "out": ALLOY, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 3}},
 		{"label": "Circuitry x2", "out": CIRCUIT, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 2}},
 	],
 	FABRICATOR: [
+		{"label": "Glow Lamp x2", "out": GLOW_LAMP, "n": 2,
+			"reqs": [{"id": CRYSTAL, "n": 1}, {"id": METAL, "n": 1}]},
+		# The base's nervous system: cheap, because a grid you cannot afford to
+		# run across your base is a grid you build around instead of with.
+		{"label": "Wire x8", "out": WIRE, "n": 8,
+			"reqs": [{"id": METAL, "n": 1}, {"refined": true, "n": 1}]},
+		{"label": "Machine Core", "out": MACHINE_CORE, "n": 1,
+			"reqs": [{"id": METAL, "n": 4}, {"refined": true, "n": 1}]},
+		{"label": "Battery", "out": BATTERY, "n": 1,
+			"reqs": [{"id": METAL, "n": 3}, {"refined": true, "n": 2}]},
+		{"label": "Power Bay", "out": POWER_BAY, "n": 1,
+			"reqs": [{"id": METAL, "n": 8}, {"refined": true, "n": 3}]},
+		{"label": "Shipworks", "out": SHIPWORKS, "n": 1,
+			"reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 		{"label": "Drill", "out": DRILL, "n": 1, "cost": 3},
 		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 3},
 		{"label": "Melee Weapon", "out": WEAPON, "n": 1, "cost": 3},
@@ -1078,9 +1064,28 @@ const STATION_CRAFTS := {
 		{"label": "Warp Drive", "out": WARP_DRIVE, "n": 1, "cost": 10},
 		{"label": "Hull Plate x4", "out": METAL, "n": 4, "reqs": [{"id": ALLOY, "n": 2}]},
 	],
+	# The bootstrap bench, and the only one that can be commissioned without a
+	# Wrench -- because the Wrench is made here. Everything on it asks for plain
+	# gathered material for the same reason: this is the bench you reach with
+	# nothing but what you picked up off the ground.
 	CARPENTER: [
+		{"label": "Wrench", "out": WRENCH, "n": 1,
+			"reqs": [{"id": ROCK, "n": 4}, {"any": WOOD_IDS, "n": 2, "label": "Wood"}]},
+		# Deliberately cheap and made from the most common material there is: a
+		# light source gates cave exploration and surviving the first night, so
+		# putting it behind rare drops would just make the early game dark.
+		{"label": "Torch x4", "out": TORCH, "n": 4,
+			"reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
+		# Burns the ore itself: how bright and how far comes from that ore's
+		# Combustion, so which ore you feed it actually matters.
+		{"label": "Ember Torch x6", "out": EMBER_TORCH, "n": 6, "carry_props": true,
+			"reqs": [{"refined": true, "n": 1}, {"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
+		{"label": "Chest", "out": CHEST, "n": 1,
+			"reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
 		{"label": "Door", "out": DOOR, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 6}, {"id": METAL, "n": 2}]},
 		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": METAL, "n": 1}]},
+		{"label": "Block Shaper", "out": SHAPER, "n": 1,
+			"reqs": [{"id": ROCK, "n": 10}, {"id": METAL, "n": 2}]},
 		{"label": "Climate Unit", "out": CLIMATE_UNIT, "n": 1,
 			"reqs": [{"any": WOOD_IDS, "n": 10, "label": "Wood"}, {"id": METAL, "n": 6}]},
 	],

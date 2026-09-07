@@ -254,17 +254,10 @@ var _station_store_label: Label    # "<station> contents" header above its stora
 var _left_header: Label            # "Blueprints" / "Actions" header on the left column
 var _refine_btn: Button            # Smelter action
 var _craft_row: Control            # holds per-station craft buttons
+var _craft_scroll: ScrollContainer # scrolls them when a bench has many
 var _craft_buttons: Array = []     # current station's craft buttons
 var _preview_label: Label          # live craft-stat preview (Fabricator/Shipworks)
 var _job_label: Label              # "Refining… 60%" / "Crafting… 30%" while a job runs
-var _build_buttons: Array = []
-var _craft_cat := "All"            # active category chip
-var _craft_query := ""             # search text
-var _craft_only_afford := false    # hide what you can't build yet
-var _craft_cat_btns: Array = []
-var _craft_vbox: VBoxContainer
-var _craft_search: LineEdit
-var _craft_empty: Label     # hand-assemble-station buttons in the inventory panel
 var _markers: Array[Label] = []   # one navigation marker per planet
 
 
@@ -2377,7 +2370,21 @@ func _try_assemble_machine() -> bool:
 			_toast("%s is damaged -- replace the missing block" % existing.title())
 		_open_station(existing)
 		return true
+	# The Carpenter's Bench is the one exception, and the game depends on it: the
+	# Wrench is made AT a bench now, so a world where every bench needs a Wrench
+	# to commission is a world you can never build anything in. Planks and pegs
+	# do not need a spanner. Everything else still does.
 	if not wrench:
+		var bare := world.assemble(planet, v, true, Blocks.CARPENTER)
+		if bare.get("ok", false):
+			_toast("%s assembled" % bare.get("name", "Station"))
+			var bst := planet.machine_station_at(v)
+			if bst != null:
+				_open_station(bst)
+			return true
+		if bare.get("built", false):
+			_toast(str(bare["reason"]))   # finished, but needs the tool
+			return true
 		return false
 	# Sub-cell builds first: they are what the wrench is mostly for. Fall back to
 	# the older whole-block patterns, which still want their Machine Core.
@@ -3076,18 +3083,12 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	var equip_w := 64
 	var equip_x := 12
 	var grid_x := equip_x + equip_w + 16
-	var craft_x := grid_x + grid_w + 16
-	var craft_w := 220
 	_inv_panel = Panel.new()
 	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
-	# The filter bar costs ~90px of the craft column, so the panel grows to keep
-	# a usable number of recipe rows visible rather than squeezing to three.
-	# Taller rows already give the craft list the room it needed, so this extra
-	# height comes back down -- the panel is centred, and any more of it rides
-	# up under the HP/O2 bars.
-	const CRAFT_EXTRA_H := 52
-	_inv_panel.custom_minimum_size = Vector2(craft_x + craft_w + 12,
-		44 + grid_h + CRAFT_EXTRA_H + 24)
+	# Just the bag and what you are wearing. The crafting column that used to sit
+	# to the right of this is gone: everything is made at a bench now, so a list
+	# of what you can make from your pockets would be an empty list.
+	_inv_panel.custom_minimum_size = Vector2(grid_x + grid_w + 12, 44 + grid_h + 24)
 	_inv_panel.size = _inv_panel.custom_minimum_size
 	_inv_panel.position = -_inv_panel.size * 0.5
 	_inv_panel.visible = false
@@ -3113,87 +3114,6 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	equip_label.position = Vector2(equip_x, 8)
 	_inv_panel.add_child(equip_label)
 	_equip_cell = _make_equip_slot(_inv_panel, Vector2(equip_x, 44))
-
-	# --- crafting column: a scrolling list of hand recipes ---
-	var chead := Label.new()
-	chead.text = "Craft"
-	chead.modulate = Color(1, 1, 1, 0.7)
-	chead.position = Vector2(craft_x, 8)
-	_inv_panel.add_child(chead)
-	# Search box: the fastest route once the list is long, and it costs one row.
-	_craft_search = LineEdit.new()
-	_craft_search.placeholder_text = "Search recipes"
-	_craft_search.position = Vector2(craft_x, 40)
-	_craft_search.custom_minimum_size = Vector2(craft_w, 26)
-	_craft_search.size = Vector2(craft_w, 26)
-	_craft_search.text_changed.connect(func(t: String):
-		_craft_query = t.strip_edges().to_lower()
-		_rebuild_craft_list())
-	_inv_panel.add_child(_craft_search)
-
-	# Category chips. A flat list of every recipe stops being browsable well
-	# before the count gets interesting; these keep it to a drawer at a time.
-	var chip_x := 0.0
-	var chip_y := 72.0
-	for cat in Blocks.CRAFT_CATS:
-		# Skip drawers nothing lives in yet, so the bar never offers a tab that
-		# can only ever show "no recipes". New categories appear on their own
-		# as soon as a recipe claims one.
-		if cat != "All":
-			var any := false
-			for r in Blocks.HAND_RECIPES:
-				if str(r.get("cat", "")) == cat:
-					any = true
-					break
-			if not any:
-				continue
-		var cb := Button.new()
-		cb.text = cat
-		cb.toggle_mode = true
-		cb.button_pressed = cat == _craft_cat
-		cb.add_theme_font_size_override("font_size", 11)
-		cb.custom_minimum_size = Vector2(0, 22)
-		var wdt := 34.0 + float(cat.length()) * 6.0
-		if chip_x + wdt > craft_w:
-			chip_x = 0.0
-			chip_y += 26.0
-		cb.position = Vector2(craft_x + chip_x, chip_y)
-		cb.size = Vector2(wdt, 22)
-		cb.pressed.connect(func():
-			_craft_cat = cat
-			_rebuild_craft_list())
-		_inv_panel.add_child(cb)
-		_craft_cat_btns.append({"btn": cb, "cat": cat})
-		chip_x += wdt + 4.0
-
-	var only := CheckBox.new()
-	only.text = "Craftable only"
-	only.add_theme_font_size_override("font_size", 11)
-	only.position = Vector2(craft_x, chip_y + 26.0)
-	only.toggled.connect(func(on: bool):
-		_craft_only_afford = on
-		_rebuild_craft_list())
-	_inv_panel.add_child(only)
-
-	var list_top := chip_y + 54.0
-	var scroll := ScrollContainer.new()
-	scroll.position = Vector2(craft_x, list_top)
-	var list_h := grid_h + CRAFT_EXTRA_H - (list_top - 44.0)
-	scroll.custom_minimum_size = Vector2(craft_w, list_h)
-	scroll.size = Vector2(craft_w, list_h)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	_inv_panel.add_child(scroll)
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 4)
-	vbox.custom_minimum_size = Vector2(craft_w - 16, 0)
-	scroll.add_child(vbox)
-	_craft_vbox = vbox
-	_craft_empty = Label.new()
-	_craft_empty.modulate = Color(1, 1, 1, 0.5)
-	_craft_empty.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_craft_empty.custom_minimum_size = Vector2(craft_w - 18, 0)
-	vbox.add_child(_craft_empty)
-	_rebuild_craft_list()
 
 
 # One slot cell: colored square + count. `mode`: "none" = display only,
@@ -3411,7 +3331,6 @@ func _refresh_slots() -> void:
 	if not _equip_cell.is_empty():
 		_paint_cell(_equip_cell, suit_slot, false)
 	_update_mine_power()
-	_refresh_build_buttons()
 
 
 # Your effective mining power is the best drill you carry (bare hands = 1.0). This
@@ -3668,84 +3587,13 @@ func _recipe_text(recipe: Dictionary) -> String:
 	return "%s %s  (%s)" % [verb, out_txt, ",  ".join(parts)]
 
 
-## Rebuilds the visible recipe list from the current category, search text and
-## craftable-only toggle. Recipes you can afford sort to the top: when the list
-## is long, "what can I make right now" is nearly always the question being
-## asked, and scrolling past twenty greyed-out rows to find it is the thing that
-## makes a flat list unusable.
-func _rebuild_craft_list() -> void:
-	if _craft_vbox == null:
-		return
-	for e in _build_buttons:
-		if is_instance_valid(e["btn"]):
-			e["btn"].queue_free()
-	_build_buttons.clear()
-	for e in _craft_cat_btns:
-		e["btn"].button_pressed = e["cat"] == _craft_cat
-
-	var afford: Array = []
-	var rest: Array = []
-	for idx in Blocks.HAND_RECIPES.size():
-		var r: Dictionary = Blocks.HAND_RECIPES[idx]
-		if _craft_cat != "All" and str(r.get("cat", "")) != _craft_cat:
-			continue
-		if _craft_query != "" and not _recipe_text(r).to_lower().contains(_craft_query):
-			continue
-		var ok := _recipe_afford(r["reqs"])
-		if not ok and _craft_only_afford:
-			continue
-		if ok:
-			afford.append(idx)
-		else:
-			rest.append(idx)
-
-	for idx in afford + rest:
-		var r2: Dictionary = Blocks.HAND_RECIPES[idx]
-		var ok2 := _recipe_afford(r2["reqs"])
-		var b := Button.new()
-		b.custom_minimum_size = Vector2(_craft_vbox.custom_minimum_size.x - 2, 44)
-		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		b.text = _recipe_text(r2)
-		b.disabled = not ok2
-		b.pressed.connect(_do_recipe.bind(idx))
-		_craft_vbox.add_child(b)
-		_build_buttons.append({"btn": b, "idx": idx})
-	_craft_empty.text = "" if not _build_buttons.is_empty() else 		("Nothing here you can build yet." if _craft_only_afford else "No matching recipes.")
-	_craft_empty.visible = _build_buttons.is_empty()
-
-
-func _refresh_build_buttons() -> void:
-	# While "craftable only" is on, gaining or spending materials changes WHICH
-	# rows belong in the list, not just whether they're enabled.
-	if _craft_only_afford:
-		_rebuild_craft_list()
-		return
-	for e in _build_buttons:
-		var recipe: Dictionary = Blocks.HAND_RECIPES[e["idx"]]
-		e["btn"].text = _recipe_text(recipe)
-		e["btn"].disabled = not _recipe_afford(recipe["reqs"])
-
-
-func _do_recipe(idx: int) -> void:
-	var recipe: Dictionary = Blocks.HAND_RECIPES[idx]
-	if not _recipe_afford(recipe["reqs"]):
-		_toast("Missing materials")
-		return
-	_recipe_consume(recipe["reqs"])
-	if recipe.get("carry_props", false):
-		# The output IS the material: an Ember Torch burns whatever ore made it,
-		# so it has to carry that ore's Combustion into the world with it.
-		_add_item(int(recipe["out"]), int(recipe.get("n", 1)),
-			_consumed_props, "", _consumed_mat)
-	else:
-		_add_item(int(recipe["out"]), int(recipe.get("n", 1)))
-	_toast("Crafted " + Blocks.name_of(int(recipe["out"])))
-	_refresh_slots()
-
 
 # --- crafting stations --------------------------------------------------------
 
 const _LEFT_W := 168   # left column (blueprints/actions) width
+## Height of the recipe column. Four rows: enough to read a bench at a glance,
+## short enough to leave the preview and progress lines below it alone.
+const CRAFT_LIST_H := 140
 const _STORE_COLS := 8 # storage cells per row
 func _build_station_ui(layer: CanvasLayer) -> void:
 	_rx = 12 + _LEFT_W + 12            # right column x
@@ -3774,10 +3622,21 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	_refine_btn.pressed.connect(_on_refine)
 	_station_panel.add_child(_refine_btn)
 
-	# per-station craft buttons are (re)built when the station opens
+	# per-station craft buttons are (re)built when the station opens.
+	#
+	# Inside a scroller with a fixed height, because the number of recipes on a
+	# bench is data now rather than a known small number: the Carpenter's Bench
+	# went from three to eight the moment hand-crafting moved onto it, and a
+	# column that simply grows runs straight through the labels underneath.
+	_craft_scroll = ScrollContainer.new()
+	_craft_scroll.position = Vector2(12, 62)
+	_craft_scroll.custom_minimum_size = Vector2(_LEFT_W + 14, CRAFT_LIST_H)
+	_craft_scroll.size = Vector2(_LEFT_W + 14, CRAFT_LIST_H)
+	_craft_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_station_panel.add_child(_craft_scroll)
 	_craft_row = Control.new()
-	_craft_row.position = Vector2(12, 62)
-	_station_panel.add_child(_craft_row)
+	_craft_row.custom_minimum_size = Vector2(_LEFT_W, 0)
+	_craft_scroll.add_child(_craft_row)
 
 	_preview_label = Label.new()
 	_preview_label.position = Vector2(14, 210)
@@ -3861,7 +3720,7 @@ func _rebuild_craft_buttons(st) -> void:
 		# for every material at once, instead of a recipe per material per shape.
 		crafts = _shaper_crafts(st)
 	var craft_top := 62.0 + (34.0 if is_smelter else 0.0)
-	_craft_row.position = Vector2(12, craft_top)
+	_craft_scroll.position = Vector2(12, craft_top)
 	var by := 0.0
 	for craft in crafts:
 		var b := Button.new()
@@ -3872,6 +3731,7 @@ func _rebuild_craft_buttons(st) -> void:
 		_craft_row.add_child(b)
 		_craft_buttons.append(b)
 		by += 34.0
+	_craft_row.custom_minimum_size = Vector2(_LEFT_W, by)
 
 
 ## Labels currently shown, so a dynamic list is only torn down and rebuilt when
@@ -3901,7 +3761,13 @@ func _open_station(st: Station) -> void:
 
 	# preview + job label sit just below the action/blueprint buttons (same spot;
 	# only one shows at a time -- preview when idle, progress when working)
-	var left_bottom: int = int(_craft_row.position.y) + (_craft_buttons.size() * 34 if not _craft_buttons.is_empty() else 34)
+	# Measured from the SCROLLER, which is what actually occupies the column now:
+	# the buttons inside it can be taller than the space they are shown in, and
+	# the labels below have to sit under the visible box, not under the list.
+	var col_h: int = mini(_craft_buttons.size() * 34, CRAFT_LIST_H) 		if not _craft_buttons.is_empty() else 34
+	_craft_scroll.custom_minimum_size = Vector2(_LEFT_W + 14, col_h)
+	_craft_scroll.size = Vector2(_LEFT_W + 14, col_h)
+	var left_bottom: int = int(_craft_scroll.position.y) + col_h
 	_preview_label.position = Vector2(14, left_bottom + 8)
 	_preview_label.visible = not _craft_buttons.is_empty() or st.kind == Blocks.SHAPER
 	_job_label.position = Vector2(14, left_bottom + 8)

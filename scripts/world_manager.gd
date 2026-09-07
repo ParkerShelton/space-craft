@@ -184,8 +184,8 @@ func edit_part(p: Planet, v: Vector3i, sub: int, id: int) -> void:
 ## function of the blocks, and the blocks are already replicated, so every
 ## machine runs the same assembly and arrives at the same station rather than
 ## being told what to believe.
-func assemble(p: Planet, v: Vector3i, parts: bool) -> Dictionary:
-	var res: Dictionary = p.assemble_parts(v) if parts else p.assemble_machine(v)
+func assemble(p: Planet, v: Vector3i, parts: bool, require: int = -1) -> Dictionary:
+	var res: Dictionary = p.assemble_parts(v, require) if parts else p.assemble_machine(v)
 	if res.get("ok", false) and net != null and net.active:
 		net.assembled(p.planet_name, v, parts)
 	return res

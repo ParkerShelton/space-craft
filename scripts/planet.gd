@@ -1226,7 +1226,11 @@ func _rot_extent(size: Vector3i, rot: int) -> Vector3i:
 ## The clicked voxel can be ANY part of the build, so every placement of the
 ## pattern that would cover it is tried, in four rotations. That is a few
 ## thousand checks, which costs nothing because it only runs on a wrench click.
-func assemble_parts(v: Vector3i) -> Dictionary:
+## `require`, when set, refuses to commission anything but that result. It exists
+## for the bare-handed case: the Carpenter's Bench can be brought to life without
+## a Wrench, and nothing else can, and the check has to happen BEFORE the machine
+## is registered rather than by undoing it afterwards.
+func assemble_parts(v: Vector3i, require: int = -1) -> Dictionary:
 	var cache := {}
 	# PASS 1 -- is it finished? Bail on the first cell that does not fit, which
 	# kills almost every candidate placement immediately.
@@ -1246,8 +1250,13 @@ func assemble_parts(v: Vector3i) -> Dictionary:
 								fits = false
 								break
 						if fits:
-							return _register_part_machine(v,
-								Blocks.PART_STRUCTURES[di], rot, origin)
+							var fdef: Dictionary = Blocks.PART_STRUCTURES[di]
+							if require >= 0 and int(fdef["result"]) != require:
+								return {"ok": false, "built": true,
+									"name": str(fdef["name"]),
+									"reason": "%s is finished -- commission it with a Wrench"
+										% str(fdef["name"])}
+							return _register_part_machine(v, fdef, rot, origin)
 	# PASS 2 -- nothing fits, so work out what to TELL them. Only reached on a
 	# failed click, and only for placements whose first cell is already right,
 	# which is enough to find the build they were plainly attempting.
