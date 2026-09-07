@@ -26,6 +26,41 @@ const _ARCHETYPES := [
 	{"top": Blocks.ROCK, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.9, 0.5, 0.35), "water": "none", "wmin": 0.0, "wmax": 0.0,
 		"tmin": 0.0, "tmax": 0.0, "moon": false, "hazard": "heat", "hdps": 4.5},
+	# --- dusty worlds ---------------------------------------------------------
+	# The regolith world was the only one of its kind and the best of the lot to
+	# look at, so it has company now: the same dust under different skies. What
+	# separates them is what a player can actually feel -- air or none, warm or
+	# cold, and how hard the ground is trying to kill them.
+	#
+	# A DUST MOON: airless, freezing, and nothing but dust. The moon you land on
+	# for its ores and leave again.
+	{"top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": false, "atmo_color": Color(0.72, 0.68, 0.62), "water": "none", "wmin": 0.0, "wmax": 0.0,
+		"tmin": 0.0, "tmax": 0.0, "moon": true, "hazard": "cold", "hdps": 2.5},
+	# An ASH PLAIN: dust with a sky over it, and that sky is the problem.
+	{"top": Blocks.REGOLITH, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.55, 0.38, 0.34), "water": "none", "wmin": 0.0, "wmax": 0.0,
+		"tmin": 0.0, "tmax": 0.05, "moon": false, "hazard": "heat", "hdps": 3.2},
+	# RUST BARRENS: dust you can stand on without a suit. Warm, dry, harmless --
+	# the desert you would actually build a base on.
+	{"top": Blocks.REGOLITH, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.86, 0.52, 0.30), "water": "none", "wmin": 0.0, "wmax": 0.0,
+		"tmin": 0.0, "tmax": 0.1, "moon": false, "hazard": "heat", "hdps": 1.2},
+	# A CRYSTAL DESERT: dust with something growing out of it that is not alive.
+	{"top": Blocks.CRYSTAL, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CRYSTAL,
+		"atmo": true, "atmo_color": Color(0.72, 0.62, 0.92), "water": "none", "wmin": 0.0, "wmax": 0.0,
+		"tmin": 0.0, "tmax": 0.0, "moon": false, "hazard": "none", "hdps": 0.0},
+	# --- and two more worlds worth walking around -----------------------------
+	# TUNDRA: cold, but a cold you can live in, and the only frozen world with
+	# trees on it.
+	{"top": Blocks.SNOW, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.70, 0.82, 0.92), "water": "liquid", "wmin": 0.1, "wmax": 0.3,
+		"tmin": 0.1, "tmax": 0.3, "moon": false, "hazard": "cold", "hdps": 1.5},
+	# ARCHIPELAGO: the temperate world, mostly drowned. Islands to find rather
+	# than a continent to walk across.
+	{"top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.40, 0.72, 0.95), "water": "liquid", "wmin": 0.72, "wmax": 0.92,
+		"tmin": 0.35, "tmax": 0.6, "moon": false, "hazard": "none", "hdps": 0.0},
 ]
 const _NAME_PRE := ["Ver", "Kro", "Zel", "Nyx", "Tor", "Aur", "Hel", "Ori", "Vex",
 	"Mar", "Cae", "Lun", "Sol", "Ith", "Ryl", "Dun", "Pyr", "Oss", "Tal", "Ael"]
