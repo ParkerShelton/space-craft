@@ -70,6 +70,8 @@ var show_look_names := true
 ## Down on one knee: set while walking, cleared everywhere else, and sent to
 ## everyone else so their copy of you does it too.
 var crouching := false
+## Counts down from COYOTE_TIME once the ground is gone.
+var _coyote := 0.0
 ## Eye height above the body's centre. The collision capsule is 1.8 tall, so its
 ## top is at 0.9 and the eye normally sits well inside it.
 const EYE_HEIGHT := 0.7
@@ -88,12 +90,25 @@ const CROUCH_SPEED_MULT := 0.45
 ## Enough that you can see it happen in first person -- the point of a crouch
 ## you cannot see is not obvious.
 const CROUCH_EYE_MULT := 0.55
-## How far past the step to probe for floor, and how far down. The lookahead has
-## to reach past your own edge or you stop with your heels over nothing; the
-## drop is the capsule's half-height plus a little, so a stair down still counts
-## as ground.
-const CROUCH_LOOKAHEAD := 0.45
+## How far past the step to probe for floor, and how far down.
+##
+## Small on purpose. The probe is what decides where a crouched step stops, and
+## at 0.45 it stopped you with the whole body still on the block -- safe, and
+## useless for the thing crouching is actually for, which is leaning out over an
+## edge to see what is under it. At 0.08 your centre gets within a hand's width
+## of the lip and the body overhangs by most of its width, which is what makes
+## looking down over a drop possible. The capsule still rests on what is left of
+## the block, so you do not fall.
+const CROUCH_LOOKAHEAD := 0.08
 const CROUCH_PROBE := 1.25
+
+## How long after walking off an edge a jump still counts.
+##
+## Not a cheat: a player presses jump when they SEE themselves at the edge, and
+## by the time the input arrives the body has already left it. Every platformer
+## worth playing has this, and the ones that do not are the ones that feel like
+## they are ignoring you.
+const COYOTE_TIME := 0.12
 
 # The placement preview, and how much of it you see.
 #
@@ -1612,11 +1627,16 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 
 	v_up += -gmag * delta  # gravity pulls along -up (the snapped down axis)
 
+	# Coyote time: the ground is remembered for a moment after it is gone.
 	if is_on_floor():
-		if v_up < 0.0:
-			v_up = 0.0
-		if not menu_open and not ui_typing and key_down("jump"):
-			v_up = JUMP_SPEED
+		_coyote = COYOTE_TIME
+	else:
+		_coyote = maxf(_coyote - delta, 0.0)
+	if is_on_floor() and v_up < 0.0:
+		v_up = 0.0
+	if _coyote > 0.0 and v_up <= 0.0 and not menu_open and not ui_typing 			and key_down("jump"):
+		v_up = JUMP_SPEED
+		_coyote = 0.0     # one jump per departure, not one per frame in the air
 	# No thrust once your feet leave the ground: a jump is a jump. There is no
 	# jetpack in the game yet, and being able to hold jump and climb was standing
 	# in for one -- if you are down a hole, the way out is to build your way out.
