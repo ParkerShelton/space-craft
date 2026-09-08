@@ -86,6 +86,15 @@ MINE_PITCH = 0.80
 DEBRIS = {"rock": 0.0}
 DEBRIS_DEFAULT = 1.0
 
+# The pop is two layers: a bright tick and a mid crack. The tick is 95% of its
+# energy above 8 kHz, peaking near 22 kHz, which is fine over a material that
+# has some sparkle of its own and awful over one that has none -- the rock take
+# has literally 0% above 8 kHz, so the tick was the only high frequency in the
+# whole sound and stood out as a hiss rather than as an edge. Set a material to
+# 0.0 to keep the crack and drop the tick.
+POP_TICK = {"rock": 0.0}
+POP_TICK_DEFAULT = 1.0
+
 # How much synthetic layer to mix over the real recording, 0 for none. With
 # pitch doing less, these do more, so they are the first things to turn.
 # Now genuinely fractions OF THE MATERIAL, since the body is normalised first.
@@ -255,7 +264,9 @@ def build_break(step, rate, k, mat=""):
 	# and a crack is most of what "it just broke" sounds like -- this is the
 	# layer the runtime version could not add.
 	pop = synth.blank(0.11)
-	synth.tap(pop, 0.016, 1.0, decay=130.0, seed=200 + k)
+	tick = float(POP_TICK.get(mat, POP_TICK_DEFAULT))
+	if tick > 0.0:
+		synth.tap(pop, 0.016, tick, decay=130.0, seed=200 + k)
 	# The transient rises too, so the crack agrees with the body instead of
 	# anchoring it back down.
 	synth.thock(pop, 520.0 * (1.0 + 0.05 * (k - 2)), 0.10, 0.9, q=4.5,
