@@ -64,8 +64,19 @@ MANIFEST = os.path.join(WORLD, ".generated")
 # shifted at all and gets its weight from a thump; a break is shifted enough to
 # feel heavier but not so far it stops being the material, and gets its edge
 # from a transient.
-BREAK_PITCH = 0.66      # heavier and 52% longer, still recognisably the same stuff
-PLACE_PITCH = 1.12      # barely up. The oomph does the work here, not the pitch
+# A break RISES, and it rises from about where the mining left off. Pitch going
+# up reads as release -- the thing you were working at finally letting go --
+# which is the one job pitch does better than any layer. It also means the
+# break lifts away from the chipping sound instead of sitting in the same place
+# as it, so the two are separated by direction rather than only by size.
+BREAK_PITCH_FROM = 0.92     # near the chip it interrupts
+BREAK_PITCH_TO = 1.30       # and up, over the length of the sound
+# 1.55 with the debris climbing behind it put the last third of a grass break
+# at a 9 kHz spectral centroid, which is a whistle rather than a release. The
+# rise has to be heard as a direction, not as a trip to the top of the range.
+# A place goes the other way: down is weight, and setting a block down is the
+# heaviest thing you do to one.
+PLACE_PITCH = 0.85
 MINE_PITCH = 0.80
 
 # How much synthetic layer to mix over the real recording, 0 for none. With
@@ -175,6 +186,26 @@ def norm(x, target=0.85):
 	return [v * k for v in x]
 
 
+def glide(x, r0, r1):
+	"""Resample with a ratio that travels from r0 to r1.
+
+	A flat shift moves a sound; a glide gives it a direction. That direction is
+	the whole point here -- a break that starts near the pitch of the chipping
+	and climbs away from it says "released" in a way no fixed pitch does.
+	"""
+	out = []
+	t = 0.0
+	guess = max(1, int(len(x) / ((r0 + r1) * 0.5)))
+	while t < len(x) - 1:
+		f = min(1.0, len(out) / float(guess))
+		r = r0 * ((r1 / r0) ** f)
+		a = int(t)
+		frac = t - a
+		out.append(x[a] + (x[a + 1] - x[a]) * frac)
+		t += r
+	return out
+
+
 def mix(dst, src, at, gain):
 	for i, v in enumerate(src):
 		j = at + i
@@ -197,7 +228,10 @@ def build_break(step, rate, k):
 	"""Pitched down, popped, and given debris made of the material itself."""
 	# Vary the shift a little per take rather than the whole recipe: four takes
 	# of one block breaking, not four different blocks.
-	body = norm(shift(step, BREAK_PITCH * (1.0 + 0.035 * (k - 2))))
+	# Takes vary in how far they climb rather than in structure: four takes of
+	# one block breaking, not four different blocks.
+	wobble = 1.0 + 0.05 * (k - 2)
+	body = norm(glide(step, BREAK_PITCH_FROM, BREAK_PITCH_TO * wobble))
 	out = body + [0.0] * int(0.12 * rate)
 
 	# The POP. A short high transient plus a mid resonance, both from synth.py,
@@ -206,18 +240,17 @@ def build_break(step, rate, k):
 	# layer the runtime version could not add.
 	pop = synth.blank(0.11)
 	synth.tap(pop, 0.016, 1.0, decay=130.0, seed=200 + k)
-	synth.thock(pop, 430.0 * (1.0 + 0.05 * (k - 2)), 0.10, 0.9, q=4.5,
-		decay=52.0, exc_ms=1.6, seed=210 + k)
-	# A little weight under the crack too. Breaking a block is a bigger event
-	# than setting one down, so it should not be the lighter of the two.
-	synth.thump(pop, 104.0, 0.07, 0.55, decay=46.0, bend=0.8)
+	# The transient rises too, so the crack agrees with the body instead of
+	# anchoring it back down.
+	synth.thock(pop, 520.0 * (1.0 + 0.05 * (k - 2)), 0.10, 0.9, q=4.5,
+		decay=52.0, exc_ms=1.6, bend=1.7, seed=210 + k)
 	mix(out, [v * 32768.0 for v in pop], 0, POP)
 
-	# Debris: the same material again, quieter, higher and late. Using the real
-	# recording rather than synthetic grain keeps the texture honest -- rock
-	# debris sounds like that rock.
-	mix(out, shift(body, 1.35), int(0.055 * rate), 0.34)
-	mix(out, shift(body, 0.92), int(0.115 * rate), 0.20)
+	# Debris: the same material again, quieter and late, and climbing further
+	# with the rest of it. Using the real recording rather than synthetic grain
+	# keeps the texture honest -- rock debris sounds like that rock.
+	mix(out, shift(body, 1.12), int(0.050 * rate), 0.30)
+	mix(out, shift(body, 1.28), int(0.105 * rate), 0.18)
 	return fade_tail(out, rate, 40)
 
 
@@ -226,12 +259,13 @@ def build_place(step, rate, k):
 	body = norm(shift(step, PLACE_PITCH * (1.0 + 0.03 * (k - 2))))
 	out = body + [0.0] * int(0.10 * rate)
 
-	# The OOMPH. A short low sine is the whole trick: 70 ms of 130 Hz is heard
+	# The OOMPH. A short low sine is the whole trick: 75 ms of 120 Hz is heard
 	# as a block landing, not as a note, because it is over before the ear can
-	# name a pitch. A footstep recording has nothing this low in it.
+	# name a pitch. A footstep recording has nothing this low in it, and with
+	# the body now pitched DOWN the two agree instead of fighting.
 	low = synth.blank(0.11)
-	synth.thump(low, 132.0 * (1.0 + 0.04 * (k - 2)), 0.075, 1.0, decay=42.0,
-		bend=0.72)
+	synth.thump(low, 120.0 * (1.0 + 0.04 * (k - 2)), 0.08, 1.0, decay=38.0,
+		bend=0.70)
 	# A little contact click on top so the weight has something to hang off.
 	synth.tap(low, 0.008, 0.28, decay=230.0, seed=300 + k)
 	mix(out, [v * 32768.0 for v in low], 0, OOMPH)
