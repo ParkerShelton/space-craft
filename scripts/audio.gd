@@ -49,7 +49,12 @@ const CATALOG := {
 	"break_dirt": {"files": ["_takes", WORLD + "break_dirt", 4], "pitch": 0.15, "throttle": 45},
 	"break_grass": {"files": ["_takes", WORLD + "break_grass", 4], "pitch": 0.15, "throttle": 45},
 	"break_wood": {"files": ["_takes", WORLD + "break_wood", 4], "pitch": 0.15, "throttle": 45},
-	"break_leaves": {"files": ["_takes", WORLD + "break_leaves", 4], "pitch": 0.18, "throttle": 45},
+	# Leaves wander much further than anything else on purpose. A rustle has no
+	# pitch to hear moving, so a detune that would be obvious on a knock is
+	# inaudible here -- it just sounds like a different handful of leaves, which
+	# is exactly right for the one material that should never sound twice the
+	# same.
+	"break_leaves": {"files": ["_takes", WORLD + "break_leaves", 4], "pitch": 0.40, "throttle": 45},
 	"break_snow": {"files": ["_takes", WORLD + "break_snow", 4], "pitch": 0.15, "throttle": 45},
 	"break_metal": {"files": ["_takes", WORLD + "break_metal", 4], "pitch": 0.12, "throttle": 45},
 	"break_glass": {"files": ["_takes", WORLD + "break_glass", 4], "pitch": 0.15, "throttle": 45},

@@ -91,6 +91,13 @@ MINE_PITCH = 0.80
 BREAK_GLIDE = {"rock": 0.30, "wood": 0.35}
 BREAK_GLIDE_DEFAULT = 1.0
 
+# How far the four break takes are pitched apart from each other, as a fraction
+# per step away from the middle. This is variation baked into the FILES, on top
+# of the random detune the game adds per play. Noise can take a lot of it before
+# it stops sounding like the same material; a knock cannot.
+BREAK_TAKE_SPREAD = {"leaves": 0.16}
+BREAK_TAKE_SPREAD_DEFAULT = 0.05
+
 # How much synthetic layer to mix over the real recording, 0 for none. With
 # pitch doing less, these do more, so they are the first things to turn.
 # Now genuinely fractions OF THE MATERIAL, since the body is normalised first.
@@ -258,9 +265,14 @@ def build_break(step, rate, k, mat=""):
 	# Takes vary in how far they climb rather than in structure: four takes of
 	# one block breaking, not four different blocks.
 	g = float(BREAK_GLIDE.get(mat, BREAK_GLIDE_DEFAULT))
-	wobble = 1.0 + 0.05 * (k - 2) * g
-	top = BREAK_PITCH_FROM + (BREAK_PITCH_TO * wobble - BREAK_PITCH_FROM) * g
-	body = norm(glide(step, BREAK_PITCH_FROM, top))
+	spread = float(BREAK_TAKE_SPREAD.get(mat, BREAK_TAKE_SPREAD_DEFAULT))
+	# The spread moves the WHOLE shift, not just where the climb ends. Scaling
+	# only the top moved the take-to-take centroid by 5%, because the start of
+	# the glide is pinned and the start is most of what is heard.
+	wobble = 1.0 + spread * (k - 2)
+	frm = BREAK_PITCH_FROM * wobble
+	top = frm + (BREAK_PITCH_TO * wobble - frm) * g
+	body = norm(glide(step, frm, top))
 	out = body + [0.0] * int(0.12 * rate)
 
 	# The crack. A mid resonance on the front of the sound: a recording of a
