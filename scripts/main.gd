@@ -157,6 +157,10 @@ func _notification(what: int) -> void:
 func _ready() -> void:
 	get_tree().set_auto_accept_quit(false)  # route window-close through _notification
 	_settings.load(settings_path)   # absent on a first run, which is not an error
+	# Says out loud which catalogued sounds have nothing behind them yet, so
+	# "that block is silent" is a line in the log rather than a mystery.
+	if OS.is_debug_build():
+		print(Audio.missing_report())
 	var fps_layer := CanvasLayer.new()
 	fps_layer.layer = 8
 	add_child(fps_layer)
@@ -226,10 +230,24 @@ func _build_menu() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 
-func _menu_button(text: String, cb: Callable) -> void:
+## Hover and press, for every button in the game.
+##
+## It lives in one place so a button added later is audible because it is a
+## button, not because someone remembered. The sound is connected BEFORE the
+## real callback for a reason: half of these callbacks rebuild the page they
+## are on, which frees the button mid-signal, and a connection on a freed
+## object does not get its turn.
+func _wire_button(b: BaseButton, sound: String = "ui_click") -> void:
+	b.mouse_entered.connect(func(): Audio.ui("ui_hover"))
+	if sound != "":
+		b.pressed.connect(func(): Audio.ui(sound))
+
+
+func _menu_button(text: String, cb: Callable, sound: String = "ui_click") -> void:
 	var b := Button.new()
 	b.text = text
 	b.custom_minimum_size = Vector2(280, 44)
+	_wire_button(b, sound)
 	b.pressed.connect(cb)
 	_menu_vb.add_child(b)
 
@@ -253,7 +271,7 @@ func _menu_populate(confirm_delete: bool) -> void:
 		_menu_button("Yes, start new world", func():
 			_delete_save()
 			_start_world(false))
-		_menu_button("Cancel", func(): _menu_populate(false))
+		_menu_button("Cancel", func(): _menu_populate(false), "ui_back")
 		return
 	_menu_label("SPACECRAFT", 52)
 	_menu_label("a voxel game in space", 18, 0.55)
@@ -289,10 +307,11 @@ func _menu_join() -> void:
 		if ip.is_empty():
 			return
 		if not _net.join(ip):
+			Audio.ui("ui_deny")
 			_menu_label(_net.last_error, 15, 0.9)
 			return
 		_start_world(false, "client"))
-	_menu_button("Back", func(): _menu_populate(false))
+	_menu_button("Back", func(): _menu_populate(false), "ui_back")
 
 
 ## Connected, waiting to be told which world to build. Nothing can be generated
@@ -331,26 +350,15 @@ func set_setting(key: String, value) -> void:
 	_apply_settings()
 
 
-## Buses for the sound that is not there yet.
-##
-## There is no audio in the game at all today. The sliders are still real: they
-## move actual bus volumes, so whatever gets played first is already under the
-## player's control instead of arriving at whatever loudness it was recorded at.
+## Sound belongs to the Audio autoload, which owns the buses because they have
+## to exist before anything can be assigned to them. These two are kept as the
+## menu's way in so the settings code reads the same as it did.
 func _ensure_audio_buses() -> void:
-	for nm in ["Music", "Effects"]:
-		if AudioServer.get_bus_index(nm) < 0:
-			var i := AudioServer.bus_count
-			AudioServer.add_bus(i)
-			AudioServer.set_bus_name(i, nm)
-			AudioServer.set_bus_send(i, "Master")
+	Audio.ensure_buses()
 
 
 func _set_bus_volume(bus: String, linear: float) -> void:
-	var i := AudioServer.get_bus_index(bus)
-	if i < 0:
-		return
-	AudioServer.set_bus_mute(i, linear <= 0.001)
-	AudioServer.set_bus_volume_db(i, linear_to_db(maxf(linear, 0.0001)))
+	Audio.set_bus_volume(bus, linear)
 
 
 func _apply_settings() -> void:
@@ -495,6 +503,9 @@ func _input(event: InputEvent) -> void:
 	# is a trap.
 	if _awaiting_bind != "":
 		var code := (event as InputEventKey).keycode
+		# Backing out with Escape is a cancel, and does not get the chime that
+		# says a key was taken.
+		Audio.ui("ui_close" if code == KEY_ESCAPE else "ui_accept")
 		if code != KEY_ESCAPE:
 			set_setting("bind_" + _awaiting_bind, int(code))
 		_awaiting_bind = ""
@@ -549,6 +560,7 @@ func _open_game_menu() -> void:
 	_game_menu_vb.alignment = BoxContainer.ALIGNMENT_CENTER
 	center.add_child(_game_menu_vb)
 	_populate_game_menu()
+	Audio.ui("ui_open")
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_world.player.menu_open = true
 
@@ -594,7 +606,7 @@ func _populate_settings_menu() -> void:
 	_game_menu_button(vb, "Audio", _populate_audio_menu)
 	_game_menu_button(vb, "Game", _populate_game_settings_menu)
 	_game_menu_button(vb, "Controls", _populate_controls_menu)
-	_game_menu_button(vb, "Back", _populate_game_menu)
+	_game_menu_button(vb, "Back", _populate_game_menu, "ui_back")
 
 
 ## The three ways a window can own the screen. Godot's "fullscreen" is the
@@ -623,7 +635,7 @@ func _populate_video_menu() -> void:
 	_game_menu_slider(vb, "Field of view", "fov", 75.0, 60.0, 110.0, 1.0, "%d")
 	_game_menu_check(vb, "V-Sync", "vsync", true)
 	_game_menu_check(vb, "Show FPS", "show_fps", false)
-	_game_menu_button(vb, "Back", _populate_settings_menu)
+	_game_menu_button(vb, "Back", _populate_settings_menu, "ui_back")
 
 
 func _populate_audio_menu() -> void:
@@ -637,7 +649,7 @@ func _populate_audio_menu() -> void:
 	note.add_theme_font_size_override("font_size", 12)
 	note.modulate = Color(1, 1, 1, 0.45)
 	vb.add_child(note)
-	_game_menu_button(vb, "Back", _populate_settings_menu)
+	_game_menu_button(vb, "Back", _populate_settings_menu, "ui_back")
 
 
 func _populate_game_settings_menu() -> void:
@@ -653,7 +665,7 @@ func _populate_game_settings_menu() -> void:
 	note.add_theme_font_size_override("font_size", 12)
 	note.modulate = Color(1, 1, 1, 0.45)
 	vb.add_child(note)
-	_game_menu_button(vb, "Back", _populate_settings_menu)
+	_game_menu_button(vb, "Back", _populate_settings_menu, "ui_back")
 
 
 ## A setting you step through rather than slide: arrows either side of the value.
@@ -681,6 +693,8 @@ func _game_menu_cycle(vb: VBoxContainer, text: String, key: String,
 		# the page is rebuilt rather than left half true.
 		if key == "window_mode":
 			_populate_video_menu()
+	_wire_button(left)
+	_wire_button(right)
 	left.pressed.connect(func(): step.call(-1))
 	right.pressed.connect(func(): step.call(1))
 	left.disabled = not enabled
@@ -712,16 +726,18 @@ func _populate_controls_menu() -> void:
 		var b := Button.new()
 		b.custom_minimum_size = Vector2(120, 26)
 		b.text = _bind_label(action)
+		_wire_button(b, "ui_prompt")
 		b.pressed.connect(func():
 			_awaiting_bind = action
 			b.text = "press a key"
 			_bind_button = b)
 		row.add_child(b)
 	_game_menu_button(page, "Reset to defaults", func():
+		Audio.ui("ui_accept")
 		for a in Player.DEFAULT_BINDS:
 			set_setting("bind_" + a, int(Player.DEFAULT_BINDS[a]))
 		_populate_controls_menu())
-	_game_menu_button(page, "Back", _populate_settings_menu)
+	_game_menu_button(page, "Back", _populate_settings_menu, "ui_back")
 
 
 func _bind_label(action: String) -> String:
@@ -773,6 +789,7 @@ func _game_menu_slider(vb: VBoxContainer, text: String, key: String,
 	val.text = fmt % (sl.value * show_mul)
 	sl.value_changed.connect(func(v: float):
 		val.text = fmt % (v * show_mul)
+		Audio.ui("ui_tick")
 		set_setting(key, v))
 	row.add_child(sl)
 	row.add_child(val)
@@ -784,20 +801,26 @@ func _game_menu_check(vb: VBoxContainer, text: String, key: String, dflt: bool) 
 	var row := _menu_row(vb, text)
 	var c := CheckButton.new()
 	c.button_pressed = bool(setting(key, dflt))
-	c.toggled.connect(func(on: bool): set_setting(key, on))
+	_wire_button(c, "")
+	c.toggled.connect(func(on: bool):
+		Audio.ui("ui_toggle_on" if on else "ui_toggle_off")
+		set_setting(key, on))
 	row.add_child(c)
 
 
-func _game_menu_button(vb: VBoxContainer, text: String, cb: Callable) -> void:
+func _game_menu_button(vb: VBoxContainer, text: String, cb: Callable,
+		sound: String = "ui_click") -> void:
 	var b := Button.new()
 	b.text = text
 	b.custom_minimum_size = Vector2(280, 44)
+	_wire_button(b, sound)
 	b.pressed.connect(cb)
 	vb.add_child(b)
 
 
 func _close_game_menu() -> void:
 	if _game_menu != null:
+		Audio.ui("ui_close")
 		_game_menu.queue_free()
 		_game_menu = null
 	if _world != null and _world.player != null:

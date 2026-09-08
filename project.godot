@@ -15,6 +15,13 @@ run/main_scene="res://scenes/Main.tscn"
 config/features=PackedStringArray("4.7", "GL Compatibility")
 config/icon="res://icon.svg"
 
+[autoload]
+
+; Sound is a singleton because the pool of players it owns has to outlive any
+; one menu, world or scene change -- and because a call site should never have
+; to know whether audio is set up yet.
+Audio="*res://scripts/audio.gd"
+
 [display]
 
 ; The 3D view renders at the WINDOW's own size rather than at a fixed 1152x648
