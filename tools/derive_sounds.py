@@ -87,7 +87,9 @@ MINE_PITCH = 0.80
 # full climb turned some of its takes into bloops. Noise can be glided as far
 # as you like because there is no pitch to hear moving; anything with a note in
 # it cannot.
-BREAK_GLIDE = {"rock": 0.30}
+# Measured, not guessed: both of these come back at 1.000 tonality where grass
+# is 0.90. Metal and glass will want a line here too when they are recorded.
+BREAK_GLIDE = {"rock": 0.30, "wood": 0.35}
 BREAK_GLIDE_DEFAULT = 1.0
 
 # Debris: the quieter, later copies of the material that trail a break. Right
