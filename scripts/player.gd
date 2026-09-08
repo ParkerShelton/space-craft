@@ -3297,6 +3297,9 @@ func _fire_ranged_weapon(shape: Dictionary, dmg: float) -> void:
 ## the moment the block finally breaks.
 ## Which half-cycle of the walk bob we were in last frame; a change is a step.
 var _step_last := 0
+## Whether we were walking last frame, so the first footfall of a movement can
+## be made to happen rather than waited for.
+var _was_walking := false
 
 
 ## What you are standing ON, which is not always what you are standing in --
@@ -3327,6 +3330,18 @@ func _update_swing(delta: float) -> void:
 	var walking := speed > 0.5 and is_on_floor()
 	_bob_amp = lerpf(_bob_amp, clampf(speed / WALK_SPEED, 0.0, 1.0) if walking else 0.0,
 		clampf(delta * 8.0, 0.0, 1.0))
+	# Starting to move ALWAYS makes a sound. The phase below runs whether or not
+	# you are walking, so a short movement that began just after a crossing and
+	# ended before the next one made no noise at all -- and at ~3.5 rad/s that
+	# is anything under about 0.9 seconds, which is most of shuffling about.
+	# Restarting the stride here also means the first footfall lands when you
+	# start walking rather than wherever the free-running phase happened to be.
+	if walking and not _was_walking:
+		_bob_phase = 0.0
+		_step_last = 0
+		if not crouching:
+			_footstep()
+	_was_walking = walking
 	# Phase advances with speed so steps land with the ground, not with the clock.
 	_bob_phase += delta * (3.0 + speed * 0.9)
 	# One footfall per dip of the bob. Hanging the sound off the same phase the
