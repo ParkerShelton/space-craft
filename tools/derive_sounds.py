@@ -100,13 +100,18 @@ DEBRIS = {"rock": 0.0}
 DEBRIS_DEFAULT = 1.0
 
 # The pop is two layers: a bright tick and a mid crack. The tick is 95% of its
-# energy above 8 kHz, peaking near 22 kHz, which is fine over a material that
-# has some sparkle of its own and awful over one that has none -- the rock take
-# has literally 0% above 8 kHz, so the tick was the only high frequency in the
-# whole sound and stood out as a hiss rather than as an edge. Set a material to
-# 0.0 to keep the crack and drop the tick.
-POP_TICK = {"rock": 0.0}
-POP_TICK_DEFAULT = 1.0
+# energy above 8 kHz, which is fine over a material with some sparkle of its own
+# and awful over one with none -- a tick is the only high frequency in the whole
+# sound, so it is heard as a hiss laid on top rather than as an edge belonging
+# to it. Rock and wood both measure 0.00% above 8 kHz and both had the problem;
+# grass has 4.96% and does not.
+#
+# So it is measured rather than listed. The tick is scaled by how much high end
+# the RECORDING already has, which means a material nobody has recorded yet gets
+# the right answer without anyone having to notice first. Putting a name in
+# POP_TICK overrides the measurement.
+POP_TICK = {}
+POP_TICK_REF = 0.03     # a source with 3% of its energy above 8 kHz gets the full tick
 
 # How much synthetic layer to mix over the real recording, 0 for none. With
 # pitch doing less, these do more, so they are the first things to turn.
@@ -208,6 +213,18 @@ def shift(x, ratio):
 	return out
 
 
+def hf_share(x, rate, fc=8000.0):
+	"""Roughly what fraction of the energy sits above fc.
+
+	Done with a filter rather than an FFT to keep this stdlib-only: subtract the
+	lowpass from the signal and what is left is the high end.
+	"""
+	lo = lowpass(x, rate, fc)
+	hi_e = sum((a - b) * (a - b) for a, b in zip(x, lo))
+	all_e = sum(v * v for v in x)
+	return hi_e / all_e if all_e > 0.0 else 0.0
+
+
 def norm(x, target=0.85):
 	"""Scale to a known peak.
 
@@ -279,8 +296,11 @@ def build_break(step, rate, k, mat=""):
 	# and a crack is most of what "it just broke" sounds like -- this is the
 	# layer the runtime version could not add.
 	pop = synth.blank(0.11)
-	tick = float(POP_TICK.get(mat, POP_TICK_DEFAULT))
-	if tick > 0.0:
+	if mat in POP_TICK:
+		tick = float(POP_TICK[mat])
+	else:
+		tick = min(1.0, hf_share(step, rate) / POP_TICK_REF)
+	if tick > 0.01:
 		synth.tap(pop, 0.016, tick, decay=130.0, seed=200 + k)
 	# The transient rises too, so the crack agrees with the body instead of
 	# anchoring it back down.
@@ -385,8 +405,13 @@ def main():
 				peak = src_peak * (10.0 ** (REL_DB[ev] / 20.0))
 				peak = max(PEAK_FLOOR, min(PEAK_CEILING, peak))
 				name = "%s_%s_%d.wav" % (ev, mat, k)
-				print("%-24s %6d ms  peak %.3f  %s" % (name,
-					len(out) * 1000 // rate, peak, os.path.basename(src)))
+				extra = ""
+				if ev == "break":
+					t = (POP_TICK[mat] if mat in POP_TICK
+						else min(1.0, hf_share(step, rate) / POP_TICK_REF))
+					extra = "  tick %.2f" % t
+				print("%-24s %6d ms  peak %.3f%s  %s" % (name,
+					len(out) * 1000 // rate, peak, extra, os.path.basename(src)))
 				if args.write:
 					write_wav(os.path.join(WORLD, name), out, rate, peak)
 				generated.append(name)
