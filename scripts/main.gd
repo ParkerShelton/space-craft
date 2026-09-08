@@ -132,6 +132,7 @@ var _settings := ConfigFile.new()
 var _fps_label: Label
 ## The action waiting for a key, while the controls page is listening.
 var _awaiting_bind := ""
+var _autosave_t := 0.0
 var _bind_button: Button
 
 func _notification(what: int) -> void:
@@ -354,8 +355,22 @@ func _set_bus_volume(bus: String, linear: float) -> void:
 func _apply_settings() -> void:
 	# Window settings apply whether or not a world is loaded; the rest need a
 	# player to apply to, and are applied again when one is made.
-	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN
-		if bool(setting("fullscreen", false)) else DisplayServer.WINDOW_MODE_WINDOWED)
+	# Windowed / borderless / exclusive, and the size only means anything in the
+	# first of those.
+	match int(setting("window_mode", 0)):
+		1:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN)
+		2:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_EXCLUSIVE_FULLSCREEN)
+		_:
+			DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
+			var r: Vector2i = RESOLUTIONS[clampi(int(setting("resolution", 3)),
+				0, RESOLUTIONS.size() - 1)]
+			# Never bigger than the screen it has to fit on.
+			var screen := DisplayServer.screen_get_size()
+			r = Vector2i(mini(r.x, screen.x), mini(r.y, screen.y))
+			DisplayServer.window_set_size(r)
+			DisplayServer.window_set_position((screen - r) / 2)
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED
 		if bool(setting("vsync", true)) else DisplayServer.VSYNC_DISABLED)
 	if _fps_label != null:
@@ -377,6 +392,7 @@ func _apply_settings() -> void:
 		for a in b:
 			b[a] = int(setting("bind_" + a, int(Player.DEFAULT_BINDS[a])))
 		pl.binds = b
+		pl.show_look_names = bool(setting("show_names", true))
 
 
 # --- chat ---------------------------------------------------------------------
@@ -557,28 +573,109 @@ func _populate_game_menu() -> void:
 
 func _populate_settings_menu() -> void:
 	var vb := _menu_page("Settings")
-	_menu_section(vb, "Video")
+	# One button per group, each with its own page. A single scrolling list works
+	# until it does not, and the moment a fourth setting joins any of these
+	# groups it stops working -- better to have the shape right while it is
+	# cheap to change.
+	_game_menu_button(vb, "Video", _populate_video_menu)
+	_game_menu_button(vb, "Audio", _populate_audio_menu)
+	_game_menu_button(vb, "Game", _populate_game_settings_menu)
+	_game_menu_button(vb, "Controls", _populate_controls_menu)
+	_game_menu_button(vb, "Back", _populate_game_menu)
+
+
+## The three ways a window can own the screen. Godot's "fullscreen" is the
+## borderless one; the exclusive mode is its own thing and worth offering,
+## because it is the one that can change refresh rate and skip the compositor.
+const WINDOW_MODES := ["Windowed", "Windowed Fullscreen", "Fullscreen"]
+const RESOLUTIONS := [Vector2i(1280, 720), Vector2i(1366, 768), Vector2i(1600, 900),
+	Vector2i(1920, 1080), Vector2i(2560, 1440), Vector2i(3840, 2160)]
+
+
+func _populate_video_menu() -> void:
+	var vb := _menu_page("Video")
+	_game_menu_cycle(vb, "Window mode", "window_mode", WINDOW_MODES, 0)
+	var res_names: Array = []
+	for r in RESOLUTIONS:
+		res_names.append("%d x %d" % [r.x, r.y])
+	# Only meaningful windowed: the other two take the size of the screen they
+	# are covering, and offering a choice that does nothing is worse than not
+	# offering it.
+	_game_menu_cycle(vb, "Resolution", "resolution", res_names, 3,
+		int(setting("window_mode", 0)) == 0)
 	_game_menu_slider(vb, "Render distance", "render_distance",
 		float(WorldManager.RENDER_DISTANCE_DEFAULT),
 		float(WorldManager.RENDER_DISTANCE_MIN), float(WorldManager.RENDER_DISTANCE_MAX),
 		1.0, "%d")
 	_game_menu_slider(vb, "Field of view", "fov", 75.0, 60.0, 110.0, 1.0, "%d")
-	_game_menu_check(vb, "Fullscreen", "fullscreen", false)
 	_game_menu_check(vb, "V-Sync", "vsync", true)
 	_game_menu_check(vb, "Show FPS", "show_fps", false)
+	_game_menu_button(vb, "Back", _populate_settings_menu)
 
-	_menu_section(vb, "Audio")
+
+func _populate_audio_menu() -> void:
+	var vb := _menu_page("Audio")
 	_game_menu_slider(vb, "Master", "vol_master", 0.8, 0.0, 1.0, 0.05, "%d%%", 100.0)
 	_game_menu_slider(vb, "Music", "vol_music", 0.7, 0.0, 1.0, 0.05, "%d%%", 100.0)
 	_game_menu_slider(vb, "Effects", "vol_sfx", 0.9, 0.0, 1.0, 0.05, "%d%%", 100.0)
+	var note := Label.new()
+	note.text = "nothing plays any sound yet"
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.add_theme_font_size_override("font_size", 12)
+	note.modulate = Color(1, 1, 1, 0.45)
+	vb.add_child(note)
+	_game_menu_button(vb, "Back", _populate_settings_menu)
 
-	_menu_section(vb, "Game")
+
+func _populate_game_settings_menu() -> void:
+	var vb := _menu_page("Game")
 	_game_menu_slider(vb, "Mouse sensitivity", "sensitivity", 1.0, 0.25, 3.0, 0.05, "%.2fx")
 	_game_menu_check(vb, "Invert mouse Y", "invert_y", false)
 	_game_menu_check(vb, "Placement preview", "placement_ghost", true)
+	_game_menu_check(vb, "Name what you look at", "show_names", true)
+	_game_menu_slider(vb, "Autosave", "autosave_min", 5.0, 0.0, 20.0, 1.0, "%d min")
+	var note := Label.new()
+	note.text = "autosave is single player only; 0 turns it off"
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.add_theme_font_size_override("font_size", 12)
+	note.modulate = Color(1, 1, 1, 0.45)
+	vb.add_child(note)
+	_game_menu_button(vb, "Back", _populate_settings_menu)
 
-	_game_menu_button(vb, "Controls...", _populate_controls_menu)
-	_game_menu_button(vb, "Back", _populate_game_menu)
+
+## A setting you step through rather than slide: arrows either side of the value.
+## Stored as an index, so the list can grow without invalidating what is saved.
+func _game_menu_cycle(vb: VBoxContainer, text: String, key: String,
+		options: Array, dflt: int, enabled: bool = true) -> void:
+	var row := _menu_row(vb, text)
+	var idx := int(setting(key, dflt))
+	var left := Button.new()
+	left.text = "<"
+	left.custom_minimum_size = Vector2(28, 26)
+	var val := Label.new()
+	val.custom_minimum_size = Vector2(150, 0)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	val.add_theme_font_size_override("font_size", 15)
+	var right := Button.new()
+	right.text = ">"
+	right.custom_minimum_size = Vector2(28, 26)
+	val.text = str(options[clampi(idx, 0, options.size() - 1)])
+	var step := func(d: int):
+		var i := posmod(int(setting(key, dflt)) + d, options.size())
+		val.text = str(options[i])
+		set_setting(key, i)
+		# The window mode decides whether the resolution row means anything, so
+		# the page is rebuilt rather than left half true.
+		if key == "window_mode":
+			_populate_video_menu()
+	left.pressed.connect(func(): step.call(-1))
+	right.pressed.connect(func(): step.call(1))
+	left.disabled = not enabled
+	right.disabled = not enabled
+	val.modulate = Color(1, 1, 1, 1.0 if enabled else 0.4)
+	row.add_child(left)
+	row.add_child(val)
+	row.add_child(right)
 
 
 ## Every key you can move it to. Its own page: fourteen rows would swamp the
@@ -1308,6 +1405,16 @@ func _process(delta: float) -> void:
 	# has neither, and it is the one machine whose clock everybody else is
 	# waiting on -- putting this after that return meant a field on a server
 	# would never grow at all.
+	# Autosave, single player only: on a server the host already saves on its own
+	# clock, and in someone else's world there is nothing of yours to write.
+	if _net_mode == "single" and _world != null and _world.player != null:
+		var mins := float(setting("autosave_min", 5.0))
+		if mins > 0.0:
+			_autosave_t += delta
+			if _autosave_t >= mins * 60.0:
+				_autosave_t = 0.0
+				if _world.save_game():
+					_world.player.call("_toast", "Autosaved")
 	if _fps_label != null and _fps_label.visible:
 		_fps_label.text = "%d fps" % int(round(Engine.get_frames_per_second()))
 	if _world != null:

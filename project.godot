@@ -17,7 +17,11 @@ config/icon="res://icon.svg"
 
 [display]
 
-window/stretch/mode="canvas_items"
+; The 3D view renders at the WINDOW's own size rather than at a fixed 1152x648
+; that is then scaled up. With canvas_items stretch, going fullscreen on a
+; 1440p monitor still rendered 1152x648 and blew it up -- which is why
+; fullscreen looked soft rather than bigger.
+window/stretch/mode="disabled"
 window/stretch/aspect="expand"
 
 [physics]

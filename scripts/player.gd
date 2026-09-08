@@ -65,6 +65,8 @@ var look_sensitivity := 1.0
 ## Looking straight down and dragging up moves the view up, unless you grew up
 ## on a flight stick.
 var invert_look := false
+## Whether the HUD names the block under the crosshair.
+var show_look_names := true
 ## Eye height above the body's centre. The collision capsule is 1.8 tall, so its
 ## top is at 0.9 and the eye normally sits well inside it.
 const EYE_HEIGHT := 0.7
@@ -4657,7 +4659,7 @@ func _update_ui() -> void:
 		else:
 			# Mining progress is shown ON the block (see _update_crack) rather
 			# than as a text bar, so this is just what you're looking at.
-			_target_label.text = _look_name
+			_target_label.text = _look_name if show_look_names else ""
 
 	if eva:
 		_hotbar_label.text = "EVA  (T to climb back in  |  aim + click to repair)"
