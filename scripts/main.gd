@@ -123,9 +123,16 @@ const SERVER_SAVE_EVERY := 60.0
 
 ## Player preferences, kept apart from the world save: they belong to the person,
 ## not to the world, and should survive starting a new one.
-const SETTINGS_PATH := "user://settings.cfg"
+## Where preferences live. A var rather than a const so a test can point it
+## somewhere else: a test that drives the real settings menu has already written
+## a render distance and a rebound jump key into a player's own preferences
+## twice, and "remember to undo it" is not a mechanism.
+var settings_path := "user://settings.cfg"
 var _settings := ConfigFile.new()
 var _fps_label: Label
+## The action waiting for a key, while the controls page is listening.
+var _awaiting_bind := ""
+var _bind_button: Button
 
 func _notification(what: int) -> void:
 	# Autosave when the window is closed (X button, Alt+F4, etc.). Never in a
@@ -147,7 +154,7 @@ func _notification(what: int) -> void:
 
 func _ready() -> void:
 	get_tree().set_auto_accept_quit(false)  # route window-close through _notification
-	_settings.load(SETTINGS_PATH)   # absent on a first run, which is not an error
+	_settings.load(settings_path)   # absent on a first run, which is not an error
 	var fps_layer := CanvasLayer.new()
 	fps_layer.layer = 8
 	add_child(fps_layer)
@@ -318,8 +325,30 @@ func setting(key: String, dflt):
 ## to set twice.
 func set_setting(key: String, value) -> void:
 	_settings.set_value("game", key, value)
-	_settings.save(SETTINGS_PATH)
+	_settings.save(settings_path)
 	_apply_settings()
+
+
+## Buses for the sound that is not there yet.
+##
+## There is no audio in the game at all today. The sliders are still real: they
+## move actual bus volumes, so whatever gets played first is already under the
+## player's control instead of arriving at whatever loudness it was recorded at.
+func _ensure_audio_buses() -> void:
+	for nm in ["Music", "Effects"]:
+		if AudioServer.get_bus_index(nm) < 0:
+			var i := AudioServer.bus_count
+			AudioServer.add_bus(i)
+			AudioServer.set_bus_name(i, nm)
+			AudioServer.set_bus_send(i, "Master")
+
+
+func _set_bus_volume(bus: String, linear: float) -> void:
+	var i := AudioServer.get_bus_index(bus)
+	if i < 0:
+		return
+	AudioServer.set_bus_mute(i, linear <= 0.001)
+	AudioServer.set_bus_volume_db(i, linear_to_db(maxf(linear, 0.0001)))
 
 
 func _apply_settings() -> void:
@@ -331,6 +360,10 @@ func _apply_settings() -> void:
 		if bool(setting("vsync", true)) else DisplayServer.VSYNC_DISABLED)
 	if _fps_label != null:
 		_fps_label.visible = bool(setting("show_fps", false))
+	_ensure_audio_buses()
+	_set_bus_volume("Master", float(setting("vol_master", 0.8)))
+	_set_bus_volume("Music", float(setting("vol_music", 0.7)))
+	_set_bus_volume("Effects", float(setting("vol_sfx", 0.9)))
 	if _world != null:
 		_world.render_distance = int(setting("render_distance",
 			WorldManager.RENDER_DISTANCE_DEFAULT))
@@ -340,6 +373,10 @@ func _apply_settings() -> void:
 		pl.look_sensitivity = float(setting("sensitivity", 1.0))
 		pl.invert_look = bool(setting("invert_y", false))
 		pl.set_fov(float(setting("fov", 75.0)))
+		var b := Player.DEFAULT_BINDS.duplicate()
+		for a in b:
+			b[a] = int(setting("bind_" + a, int(Player.DEFAULT_BINDS[a])))
+		pl.binds = b
 
 
 # --- chat ---------------------------------------------------------------------
@@ -434,7 +471,21 @@ func _close_chat(send: bool) -> void:
 ## anything else sees them: Escape would otherwise reach the player and open the
 ## game menu on top of the half-typed message.
 func _input(event: InputEvent) -> void:
-	if _chat_entry == null or not (event is InputEventKey and event.pressed and not event.echo):
+	if not (event is InputEventKey and event.pressed and not event.echo):
+		return
+	# Rebinding swallows the next key, whatever it is -- that is the whole point
+	# of the state. Escape backs out, because a key you cannot cancel choosing
+	# is a trap.
+	if _awaiting_bind != "":
+		var code := (event as InputEventKey).keycode
+		if code != KEY_ESCAPE:
+			set_setting("bind_" + _awaiting_bind, int(code))
+		_awaiting_bind = ""
+		_bind_button = null
+		_populate_controls_menu()
+		get_viewport().set_input_as_handled()
+		return
+	if _chat_entry == null:
 		return
 	var k := (event as InputEventKey).keycode
 	if _chat_entry.visible:
@@ -474,7 +525,7 @@ func _open_game_menu() -> void:
 	center.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_game_menu.add_child(center)
 	_game_menu_vb = VBoxContainer.new()
-	_game_menu_vb.add_theme_constant_override("separation", 14)
+	_game_menu_vb.add_theme_constant_override("separation", 6)
 	_game_menu_vb.alignment = BoxContainer.ALIGNMENT_CENTER
 	center.add_child(_game_menu_vb)
 	_populate_game_menu()
@@ -506,71 +557,125 @@ func _populate_game_menu() -> void:
 
 func _populate_settings_menu() -> void:
 	var vb := _menu_page("Settings")
-	# Kept short on purpose. Every one of these is something a player actually
-	# reaches for -- how far they can see, how fast the view turns, whether the
-	# window owns the screen -- rather than every number the engine happens to
-	# expose.
-	_game_menu_slider(vb, "Render distance", "chunks -- the big one for framerate",
-		"render_distance", float(WorldManager.RENDER_DISTANCE_DEFAULT),
+	_menu_section(vb, "Video")
+	_game_menu_slider(vb, "Render distance", "render_distance",
+		float(WorldManager.RENDER_DISTANCE_DEFAULT),
 		float(WorldManager.RENDER_DISTANCE_MIN), float(WorldManager.RENDER_DISTANCE_MAX),
 		1.0, "%d")
-	_game_menu_slider(vb, "Field of view", "degrees", "fov", 75.0, 60.0, 110.0, 1.0, "%d")
-	_game_menu_slider(vb, "Mouse sensitivity", "", "sensitivity", 1.0, 0.25, 3.0, 0.05, "%.2fx")
-	_game_menu_check(vb, "Invert mouse Y", "", "invert_y", false)
-	_game_menu_check(vb, "Fullscreen", "", "fullscreen", false)
-	_game_menu_check(vb, "V-Sync", "smoother, at the cost of a little input lag",
-		"vsync", true)
-	_game_menu_check(vb, "Show FPS", "", "show_fps", false)
-	_game_menu_check(vb, "Placement preview",
-		"the ghost block showing where a block would go",
-		"placement_ghost", true)
+	_game_menu_slider(vb, "Field of view", "fov", 75.0, 60.0, 110.0, 1.0, "%d")
+	_game_menu_check(vb, "Fullscreen", "fullscreen", false)
+	_game_menu_check(vb, "V-Sync", "vsync", true)
+	_game_menu_check(vb, "Show FPS", "show_fps", false)
+
+	_menu_section(vb, "Audio")
+	_game_menu_slider(vb, "Master", "vol_master", 0.8, 0.0, 1.0, 0.05, "%d%%", 100.0)
+	_game_menu_slider(vb, "Music", "vol_music", 0.7, 0.0, 1.0, 0.05, "%d%%", 100.0)
+	_game_menu_slider(vb, "Effects", "vol_sfx", 0.9, 0.0, 1.0, 0.05, "%d%%", 100.0)
+
+	_menu_section(vb, "Game")
+	_game_menu_slider(vb, "Mouse sensitivity", "sensitivity", 1.0, 0.25, 3.0, 0.05, "%.2fx")
+	_game_menu_check(vb, "Invert mouse Y", "invert_y", false)
+	_game_menu_check(vb, "Placement preview", "placement_ghost", true)
+
+	_game_menu_button(vb, "Controls...", _populate_controls_menu)
 	_game_menu_button(vb, "Back", _populate_game_menu)
 
 
-## A labelled slider. Like the checkboxes, it takes effect as it moves: a
-## setting you have to confirm is a setting you cannot feel while you choose it,
-## and render distance in particular is a thing you want to SEE change.
-func _game_menu_slider(vb: VBoxContainer, text: String, hint: String, key: String,
-		dflt: float, lo: float, hi: float, step: float, fmt: String) -> void:
-	var head := Label.new()
-	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vb.add_child(head)
+## Every key you can move it to. Its own page: fourteen rows would swamp the
+## settings, and rebinding is a thing you do once rather than something you
+## want in the way of the sliders you touch often.
+func _populate_controls_menu() -> void:
+	var page := _menu_page("Controls")
+	# Scrolled, with a cap: fourteen rows is taller than a small screen, and a
+	# list that runs off the bottom takes its Back button with it.
+	var scroll := ScrollContainer.new()
+	scroll.custom_minimum_size = Vector2(320, minf(420.0,
+		float(get_viewport().get_visible_rect().size.y) * 0.55))
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	page.add_child(scroll)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 4)
+	vb.custom_minimum_size = Vector2(300, 0)
+	scroll.add_child(vb)
+	for action in Player.BIND_ORDER:
+		var row := _menu_row(vb, str(Player.BIND_NAMES[action]))
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(120, 26)
+		b.text = _bind_label(action)
+		b.pressed.connect(func():
+			_awaiting_bind = action
+			b.text = "press a key"
+			_bind_button = b)
+		row.add_child(b)
+	_game_menu_button(page, "Reset to defaults", func():
+		for a in Player.DEFAULT_BINDS:
+			set_setting("bind_" + a, int(Player.DEFAULT_BINDS[a]))
+		_populate_controls_menu())
+	_game_menu_button(page, "Back", _populate_settings_menu)
+
+
+func _bind_label(action: String) -> String:
+	var code := int(setting("bind_" + action, int(Player.DEFAULT_BINDS[action])))
+	var nm := OS.get_keycode_string(code)
+	return nm if nm != "" else "?"
+
+
+## A label on the left and room for a control on the right, so a page of
+## settings reads as one list rather than as a stack of centred captions.
+func _menu_row(vb: VBoxContainer, text: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.custom_minimum_size = Vector2(300, 0)
+	row.add_theme_constant_override("separation", 10)
+	var l := Label.new()
+	l.text = text
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	l.add_theme_font_size_override("font_size", 15)
+	row.add_child(l)
+	vb.add_child(row)
+	return row
+
+
+func _menu_section(vb: VBoxContainer, text: String) -> void:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", 13)
+	l.modulate = Color(0.65, 0.82, 1.0, 0.85)
+	vb.add_child(l)
+
+
+## A labelled slider, on one line with its value. `show_mul` scales what is
+## PRINTED without touching what is stored, so a volume can be a fraction on
+## disk and a percentage on screen.
+func _game_menu_slider(vb: VBoxContainer, text: String, key: String,
+		dflt: float, lo: float, hi: float, step: float, fmt: String,
+		show_mul: float = 1.0) -> void:
+	var row := _menu_row(vb, text)
+	var val := Label.new()
+	val.custom_minimum_size = Vector2(52, 0)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	val.add_theme_font_size_override("font_size", 15)
 	var sl := HSlider.new()
 	sl.min_value = lo
 	sl.max_value = hi
 	sl.step = step
 	sl.value = float(setting(key, dflt))
-	sl.custom_minimum_size = Vector2(280, 20)
-	head.text = "%s:  %s" % [text, fmt % sl.value]
+	sl.custom_minimum_size = Vector2(130, 20)
+	val.text = fmt % (sl.value * show_mul)
 	sl.value_changed.connect(func(v: float):
-		head.text = "%s:  %s" % [text, fmt % v]
+		val.text = fmt % (v * show_mul)
 		set_setting(key, v))
-	vb.add_child(sl)
-	if hint != "":
-		var l := Label.new()
-		l.text = hint
-		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		l.add_theme_font_size_override("font_size", 13)
-		l.modulate = Color(1, 1, 1, 0.5)
-		vb.add_child(l)
+	row.add_child(sl)
+	row.add_child(val)
 
 
 ## A labelled on/off row. Takes effect and is written to disk the moment it is
 ## clicked -- there is no OK button to forget to press.
-func _game_menu_check(vb: VBoxContainer, text: String, hint: String,
-		key: String, dflt: bool) -> void:
+func _game_menu_check(vb: VBoxContainer, text: String, key: String, dflt: bool) -> void:
+	var row := _menu_row(vb, text)
 	var c := CheckButton.new()
-	c.text = text
 	c.button_pressed = bool(setting(key, dflt))
-	c.custom_minimum_size = Vector2(280, 40)
 	c.toggled.connect(func(on: bool): set_setting(key, on))
-	vb.add_child(c)
-	var l := Label.new()
-	l.text = hint
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	l.add_theme_font_size_override("font_size", 13)
-	l.modulate = Color(1, 1, 1, 0.5)
-	vb.add_child(l)
+	row.add_child(c)
 
 
 func _game_menu_button(vb: VBoxContainer, text: String, cb: Callable) -> void:

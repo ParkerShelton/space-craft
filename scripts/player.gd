@@ -22,6 +22,43 @@ const FLY_SPEED := 16.0
 const FLY_ACCEL := 6.0
 const FLY_DAMP := 3.0
 const MOUSE_SENS := 0.0025
+
+# --- keys ---------------------------------------------------------------------
+#
+# Read through a table rather than written into the code, so they can be
+# rebound. The engine's InputMap would be the other way round, but every one of
+# these is POLLED (held, not pressed) in the middle of movement code, and a
+# table of keycodes is the smaller change to make that rebindable.
+const DEFAULT_BINDS := {
+	"forward": KEY_W, "back": KEY_S, "left": KEY_A, "right": KEY_D,
+	"jump": KEY_SPACE, "crouch": KEY_SHIFT,
+	"inventory": KEY_E, "recipes": KEY_B, "fine_place": KEY_C,
+	"rotate": KEY_R, "pilot": KEY_F, "eva": KEY_T, "starmap": KEY_M,
+	"board": KEY_G,
+}
+## What each one is called on the settings page, in the order they show there.
+const BIND_ORDER := ["forward", "back", "left", "right", "jump", "crouch",
+	"inventory", "recipes", "fine_place", "rotate", "pilot", "board", "eva",
+	"starmap"]
+const BIND_NAMES := {
+	"forward": "Walk forward", "back": "Walk back", "left": "Strafe left",
+	"right": "Strafe right", "jump": "Jump / ascend", "crouch": "Crouch / descend",
+	"inventory": "Inventory", "recipes": "Recipe book",
+	"fine_place": "Eighth-block placing", "rotate": "Rotate what you are placing",
+	"pilot": "Take the controls", "board": "Build a ship", "eva": "EVA suit",
+	"starmap": "Star map",
+}
+var binds := DEFAULT_BINDS.duplicate()
+
+## Is the key for this action held down right now?
+func key_down(action: String) -> bool:
+	return Input.is_physical_key_pressed(int(binds.get(action, DEFAULT_BINDS[action])))
+
+
+## Was this event the key for this action?
+func key_is(event: InputEventKey, action: String) -> bool:
+	return event.keycode == int(binds.get(action, DEFAULT_BINDS[action]))
+
 ## Multiplies MOUSE_SENS. A setting, because what feels like a flick of the
 ## wrist to one person is a whole arm to another.
 var look_sensitivity := 1.0
@@ -670,7 +707,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			# those. Once a bench is a bench, right-clicking it is the only way
 			# to open it -- but it is also a flat surface at waist height with a
 			# wall behind it, which is exactly where you want to keep building.
-			if Input.is_physical_key_pressed(KEY_SHIFT):
+			if key_down("crouch"):
 				_edit_block(false)
 				return
 			var st := _looked_at_station()
@@ -723,7 +760,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toast("Loaded")
 			else:
 				_toast("No save found")
-		elif event.keycode == KEY_E:
+		elif key_is(event, "inventory"):
 			if piloting != null:
 				pass  # E rolls the ship while piloting -- not the inventory
 			elif _station_open != null:
@@ -732,31 +769,31 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toggle_inventory()
 		elif _station_open != null:
 			return  # a station panel is open: swallow other keys
-		elif event.keycode == KEY_F:
+		elif key_is(event, "pilot"):
 			_toggle_pilot()
-		elif event.keycode == KEY_T:
+		elif key_is(event, "eva"):
 			_toggle_eva()
-		elif event.keycode == KEY_M:
+		elif key_is(event, "starmap"):
 			# warp requires actually piloting a ship built with a Warp Drive, in
 			# space -- an exception to "only F/Esc/mouse-look work while flying"
 			_try_open_starmap()
 		elif piloting:
 			return  # while flying, only F/M/Esc/mouse-look do anything
-		elif event.keycode == KEY_R:
+		elif key_is(event, "rotate"):
 			# Step through EVERY stair state: the straight run turned through
 			# four quarters, then the corner through four. Facing is part of the
 			# cycle rather than read from the camera, so the ghost always shows
 			# precisely what will be placed.
 			_stair_state = (_stair_state + 1) % Blocks.STAIR_STATES
 			_toast("Stairs: %s" % Blocks.stair_state_name(_stair_state))
-		elif event.keycode == KEY_C:
+		elif key_is(event, "fine_place"):
 			fine_place = not fine_place
 			_apply_place_mode_ui()
 			_toast("Fine placing: %s" % ("ON — eighth blocks" if fine_place else "off"))
-		elif event.keycode == KEY_B:
+		elif key_is(event, "recipes"):
 			if not (_book_search != null and _book_search.has_focus()):
 				_toggle_book()
-		elif event.keycode == KEY_G:
+		elif key_is(event, "board"):
 			if aboard == null and not eva:
 				_start_ship()
 		elif event.keycode >= KEY_1 and event.keycode <= KEY_8:
@@ -1176,8 +1213,8 @@ func _pilot_physics(delta: float) -> void:
 		_exit_pilot()
 		return
 	var ascend := 0.0
-	if not menu_open and not ui_typing and Input.is_physical_key_pressed(KEY_SPACE): ascend += 1.0
-	if Input.is_physical_key_pressed(KEY_SHIFT): ascend -= 1.0
+	if not menu_open and not ui_typing and key_down("jump"): ascend += 1.0
+	if key_down("crouch"): ascend -= 1.0
 	var roll := 0.0
 	if Input.is_physical_key_pressed(KEY_Q): roll += 1.0
 	if Input.is_physical_key_pressed(KEY_E): roll -= 1.0
@@ -1404,7 +1441,7 @@ func _walk_interior(delta: float, ship: Ship) -> void:
 		wish = wish.normalized()
 	var disp := wish * WALK_SPEED * (STARVE_SPEED_MULT if hunger <= 0.0 else 1.0) * delta
 
-	if _interior_floor and Input.is_physical_key_pressed(KEY_SPACE):
+	if _interior_floor and key_down("jump"):
 		_iv_y = JUMP_SPEED
 	_iv_y -= ARTIFICIAL_G * delta
 
@@ -1554,14 +1591,14 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	if is_on_floor():
 		if v_up < 0.0:
 			v_up = 0.0
-		if not menu_open and not ui_typing and Input.is_physical_key_pressed(KEY_SPACE):
+		if not menu_open and not ui_typing and key_down("jump"):
 			v_up = JUMP_SPEED
 	# No thrust once your feet leave the ground: a jump is a jump. There is no
 	# jetpack in the game yet, and being able to hold jump and climb was standing
 	# in for one -- if you are down a hole, the way out is to build your way out.
 
 	# Crouching: hold shift and you will not walk off what you are standing on.
-	if not menu_open and not ui_typing and Input.is_physical_key_pressed(KEY_SHIFT) 			and is_on_floor():
+	if not menu_open and not ui_typing and key_down("crouch") 			and is_on_floor():
 		horiz = _hold_the_ledge(horiz, up, delta) * CROUCH_SPEED_MULT
 
 	velocity = horiz + up * v_up
@@ -1838,8 +1875,8 @@ func _swim(delta: float, up: Vector3) -> void:
 	if wish.length() > 0.01:
 		desired = wish.normalized() * SWIM_SPEED
 	var vy := 0.0
-	if not menu_open and not ui_typing and Input.is_physical_key_pressed(KEY_SPACE): vy += 1.0
-	if Input.is_physical_key_pressed(KEY_SHIFT): vy -= 1.0
+	if not menu_open and not ui_typing and key_down("jump"): vy += 1.0
+	if key_down("crouch"): vy -= 1.0
 	if vy != 0.0:
 		desired += up * vy * SWIM_SPEED
 	elif _in_water(global_position + up * 0.5):
@@ -1866,9 +1903,9 @@ func _process_float(delta: float) -> void:
 	var right := cam.x
 	var up := cam.y
 	var vertical := 0.0
-	if not menu_open and not ui_typing and Input.is_physical_key_pressed(KEY_SPACE):
+	if not menu_open and not ui_typing and key_down("jump"):
 		vertical += 1.0
-	if Input.is_physical_key_pressed(KEY_SHIFT):
+	if key_down("crouch"):
 		vertical -= 1.0
 
 	var wish := (fwd * input.y + right * input.x + up * vertical)
@@ -1901,10 +1938,10 @@ func _move_input() -> Vector2:
 		return Vector2.ZERO
 	var x := 0.0
 	var y := 0.0
-	if Input.is_physical_key_pressed(KEY_W): y += 1.0
-	if Input.is_physical_key_pressed(KEY_S): y -= 1.0
-	if Input.is_physical_key_pressed(KEY_D): x += 1.0
-	if Input.is_physical_key_pressed(KEY_A): x -= 1.0
+	if key_down("forward"): y += 1.0
+	if key_down("back"): y -= 1.0
+	if key_down("right"): x += 1.0
+	if key_down("left"): x -= 1.0
 	return Vector2(x, y)
 
 
