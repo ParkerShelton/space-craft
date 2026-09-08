@@ -22,6 +22,7 @@ Stdlib only.
 """
 
 import argparse
+import math
 import os
 import shutil
 import struct
@@ -44,6 +45,21 @@ EVENTS = {
 	"mine": {"peak": 0.70, "max_ms": 700, "tail_ms": 40},
 	"place": {"peak": 0.75, "max_ms": 900, "tail_ms": 60},
 	"break": {"peak": 0.80, "max_ms": 1600, "tail_ms": 120},
+}
+
+# Per-material tone correction, for a recording that is right in character but
+# wrong in the spectrum. Applied after trimming and before levelling.
+#
+#   pitch    -- resample. Below 1.0 moves everything down AND makes it longer.
+#   lowpass  -- one-pole rolloff, in Hz, for taking fizz off the top.
+#
+# Dirt is the reason this exists. Its takes measured 85-98% of their energy in
+# 1-3 kHz with 0.0% below 300 Hz, where a grass step has 73% below 300. That is
+# not a bright footstep, it is a footstep with no body at all, which is why it
+# sounded wrong in a way no amount of filtering could fix -- there was nothing
+# underneath to uncover. Moving it down is what gives it a bottom.
+TONE = {
+	"dirt": {"pitch": 0.70, "lowpass": 3500.0},
 }
 
 # Where the sound is judged to start and stop, as a fraction of its own peak.
@@ -81,7 +97,37 @@ def write_wav(path, x, rate):
 			struct.pack("<h", max(-32768, min(32767, int(v)))) for v in x))
 
 
-def prep(x, rate, spec, normalize=True):
+def lowpass(x, rate, fc):
+	"""One-pole rolloff. Takes the edge off without changing what it is."""
+	a = math.exp(-2.0 * math.pi * fc / rate)
+	out = []
+	prev = 0.0
+	for v in x:
+		prev = v * (1.0 - a) + prev * a
+		out.append(prev)
+	return out
+
+
+def resample(x, ratio):
+	"""Linear interpolation. Below 1.0 is lower and longer."""
+	m = int(len(x) / ratio)
+	out = [0.0] * m
+	for i in range(m):
+		t = i * ratio
+		a = int(t)
+		f = t - a
+		s0 = x[a] if a < len(x) else 0.0
+		s1 = x[a + 1] if a + 1 < len(x) else 0.0
+		out[i] = s0 + (s1 - s0) * f
+	return out
+
+
+def material_of(name):
+	parts = os.path.splitext(name)[0].split("_")
+	return "_".join(parts[1:-1]) if len(parts) >= 3 else ""
+
+
+def prep(x, rate, spec, normalize=True, tone=None):
 	"""Trim, cap, fade, level. Returns the new samples."""
 	peak = max((abs(v) for v in x), default=0)
 	if peak == 0:
@@ -93,6 +139,12 @@ def prep(x, rate, spec, normalize=True):
 	end = min(len(x), end + int(spec["tail_ms"] * rate / 1000))
 	end = min(end, start + int(spec["max_ms"] * rate / 1000))
 	y = [float(v) for v in x[start:end]]
+	if tone:
+		if tone.get("pitch", 1.0) != 1.0:
+			y = resample(y, float(tone["pitch"]))
+		if tone.get("lowpass"):
+			y = lowpass(y, rate, float(tone["lowpass"]))
+		peak = max((abs(v) for v in y), default=0.0) or peak
 	if normalize:
 		k = spec["peak"] * 32768.0 / peak
 		y = [v * k for v in y]
@@ -115,6 +167,7 @@ def main():
 	ap = argparse.ArgumentParser(description=__doc__)
 	ap.add_argument("--write", action="store_true",
 		help="apply the changes (without this, only reports)")
+	ap.add_argument("--only", help="one material, e.g. dirt")
 	ap.add_argument("--no-normalize", action="store_true",
 		help="trim and cap length but leave levels exactly as recorded")
 	args = ap.parse_args()
@@ -147,6 +200,8 @@ def main():
 	for name in names:
 		if name in generated:
 			continue
+		if args.only and material_of(name) != args.only:
+			continue
 		ev = event_of(name)
 		if ev is None:
 			skipped.append(name)
@@ -161,7 +216,8 @@ def main():
 		except Exception as e:
 			print("%-24s  !! %s" % (name, e))
 			continue
-		y, note = prep(x, rate, EVENTS[ev], not args.no_normalize)
+		y, note = prep(x, rate, EVENTS[ev], not args.no_normalize,
+			TONE.get(material_of(name)))
 		if note:
 			print("%-24s  !! %s" % (name, note))
 			continue
