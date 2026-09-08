@@ -79,6 +79,13 @@ BREAK_PITCH_TO = 1.30       # and up, over the length of the sound
 PLACE_PITCH = 0.85
 MINE_PITCH = 0.80
 
+# Debris: the quieter, later copies of the material that trail a break. Right
+# for something that shatters, wrong for something that just goes -- set a
+# material to 0.0 here and its break is a single clean event with no rubble
+# afterwards.
+DEBRIS = {"rock": 0.0}
+DEBRIS_DEFAULT = 1.0
+
 # How much synthetic layer to mix over the real recording, 0 for none. With
 # pitch doing less, these do more, so they are the first things to turn.
 # Now genuinely fractions OF THE MATERIAL, since the body is normalised first.
@@ -88,7 +95,16 @@ POP = 0.50              # break: the crack at the instant it gives way
 OOMPH = 0.45            # place: low weight under the contact
 
 TAKES = {"break": 4, "place": 3, "mine": 3}
-PEAK = {"break": 0.86, "place": 0.76, "mine": 0.30}
+
+# Loudness is set RELATIVE to the step it was built from, in dB, not to an
+# absolute target. Absolute was wrong for a reason worth remembering: a grass
+# take peaks at 0.05 and a rock take at 0.87, so normalising both breaks to 0.86
+# made the grass break land about 33 dB above its own footstep while the rock
+# one barely moved. Relative keeps each material internally balanced whatever
+# level it happened to be recorded at.
+REL_DB = {"break": 6.0, "place": 2.0, "mine": -6.0}
+PEAK_CEILING = 0.90     # never closer to the ceiling than this, whatever the maths says
+PEAK_FLOOR = 0.01
 
 # Mining is a different KIND of sound, not a quieter version of the same one.
 # It is the chipping away, and it has to still be going on when the block
@@ -224,7 +240,7 @@ def level(x):
 	return max((abs(v) for v in x), default=0.0) / 32768.0
 
 
-def build_break(step, rate, k):
+def build_break(step, rate, k, mat=""):
 	"""Pitched down, popped, and given debris made of the material itself."""
 	# Vary the shift a little per take rather than the whole recipe: four takes
 	# of one block breaking, not four different blocks.
@@ -249,12 +265,14 @@ def build_break(step, rate, k):
 	# Debris: the same material again, quieter and late, and climbing further
 	# with the rest of it. Using the real recording rather than synthetic grain
 	# keeps the texture honest -- rock debris sounds like that rock.
-	mix(out, shift(body, 1.12), int(0.050 * rate), 0.30)
-	mix(out, shift(body, 1.28), int(0.105 * rate), 0.18)
+	deb = float(DEBRIS.get(mat, DEBRIS_DEFAULT))
+	if deb > 0.0:
+		mix(out, shift(body, 1.12), int(0.050 * rate), 0.30 * deb)
+		mix(out, shift(body, 1.28), int(0.105 * rate), 0.18 * deb)
 	return fade_tail(out, rate, 40)
 
 
-def build_place(step, rate, k):
+def build_place(step, rate, k, mat=""):
 	"""Pitched up and shortened, with weight put under it."""
 	body = norm(shift(step, PLACE_PITCH * (1.0 + 0.03 * (k - 2))))
 	out = body + [0.0] * int(0.10 * rate)
@@ -272,7 +290,7 @@ def build_place(step, rate, k):
 	return fade_tail(out, rate, 25)
 
 
-def build_mine(step, rate, k):
+def build_mine(step, rate, k, mat=""):
 	"""A chip, not a hit.
 
 	Kept to the first 80 ms -- the attack and nothing else -- then muffled. The
@@ -334,12 +352,17 @@ def main():
 				# synth's helpers read this module-level rate, so match the
 				# recording rather than resampling it to suit them.
 				synth.RATE = rate
-				out = BUILD[ev](step, rate, k)
+				out = BUILD[ev](step, rate, k, mat)
+				# Relative to this material's own step, so a quiet recording
+				# stays quiet and a loud one stays loud.
+				src_peak = max((abs(v) for v in step), default=0.0) / 32768.0
+				peak = src_peak * (10.0 ** (REL_DB[ev] / 20.0))
+				peak = max(PEAK_FLOOR, min(PEAK_CEILING, peak))
 				name = "%s_%s_%d.wav" % (ev, mat, k)
-				print("%-24s %6d ms  %s" % (name, len(out) * 1000 // rate,
-					os.path.basename(src)))
+				print("%-24s %6d ms  peak %.3f  %s" % (name,
+					len(out) * 1000 // rate, peak, os.path.basename(src)))
 				if args.write:
-					write_wav(os.path.join(WORLD, name), out, rate, PEAK[ev])
+					write_wav(os.path.join(WORLD, name), out, rate, peak)
 				generated.append(name)
 
 	print("-" * 62)
