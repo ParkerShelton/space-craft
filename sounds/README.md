@@ -30,14 +30,21 @@ folder empty.
 Nothing has to arrive at once. One material, or one take, is a valid change on
 its own -- record `break_wood_1.wav` and only breaking wood makes a noise.
 
-**You only have to record the steps.** A break or place with no files of its own
-borrows the step of the same material and shifts its pitch -- down for breaking,
-up for placing. That is not just a pitch change: on a sample, pitch and length
+**You only have to record the steps.** A mine, break or place with no files of
+its own borrows the step of the same material and shifts its pitch -- down for
+breaking, up for placing, slightly down and much quieter for mining. That is not just a pitch change: on a sample, pitch and length
 are the same knob, so a break comes out 39% longer than the step and a place 21%
 shorter, which is the right shape for both. Recording eight footstep sets gets
 you all twenty-four sounds.
 
-What pitch cannot fake is a debris tail, so a derived break is a heavier thud
+Pitch alone is not enough, and grass is why: shifting a *tonal* sound is
+obvious, but shifting broadband rustle is barely audible, because noise has no
+pitch to move. So a derived break also gets a different SHAPE -- three grains a
+few tens of milliseconds apart rather than one. That is what breaking is, a
+thing coming apart in pieces, where a step is a single contact, and it separates
+them even when the recording is pure hiss.
+
+What none of this fakes is a real debris tail, so a derived break is a busy thud
 rather than a proper crunch. Record real breaks for the materials you care most
 about; they take over automatically, with nothing to switch off.
 
@@ -71,6 +78,7 @@ Eight materials -- `rock`, `dirt`, `grass`, `wood`, `leaves`, `snow`, `metal`,
 
 | event | takes | filenames | fires when |
 |---|---|---|---|
+| mine | 3 | `mine_<material>_1.wav` ... `_3.wav` | repeatedly, while a block is being chipped at |
 | break | 4 | `break_<material>_1.wav` ... `_4.wav` | a block or eighth-block is removed |
 | place | 3 | `place_<material>_1.wav` ... `_3.wav` | a block or eighth-block is added |
 | step | 6 | `step_<material>_1.wav` ... `_6.wav` | once per dip of the walk cycle |

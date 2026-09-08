@@ -3083,6 +3083,9 @@ func _process_mining(delta: float) -> void:
 		var bare := 1.0 if Blocks.is_leaf(Blocks.bottom_of(id)) else BARE_MINE_MULT
 		_mine_total = hardness * bare / mine_power
 	_mine_time += delta
+	# Asked for every frame while the button is held; Audio decides how often it
+	# actually sounds, and it stops on its own when the asking stops.
+	Audio.mining(id, obj.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)))
 	_update_crack(obj, v, id, _mine_time / maxf(_mine_total, 0.001))
 	if _mine_time >= _mine_total:
 		if planet != null and Blocks.bottom_of(id) == Blocks.PARTS:

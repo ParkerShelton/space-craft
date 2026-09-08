@@ -61,6 +61,16 @@ const CATALOG := {
 	"place_snow": {"files": ["_takes", WORLD + "place_snow", 3], "pitch": 0.15, "throttle": 45},
 	"place_metal": {"files": ["_takes", WORLD + "place_metal", 3], "pitch": 0.12, "throttle": 45},
 	"place_glass": {"files": ["_takes", WORLD + "place_glass", 3], "pitch": 0.15, "throttle": 45},
+	# Held down rather than triggered: the throttle IS the repeat rate, so this
+	# one entry replayed every 190 ms is the whole mining loop.
+	"mine_rock": {"files": ["_takes", WORLD + "mine_rock", 3], "pitch": 0.16, "throttle": 190},
+	"mine_dirt": {"files": ["_takes", WORLD + "mine_dirt", 3], "pitch": 0.16, "throttle": 190},
+	"mine_grass": {"files": ["_takes", WORLD + "mine_grass", 3], "pitch": 0.16, "throttle": 190},
+	"mine_wood": {"files": ["_takes", WORLD + "mine_wood", 3], "pitch": 0.16, "throttle": 190},
+	"mine_leaves": {"files": ["_takes", WORLD + "mine_leaves", 3], "pitch": 0.18, "throttle": 190},
+	"mine_snow": {"files": ["_takes", WORLD + "mine_snow", 3], "pitch": 0.16, "throttle": 190},
+	"mine_metal": {"files": ["_takes", WORLD + "mine_metal", 3], "pitch": 0.14, "throttle": 190},
+	"mine_glass": {"files": ["_takes", WORLD + "mine_glass", 3], "pitch": 0.16, "throttle": 190},
 	# Footsteps fire several times a second, so they get the most takes and the
 	# widest detune of anything in the game.
 	"step_rock": {"files": ["_takes", WORLD + "step_rock", 6], "db": -20.0, "pitch": -0.2, "throttle": 120},
@@ -97,11 +107,28 @@ const CATALOG := {
 #
 # Steps are recorded quiet because they are steps, so a derived sound puts gain
 # back on top of the step's own trim.
-const DERIVE_PITCH := {"break": 0.55, "place": 1.55}
-const DERIVE_GAIN := {"break": 6.0, "place": 3.0}
+const DERIVE_PITCH := {"break": 0.55, "place": 1.55, "mine": 0.9}
+const DERIVE_GAIN := {"break": 6.0, "place": 3.0, "mine": -5.0}
 ## Wider than the source step's own spread: these fire once rather than
 ## constantly, so they can afford to move around more.
-const DERIVE_SPREAD := {"break": 1.22, "place": 1.18}
+const DERIVE_SPREAD := {"break": 1.22, "place": 1.18, "mine": 1.3}
+
+
+## Pitch alone is not enough, and grass is why.
+##
+## Shifting a TONAL sound is obvious; shifting broadband rustle is barely
+## audible, because noise has no pitch to move. So a derived break is also given
+## a different SHAPE: three grains a few tens of milliseconds apart rather than
+## one. That is what breaking actually is -- a thing coming apart in pieces,
+## where a footstep is a single contact -- and it separates the two even when
+## the recording is pure hiss.
+##
+## Each grain is [delay in seconds, pitch multiplier, dB offset]. Only derived
+## sounds get this: a real recording of a break already has its own tail.
+const DERIVE_BURST := {
+	"break": [[0.0, 1.0, 0.0], [0.043, 1.21, -6.0], [0.094, 0.86, -11.0]],
+	"place": [[0.0, 1.0, 0.0], [0.028, 1.34, -9.0]],
+}
 
 
 ## Expands the ["_takes", base, n] shorthand above into base_1.wav .. base_n.wav.
@@ -378,10 +405,31 @@ func at(name: String, pos: Vector3) -> void:
 	var spec: Dictionary = CATALOG[name]
 	if _throttled(name, spec):
 		return
+	var ev: String = String(name).split("_")[0]
+	if _derived.has(name) and DERIVE_BURST.has(ev):
+		for g in DERIVE_BURST[ev]:
+			if float(g[0]) <= 0.0:
+				_spawn(name, pos, float(g[1]), float(g[2]))
+			else:
+				# A grain each, spaced out, rather than one longer sample: it
+				# costs a player for a few tens of ms and needs no new files.
+				get_tree().create_timer(float(g[0])).timeout.connect(
+					_spawn.bind(name, pos, float(g[1]), float(g[2])))
+		return
+	_spawn(name, pos, 1.0, 0.0)
+
+
+## One grain. Pitch and trim are per-PLAYER rather than baked into the stream,
+## so the same step recording can be a step here and a break over there in the
+## same frame.
+func _spawn(name: String, pos: Vector3, pitch_mul: float, db: float) -> void:
+	if _silent or not _streams.has(name):
+		return
+	var spec: Dictionary = CATALOG[name]
 	var p := _free_positional()
 	p.stream = _streams[name]
-	p.volume_db = float(spec.get("db", 0.0)) + float(_gain.get(name, 0.0))
-	p.pitch_scale = float(_pitch.get(name, 1.0))
+	p.volume_db = float(spec.get("db", 0.0)) + float(_gain.get(name, 0.0)) + db
+	p.pitch_scale = float(_pitch.get(name, 1.0)) * pitch_mul
 	p.global_position = pos
 	p.play()
 
@@ -399,6 +447,13 @@ func block_placed(id: int, pos: Vector3) -> void:
 
 func footstep(id: int, pos: Vector3) -> void:
 	at("step_" + material_of(id), pos)
+
+
+## Called every frame while a block is being mined. The throttle on the entry
+## decides the actual repeat rate, so the caller keeps no timer of its own --
+## and stopping is not something anyone has to remember: stop asking, it stops.
+func mining(id: int, pos: Vector3) -> void:
+	at("mine_" + material_of(id), pos)
 
 
 ## A free player, or else the one that has been going longest. Stealing beats
