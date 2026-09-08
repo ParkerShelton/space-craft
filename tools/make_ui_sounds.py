@@ -290,20 +290,28 @@ def main():
 
     # --- click ---------------------------------------------------------------
     # The main press: a dry wooden tok, and nothing else. No low thump at all.
+    # Pitched to sit with the hover rather than under it -- these two are
+    # heard within a fraction of a second of each other on every single
+    # button, so a gap between them reads as two different objects.
     # A short percussive hit with weight under it is a drum, which is exactly
     # what the last set turned into -- the fix is not less bass, it is none.
-    for k, f in enumerate((615.0, 638.0, 596.0)):
+    for k, f in enumerate((800.0, 829.0, 775.0)):
         b = blank(0.085)
-        wood(b, f, 0.08, 1.0, q=5.5, decay=58.0, seed=10 + k)
+        # One seed across the three takes, as with the hover: varying the
+        # noise as well as the pitch made take 2 land 70% of its energy in
+        # the top band against take 1's 35%, which is three buttons rather
+        # than one button pressed three times.
+        wood(b, f, 0.08, 1.0, q=5.5, decay=58.0, seed=10)
         tap(b, 0.010, 0.16, decay=200.0, seed=3)
         write("click_%d" % (k + 1), b, peak=0.66)
 
     # --- back ----------------------------------------------------------------
-    # The same piece of wood, struck lower. Leaving a page should not sound
+    # A fifth below the click, which is enough to hear as a drop without
+    # leaving the family. The same piece of wood, struck lower. Leaving a page should not sound
     # identical to entering one, and a pitch drop says that without needing a
     # different sound.
     b = blank(0.095)
-    wood(b, 432.0, 0.09, 1.0, q=5.5, decay=52.0, seed=20)
+    wood(b, 562.0, 0.09, 1.0, q=5.5, decay=52.0, seed=20)
     tap(b, 0.010, 0.13, decay=200.0, seed=23)
     write("back", b, peak=0.66)
 
@@ -334,13 +342,13 @@ def main():
     # open and falling to close -- the same material, just more of it, because
     # opening a menu is a bigger event than pressing a button in it.
     b = blank(0.17)
-    wood(b, 400.0, 0.07, 0.8, q=5.0, decay=70.0, seed=80)
-    wood(b, 600.0, 0.09, 0.95, q=5.5, decay=58.0, start=0.045, seed=81)
+    wood(b, 520.0, 0.07, 0.8, q=5.0, decay=70.0, seed=80)
+    wood(b, 780.0, 0.09, 0.95, q=5.5, decay=58.0, start=0.045, seed=81)
     write("open", b, peak=0.55)
 
     b = blank(0.17)
-    wood(b, 600.0, 0.07, 0.85, q=5.5, decay=70.0, seed=82)
-    wood(b, 400.0, 0.09, 0.9, q=5.0, decay=58.0, start=0.045, seed=83)
+    wood(b, 780.0, 0.07, 0.85, q=5.5, decay=70.0, seed=82)
+    wood(b, 520.0, 0.09, 0.9, q=5.0, decay=58.0, start=0.045, seed=83)
     write("close", b, peak=0.55)
 
     # --- rebinding -----------------------------------------------------------
