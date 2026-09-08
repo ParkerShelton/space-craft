@@ -2387,16 +2387,26 @@ func _drop_flora_seed(planet: Planet, kind: String, item: int) -> void:
 			sp = other
 	if sp.is_empty():
 		return          # nothing grows here to have seeded it
-	# A sapling only makes sense for a tree; anything else seeds.
+	_give_seeds(planet, sp, 1)
+	_toast("Found " + _seed_label(sp))
+
+
+## The seed item for a species, in the player's hands.
+##
+## The class rides along, not the planet: what matters when you come to plant it
+## is the kind of world it needs, and that travels between worlds while a planet
+## name does not.
+func _give_seeds(planet: Planet, sp: Dictionary, n: int) -> void:
+	if sp.is_empty() or n <= 0:
+		return
 	var give: int = Blocks.SAPLING if str(sp["kind"]) == "tree" else Blocks.SEEDS
-	var label: String = "%s %s" % [str(sp["name"]),
-		"Sapling" if give == Blocks.SAPLING else "Seeds"]
-	# The class rides along, not the planet: what matters when you come to plant
-	# it is the kind of world it needs, and that travels between worlds while a
-	# planet name does not.
-	_add_item(give, 1, {"species": str(sp["key"]), "class": planet.planet_class()},
-		planet.planet_name, {"name": label, "color": Blocks.color_of(give)})
-	_toast("Found " + label)
+	_add_item(give, n, {"species": str(sp["key"]), "class": planet.planet_class()},
+		planet.planet_name, {"name": _seed_label(sp), "color": Blocks.color_of(give)})
+
+
+func _seed_label(sp: Dictionary) -> String:
+	return "%s %s" % [str(sp["name"]),
+		"Sapling" if str(sp["kind"]) == "tree" else "Seeds"]
 
 
 # --- farming ------------------------------------------------------------------
@@ -2481,7 +2491,13 @@ func _try_harvest(tgt: Dictionary) -> bool:
 	var nm: String = str(sp.get("name", "Crop")) if not sp.is_empty() else "Crop"
 	_add_item(Blocks.CROP, int(got["n"]), {"species": str(got["key"])}, planet.planet_name,
 		{"name": nm, "color": Blocks.color_of(Blocks.CROP)})
-	_toast("Harvested %d %s" % [int(got["n"]), nm])
+	# ...and its seed back. A crop that ate its own seed would make farming a
+	# way to run out of plants, so a harvest always replaces itself; a second
+	# seed now and then is how a field grows.
+	var seeds := 2 if randf() < Blocks.SEED_BONUS_CHANCE else 1
+	_give_seeds(planet, sp, seeds)
+	_toast("Harvested %d %s, and %d seed%s" % [int(got["n"]), nm, seeds,
+		"" if seeds == 1 else "s"])
 	return true
 
 

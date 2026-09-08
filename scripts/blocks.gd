@@ -1466,6 +1466,11 @@ static func flora_by_key(key: String) -> Dictionary:
 ## How often clearing tall grass leaves a seed behind. Low enough that seeds are
 ## worth going out for, high enough that a field is a reliable way to get them.
 const SEED_DROP_CHANCE := 0.12
+## Harvesting always returns a seed, so a field keeps itself going. Now and
+## then it returns two, which is how a field gets BIGGER -- rare enough that
+## expanding is something you work up to rather than something that happens
+## whether you meant it or not.
+const SEED_BONUS_CHANCE := 0.22
 ## How often clearing leaves gives a sapling of that tree.
 const SAPLING_DROP_CHANCE := 0.08
 ## And how often what drops is some OTHER plant that lives on this world instead
