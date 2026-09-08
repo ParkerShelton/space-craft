@@ -130,6 +130,7 @@ const SERVER_SAVE_EVERY := 60.0
 var settings_path := "user://settings.cfg"
 var _settings := ConfigFile.new()
 var _fps_label: Label
+var _game_menu_bg: ColorRect
 ## The action waiting for a key, while the controls page is listening.
 var _awaiting_bind := ""
 var _autosave_t := 0.0
@@ -531,10 +532,13 @@ func _open_game_menu() -> void:
 	_game_menu = CanvasLayer.new()
 	_game_menu.layer = 12
 	add_child(_game_menu)
-	# Dimmed rather than hidden: it stays clear that the world is still there and
-	# still running behind it.
-	var bg := ColorRect.new()
-	bg.color = Color(0.03, 0.04, 0.08, 0.72)
+	# Dimmed rather than hidden on the front page: it stays clear that the world
+	# is still there and still running behind it. The settings pages go opaque --
+	# see _menu_page -- because reading a list of settings over the top of the
+	# HUD means reading two things at once.
+	_game_menu_bg = ColorRect.new()
+	var bg := _game_menu_bg
+	bg.color = MENU_BG_DIM
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_game_menu.add_child(bg)
 	var center := CenterContainer.new()
@@ -549,7 +553,16 @@ func _open_game_menu() -> void:
 	_world.player.menu_open = true
 
 
-func _menu_page(title_text: String) -> VBoxContainer:
+const MENU_BG_DIM := Color(0.03, 0.04, 0.08, 0.72)
+const MENU_BG_SOLID := Color(0.04, 0.05, 0.09, 1.0)
+
+
+## `see_through` is for the front page only. Anything with things to read on it
+## covers the HUD completely: a settings row over the top of a hotbar label is
+## two things competing for the same few pixels.
+func _menu_page(title_text: String, see_through: bool = false) -> VBoxContainer:
+	if _game_menu_bg != null:
+		_game_menu_bg.color = MENU_BG_DIM if see_through else MENU_BG_SOLID
 	for c in _game_menu_vb.get_children():
 		_game_menu_vb.remove_child(c)
 		c.queue_free()
@@ -562,7 +575,7 @@ func _menu_page(title_text: String) -> VBoxContainer:
 
 
 func _populate_game_menu() -> void:
-	var vb := _menu_page("Game Menu")
+	var vb := _menu_page("Game Menu", true)
 	# Continue FIRST, because the commonest reason to be looking at this screen
 	# is having pressed Escape by mistake.
 	_game_menu_button(vb, "Continue", _close_game_menu)

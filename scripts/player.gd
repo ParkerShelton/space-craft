@@ -67,6 +67,9 @@ var look_sensitivity := 1.0
 var invert_look := false
 ## Whether the HUD names the block under the crosshair.
 var show_look_names := true
+## Down on one knee: set while walking, cleared everywhere else, and sent to
+## everyone else so their copy of you does it too.
+var crouching := false
 ## Eye height above the body's centre. The collision capsule is 1.8 tall, so its
 ## top is at 0.9 and the eye normally sits well inside it.
 const EYE_HEIGHT := 0.7
@@ -81,6 +84,10 @@ const WRENCH_NUDGE_Y := 4.0
 ## Crouching. Slower, because a careful step is a slow one -- and because the
 ## speed is what tells you the ledge guard is on without a word on screen.
 const CROUCH_SPEED_MULT := 0.45
+## How far the eye drops when crouching, as a fraction of standing eye height.
+## Enough that you can see it happen in first person -- the point of a crouch
+## you cannot see is not obvious.
+const CROUCH_EYE_MULT := 0.55
 ## How far past the step to probe for floor, and how far down. The lookahead has
 ## to reach past your own edge or you stop with your heels over nothing; the
 ## drop is the capsule's half-height plus a little, so a stair down still counts
@@ -612,12 +619,18 @@ func _selected_id() -> int:
 
 ## What this player is visibly doing, so others can draw it (see Net.player_state).
 ## 0 = nothing, 1 = mining, 2 = placing.
+## 0 nothing, 1 mining, 2 placing, plus CROUCH_BIT on top of any of them.
+## A bit rather than another argument: this rides in a twenty-times-a-second
+## broadcast, and it is one thing about the body among several.
+const CROUCH_BIT := 4
+
 func action_state() -> int:
+	var a := 0
 	if _place_flash > 0.0:
-		return 2
-	if _mine_time > 0.0:
-		return 1
-	return 0
+		a = 2
+	elif _mine_time > 0.0:
+		a = 1
+	return a | (CROUCH_BIT if crouching else 0)
 
 
 # --- eighths ------------------------------------------------------------------
@@ -1117,7 +1130,7 @@ func _update_eye_clearance(delta: float) -> void:
 		# centimetres over your head is not a ceiling you are about to headbutt.
 		_camera.position.y = move_toward(_camera.position.y, EYE_HEIGHT, delta * 3.0)
 		return
-	var want := EYE_HEIGHT
+	var want := EYE_HEIGHT * (CROUCH_EYE_MULT if crouching else 1.0)
 	var space := get_world_3d().direct_space_state
 	if space != null:
 		var up := global_transform.basis.y
@@ -1128,11 +1141,16 @@ func _update_eye_clearance(delta: float) -> void:
 		var hit := space.intersect_ray(q)
 		if not hit.is_empty():
 			var d: float = global_position.distance_to(hit["position"])
-			want = clampf(d - EYE_CLEARANCE, 0.0, EYE_HEIGHT)
-	if want < _camera.position.y:
+			# A ceiling overrules a crouch in one direction only: it can push the
+			# eye further down, never hold it up.
+			want = minf(want, clampf(d - EYE_CLEARANCE, 0.0, EYE_HEIGHT))
+	# Crouching eases both ways so it reads as a movement; a ceiling still drops
+	# the eye instantly, because being late there is what puts it in the block.
+	var ceiling_forced := want < _camera.position.y and not crouching
+	if ceiling_forced:
 		_camera.position.y = want
 	else:
-		_camera.position.y = move_toward(_camera.position.y, want, delta * 3.0)
+		_camera.position.y = move_toward(_camera.position.y, want, delta * 2.2)
 
 
 func _physics_process(delta: float) -> void:
@@ -1178,6 +1196,7 @@ func _physics_process(delta: float) -> void:
 			_ghost.visible = false
 		if _crack != null:
 			_crack.visible = false
+		crouching = false
 		_pilot_physics(delta)
 		_update_ui()
 		return
@@ -1188,6 +1207,7 @@ func _physics_process(delta: float) -> void:
 			# Walk the interior in the ship's local frame (decoupled from how the
 			# ship moves through space -- rock solid at any speed/orientation).
 			grounded = true
+			crouching = false
 			_walk_interior(delta, aboard)
 			_process_mining(delta)
 			_update_ui()
@@ -1197,12 +1217,14 @@ func _physics_process(delta: float) -> void:
 	if _in_water(global_position + up * 0.5) or _in_water(global_position - up * 0.8):
 		# align to the snapped axis (like walking) so you stay upright vs gravity
 		var sup := -_snap_to_axis(g) if g.length() > 0.01 else Vector3.UP
+		crouching = false
 		_swim(delta, sup)
 	else:
 		grounded = g.length() > FLIGHT_THRESHOLD
 		if grounded:
 			_walk(delta, -_snap_to_axis(g), g.length())
 		else:
+			crouching = false
 			_process_float(delta)
 	_process_mining(delta)
 	_update_ui()
@@ -1600,7 +1622,8 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	# in for one -- if you are down a hole, the way out is to build your way out.
 
 	# Crouching: hold shift and you will not walk off what you are standing on.
-	if not menu_open and not ui_typing and key_down("crouch") 			and is_on_floor():
+	crouching = not menu_open and not ui_typing and key_down("crouch") and is_on_floor()
+	if crouching:
 		horiz = _hold_the_ledge(horiz, up, delta) * CROUCH_SPEED_MULT
 
 	velocity = horiz + up * v_up

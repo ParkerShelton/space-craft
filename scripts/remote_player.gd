@@ -10,11 +10,16 @@ class_name RemotePlayer
 const ACT_NONE := 0
 const ACT_MINE := 1
 const ACT_PLACE := 2
+## Set alongside the action above; see Player.action_state.
+const CROUCH_BIT := 4
 
 var peer_id := 0
 
 var _target := Vector3.ZERO
 var _label: Label3D
+var _body: Node3D                  # everything but the name tag
+var _crouch := 0.0                 # 0 standing, 1 down
+var _crouch_want := 0.0
 var _arms: Array[Node3D] = []      # shoulder pivots, right first
 var _legs: Array[Node3D] = []      # hip pivots, right first
 var _phase := 0.0                  # walk cycle position
@@ -26,6 +31,10 @@ var _have_last := false
 
 
 func setup(id: int) -> void:
+	# One node holding the whole figure, so crouching moves it as a piece rather
+	# than as eight separate offsets that have to agree with each other.
+	_body = Node3D.new()
+	add_child(_body)
 	peer_id = id
 	# A stable colour per player, so the same person is the same colour all
 	# session and no two are nearly the same shade.
@@ -36,10 +45,10 @@ func setup(id: int) -> void:
 	# player's origin sits: its collision capsule is 1.8 tall and centred on the
 	# node. Building from the feet up left the figure hovering above the ground.
 	const FEET := -0.9
-	_box(self, Vector3(0.62, 0.72, 0.38), Vector3(0, FEET + 1.14, 0), body)   # torso
-	_box(self, Vector3(0.46, 0.42, 0.42), Vector3(0, FEET + 1.71, 0), trim)   # head
+	_box(_body, Vector3(0.62, 0.72, 0.38), Vector3(0, FEET + 1.14, 0), body)   # torso
+	_box(_body, Vector3(0.46, 0.42, 0.42), Vector3(0, FEET + 1.71, 0), trim)   # head
 	for sx in [-1.0, 1.0]:
-		_box(self, Vector3(0.10, 0.10, 0.06),
+		_box(_body, Vector3(0.10, 0.10, 0.06),
 			Vector3(sx * 0.11, FEET + 1.77, -0.22), Color(0.05, 0.05, 0.06))  # eyes
 
 	# Limbs hang from PIVOTS at the shoulder and hip, with the box offset below
@@ -68,7 +77,7 @@ func setup(id: int) -> void:
 func _pivot(pos: Vector3) -> Node3D:
 	var n := Node3D.new()
 	n.position = pos
-	add_child(n)
+	_body.add_child(n)
 	return n
 
 
@@ -91,7 +100,8 @@ func _box(parent: Node3D, size: Vector3, pos: Vector3, col: Color) -> MeshInstan
 ## toward rather than snapped to -- otherwise everyone else visibly stutters.
 func remote_state(pos: Vector3, facing: Vector3, up: Vector3, action: int) -> void:
 	_target = pos
-	_action = action
+	_action = action & 3
+	_crouch_want = 1.0 if (action & CROUCH_BIT) != 0 else 0.0
 	var u := up.normalized()
 	if u.length_squared() < 0.5:
 		return
@@ -129,6 +139,13 @@ func _process(delta: float) -> void:
 func _animate(delta: float) -> void:
 	if _arms.size() < 2 or _legs.size() < 2:
 		return
+	# Down on one knee: the whole figure drops and leans in. Eased, so it reads
+	# as somebody crouching rather than as somebody teleporting downward -- and
+	# on the same curve the first-person eye uses, so both look like one motion.
+	_crouch = move_toward(_crouch, _crouch_want, delta * 2.2)
+	if _body != null:
+		_body.position.y = -0.34 * _crouch
+		_body.rotation.x = 0.32 * _crouch
 	# The cycle advances with SPEED, not with time, so the feet keep pace with
 	# the ground instead of the legs windmilling while barely moving.
 	var walking: float = clampf(_speed / 4.0, 0.0, 1.0)
