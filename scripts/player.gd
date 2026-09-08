@@ -2494,7 +2494,7 @@ func _try_harvest(tgt: Dictionary) -> bool:
 	# ...and its seed back. A crop that ate its own seed would make farming a
 	# way to run out of plants, so a harvest always replaces itself; a second
 	# seed now and then is how a field grows.
-	var seeds := 2 if randf() < Blocks.SEED_BONUS_CHANCE else 1
+	var seeds := Blocks.seed_return(str(got["key"]))
 	_give_seeds(planet, sp, seeds)
 	_toast("Harvested %d %s, and %d seed%s" % [int(got["n"]), nm, seeds,
 		"" if seeds == 1 else "s"])

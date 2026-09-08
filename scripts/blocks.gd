@@ -1405,17 +1405,43 @@ const FLORA := [
 ## decisions about what to put in your field, and that is the whole game of
 ## farming. Times are seconds for the WHOLE plant; each stage takes an equal
 ## share of it.
+## `spread` is how often a harvest returns MORE than the one seed it always
+## gives back, and `spread_n` is how many extra when it does. This is where a
+## plant's temperament lives: some put out one of themselves and no more, and
+## some go like potatoes -- one in, a handful out, but only now and then.
 const CROP_GROWTH := {
-	"meadow":     {"stages": 3, "time": 150.0, "yield_n": 2, "food": 3.0},
-	"frostgrass": {"stages": 4, "time": 260.0, "yield_n": 2, "food": 4.0},
-	"duneweed":   {"stages": 3, "time": 200.0, "yield_n": 1, "food": 3.5},
-	"ashgrass":   {"stages": 5, "time": 320.0, "yield_n": 2, "food": 5.0},
-	"kelpvine":   {"stages": 2, "time": 120.0, "yield_n": 3, "food": 2.5},
-	"clover":     {"stages": 3, "time": 170.0, "yield_n": 2, "food": 3.0},
-	"snowberry":  {"stages": 4, "time": 240.0, "yield_n": 3, "food": 4.5},
-	"thornbush":  {"stages": 4, "time": 280.0, "yield_n": 2, "food": 4.0},
-	"coralbush":  {"stages": 3, "time": 190.0, "yield_n": 3, "food": 3.5},
+	# The steady ones. A row of these stays a row unless you work at it.
+	"meadow":     {"stages": 3, "time": 150.0, "yield_n": 2, "food": 3.0,
+		"spread": 0.10, "spread_n": 1},
+	"frostgrass": {"stages": 4, "time": 260.0, "yield_n": 2, "food": 4.0,
+		"spread": 0.08, "spread_n": 1},
+	"duneweed":   {"stages": 3, "time": 200.0, "yield_n": 1, "food": 3.5,
+		"spread": 0.12, "spread_n": 1},
+	"thornbush":  {"stages": 4, "time": 280.0, "yield_n": 2, "food": 4.0,
+		"spread": 0.10, "spread_n": 1},
+	# Slow, but generous when it finally does.
+	"ashgrass":   {"stages": 5, "time": 320.0, "yield_n": 2, "food": 5.0,
+		"spread": 0.07, "spread_n": 3},
+	# The runners. Worth planting for the seed as much as the food.
+	"clover":     {"stages": 3, "time": 170.0, "yield_n": 2, "food": 3.0,
+		"spread": 0.18, "spread_n": 2},
+	"snowberry":  {"stages": 4, "time": 240.0, "yield_n": 3, "food": 4.5,
+		"spread": 0.15, "spread_n": 2},
+	"kelpvine":   {"stages": 2, "time": 120.0, "yield_n": 3, "food": 2.5,
+		"spread": 0.22, "spread_n": 3},
+	"coralbush":  {"stages": 3, "time": 190.0, "yield_n": 3, "food": 3.5,
+		"spread": 0.20, "spread_n": 3},
 }
+
+
+## How many seeds one harvest of this plant hands back. Always at least the one
+## it grew from -- a crop that ate its own seed would make farming a way to run
+## out of plants.
+static func seed_return(key: String) -> int:
+	var g := crop_growth(key)
+	if randf() >= float(g.get("spread", 0.1)):
+		return 1
+	return 1 + randi_range(1, int(g.get("spread_n", 1)))
 
 ## Everything a crop needs to know, with sane numbers for a species that has no
 ## entry of its own yet.
@@ -1466,11 +1492,6 @@ static func flora_by_key(key: String) -> Dictionary:
 ## How often clearing tall grass leaves a seed behind. Low enough that seeds are
 ## worth going out for, high enough that a field is a reliable way to get them.
 const SEED_DROP_CHANCE := 0.12
-## Harvesting always returns a seed, so a field keeps itself going. Now and
-## then it returns two, which is how a field gets BIGGER -- rare enough that
-## expanding is something you work up to rather than something that happens
-## whether you meant it or not.
-const SEED_BONUS_CHANCE := 0.22
 ## How often clearing leaves gives a sapling of that tree.
 const SAPLING_DROP_CHANCE := 0.08
 ## And how often what drops is some OTHER plant that lives on this world instead
