@@ -82,19 +82,26 @@ const CATALOG := {
 # most of a recording session saved.
 #
 # It works because pitch and length are the same knob on a sample. Playing a
-# step at 0.72x is not merely lower, it is 39% LONGER -- and a break should be
-# longer than a step. Placing at 1.26x is 21% shorter, which is also right: a
+# step at 0.55x is not merely lower, it is 82% LONGER -- and a break should be
+# longer than a step. Placing at 1.55x is 35% shorter, which is also right: a
 # block set down is the quickest of the three. The one thing pitch cannot fake
 # is a debris tail, so a derived break is a heavier thud rather than a proper
 # crunch. Any real recording dropped in later beats it.
 #
+# These ratios are deliberately extreme. A subtler shift (0.72 / 1.26 was the
+# first try) leaves the three events sounding like the same sound at three
+# volumes, which defeats the point -- the whole job here is to make one
+# recording read as three different EVENTS, and half an octave apart is what
+# it takes. Far enough that it stops sounding like the source, which is fine,
+# because nobody hears the source and the derived one side by side.
+#
 # Steps are recorded quiet because they are steps, so a derived sound puts gain
 # back on top of the step's own trim.
-const DERIVE_PITCH := {"break": 0.72, "place": 1.26}
+const DERIVE_PITCH := {"break": 0.55, "place": 1.55}
 const DERIVE_GAIN := {"break": 6.0, "place": 3.0}
 ## Wider than the source step's own spread: these fire once rather than
 ## constantly, so they can afford to move around more.
-const DERIVE_SPREAD := {"break": 1.16, "place": 1.12}
+const DERIVE_SPREAD := {"break": 1.22, "place": 1.18}
 
 
 ## Expands the ["_takes", base, n] shorthand above into base_1.wav .. base_n.wav.
