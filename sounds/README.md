@@ -4,16 +4,33 @@ Everything the game plays goes through the `Audio` autoload
 ([scripts/audio.gd](../scripts/audio.gd)). It owns the buses, a pool of
 players, and a catalogue that says how each sound is allowed to behave.
 
-## Adding sounds
+## What is here
 
-**Drop WAVs into `sounds/world/` with the names below and they start playing.
-There is no code to change.** The triggers are already wired: breaking, placing
-and footsteps all call into the catalogue, and a catalogue entry whose files are
-all missing is simply silent rather than an error.
+Every sound in the game is generated rather than recorded, by two scripts:
+
+```bash
+python tools/make_ui_sounds.py      # sounds/ui/    -- menus and buttons
+python tools/make_world_sounds.py   # sounds/world/ -- blocks and footsteps
+```
+
+Both share the synthesis primitives in [tools/synth.py](../tools/synth.py). The
+recipes are the artefact worth reading: each material is a handful of named
+layers with numbers you can move.
+
+Synthesis is a stylistic choice before it is a practical one. Minecraft's block
+sounds are not recordings of stone either -- realistic foley next to blocky
+voxel art fights the art, and a convincing recording of breaking rock sounds
+wrong here in a way a hundred-millisecond resonant thud does not.
+
+## Replacing one with a recording
+
+**Drop a WAV over any file in `sounds/world/` and it plays instead. There is no
+code to change**, and no need to replace a whole set -- one better take of
+`break_wood_2.wav` is a valid change on its own. The rest of this file is for
+when you want to.
 
 Numbered takes are a ceiling, not a requirement -- `step_grass` lists six, and if
-you record three, those three are what plays. More takes is better for anything
-that fires often; footsteps are the extreme case.
+you record three, those three are what plays.
 
 ### File format
 
