@@ -67,31 +67,81 @@ Breaking and placing work in co-op without anything extra: the sound hangs off
 the single point every block edit passes through, so another player's mining is
 audible at the place it happened. Footsteps are local to your own player only.
 
-### Foley notes
+### How to make each sound
 
-A phone in a quiet closet gets you most of the way. Classic voxel-game sources:
+Almost none of this is the real material. Recorded literally, most of these are
+disappointing -- real breaking stone is a dull crack with no body, and a real
+footstep on grass is nearly silent. Foley is about finding an object that
+sounds like the idea of the thing.
 
-- **stone** — two bricks or rocks knocked together
-- **dirt** — a bag of potting soil, punched
-- **grass / steps** — dry rice or cat litter in a bowl, squeezed
-- **wood** — dry pasta or celery snapped
-- **leaves** — a handful of crumpled paper or actual dry leaves
-- **snow** — cornstarch in a bag, squeezed slowly
-- **glass** — a dropped jar lid; ice cubes in a glass
-- **metal** — a wrench tapped on a pipe or radiator
+The three events are three performances, not one sound at three volumes:
 
-## The UI sounds
+- **break** -- destructive, the loudest, and the only one with a tail. Something
+  gives way, then debris.
+- **place** -- a firm set-down. Short, no tail, slightly softer.
+- **step** -- the quietest and quickest. Weight transferring, not an impact.
 
-`sounds/ui/` is generated, not recorded — see
-[tools/make_ui_sounds.py](../tools/make_ui_sounds.py). Menu blips are the one
-category where synthetic is the *right* character, and the one category you want
-dead consistent across a hundred presses a session.
+A useful shortcut: record the break first, then perform the same object more
+gently for the place, and gently again with a shorter, brushier motion for the
+step. Same object all the way through is what makes the three read as one
+material.
 
-Re-run it after editing a recipe:
+| material | break | place | step |
+|---|---|---|---|
+| **stone** | two bricks struck hard, then a handful of gravel dropped for debris | one brick set down firmly on concrete | press a shoe into a tray of gravel or kitty litter |
+| **dirt** | a trowel stabbed hard into a bag of potting soil | pat a mound of soil flat with your palm | press slowly into dry soil or used coffee grounds |
+| **grass** | tear a fistful of grass or celery tops, over a soil hit | light palm pat on soil with grass laid over it | squeeze dry rice or kitty litter in a bowl |
+| **wood** | snap a thin dowel or dry pasta, then splinter-crackle | a wooden block set down on a table | knuckles or palm knocked on a plank |
+| **leaves** | crumple a big handful of dry leaves, fast | one short crumple of the same | scrunch a plastic bag very lightly |
+| **snow** | punch a bag of cornstarch | press the cornstarch bag flat, once | squeeze the cornstarch bag slowly |
+| **metal** | wrench struck on a pipe, hand-muted straight after | a spoon or metal plate set on a hard surface | tap a baking tray or a ladder rung |
+| **glass** | ice cubes dropped into a glass, or a jar lid dropped on tile | a tumbler set down on a table | fingernail flicked against a glass |
 
-```bash
-python tools/make_ui_sounds.py
-```
+**Do not break real glass to record glass.** Ice in a tumbler and a dropped jar
+lid get you a better result with no trip to A&E, because what sells breaking
+glass is the tinkle of debris rather than the initial crack.
 
-To replace any of them with something recorded, just overwrite the WAV — the
-catalogue only cares about the filename.
+Cornstarch in a bag really is how snow is done, everywhere. Real snow sounds
+like almost nothing.
+
+### Recording notes
+
+**The room matters more than the microphone.** A clothes closet is the best free
+vocal booth there is -- hanging fabric kills the reflections that make a
+recording sound like a room instead of like a thing. A phone in a closet beats a
+good mic in a kitchen.
+
+- Record close, 15-30 cm, and slightly off to the side rather than straight on.
+- Aim peaks around -12 dB. Clipping is the one mistake you cannot fix later.
+- **One long take per material**, 10-12 hits with about two seconds between
+  them, rather than a file per hit. Slicing one file is far quicker, and the
+  takes stay consistent because nothing about the setup changed.
+- Say the material name out loud at the top of each take.
+- Vary your strike a little between hits -- angle and force -- but never the
+  setup. Variation should sound like the same object hit twice, not like two
+  objects.
+
+Watch out for: handling noise on whatever you are holding, and your own
+breathing. Both are inaudible while you record and obvious on playback.
+
+One thing specific to this game: these get played quietly, in 3D, several at
+once. Sounds with a clear midrange transient survive that. Boomy ones turn to
+mush -- the same trap the menu click fell into.
+
+### Editing
+
+Audacity is free and enough. Per material:
+
+1. High-pass at 80 Hz -- kills handling rumble and aircon you cannot hear until
+   it is layered ten deep
+2. Slice at the silences; trim each so the hit starts within a few ms of zero
+3. Normalise each slice to about -3 dB
+4. Export 16-bit mono WAV, named as above
+
+### Where to start
+
+**Record grass first and get it all the way into the game before recording
+anything else.** You walk on it constantly, so problems show up immediately, and
+one material end to end catches format and naming mistakes while they cost ten
+minutes instead of three hours. Then dirt, stone, wood -- that is most of what
+you touch in a session. Leaves, snow, metal, glass after.
