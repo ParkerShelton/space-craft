@@ -72,6 +72,9 @@ var show_look_names := true
 var crouching := false
 ## Counts down from COYOTE_TIME once the ground is gone.
 var _coyote := 0.0
+## Counts down from JUMP_BUFFER after the jump key goes down in the air.
+var _jump_buffer := 0.0
+var _jump_was_held := false
 ## Eye height above the body's centre. The collision capsule is 1.8 tall, so its
 ## top is at 0.9 and the eye normally sits well inside it.
 const EYE_HEIGHT := 0.7
@@ -109,6 +112,12 @@ const CROUCH_PROBE := 1.25
 ## worth playing has this, and the ones that do not are the ones that feel like
 ## they are ignoring you.
 const COYOTE_TIME := 0.12
+
+## And the other half of it: a jump pressed just BEFORE landing is remembered
+## and fires the moment the ground arrives. Without it, the input a player makes
+## while watching themselves fall is simply thrown away, and the game feels like
+## it dropped the key press -- which it did.
+const JUMP_BUFFER := 0.15
 
 # The placement preview, and how much of it you see.
 #
@@ -1634,9 +1643,19 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 		_coyote = maxf(_coyote - delta, 0.0)
 	if is_on_floor() and v_up < 0.0:
 		v_up = 0.0
-	if _coyote > 0.0 and v_up <= 0.0 and not menu_open and not ui_typing 			and key_down("jump"):
+	# Jump buffering: the PRESS is remembered, not just the hold, so a tap made
+	# a moment before landing is still there when the ground arrives.
+	var held := not menu_open and not ui_typing and key_down("jump")
+	if held and not _jump_was_held:
+		_jump_buffer = JUMP_BUFFER
+	_jump_was_held = held
+	_jump_buffer = maxf(_jump_buffer - delta, 0.0)
+	if _coyote > 0.0 and v_up <= 0.0 and (held or _jump_buffer > 0.0):
 		v_up = JUMP_SPEED
-		_coyote = 0.0     # one jump per departure, not one per frame in the air
+		# One jump per departure, not one per frame in the air, and the buffered
+		# press is spent rather than left to fire again on the next landing.
+		_coyote = 0.0
+		_jump_buffer = 0.0
 	# No thrust once your feet leave the ground: a jump is a jump. There is no
 	# jetpack in the game yet, and being able to hold jump and climb was standing
 	# in for one -- if you are down a hole, the way out is to build your way out.
