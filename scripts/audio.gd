@@ -92,22 +92,26 @@ const CATALOG := {
 # most of a recording session saved.
 #
 # It works because pitch and length are the same knob on a sample. Playing a
-# step at 0.55x is not merely lower, it is 82% LONGER -- and a break should be
-# longer than a step. Placing at 1.55x is 35% shorter, which is also right: a
+# step at 0.42x is not merely lower, it is 138% LONGER -- and a break should be
+# longer than a step. Placing at 1.9x is 47% shorter, which is also right: a
 # block set down is the quickest of the three. The one thing pitch cannot fake
 # is a debris tail, so a derived break is a heavier thud rather than a proper
 # crunch. Any real recording dropped in later beats it.
 #
-# These ratios are deliberately extreme. A subtler shift (0.72 / 1.26 was the
-# first try) leaves the three events sounding like the same sound at three
-# volumes, which defeats the point -- the whole job here is to make one
-# recording read as three different EVENTS, and half an octave apart is what
-# it takes. Far enough that it stops sounding like the source, which is fine,
-# because nobody hears the source and the derived one side by side.
+# These ratios are deliberately extreme, and got more so twice. The whole job
+# is to make one recording read as three different EVENTS, and anything subtle
+# just sounds like the same sound at three volumes. Far enough that a derived
+# break stops resembling the step it came from is the POINT, not a side effect:
+# nobody ever hears the two side by side.
 #
 # Steps are recorded quiet because they are steps, so a derived sound puts gain
 # back on top of the step's own trim.
-const DERIVE_PITCH := {"break": 0.55, "place": 1.55, "mine": 0.9}
+## THE tuning knob. If a derived break still sounds like a footstep, this is
+## the line to move: lower breaks harder, higher places lighter. Godot does not
+## clamp pitch_scale (checked), so there is no ceiling to run into -- the only
+## limit is taste. 0.72/1.26 was too subtle, 0.55/1.55 still was for materials
+## made of noise, so: over an octave down and nearly one up.
+const DERIVE_PITCH := {"break": 0.42, "place": 1.90, "mine": 0.88}
 const DERIVE_GAIN := {"break": 6.0, "place": 3.0, "mine": -5.0}
 ## Wider than the source step's own spread: these fire once rather than
 ## constantly, so they can afford to move around more.
