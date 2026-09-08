@@ -8,10 +8,9 @@ had, which is where the pop and the oomph come from.
 
 Each event is the same recording wearing a different shape:
 
-  break -- pitched well down (longer as well as lower, since on a sample those
-           are the same knob), with a sharp synthetic POP on the front so the
-           moment the block gives way has an edge to it, then two quieter
-           echoes of the material itself as debris.
+  break -- pitched so it CLIMBS across its own length, which reads as release,
+           with a synthetic crack on the front so the moment the block gives
+           way has an edge to it.
   place -- pitched up and shortened, with a low thump under it for OOMPH: the
            weight of a block being set down, which a footstep recording has
            none of.
@@ -92,32 +91,17 @@ MINE_PITCH = 0.80
 BREAK_GLIDE = {"rock": 0.30, "wood": 0.35}
 BREAK_GLIDE_DEFAULT = 1.0
 
-# Debris: the quieter, later copies of the material that trail a break. Right
-# for something that shatters, wrong for something that just goes -- set a
-# material to 0.0 here and its break is a single clean event with no rubble
-# afterwards.
-DEBRIS = {"rock": 0.0}
-DEBRIS_DEFAULT = 1.0
-
-# The pop is two layers: a bright tick and a mid crack. The tick is 95% of its
-# energy above 8 kHz, which is fine over a material with some sparkle of its own
-# and awful over one with none -- a tick is the only high frequency in the whole
-# sound, so it is heard as a hiss laid on top rather than as an edge belonging
-# to it. Rock and wood both measure 0.00% above 8 kHz and both had the problem;
-# grass has 4.96% and does not.
-#
-# So it is measured rather than listed. The tick is scaled by how much high end
-# the RECORDING already has, which means a material nobody has recorded yet gets
-# the right answer without anyone having to notice first. Putting a name in
-# POP_TICK overrides the measurement.
-POP_TICK = {}
-POP_TICK_REF = 0.03     # a source with 3% of its energy above 8 kHz gets the full tick
-
 # How much synthetic layer to mix over the real recording, 0 for none. With
 # pitch doing less, these do more, so they are the first things to turn.
 # Now genuinely fractions OF THE MATERIAL, since the body is normalised first.
 # 0.45 means "the added layer peaks at about half what the recording does",
 # which is audible as weight without covering the recording up.
+# The crack is a mid resonance and NOTHING above it. There used to be a bright
+# tick in front of it and trailing copies of the material behind it as debris;
+# both are gone for good. The tick was 95% of its energy above 8 kHz and read as
+# a hiss laid over the sound rather than as part of it, and the debris read as
+# several separate things breaking rather than one. Neither is wanted on any
+# material, so neither is an option.
 POP = 0.50              # break: the crack at the instant it gives way
 OOMPH = 0.45            # place: low weight under the contact
 
@@ -213,18 +197,6 @@ def shift(x, ratio):
 	return out
 
 
-def hf_share(x, rate, fc=8000.0):
-	"""Roughly what fraction of the energy sits above fc.
-
-	Done with a filter rather than an FFT to keep this stdlib-only: subtract the
-	lowpass from the signal and what is left is the high end.
-	"""
-	lo = lowpass(x, rate, fc)
-	hi_e = sum((a - b) * (a - b) for a, b in zip(x, lo))
-	all_e = sum(v * v for v in x)
-	return hi_e / all_e if all_e > 0.0 else 0.0
-
-
 def norm(x, target=0.85):
 	"""Scale to a known peak.
 
@@ -280,7 +252,7 @@ def level(x):
 
 
 def build_break(step, rate, k, mat=""):
-	"""Pitched down, popped, and given debris made of the material itself."""
+	"""Climbing, with a crack on the front. One event, no rubble after it."""
 	# Vary the shift a little per take rather than the whole recipe: four takes
 	# of one block breaking, not four different blocks.
 	# Takes vary in how far they climb rather than in structure: four takes of
@@ -291,30 +263,16 @@ def build_break(step, rate, k, mat=""):
 	body = norm(glide(step, BREAK_PITCH_FROM, top))
 	out = body + [0.0] * int(0.12 * rate)
 
-	# The POP. A short high transient plus a mid resonance, both from synth.py,
-	# sitting right on the front. A recording of a footstep has no crack in it,
-	# and a crack is most of what "it just broke" sounds like -- this is the
-	# layer the runtime version could not add.
+	# The crack. A mid resonance on the front of the sound: a recording of a
+	# footstep has no crack in it, and a crack is most of what "it just broke"
+	# sounds like. This is the layer the runtime version could not add.
 	pop = synth.blank(0.11)
-	if mat in POP_TICK:
-		tick = float(POP_TICK[mat])
-	else:
-		tick = min(1.0, hf_share(step, rate) / POP_TICK_REF)
-	if tick > 0.01:
-		synth.tap(pop, 0.016, tick, decay=130.0, seed=200 + k)
 	# The transient rises too, so the crack agrees with the body instead of
 	# anchoring it back down.
 	synth.thock(pop, 520.0 * (1.0 + 0.05 * (k - 2)), 0.10, 0.9, q=4.5,
 		decay=52.0, exc_ms=1.6, bend=1.7, seed=210 + k)
 	mix(out, [v * 32768.0 for v in pop], 0, POP)
 
-	# Debris: the same material again, quieter and late, and climbing further
-	# with the rest of it. Using the real recording rather than synthetic grain
-	# keeps the texture honest -- rock debris sounds like that rock.
-	deb = float(DEBRIS.get(mat, DEBRIS_DEFAULT))
-	if deb > 0.0:
-		mix(out, shift(body, 1.12), int(0.050 * rate), 0.30 * deb)
-		mix(out, shift(body, 1.28), int(0.105 * rate), 0.18 * deb)
 	return fade_tail(out, rate, 40)
 
 
@@ -330,8 +288,6 @@ def build_place(step, rate, k, mat=""):
 	low = synth.blank(0.11)
 	synth.thump(low, 120.0 * (1.0 + 0.04 * (k - 2)), 0.08, 1.0, decay=38.0,
 		bend=0.70)
-	# A little contact click on top so the weight has something to hang off.
-	synth.tap(low, 0.008, 0.28, decay=230.0, seed=300 + k)
 	mix(out, [v * 32768.0 for v in low], 0, OOMPH)
 	return fade_tail(out, rate, 25)
 
@@ -405,13 +361,8 @@ def main():
 				peak = src_peak * (10.0 ** (REL_DB[ev] / 20.0))
 				peak = max(PEAK_FLOOR, min(PEAK_CEILING, peak))
 				name = "%s_%s_%d.wav" % (ev, mat, k)
-				extra = ""
-				if ev == "break":
-					t = (POP_TICK[mat] if mat in POP_TICK
-						else min(1.0, hf_share(step, rate) / POP_TICK_REF))
-					extra = "  tick %.2f" % t
-				print("%-24s %6d ms  peak %.3f%s  %s" % (name,
-					len(out) * 1000 // rate, peak, extra, os.path.basename(src)))
+				print("%-24s %6d ms  peak %.3f  %s" % (name,
+					len(out) * 1000 // rate, peak, os.path.basename(src)))
 				if args.write:
 					write_wav(os.path.join(WORLD, name), out, rate, peak)
 				generated.append(name)
