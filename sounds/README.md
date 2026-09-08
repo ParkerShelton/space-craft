@@ -50,7 +50,7 @@ play by up to +/-15-20%, which is where most of the variation comes from.
 
 ### Naming
 
-Eight materials -- `stone`, `dirt`, `grass`, `wood`, `leaves`, `snow`, `metal`,
+Eight materials -- `rock`, `dirt`, `grass`, `wood`, `leaves`, `snow`, `metal`,
 `glass` -- times three events:
 
 | event | takes | filenames | fires when |
@@ -59,11 +59,11 @@ Eight materials -- `stone`, `dirt`, `grass`, `wood`, `leaves`, `snow`, `metal`,
 | place | 3 | `place_<material>_1.wav` ... `_3.wav` | a block or eighth-block is added |
 | step | 6 | `step_<material>_1.wav` ... `_6.wav` | once per dip of the walk cycle |
 
-So `sounds/world/break_stone_1.wav`, `sounds/world/step_grass_4.wav`, and so on.
+So `sounds/world/break_rock_1.wav`, `sounds/world/step_grass_4.wav`, and so on.
 
 Every block in the game maps to one of those eight. Slabs and stairs inherit
 from the block they were cut out of, and anything not in the table falls back to
-`stone` -- so a new block makes a plausible noise the day it is added.
+`rock` -- so a new block makes a plausible noise the day it is added.
 
 Break, place and step are three different performances, not one sound at three
 volumes. A break is destructive and has a tail; a place is a firm set-down,
@@ -88,7 +88,7 @@ audible at the place it happened. Footsteps are local to your own player only.
 ### How to make each sound
 
 Almost none of this is the real material. Recorded literally, most of these are
-disappointing -- real breaking stone is a dull crack with no body, and a real
+disappointing -- real breaking rock is a dull crack with no body, and a real
 footstep on grass is nearly silent. Foley is about finding an object that
 sounds like the idea of the thing.
 
@@ -106,7 +106,7 @@ material.
 
 | material | break | place | step |
 |---|---|---|---|
-| **stone** | two bricks struck hard, then a handful of gravel dropped for debris | one brick set down firmly on concrete | press a shoe into a tray of gravel or kitty litter |
+| **rock** | two bricks struck hard, then a handful of gravel dropped for debris | one brick set down firmly on concrete | press a shoe into a tray of gravel or kitty litter |
 | **dirt** | a trowel stabbed hard into a bag of potting soil | pat a mound of soil flat with your palm | press slowly into dry soil or used coffee grounds |
 | **grass** | tear a fistful of grass or celery tops, over a soil hit | light palm pat on soil with grass laid over it | squeeze dry rice or kitty litter in a bowl |
 | **wood** | snap a thin dowel or dry pasta, then splinter-crackle | a wooden block set down on a table | knuckles or palm knocked on a plank |
@@ -161,5 +161,5 @@ Audacity is free and enough. Per material:
 **Record grass first and get it all the way into the game before recording
 anything else.** You walk on it constantly, so problems show up immediately, and
 one material end to end catches format and naming mistakes while they cost ten
-minutes instead of three hours. Then dirt, stone, wood -- that is most of what
+minutes instead of three hours. Then dirt, rock, wood -- that is most of what
 you touch in a session. Leaves, snow, metal, glass after.

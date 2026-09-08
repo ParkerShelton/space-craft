@@ -45,7 +45,7 @@ const CATALOG := {
 	# throttle is because these arrive in bursts as well as singly: assembling
 	# a build clears eight eighth-blocks in one frame, and two players can mine
 	# the same material a few milliseconds apart.
-	"break_stone": {"files": ["_takes", WORLD + "break_stone", 4], "pitch": 0.15, "throttle": 45},
+	"break_rock": {"files": ["_takes", WORLD + "break_rock", 4], "pitch": 0.15, "throttle": 45},
 	"break_dirt": {"files": ["_takes", WORLD + "break_dirt", 4], "pitch": 0.15, "throttle": 45},
 	"break_grass": {"files": ["_takes", WORLD + "break_grass", 4], "pitch": 0.15, "throttle": 45},
 	"break_wood": {"files": ["_takes", WORLD + "break_wood", 4], "pitch": 0.15, "throttle": 45},
@@ -53,7 +53,7 @@ const CATALOG := {
 	"break_snow": {"files": ["_takes", WORLD + "break_snow", 4], "pitch": 0.15, "throttle": 45},
 	"break_metal": {"files": ["_takes", WORLD + "break_metal", 4], "pitch": 0.12, "throttle": 45},
 	"break_glass": {"files": ["_takes", WORLD + "break_glass", 4], "pitch": 0.15, "throttle": 45},
-	"place_stone": {"files": ["_takes", WORLD + "place_stone", 3], "pitch": 0.15, "throttle": 45},
+	"place_rock": {"files": ["_takes", WORLD + "place_rock", 3], "pitch": 0.15, "throttle": 45},
 	"place_dirt": {"files": ["_takes", WORLD + "place_dirt", 3], "pitch": 0.15, "throttle": 45},
 	"place_grass": {"files": ["_takes", WORLD + "place_grass", 3], "pitch": 0.15, "throttle": 45},
 	"place_wood": {"files": ["_takes", WORLD + "place_wood", 3], "pitch": 0.15, "throttle": 45},
@@ -63,7 +63,7 @@ const CATALOG := {
 	"place_glass": {"files": ["_takes", WORLD + "place_glass", 3], "pitch": 0.15, "throttle": 45},
 	# Footsteps fire several times a second, so they get the most takes and the
 	# widest detune of anything in the game.
-	"step_stone": {"files": ["_takes", WORLD + "step_stone", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
+	"step_rock": {"files": ["_takes", WORLD + "step_rock", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_dirt": {"files": ["_takes", WORLD + "step_dirt", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_grass": {"files": ["_takes", WORLD + "step_grass", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_wood": {"files": ["_takes", WORLD + "step_wood", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
@@ -94,7 +94,11 @@ func _files_for(spec: Dictionary) -> Array:
 ## Anything not in the table below falls back to this, so a block added later
 ## makes a plausible noise on day one rather than none at all -- and most of
 ## what is missing from the table genuinely is rock.
-const MATERIAL_DEFAULT := "stone"
+##
+## Named for the block rather than for the substance: the game calls it ROCK
+## everywhere a player can see, and a file named break_stone for a block called
+## Rock is a trap for whoever records it.
+const MATERIAL_DEFAULT := "rock"
 
 ## The ten base blocks that have a slab and a stair form, in the order their
 ## ids run. Both shaped ranges are contiguous and parallel to this list, so a
