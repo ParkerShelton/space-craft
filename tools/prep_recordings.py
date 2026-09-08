@@ -59,7 +59,7 @@ EVENTS = {
 # sounded wrong in a way no amount of filtering could fix -- there was nothing
 # underneath to uncover. Moving it down is what gives it a bottom.
 TONE = {
-	"dirt": {"pitch": 0.70, "lowpass": 3500.0},
+	"dirt": {"pitch": 0.85, "lowpass": 4500.0},
 }
 
 # Where the sound is judged to start and stop, as a fraction of its own peak.
