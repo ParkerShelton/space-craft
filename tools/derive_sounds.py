@@ -35,6 +35,7 @@ Stdlib only, plus the synthesis primitives in synth.py.
 """
 
 import argparse
+import math
 import os
 import struct
 import sys
@@ -50,22 +51,40 @@ MANIFEST = os.path.join(WORLD, ".generated")
 
 # --- the knobs ----------------------------------------------------------------
 #
-# Pitch is the big one. Anything subtle leaves the events sounding like the same
-# sound at three volumes; these are far enough apart that a break stops
-# resembling the step it came from, which is the point rather than a side
-# effect -- nobody hears the two side by side.
-BREAK_PITCH = 0.50      # over an octave down, and 100% longer with it
-PLACE_PITCH = 1.70      # and 41% shorter
-MINE_PITCH = 0.88
+# Pitch pulls two ways at once, and this is the whole design problem.
+#
+# Far from 1.0 is what makes two events sound DIFFERENT. Near 1.0 is what keeps
+# them sounding like the MATERIAL. Push a place up to 1.7x and it is
+# unmistakably not a footstep -- and also unmistakably not grass any more,
+# because a rustle sped up by two thirds is just hiss. Both complaints are real
+# and they are the same knob.
+#
+# So pitch is used sparingly now and the separation is carried by things that
+# do not touch identity: length, and what is layered on top. A place is barely
+# shifted at all and gets its weight from a thump; a break is shifted enough to
+# feel heavier but not so far it stops being the material, and gets its edge
+# from a transient.
+BREAK_PITCH = 0.66      # heavier and 52% longer, still recognisably the same stuff
+PLACE_PITCH = 1.12      # barely up. The oomph does the work here, not the pitch
+MINE_PITCH = 0.80
 
-# How much synthetic layer to mix over the real recording, 0 for none. These are
-# the two the ear notices most, so they are the two worth turning first.
-POP = 0.34              # break: the crack at the instant it gives way
-OOMPH = 0.40            # place: low weight under the contact
+# How much synthetic layer to mix over the real recording, 0 for none. With
+# pitch doing less, these do more, so they are the first things to turn.
+# Now genuinely fractions OF THE MATERIAL, since the body is normalised first.
+# 0.45 means "the added layer peaks at about half what the recording does",
+# which is audible as weight without covering the recording up.
+POP = 0.50              # break: the crack at the instant it gives way
+OOMPH = 0.45            # place: low weight under the contact
 
 TAKES = {"break": 4, "place": 3, "mine": 3}
-PEAK = {"break": 0.82, "place": 0.76, "mine": 0.52}
-MINE_MAX_MS = 190       # it repeats on a 190 ms throttle; longer just overlaps
+PEAK = {"break": 0.86, "place": 0.76, "mine": 0.30}
+
+# Mining is a different KIND of sound, not a quieter version of the same one.
+# It is the chipping away, and it has to still be going on when the block
+# finally gives -- so it is short, dull and small, and the break lands on top
+# of it as an obviously bigger event.
+MINE_MAX_MS = 80
+MINE_LOWPASS = 2000.0
 
 
 def read_wav(path):
@@ -110,6 +129,22 @@ def trim(x, rate, gate=0.03, lead_ms=6, tail_ms=45):
 	return x[a:b]
 
 
+def lowpass(x, rate, fc):
+	"""One-pole lowpass. Takes the edge off without changing what it is.
+
+	Used to make mining dull rather than quiet. Turning a sound down keeps all
+	its detail and just moves it away; filtering it takes the detail out, which
+	is what "muffled, still working on it" actually sounds like.
+	"""
+	a = math.exp(-2.0 * math.pi * fc / rate)
+	out = []
+	prev = 0.0
+	for v in x:
+		prev = v * (1.0 - a) + prev * a
+		out.append(prev)
+	return out
+
+
 def shift(x, ratio):
 	"""Resample by linear interpolation: lower ratio is lower AND longer."""
 	m = int(len(x) / ratio)
@@ -122,6 +157,22 @@ def shift(x, ratio):
 		s1 = x[a + 1] if a + 1 < len(x) else 0.0
 		out[i] = s0 + (s1 - s0) * f
 	return out
+
+
+def norm(x, target=0.85):
+	"""Scale to a known peak.
+
+	The layers below are mixed as FRACTIONS of the material, so the material
+	has to be at a known level first. Skipping this is how a place ended up 98%
+	below 200 Hz: the grass take peaks at 0.05, the thump was at a fixed 0.62,
+	so the synthetic layer was twelve times the recording and buried the very
+	thing that makes it sound like grass.
+	"""
+	hi = max((abs(v) for v in x), default=0.0)
+	if hi <= 0.0:
+		return x
+	k = target * 32768.0 / hi
+	return [v * k for v in x]
 
 
 def mix(dst, src, at, gain):
@@ -146,17 +197,20 @@ def build_break(step, rate, k):
 	"""Pitched down, popped, and given debris made of the material itself."""
 	# Vary the shift a little per take rather than the whole recipe: four takes
 	# of one block breaking, not four different blocks.
-	body = shift(step, BREAK_PITCH * (1.0 + 0.035 * (k - 2)))
+	body = norm(shift(step, BREAK_PITCH * (1.0 + 0.035 * (k - 2))))
 	out = body + [0.0] * int(0.12 * rate)
 
 	# The POP. A short high transient plus a mid resonance, both from synth.py,
 	# sitting right on the front. A recording of a footstep has no crack in it,
 	# and a crack is most of what "it just broke" sounds like -- this is the
 	# layer the runtime version could not add.
-	pop = synth.blank(0.09)
-	synth.tap(pop, 0.014, 1.0, decay=150.0, seed=200 + k)
-	synth.thock(pop, 430.0 * (1.0 + 0.05 * (k - 2)), 0.085, 0.85, q=4.5,
-		decay=60.0, exc_ms=1.6, seed=210 + k)
+	pop = synth.blank(0.11)
+	synth.tap(pop, 0.016, 1.0, decay=130.0, seed=200 + k)
+	synth.thock(pop, 430.0 * (1.0 + 0.05 * (k - 2)), 0.10, 0.9, q=4.5,
+		decay=52.0, exc_ms=1.6, seed=210 + k)
+	# A little weight under the crack too. Breaking a block is a bigger event
+	# than setting one down, so it should not be the lighter of the two.
+	synth.thump(pop, 104.0, 0.07, 0.55, decay=46.0, bend=0.8)
 	mix(out, [v * 32768.0 for v in pop], 0, POP)
 
 	# Debris: the same material again, quieter, higher and late. Using the real
@@ -169,7 +223,7 @@ def build_break(step, rate, k):
 
 def build_place(step, rate, k):
 	"""Pitched up and shortened, with weight put under it."""
-	body = shift(step, PLACE_PITCH * (1.0 + 0.03 * (k - 2)))
+	body = norm(shift(step, PLACE_PITCH * (1.0 + 0.03 * (k - 2))))
 	out = body + [0.0] * int(0.10 * rate)
 
 	# The OOMPH. A short low sine is the whole trick: 70 ms of 130 Hz is heard
@@ -185,10 +239,17 @@ def build_place(step, rate, k):
 
 
 def build_mine(step, rate, k):
-	"""Short, quiet, plain. It is going to play three hundred times."""
-	body = shift(step, MINE_PITCH * (1.0 + 0.05 * (k - 2)))
+	"""A chip, not a hit.
+
+	Kept to the first 80 ms -- the attack and nothing else -- then muffled. The
+	point is that this can be going on when the block finally breaks and the
+	break still lands as an obviously bigger, brighter, longer event. A quieter
+	copy of the same sound would not do that; it would just be the same sound.
+	"""
+	body = norm(shift(step, MINE_PITCH * (1.0 + 0.05 * (k - 2))))
 	body = body[:int(MINE_MAX_MS * rate / 1000)]
-	return fade_tail(body, rate, 22)
+	body = lowpass(body, rate, MINE_LOWPASS)
+	return fade_tail(body, rate, 18)
 
 
 BUILD = {"break": build_break, "place": build_place, "mine": build_mine}
