@@ -4,3 +4,5 @@
 # Exported builds and packaged zips -- rebuilt on demand, never committed.
 build/
 *.zip
+__pycache__/
+*.pyc

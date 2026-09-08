@@ -7,23 +7,26 @@ sounds like someone's desk, a generated one sounds like a machine responding.
 They are also the category you want dead consistent across a hundred presses a
 session, which recording does not give you for free.
 
-The palette is a heavy ship console: low, chunky, and pitched without being
-musical. That last part is the whole design. A sine wave IS a note, so anything
-built out of sines sounds like a test tone no matter how it is enveloped --
-which is why the bodies here are resonance rather than oscillation. A short
-burst of noise is fired into a high-Q bandpass filter and the filter rings; the
-ring has a pitch, but it decays the way a struck object decays instead of
-holding like an instrument. Weight comes from a separate low thump underneath,
-kept around 100-160 Hz so it survives laptop speakers rather than disappearing
-into sub-bass nobody can reproduce.
+The palette is dry struck wood -- the Minecraft register. Short, mid-high, and
+pitched without being musical.
 
-The layer levels are not guesses. They were solved against a measured target
-balance -- roughly 18% of the energy below 120 Hz, half in the 120-300 Hz body,
-and the rest spread above it -- because the two failure modes here are easy to
-fall into by ear and easy to catch with a spectrum: all low end reads as a boom
-and vanishes on laptop speakers, all high end reads as thin. A low sine is far
-more energy-dense than a decaying resonance, so it has to sit much lower in the
-mix than it looks like it should.
+Two rules do most of the work, both learned the hard way. First, no low end:
+a short percussive hit with weight underneath is a drum, not a button, and an
+earlier pass at making these "chunkier" turned the whole menu into a kit. Bass
+is for things with size, and a button has none. Second, no sine bodies: a sine
+IS a note, so anything built from one sounds like a test tone however it is
+enveloped. The bodies here are resonance instead -- a short noise burst fired
+into a bank of bandpass filters, which rings at several inharmonic frequencies
+at once. That disagreement between the modes is what makes the ear hear a
+material rather than a pitch.
+
+Pops are a third thing, separate from either: a pop is a sound that starts too
+abruptly, and it is fixed at the attack rather than in the tone.
+
+Levels are checked against a spectrum rather than trusted to the ear, since
+whoever last edited this may not be able to hear it. For this palette almost
+everything should sit between 300 Hz and 2 kHz, with very little below 120 Hz;
+anything much heavier than that is the drum problem coming back.
 
 Everything here is stdlib. Re-run it after editing a recipe:
 
@@ -59,11 +62,16 @@ def _env(i, n, attack, decay):
     return a * tail * math.exp(-decay * t)
 
 
-def _burst(n, ms, rng):
+def _burst(n, ms, rng, impulse=0.8):
     """The excitation: a very short noise blip that dies almost immediately.
 
     Nothing here is audible on its own. It exists to whack the filter below,
     the same way the sound of a hammer is not the sound of the bell.
+
+    `impulse` is how hard it is struck on the very first sample. It is also
+    exactly what makes a sound "poppy" -- a full-scale step at sample zero is
+    heard as a click in front of whatever follows. Anything that should feel
+    brushed rather than struck wants this at zero.
     """
     out = [0.0] * n
     k = int(ms * 0.001 * RATE)
@@ -72,12 +80,12 @@ def _burst(n, ms, rng):
         w = rng.uniform(-1.0, 1.0)
         prev = prev * 0.4 + w * 0.6
         out[i] = prev * math.exp(-9.0 * i / max(k, 1))
-    out[0] += 0.8  # a click of impulse, so the filter starts with real energy
+    out[0] += impulse
     return out
 
 
 def thock(buf, freq, dur, amp, q=8.0, decay=20.0, exc_ms=3.0, bend=1.0,
-          start=0.0, seed=1):
+          start=0.0, seed=1, impulse=0.8, attack=0.0004):
     """A resonant knock: noise fired into a ringing bandpass.
 
     `q` is what decides whether this reads as a hit or as a note. Low (2-4) is
@@ -91,7 +99,7 @@ def thock(buf, freq, dur, amp, q=8.0, decay=20.0, exc_ms=3.0, bend=1.0,
     """
     n = int(dur * RATE)
     off = int(start * RATE)
-    exc = _burst(n, exc_ms, random.Random(seed))
+    exc = _burst(n, exc_ms, random.Random(seed), impulse)
     low = 0.0
     band = 0.0
     damp = 1.0 / q
@@ -103,7 +111,7 @@ def thock(buf, freq, dur, amp, q=8.0, decay=20.0, exc_ms=3.0, bend=1.0,
         high = exc[i] - low - damp * band
         band += f * high
         low += f * band
-        v = band * _env(i, n, 0.0004, decay)
+        v = band * _env(i, n, attack, decay)
         tmp[i] = v
         peak = max(peak, abs(v))
     # Normalised per-voice so `amp` means the same thing at every frequency:
@@ -154,6 +162,26 @@ def ring(buf, freqs, dur, amp, decay=30.0, start=0.0):
             phase += 2.0 * math.pi * f / RATE
             buf[j] += (amp / len(freqs)) * _env(i, n, 0.0006, decay) \
                 * math.sin(phase)
+
+
+def wood(buf, freq, dur, amp, q=5.5, decay=52.0, start=0.0, seed=1,
+         impulse=0.8, attack=0.0004, exc_ms=2.0, modes=(1.0, 1.48, 2.11)):
+    """A dry wooden tap: one strike heard through several inharmonic modes.
+
+    A single resonance is a tuned drum -- one pitch, and the ear names it. Real
+    struck wood rings at several unrelated frequencies at once, and it is that
+    disagreement between them that stops the brain hearing a note and makes it
+    hear a material instead. The ratios are deliberately not whole numbers for
+    the same reason.
+
+    Short by design. Almost everything that makes a UI sound like a drum kit
+    rather than a button is decay time and low end, and this has little of
+    either.
+    """
+    for i, m in enumerate(modes):
+        thock(buf, freq * m, dur, amp * (0.55 ** i), q=q,
+              decay=decay * (1.0 + 0.35 * i), exc_ms=exc_ms, start=start,
+              seed=seed + i * 7, impulse=impulse, attack=attack)
 
 
 def tap(buf, dur, amp, decay=260.0, start=0.0, seed=3):
@@ -241,120 +269,105 @@ def main():
     print("writing to", OUT)
 
     # --- hover ---------------------------------------------------------------
-    # The quietest thing in the game. It fires every time the mouse crosses a
-    # button, so anything with presence becomes torture inside a minute. Low Q
-    # and no thump: this should read as a texture, not as an event.
-    for k, f in enumerate((430.0, 468.0, 402.0)):
-        b = blank(0.045)
-        thock(b, f, 0.04, 1.0, q=3.0, decay=95.0, exc_ms=1.6, seed=40 + k)
-        write("hover_%d" % (k + 1), b, peak=0.15)
+    # The quietest thing in the game, and the one that was popping. Two changes:
+    # the strike impulse is gone entirely, and the attack is slowed to 5 ms.
+    # Both exist to stop the sound STARTING abruptly, which is all a pop is --
+    # the ear hears the edge, not the tone behind it. What is left is a brushed
+    # tick rather than a tap.
+    # Slowing the output envelope alone did nothing measurable -- the peak
+    # still landed inside the first millisecond, because the ENERGY going in
+    # was a 2 ms whack. Feeding it in over 22 ms instead is what actually
+    # softens the onset.
+    for k, f in enumerate((770.0, 800.0, 738.0)):
+        b = blank(0.085)
+        # One seed for all three takes: with the onset this soft, a different
+        # noise seed changed how soft it was (0.9 ms of rise against 4.2 ms
+        # between takes), and inconsistent softness is heard as the odd one
+        # popping. Only the pitch varies.
+        wood(b, f, 0.075, 1.0, q=3.0, decay=46.0, seed=40,
+             impulse=0.0, attack=0.012, exc_ms=30.0)
+        write("hover_%d" % (k + 1), b, peak=0.13)
 
     # --- click ---------------------------------------------------------------
-    # The main press, and the sound everything else is judged against. Three
-    # layers: the low thump for weight, the resonant body for pitch, and a
-    # barely-there metallic ring so it sounds like a console and not a box.
-    for k, f in enumerate((236.0, 244.0, 229.0)):
-        b = blank(0.16)
-        thump(b, 118.0, 0.055, 0.55, decay=58.0, bend=0.7)
-        thock(b, f, 0.14, 1.0, q=7.5, decay=30.0, exc_ms=3.2, bend=0.88,
-              seed=10 + k)
-        # The upper voice and the transient keep the SAME seed across the
-        # three takes. Only the body moves. Varying every layer at once made
-        # three different sounds rather than one object struck three times --
-        # measurably so: the body band swung from 19% to 46% of the energy.
-        thock(b, f * 3.1, 0.14, 1.5, q=4.0, decay=24.0, exc_ms=1.4, seed=90)
-        tap(b, 0.04, 0.30, decay=90.0, seed=3)
-        ring(b, [f * 8.7, f * 13.3], 0.06, 0.06, decay=55.0)
-        write("click_%d" % (k + 1), b, peak=0.70)
+    # The main press: a dry wooden tok, and nothing else. No low thump at all.
+    # A short percussive hit with weight under it is a drum, which is exactly
+    # what the last set turned into -- the fix is not less bass, it is none.
+    for k, f in enumerate((615.0, 638.0, 596.0)):
+        b = blank(0.085)
+        wood(b, f, 0.08, 1.0, q=5.5, decay=58.0, seed=10 + k)
+        tap(b, 0.010, 0.16, decay=200.0, seed=3)
+        write("click_%d" % (k + 1), b, peak=0.66)
 
     # --- back ----------------------------------------------------------------
-    # The same object hit lower and softer, with the metal taken off it.
-    # Leaving a page should not sound identical to entering one.
-    b = blank(0.19)
-    thump(b, 92.0, 0.07, 0.55, decay=46.0, bend=0.68)
-    thock(b, 168.0, 0.17, 1.0, q=6.5, decay=25.0, exc_ms=4.0, bend=0.84,
-          seed=20)
-    thock(b, 521.0, 0.16, 1.9, q=3.5, decay=26.0, exc_ms=1.4, seed=22)
-    tap(b, 0.035, 0.22, decay=95.0, seed=23)
-    write("back", b, peak=0.68)
+    # The same piece of wood, struck lower. Leaving a page should not sound
+    # identical to entering one, and a pitch drop says that without needing a
+    # different sound.
+    b = blank(0.095)
+    wood(b, 432.0, 0.09, 1.0, q=5.5, decay=52.0, seed=20)
+    tap(b, 0.010, 0.13, decay=200.0, seed=23)
+    write("back", b, peak=0.66)
 
     # --- toggles -------------------------------------------------------------
-    # Two knocks, up for on and down for off, so a checkbox tells you what it
-    # did without you having to look at it. The thump goes on the first hit
-    # only -- weight on both would make a switch sound like two presses.
-    b = blank(0.2)
-    thump(b, 104.0, 0.05, 0.45, decay=60.0)
-    thock(b, 196.0, 0.09, 0.9, q=6.0, decay=40.0, seed=51)
-    thock(b, 608.0, 0.09, 1.5, q=3.5, decay=38.0, exc_ms=1.4, seed=59)
-    thock(b, 310.0, 0.13, 1.0, q=7.0, decay=30.0, start=0.058, seed=52)
-    thock(b, 961.0, 0.12, 1.5, q=3.5, decay=30.0, exc_ms=1.4, start=0.058,
-          seed=60)
-    tap(b, 0.025, 0.20, decay=100.0, seed=55)
-    tap(b, 0.025, 0.20, decay=100.0, start=0.058, seed=56)
+    # Two taps, up for on and down for off, so a checkbox tells you what it did
+    # without you having to look at it.
+    b = blank(0.14)
+    wood(b, 520.0, 0.06, 0.85, q=5.0, decay=75.0, seed=51)
+    wood(b, 745.0, 0.07, 0.9, q=5.5, decay=68.0, start=0.052, seed=52)
     write("toggle_on", b, peak=0.6)
 
-    b = blank(0.2)
-    thump(b, 104.0, 0.05, 0.45, decay=60.0)
-    thock(b, 310.0, 0.09, 0.9, q=7.0, decay=40.0, seed=53)
-    thock(b, 961.0, 0.09, 1.5, q=3.5, decay=38.0, exc_ms=1.4, seed=67)
-    thock(b, 196.0, 0.13, 1.0, q=6.0, decay=30.0, start=0.058, seed=54)
-    thock(b, 608.0, 0.12, 1.5, q=3.5, decay=30.0, exc_ms=1.4, start=0.058,
-          seed=68)
-    tap(b, 0.025, 0.20, decay=100.0, seed=57)
-    tap(b, 0.025, 0.20, decay=100.0, start=0.058, seed=58)
+    b = blank(0.14)
+    wood(b, 745.0, 0.06, 0.85, q=5.5, decay=75.0, seed=53)
+    wood(b, 520.0, 0.07, 0.9, q=5.0, decay=68.0, start=0.052, seed=54)
     write("toggle_off", b, peak=0.6)
 
     # --- slider tick ---------------------------------------------------------
     # Fires once per step of a slider, so it is barely there by design: this is
-    # texture under a drag, not an event. Detent on a machined dial.
-    b = blank(0.035)
-    thock(b, 620.0, 0.03, 1.0, q=2.4, decay=150.0, exc_ms=1.0, seed=31)
-    write("tick", b, peak=0.13)
+    # texture under a drag, not an event.
+    b = blank(0.03)
+    wood(b, 1180.0, 0.026, 1.0, q=2.6, decay=200.0, seed=31, impulse=0.35)
+    write("tick", b, peak=0.12)
 
     # --- open / close --------------------------------------------------------
-    # The menu itself: bigger than a button because it is a bigger event, and
-    # the only place anything moves. A filter travelling up over a low body --
-    # a console coming to life rather than a chime.
-    b = blank(0.40)
-    thump(b, 76.0, 0.16, 0.22, decay=18.0, bend=1.25)
-    sweep(b, 150.0, 900.0, 0.34, 1.0, q=3.2, decay=6.0)
-    write("open", b, peak=0.52)
+    # Deliberately NOT the swelling filter sweep these used to be. A sweep over
+    # a low body is a cinematic whoosh, and next to a wooden click it sounded
+    # like it came out of a different game. Two quick taps instead, climbing to
+    # open and falling to close -- the same material, just more of it, because
+    # opening a menu is a bigger event than pressing a button in it.
+    b = blank(0.17)
+    wood(b, 400.0, 0.07, 0.8, q=5.0, decay=70.0, seed=80)
+    wood(b, 600.0, 0.09, 0.95, q=5.5, decay=58.0, start=0.045, seed=81)
+    write("open", b, peak=0.55)
 
-    b = blank(0.40)
-    thump(b, 96.0, 0.17, 0.24, decay=17.0, bend=0.72)
-    sweep(b, 820.0, 140.0, 0.32, 1.0, q=3.2, decay=7.0, seed=6)
-    write("close", b, peak=0.52)
+    b = blank(0.17)
+    wood(b, 600.0, 0.07, 0.85, q=5.5, decay=70.0, seed=82)
+    wood(b, 400.0, 0.09, 0.9, q=5.0, decay=58.0, start=0.045, seed=83)
+    write("close", b, peak=0.55)
 
     # --- rebinding -----------------------------------------------------------
-    # "Waiting for a key": one knock left ringing longer than anything else
-    # here, so it sounds unfinished. It is -- the game is waiting on you.
-    b = blank(0.26)
-    thock(b, 330.0, 0.24, 0.9, q=11.0, decay=16.0, exc_ms=2.4, seed=61)
-    write("prompt", b, peak=0.46)
+    # "Waiting for a key": struck high and left ringing longer than anything
+    # else here, so it sounds unfinished. It is -- the game is waiting on you.
+    b = blank(0.2)
+    wood(b, 940.0, 0.19, 1.0, q=9.0, decay=26.0, seed=61)
+    write("prompt", b, peak=0.42)
 
-    # "Got it": three knocks climbing. Resonances rather than notes, so it
-    # lands as a mechanism completing instead of as a little tune.
-    b = blank(0.28)
-    thump(b, 110.0, 0.05, 0.45, decay=55.0)
-    tap(b, 0.008, 0.16, seed=74)
-    thock(b, 210.0, 0.09, 0.8, q=6.5, decay=42.0, seed=71)
-    thock(b, 296.0, 0.09, 0.8, q=6.5, decay=42.0, start=0.055, seed=72)
-    thock(b, 420.0, 0.15, 0.85, q=7.5, decay=26.0, start=0.108, seed=73)
-    write("accept", b, peak=0.6)
+    # "Got it": three taps climbing. Still wood, so it lands as a mechanism
+    # finishing rather than as a little tune.
+    b = blank(0.22)
+    wood(b, 560.0, 0.06, 0.8, q=5.5, decay=80.0, seed=71)
+    wood(b, 745.0, 0.06, 0.85, q=5.5, decay=80.0, start=0.05, seed=72)
+    wood(b, 1000.0, 0.09, 0.95, q=6.0, decay=58.0, start=0.098, seed=73)
+    write("accept", b, peak=0.58)
 
     # --- deny ----------------------------------------------------------------
-    # For anything refused. Two heavy low knocks with no pitch movement at all,
-    # which is what makes it read as a wall rather than as a transition.
-    b = blank(0.3)
-    thump(b, 82.0, 0.09, 0.30, decay=38.0, bend=0.9)
-    thock(b, 172.0, 0.12, 1.0, q=5.0, decay=34.0, exc_ms=4.5, seed=81)
-    thock(b, 386.0, 0.14, 1.1, q=3.0, decay=30.0, exc_ms=2.0, seed=83)
-    thump(b, 78.0, 0.10, 0.28, decay=34.0, bend=0.9, start=0.095)
-    thock(b, 164.0, 0.16, 0.95, q=5.0, decay=26.0, exc_ms=4.5, start=0.095,
-          seed=82)
-    thock(b, 368.0, 0.16, 1.1, q=3.0, decay=28.0, exc_ms=2.0, start=0.095,
-          seed=84)
-    write("deny", b, peak=0.72)
+    # For anything refused. Two dull knocks with no pitch movement and the top
+    # end taken off -- dead, not deep. The distinction matters: a low BOOM is a
+    # drum again, whereas a damped thud reads as a door that will not open.
+    b = blank(0.26)
+    wood(b, 258.0, 0.11, 0.95, q=3.4, decay=44.0, seed=81,
+         modes=(1.0, 1.42))
+    wood(b, 246.0, 0.13, 0.9, q=3.4, decay=38.0, start=0.1, seed=84,
+         modes=(1.0, 1.42))
+    write("deny", b, peak=0.62)
 
 
 if __name__ == "__main__":
