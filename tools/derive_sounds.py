@@ -79,6 +79,17 @@ BREAK_PITCH_TO = 1.30       # and up, over the length of the sound
 PLACE_PITCH = 0.85
 MINE_PITCH = 0.80
 
+# How much of that climb a material actually gets, 0 for a flat shift.
+#
+# A rising pitch on a TONAL body is how you synthesise a water drop -- that is
+# not an analogy, it is the recipe. The rock take is a narrow resonance around
+# 140 Hz and measures 1.000 on a tonality scale where grass is 0.90, so the
+# full climb turned some of its takes into bloops. Noise can be glided as far
+# as you like because there is no pitch to hear moving; anything with a note in
+# it cannot.
+BREAK_GLIDE = {"rock": 0.30}
+BREAK_GLIDE_DEFAULT = 1.0
+
 # Debris: the quieter, later copies of the material that trail a break. Right
 # for something that shatters, wrong for something that just goes -- set a
 # material to 0.0 here and its break is a single clean event with no rubble
@@ -255,8 +266,10 @@ def build_break(step, rate, k, mat=""):
 	# of one block breaking, not four different blocks.
 	# Takes vary in how far they climb rather than in structure: four takes of
 	# one block breaking, not four different blocks.
-	wobble = 1.0 + 0.05 * (k - 2)
-	body = norm(glide(step, BREAK_PITCH_FROM, BREAK_PITCH_TO * wobble))
+	g = float(BREAK_GLIDE.get(mat, BREAK_GLIDE_DEFAULT))
+	wobble = 1.0 + 0.05 * (k - 2) * g
+	top = BREAK_PITCH_FROM + (BREAK_PITCH_TO * wobble - BREAK_PITCH_FROM) * g
+	body = norm(glide(step, BREAK_PITCH_FROM, top))
 	out = body + [0.0] * int(0.12 * rate)
 
 	# The POP. A short high transient plus a mid resonance, both from synth.py,
