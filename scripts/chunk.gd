@@ -876,10 +876,11 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 				Blocks.YOUNG_TREE, verts, normals, colors, uvs, uv2s,
 				_face_light(snap, gpv, Vector3i.ZERO))
 		else:
-			var st := float(int(info.get("stage", 0)) + 1)
-			var total := float(Blocks.crop_growth(str(info.get("key", ""))) ["stages"])
-			_emit_grass(Vector3(pl), pup, Blocks.crop_color(st >= total), gpv,
-				_sky_depth(snap, gpv), clampf(st / maxf(total, 1.0), 0.3, 1.0),
+			var stage := int(info.get("stage", 0))
+			var total := int(Blocks.crop_growth(str(info.get("key", "")))["stages"])
+			var ripe := stage >= total - 1
+			_emit_grass(Vector3(pl), pup, Blocks.crop_color(ripe), gpv,
+				_sky_depth(snap, gpv), Blocks.crop_height(stage, total),
 				gverts, gnormals, gcolors, guvs)
 
 	# campfire flames. Emissive geometry standing above the fuel, because four
@@ -988,9 +989,7 @@ static func _emit_grass(lo: Vector3, up: Vector3, col: Color, gv: Vector3i,
 	# sitting on the floor of the cell, nudged off-centre per cell so a field is
 	# not a grid of identical crosses
 	var c := lo + Vector3(0.5, 0.5, 0.5) - uq * 0.5
-	var h := 0.62 + _hash3(gv, 5) * 0.36
-	if scale < 1.0:
-		h *= scale
+	var h := (0.62 + _hash3(gv, 5) * 0.36) * scale
 	c += t1 * ((_hash3(gv, 6) - 0.5) * 0.34) + t2 * ((_hash3(gv, 7) - 0.5) * 0.34)
 	# UV.x is the position ACROSS the quad, UV.y the height up the blade. Both are
 	# per-vertex; the shader cuts the blades out of the quad using them.

@@ -1426,6 +1426,20 @@ static func crop_growth(key: String) -> Dictionary:
 ## How long a young tree stands before it becomes a tree, in seconds.
 const SAPLING_TIME := 240.0
 
+## How tall a crop stands at a given stage, as a multiple of a wild grass blade.
+##
+## A sprout is a quarter the height of the grass around it and the ripe plant is
+## taller than any of it, so a field reads as a field from across it and you can
+## see it come on without counting anything. The steps are even, so every stage
+## is a visible step up rather than the last one doing all the growing.
+const CROP_H_SPROUT := 0.26
+const CROP_H_RIPE := 1.25
+
+static func crop_height(stage: int, stages: int) -> float:
+	var t := float(stage) / maxf(float(stages - 1), 1.0)
+	return lerpf(CROP_H_SPROUT, CROP_H_RIPE, clampf(t, 0.0, 1.0))
+
+
 ## Colours a crop by how far along it is: green while it is coming, gold when it
 ## is ready. A field you can read across from the far side of it is worth more
 ## than a name you have to walk up to.
