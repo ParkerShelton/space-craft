@@ -41,23 +41,26 @@ const CATALOG := {
 	"ui_accept": {"files": [UI + "accept.wav"], "db": -7.0, "pitch": 0.02},
 	"ui_deny": {"files": [UI + "deny.wav"], "db": -6.0, "pitch": 0.02},
 
-	# The world. Nothing behind these yet -- see the note at the top.
-	"break_stone": {"files": ["_takes", WORLD + "break_stone", 4], "pitch": 0.15},
-	"break_dirt": {"files": ["_takes", WORLD + "break_dirt", 4], "pitch": 0.15},
-	"break_grass": {"files": ["_takes", WORLD + "break_grass", 4], "pitch": 0.15},
-	"break_wood": {"files": ["_takes", WORLD + "break_wood", 4], "pitch": 0.15},
-	"break_leaves": {"files": ["_takes", WORLD + "break_leaves", 4], "pitch": 0.18},
-	"break_snow": {"files": ["_takes", WORLD + "break_snow", 4], "pitch": 0.15},
-	"break_metal": {"files": ["_takes", WORLD + "break_metal", 4], "pitch": 0.12},
-	"break_glass": {"files": ["_takes", WORLD + "break_glass", 4], "pitch": 0.15},
-	"place_stone": {"files": ["_takes", WORLD + "place_stone", 3], "pitch": 0.15},
-	"place_dirt": {"files": ["_takes", WORLD + "place_dirt", 3], "pitch": 0.15},
-	"place_grass": {"files": ["_takes", WORLD + "place_grass", 3], "pitch": 0.15},
-	"place_wood": {"files": ["_takes", WORLD + "place_wood", 3], "pitch": 0.15},
-	"place_leaves": {"files": ["_takes", WORLD + "place_leaves", 3], "pitch": 0.18},
-	"place_snow": {"files": ["_takes", WORLD + "place_snow", 3], "pitch": 0.15},
-	"place_metal": {"files": ["_takes", WORLD + "place_metal", 3], "pitch": 0.12},
-	"place_glass": {"files": ["_takes", WORLD + "place_glass", 3], "pitch": 0.15},
+	# The world. Nothing behind these yet -- see the note at the top. The short
+	# throttle is because these arrive in bursts as well as singly: assembling
+	# a build clears eight eighth-blocks in one frame, and two players can mine
+	# the same material a few milliseconds apart.
+	"break_stone": {"files": ["_takes", WORLD + "break_stone", 4], "pitch": 0.15, "throttle": 45},
+	"break_dirt": {"files": ["_takes", WORLD + "break_dirt", 4], "pitch": 0.15, "throttle": 45},
+	"break_grass": {"files": ["_takes", WORLD + "break_grass", 4], "pitch": 0.15, "throttle": 45},
+	"break_wood": {"files": ["_takes", WORLD + "break_wood", 4], "pitch": 0.15, "throttle": 45},
+	"break_leaves": {"files": ["_takes", WORLD + "break_leaves", 4], "pitch": 0.18, "throttle": 45},
+	"break_snow": {"files": ["_takes", WORLD + "break_snow", 4], "pitch": 0.15, "throttle": 45},
+	"break_metal": {"files": ["_takes", WORLD + "break_metal", 4], "pitch": 0.12, "throttle": 45},
+	"break_glass": {"files": ["_takes", WORLD + "break_glass", 4], "pitch": 0.15, "throttle": 45},
+	"place_stone": {"files": ["_takes", WORLD + "place_stone", 3], "pitch": 0.15, "throttle": 45},
+	"place_dirt": {"files": ["_takes", WORLD + "place_dirt", 3], "pitch": 0.15, "throttle": 45},
+	"place_grass": {"files": ["_takes", WORLD + "place_grass", 3], "pitch": 0.15, "throttle": 45},
+	"place_wood": {"files": ["_takes", WORLD + "place_wood", 3], "pitch": 0.15, "throttle": 45},
+	"place_leaves": {"files": ["_takes", WORLD + "place_leaves", 3], "pitch": 0.18, "throttle": 45},
+	"place_snow": {"files": ["_takes", WORLD + "place_snow", 3], "pitch": 0.15, "throttle": 45},
+	"place_metal": {"files": ["_takes", WORLD + "place_metal", 3], "pitch": 0.12, "throttle": 45},
+	"place_glass": {"files": ["_takes", WORLD + "place_glass", 3], "pitch": 0.15, "throttle": 45},
 	# Footsteps fire several times a second, so they get the most takes and the
 	# widest detune of anything in the game.
 	"step_stone": {"files": ["_takes", WORLD + "step_stone", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
@@ -145,8 +148,11 @@ func _build_material_table() -> void:
 				_material[int(k[base + form])] = mat
 
 
+## Block ids carry packed metadata in their high bits -- a torch's tier, a
+## stair's facing, the block sitting on top of a slab. Only the low byte says
+## what the thing is made of, and that is all this cares about.
 func material_of(id: int) -> String:
-	return _material.get(id, MATERIAL_DEFAULT)
+	return _material.get(Blocks.bottom_of(id), MATERIAL_DEFAULT)
 
 
 # --- the pool -----------------------------------------------------------------

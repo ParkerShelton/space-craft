@@ -314,7 +314,9 @@ func _apply_bulk(planet_name: String, cells: PackedVector3Array, ids: PackedInt3
 		return
 	for i in mini(cells.size(), ids.size()):
 		var c: Vector3 = cells[i]
-		p.set_block(Vector3i(roundi(c.x), roundi(c.y), roundi(c.z)), ids[i])
+		# Quiet: this is a backlog being replayed, not a hundred players
+		# mining at once.
+		p.set_block(Vector3i(roundi(c.x), roundi(c.y), roundi(c.z)), ids[i], true)
 	print("[net] caught up on %d changes to %s" % [ids.size(), planet_name])
 
 

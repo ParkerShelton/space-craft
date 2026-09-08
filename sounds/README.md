@@ -7,41 +7,65 @@ players, and a catalogue that says how each sound is allowed to behave.
 ## Adding sounds
 
 **Drop WAVs into `sounds/world/` with the names below and they start playing.
-There is no code to change.** A catalogue entry whose files are all missing is
-simply silent, and the game prints what is still missing at startup:
+There is no code to change.** The triggers are already wired: breaking, placing
+and footsteps all call into the catalogue, and a catalogue entry whose files are
+all missing is simply silent rather than an error.
 
-```
-audio: 104 file(s) not recorded yet -- res://sounds/world (104)
-```
-
-Numbered takes are a ceiling, not a requirement — `step_grass` lists six, and if
+Numbered takes are a ceiling, not a requirement -- `step_grass` lists six, and if
 you record three, those three are what plays. More takes is better for anything
 that fires often; footsteps are the extreme case.
 
-Format: **16-bit mono WAV**. Mono matters — a stereo file cannot be positioned
-in 3D. Trim the silence off the front; a sound with 40 ms of dead air in front
-of it is a sound that arrives late.
+### File format
 
-Don't bother pitch-shifting takes to make them differ. The catalogue already
-detunes every play by up to ±15–20%, which is where most of the variation
-comes from.
+**16-bit mono WAV, 44.1 kHz.** Three things about that matter:
 
-### What to record
+- **Mono, not stereo.** A stereo file cannot be positioned in 3D. This is the
+  one that silently ruins a recording session.
+- **WAV, not OGG or MP3.** These are short and fire constantly, and WAV needs no
+  decoding per play. Use OGG only for music and long ambience.
+- **Trim the front.** A sound with 40 ms of dead air in front of it is a sound
+  that arrives late, and it will feel like input lag rather than like a bad
+  recording.
 
-Eight materials — `stone`, `dirt`, `grass`, `wood`, `leaves`, `snow`, `metal`,
-`glass` — times three events:
+Don't pitch-shift takes to make them differ. The catalogue already detunes every
+play by up to +/-15-20%, which is where most of the variation comes from.
 
-| | takes | filenames |
-|---|---|---|
-| break | 4 | `break_<material>_1.wav` … `_4.wav` |
-| place | 3 | `place_<material>_1.wav` … `_3.wav` |
-| step | 6 | `step_<material>_1.wav` … `_6.wav` |
+### Naming
+
+Eight materials -- `stone`, `dirt`, `grass`, `wood`, `leaves`, `snow`, `metal`,
+`glass` -- times three events:
+
+| event | takes | filenames | fires when |
+|---|---|---|---|
+| break | 4 | `break_<material>_1.wav` ... `_4.wav` | a block or eighth-block is removed |
+| place | 3 | `place_<material>_1.wav` ... `_3.wav` | a block or eighth-block is added |
+| step | 6 | `step_<material>_1.wav` ... `_6.wav` | once per dip of the walk cycle |
 
 So `sounds/world/break_stone_1.wav`, `sounds/world/step_grass_4.wav`, and so on.
 
 Every block in the game maps to one of those eight. Slabs and stairs inherit
 from the block they were cut out of, and anything not in the table falls back to
-`stone` — so a new block makes a plausible noise the day it is added.
+`stone` -- so a new block makes a plausible noise the day it is added.
+
+Break, place and step are three different performances, not one sound at three
+volumes. A break is destructive and has a tail; a place is a firm set-down,
+shorter and softer; a step is the quietest and quickest of the three. Record
+them differently or all three will sound like the same event.
+
+### Checking your work
+
+`Audio.missing_report()` returns what is still un-recorded:
+
+```
+audio: 104 file(s) not recorded yet -- res://sounds/world (104)
+```
+
+Printing it on startup in a debug build is a one-liner in `Main._ready`, and
+worth having while you are recording.
+
+Breaking and placing work in co-op without anything extra: the sound hangs off
+the single point every block edit passes through, so another player's mining is
+audible at the place it happened. Footsteps are local to your own player only.
 
 ### Foley notes
 

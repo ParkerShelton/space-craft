@@ -3292,6 +3292,27 @@ func _fire_ranged_weapon(shape: Dictionary, dmg: float) -> void:
 ## carrying the whole job of making an action feel like it happened -- hence a
 ## continuous motion for the continuous action (mining) rather than one flick at
 ## the moment the block finally breaks.
+## Which half-cycle of the walk bob we were in last frame; a change is a step.
+var _step_last := 0
+
+
+## What you are standing ON, which is not always what you are standing in --
+## the probe starts below the capsule's feet and reaches down, so tall grass at
+## ankle height does not get mistaken for the ground under it.
+func _footstep() -> void:
+	if world == null:
+		return
+	var p := world.nearest_planet(global_position)
+	if p == null:
+		return
+	var foot := global_position - up_direction * 0.9
+	for depth in [0.15, 0.45]:
+		var id := p.get_id(p.world_to_voxel(foot - up_direction * depth))
+		if id != Blocks.AIR and id != Blocks.WATER:
+			Audio.footstep(id, foot)
+			return
+
+
 func _update_swing(delta: float) -> void:
 	if _hand_pivot == null:
 		return
@@ -3305,6 +3326,15 @@ func _update_swing(delta: float) -> void:
 		clampf(delta * 8.0, 0.0, 1.0))
 	# Phase advances with speed so steps land with the ground, not with the clock.
 	_bob_phase += delta * (3.0 + speed * 0.9)
+	# One footfall per dip of the bob. Hanging the sound off the same phase the
+	# camera already uses means steps land with the stride you can see rather
+	# than on a timer of their own -- and it slows down when you are wading or
+	# starving for free, because the phase already does.
+	var step := floori(_bob_phase / PI)
+	if step != _step_last:
+		_step_last = step
+		if walking and not crouching:
+			_footstep()
 	# Twice the vertical frequency of the horizontal sway: one rise and fall per
 	# footfall, one side-to-side per full stride. That two-to-one is what makes a
 	# bob read as walking instead of as a floating hand.

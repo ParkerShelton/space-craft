@@ -1397,6 +1397,7 @@ func part_at(v: Vector3i, sub: int) -> int:
 ## Put one eighth into `v`. The voxel itself becomes a PARTS marker so meshing,
 ## occlusion and re-meshing all behave without knowing about sub-cells.
 func set_part(v: Vector3i, sub: int, id: int) -> void:
+	Audio.block_placed(id, to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)))
 	var cc := chunk_of(v)
 	if not _parts_by_chunk.has(cc):
 		_parts_by_chunk[cc] = {}
@@ -1414,6 +1415,7 @@ func clear_part(v: Vector3i, sub: int) -> void:
 	var cell: PackedByteArray = parts_at(v)
 	if cell.size() != Blocks.PART_COUNT:
 		return
+	Audio.block_broken(cell[sub], to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)))
 	cell[sub] = Blocks.AIR
 	var any := false
 	for i in Blocks.PART_COUNT:
@@ -3990,8 +3992,29 @@ func _clear_temp_colliders(cc: Vector3i) -> void:
 		_temp_solid.erase(v)
 
 
-func set_block(v: Vector3i, id: int) -> void:
+## Break, place, or neither.
+##
+## This lives in set_block rather than at the call sites because set_block is
+## the ONLY way a block ever changes after generation -- local edits, the host
+## applying a client's edit, and a client applying the host's all funnel through
+## here. One hook covers single player and co-op without either knowing about
+## the other.
+func _edit_sound(v: Vector3i, was: int, id: int) -> void:
+	var pos := to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+	if id == Blocks.AIR:
+		if was != Blocks.AIR:
+			Audio.block_broken(was, pos)
+	elif id != was:
+		Audio.block_placed(id, pos)
+
+
+## `quiet` is for edits that are being replayed rather than happening: a client
+## catching up on a hundred blocks it missed should arrive at the right world in
+## silence, not to a hundred simultaneous bangs.
+func set_block(v: Vector3i, id: int, quiet := false) -> void:
 	var was := get_id(v)
+	if not quiet:
+		_edit_sound(v, was, id)
 	# A built machine only works while every one of its blocks is present, so
 	# any edit inside a footprint re-checks it (see _machine_block_changed).
 	if not _machine_at.is_empty():
