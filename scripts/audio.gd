@@ -63,7 +63,7 @@ const CATALOG := {
 	"place_glass": {"files": ["_takes", WORLD + "place_glass", 3], "pitch": 0.15, "throttle": 45},
 	# Footsteps fire several times a second, so they get the most takes and the
 	# widest detune of anything in the game.
-	"step_rock": {"files": ["_takes", WORLD + "step_rock", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
+	"step_rock": {"files": ["_takes", WORLD + "step_rock", 6], "db": -20.0, "pitch": -0.2, "throttle": 120},
 	"step_dirt": {"files": ["_takes", WORLD + "step_dirt", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_grass": {"files": ["_takes", WORLD + "step_grass", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_wood": {"files": ["_takes", WORLD + "step_wood", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
@@ -72,6 +72,29 @@ const CATALOG := {
 	"step_metal": {"files": ["_takes", WORLD + "step_metal", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_glass": {"files": ["_takes", WORLD + "step_glass", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 }
+
+
+# --- one recording, three sounds ----------------------------------------------
+#
+# A break or place with nothing recorded for it borrows the STEP of the same
+# material and shifts its pitch: down for breaking, up for placing. That turns
+# recording eight footstep sets into having all twenty-four sounds, which is
+# most of a recording session saved.
+#
+# It works because pitch and length are the same knob on a sample. Playing a
+# step at 0.72x is not merely lower, it is 39% LONGER -- and a break should be
+# longer than a step. Placing at 1.26x is 21% shorter, which is also right: a
+# block set down is the quickest of the three. The one thing pitch cannot fake
+# is a debris tail, so a derived break is a heavier thud rather than a proper
+# crunch. Any real recording dropped in later beats it.
+#
+# Steps are recorded quiet because they are steps, so a derived sound puts gain
+# back on top of the step's own trim.
+const DERIVE_PITCH := {"break": 0.72, "place": 1.26}
+const DERIVE_GAIN := {"break": 6.0, "place": 3.0}
+## Wider than the source step's own spread: these fire once rather than
+## constantly, so they can afford to move around more.
+const DERIVE_SPREAD := {"break": 1.16, "place": 1.12}
 
 
 ## Expands the ["_takes", base, n] shorthand above into base_1.wav .. base_n.wav.
@@ -169,6 +192,9 @@ var _flat: Array[AudioStreamPlayer] = []
 var _positional: Array[AudioStreamPlayer3D] = []
 var _streams := {}
 var _last := {}
+var _pitch := {}
+var _gain := {}
+var _derived: Array[String] = []
 var _silent := false
 var _missing: Array[String] = []
 
@@ -237,11 +263,51 @@ func _load() -> void:
 			n += 1
 		if n == 0:
 			continue
-		rnd.random_pitch = 1.0 + float(spec.get("pitch", 0.0))
+		# `pitch` is how far a play may wander, so it is only ever a widening:
+		# a negative one asks for a spread narrower than none, which Godot
+		# quietly ignores. To shift a sound up or down, use `pitch_base`.
+		rnd.random_pitch = maxf(1.0, 1.0 + absf(float(spec.get("pitch", 0.0))))
 		# No-repeats needs somewhere to go; with one take there is nowhere.
 		rnd.playback_mode = AudioStreamRandomizer.PLAYBACK_RANDOM_NO_REPEATS \
 			if n > 1 else AudioStreamRandomizer.PLAYBACK_RANDOM
 		_streams[name] = rnd
+		var bp := _base_pitch(spec)
+		if not is_equal_approx(bp, 1.0):
+			_pitch[name] = bp
+	_derive()
+
+
+## A permanent pitch shift for one entry, as opposed to the per-play wander.
+## Doubles as the tuning knob for a recording that came out at the wrong pitch.
+func _base_pitch(spec: Dictionary) -> float:
+	return maxf(0.05, float(spec.get("pitch_base", 1.0)))
+
+
+## Fills the gaps from the steps. Runs after everything real has loaded, so a
+## recorded break always wins over a derived one -- record a proper break_wood
+## later and it takes over with nothing to switch off.
+func _derive() -> void:
+	for name in CATALOG:
+		if _streams.has(name):
+			continue
+		var ev: String = name.split("_")[0]
+		if not DERIVE_PITCH.has(ev):
+			continue
+		var src: String = "step_" + String(name).substr(ev.length() + 1)
+		if not _streams.has(src):
+			continue
+		# Duplicated rather than shared: the copy needs its own detune spread,
+		# and editing the step's randomizer in place would change how the steps
+		# themselves sound.
+		var rnd: AudioStreamRandomizer = _streams[src].duplicate()
+		rnd.random_pitch = float(DERIVE_SPREAD[ev])
+		_streams[name] = rnd
+		_pitch[name] = float(DERIVE_PITCH[ev]) * _base_pitch(CATALOG[src])
+		# RELATIVE to the step it came from, not absolute: a step trimmed down
+		# to -20 dB was recorded hot, and a derived break that ignored that
+		# came back at +29 dB.
+		_gain[name] = float(CATALOG[src].get("db", 0.0)) + float(DERIVE_GAIN[ev])
+		_derived.append(name)
 
 
 ## What is catalogued but not yet recorded, so it stays visible instead of just
@@ -249,8 +315,11 @@ func _load() -> void:
 func missing_report() -> String:
 	if _silent:
 		return "audio: off (no output on this run)"
+	var extra := ""
+	if not _derived.is_empty():
+		extra = ", %d derived from steps" % _derived.size()
 	if _missing.is_empty():
-		return "audio: every catalogued sound has a file behind it"
+		return "audio: every catalogued sound has a file behind it" + extra
 	var by_dir := {}
 	for p in _missing:
 		var d: String = p.get_base_dir()
@@ -258,8 +327,8 @@ func missing_report() -> String:
 	var parts := []
 	for d in by_dir:
 		parts.append("%s (%d)" % [d, by_dir[d]])
-	return "audio: %d file(s) not recorded yet -- %s" % [_missing.size(),
-		", ".join(parts)]
+	return "audio: %d file(s) not recorded yet -- %s%s" % [_missing.size(),
+		", ".join(parts), extra]
 
 
 ## True if this name would actually make a noise. Lets a call site skip work it
@@ -290,7 +359,8 @@ func ui(name: String) -> void:
 		return
 	var p := _free_flat()
 	p.stream = _streams[name]
-	p.volume_db = float(spec.get("db", 0.0))
+	p.volume_db = float(spec.get("db", 0.0)) + float(_gain.get(name, 0.0))
+	p.pitch_scale = float(_pitch.get(name, 1.0))
 	p.play()
 
 
@@ -303,7 +373,8 @@ func at(name: String, pos: Vector3) -> void:
 		return
 	var p := _free_positional()
 	p.stream = _streams[name]
-	p.volume_db = float(spec.get("db", 0.0))
+	p.volume_db = float(spec.get("db", 0.0)) + float(_gain.get(name, 0.0))
+	p.pitch_scale = float(_pitch.get(name, 1.0))
 	p.global_position = pos
 	p.play()
 

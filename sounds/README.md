@@ -30,6 +30,17 @@ folder empty.
 Nothing has to arrive at once. One material, or one take, is a valid change on
 its own -- record `break_wood_1.wav` and only breaking wood makes a noise.
 
+**You only have to record the steps.** A break or place with no files of its own
+borrows the step of the same material and shifts its pitch -- down for breaking,
+up for placing. That is not just a pitch change: on a sample, pitch and length
+are the same knob, so a break comes out 39% longer than the step and a place 21%
+shorter, which is the right shape for both. Recording eight footstep sets gets
+you all twenty-four sounds.
+
+What pitch cannot fake is a debris tail, so a derived break is a heavier thud
+rather than a proper crunch. Record real breaks for the materials you care most
+about; they take over automatically, with nothing to switch off.
+
 Numbered takes are a ceiling, not a requirement -- `step_grass` lists six, and if
 you record three, those three are what plays.
 
@@ -47,6 +58,11 @@ you record three, those three are what plays.
 
 Don't pitch-shift takes to make them differ. The catalogue already detunes every
 play by up to +/-15-20%, which is where most of the variation comes from.
+
+Two separate knobs in the catalogue, easy to confuse: `pitch` is how far a play
+may *wander* either side of normal, so it only ever widens and a negative value
+means nothing. To shift a sound permanently up or down -- a take that came out
+at the wrong pitch -- use `pitch_base`, where 0.9 is lower and 1.1 is higher.
 
 ### Naming
 
