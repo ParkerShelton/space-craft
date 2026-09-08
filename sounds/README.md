@@ -91,10 +91,9 @@ the block they were cut out of, and anything not in the table falls back to
 
 `sand` is dust rather than soil: dry, fine, no moisture in it. Regolith is the
 whole surface of four archetypes, so on those worlds it is the sound of the
-entire planet. Until it has recordings it borrows `dirt`, which is what regolith
-sounded like before it had a slot -- a new material never makes something go
-quiet that used to make a noise. Drop `step_sand_1.wav` in and the borrowing
-stops on its own.
+entire planet. It is silent until it is recorded, like every other slot: a
+material standing in for another is a material nobody remembers to go back and
+do, so silence is the to-do list.
 
 Break, place and step are three different performances, not one sound at three
 volumes. A break is destructive and has a tail; a place is a firm set-down,

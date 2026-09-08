@@ -157,10 +157,6 @@ func _notification(what: int) -> void:
 func _ready() -> void:
 	get_tree().set_auto_accept_quit(false)  # route window-close through _notification
 	_settings.load(settings_path)   # absent on a first run, which is not an error
-	# Says out loud which catalogued sounds have nothing behind them yet, so
-	# "that block is silent" is a line in the log rather than a mystery.
-	if OS.is_debug_build():
-		print(Audio.missing_report())
 	var fps_layer := CanvasLayer.new()
 	fps_layer.layer = 8
 	add_child(fps_layer)

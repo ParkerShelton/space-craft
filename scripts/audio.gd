@@ -194,6 +194,9 @@ func _build_material_table() -> void:
 		# surface of four archetypes -- the dust moon, the ash plain, the rust
 		# barrens, the crystal desert -- so on those worlds this is the sound of
 		# the entire planet, not an occasional block.
+		#
+		# Silent until it is recorded, deliberately. A material standing in for
+		# another is a material nobody remembers to go back and do.
 		"sand": ["REGOLITH"],
 		"grass": ["GRASS", "TALL_GRASS", "CROP", "SAPLING", "YOUNG_TREE",
 			"SEEDS", "COOKED_CROP"],
@@ -247,7 +250,6 @@ var _last := {}
 var _pitch := {}
 var _gain := {}
 var _derived: Array[String] = []
-var _borrowed: Array[String] = []
 var _silent := false
 var _missing: Array[String] = []
 
@@ -336,15 +338,6 @@ func _base_pitch(spec: Dictionary) -> float:
 	return maxf(0.05, float(spec.get("pitch_base", 1.0)))
 
 
-## What a material borrows until it has recordings of its own.
-##
-## Adding a slot should never make something go QUIET that used to make a noise.
-## Regolith sounded like dirt before it had a slot; it goes on sounding like
-## dirt until there is a sand recording, and then it stops, with nothing to
-## switch over.
-const MATERIAL_FALLBACK := {"sand": "dirt"}
-
-
 ## Fills the gaps from the steps. Runs after everything real has loaded, so a
 ## recorded break always wins over a derived one -- record a proper break_wood
 ## later and it takes over with nothing to switch off.
@@ -370,32 +363,7 @@ func _derive() -> void:
 		# came back at +29 dB.
 		_gain[name] = float(CATALOG[src].get("db", 0.0)) + float(DERIVE_GAIN[ev])
 		_derived.append(name)
-	_borrow()
 
-
-## Second pass: anything still empty takes another material's, whole -- the same
-## stream, the same pitch, the same trim. Runs after deriving so a borrowed
-## sound can be one that was itself derived from a step.
-func _borrow() -> void:
-	for name in CATALOG:
-		if _streams.has(name):
-			continue
-		var parts: PackedStringArray = String(name).split("_")
-		if parts.size() < 2:
-			continue
-		var ev: String = parts[0]
-		var mat: String = String(name).substr(ev.length() + 1)
-		if not MATERIAL_FALLBACK.has(mat):
-			continue
-		var src: String = ev + "_" + str(MATERIAL_FALLBACK[mat])
-		if not _streams.has(src):
-			continue
-		_streams[name] = _streams[src]
-		if _pitch.has(src):
-			_pitch[name] = _pitch[src]
-		# The trim travels too: it was chosen against the source's own level.
-		_gain[name] = float(CATALOG[src].get("db", 0.0)) 			- float(CATALOG[name].get("db", 0.0)) + float(_gain.get(src, 0.0))
-		_borrowed.append(name)
 
 
 ## What is catalogued but not yet recorded, so it stays visible instead of just
@@ -406,8 +374,6 @@ func missing_report() -> String:
 	var extra := ""
 	if not _derived.is_empty():
 		extra = ", %d derived from steps" % _derived.size()
-	if not _borrowed.is_empty():
-		extra += ", %d borrowed from another material" % _borrowed.size()
 	if _missing.is_empty():
 		return "audio: every catalogued sound has a file behind it" + extra
 	var by_dir := {}
