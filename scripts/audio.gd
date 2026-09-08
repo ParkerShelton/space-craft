@@ -47,6 +47,7 @@ const CATALOG := {
 	# the same material a few milliseconds apart.
 	"break_rock": {"files": ["_takes", WORLD + "break_rock", 4], "pitch": 0.15, "throttle": 45},
 	"break_dirt": {"files": ["_takes", WORLD + "break_dirt", 4], "pitch": 0.15, "throttle": 45},
+	"break_sand": {"files": ["_takes", WORLD + "break_sand", 4], "pitch": 0.15, "throttle": 45},
 	"break_grass": {"files": ["_takes", WORLD + "break_grass", 4], "pitch": 0.15, "throttle": 45},
 	"break_wood": {"files": ["_takes", WORLD + "break_wood", 4], "pitch": 0.15, "throttle": 45},
 	# Leaves wander much further than anything else on purpose. A rustle has no
@@ -60,6 +61,7 @@ const CATALOG := {
 	"break_glass": {"files": ["_takes", WORLD + "break_glass", 4], "pitch": 0.15, "throttle": 45},
 	"place_rock": {"files": ["_takes", WORLD + "place_rock", 3], "pitch": 0.15, "throttle": 45},
 	"place_dirt": {"files": ["_takes", WORLD + "place_dirt", 3], "pitch": 0.15, "throttle": 45},
+	"place_sand": {"files": ["_takes", WORLD + "place_sand", 3], "pitch": 0.15, "throttle": 45},
 	"place_grass": {"files": ["_takes", WORLD + "place_grass", 3], "pitch": 0.15, "throttle": 45},
 	"place_wood": {"files": ["_takes", WORLD + "place_wood", 3], "pitch": 0.15, "throttle": 45},
 	"place_leaves": {"files": ["_takes", WORLD + "place_leaves", 3], "pitch": 0.18, "throttle": 45},
@@ -70,6 +72,7 @@ const CATALOG := {
 	# one entry replayed every 190 ms is the whole mining loop.
 	"mine_rock": {"files": ["_takes", WORLD + "mine_rock", 3], "pitch": 0.16, "throttle": 190},
 	"mine_dirt": {"files": ["_takes", WORLD + "mine_dirt", 3], "pitch": 0.16, "throttle": 190},
+	"mine_sand": {"files": ["_takes", WORLD + "mine_sand", 3], "pitch": 0.16, "throttle": 190},
 	"mine_grass": {"files": ["_takes", WORLD + "mine_grass", 3], "pitch": 0.16, "throttle": 190},
 	"mine_wood": {"files": ["_takes", WORLD + "mine_wood", 3], "pitch": 0.16, "throttle": 190},
 	"mine_leaves": {"files": ["_takes", WORLD + "mine_leaves", 3], "pitch": 0.18, "throttle": 190},
@@ -80,6 +83,7 @@ const CATALOG := {
 	# widest detune of anything in the game.
 	"step_rock": {"files": ["_takes", WORLD + "step_rock", 6], "db": -20.0, "pitch": -0.2, "throttle": 120},
 	"step_dirt": {"files": ["_takes", WORLD + "step_dirt", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
+	"step_sand": {"files": ["_takes", WORLD + "step_sand", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_grass": {"files": ["_takes", WORLD + "step_grass", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_wood": {"files": ["_takes", WORLD + "step_wood", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_leaves": {"files": ["_takes", WORLD + "step_leaves", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
@@ -185,7 +189,12 @@ var _material := {}
 func _build_material_table() -> void:
 	var k: Dictionary = (Blocks as GDScript).get_script_constant_map()
 	var t := {
-		"dirt": ["DIRT", "TILLED", "REGOLITH", "CORE", "PATH"],
+		"dirt": ["DIRT", "TILLED", "CORE", "PATH"],
+		# Dust rather than soil: dry, fine, no moisture in it. It is the whole
+		# surface of four archetypes -- the dust moon, the ash plain, the rust
+		# barrens, the crystal desert -- so on those worlds this is the sound of
+		# the entire planet, not an occasional block.
+		"sand": ["REGOLITH"],
 		"grass": ["GRASS", "TALL_GRASS", "CROP", "SAPLING", "YOUNG_TREE",
 			"SEEDS", "COOKED_CROP"],
 		"wood": ["WOOD", "WOOD_PALE", "WOOD_DARK", "PLANK", "PLANK_PALE",
@@ -238,6 +247,7 @@ var _last := {}
 var _pitch := {}
 var _gain := {}
 var _derived: Array[String] = []
+var _borrowed: Array[String] = []
 var _silent := false
 var _missing: Array[String] = []
 
@@ -326,6 +336,15 @@ func _base_pitch(spec: Dictionary) -> float:
 	return maxf(0.05, float(spec.get("pitch_base", 1.0)))
 
 
+## What a material borrows until it has recordings of its own.
+##
+## Adding a slot should never make something go QUIET that used to make a noise.
+## Regolith sounded like dirt before it had a slot; it goes on sounding like
+## dirt until there is a sand recording, and then it stops, with nothing to
+## switch over.
+const MATERIAL_FALLBACK := {"sand": "dirt"}
+
+
 ## Fills the gaps from the steps. Runs after everything real has loaded, so a
 ## recorded break always wins over a derived one -- record a proper break_wood
 ## later and it takes over with nothing to switch off.
@@ -351,6 +370,32 @@ func _derive() -> void:
 		# came back at +29 dB.
 		_gain[name] = float(CATALOG[src].get("db", 0.0)) + float(DERIVE_GAIN[ev])
 		_derived.append(name)
+	_borrow()
+
+
+## Second pass: anything still empty takes another material's, whole -- the same
+## stream, the same pitch, the same trim. Runs after deriving so a borrowed
+## sound can be one that was itself derived from a step.
+func _borrow() -> void:
+	for name in CATALOG:
+		if _streams.has(name):
+			continue
+		var parts: PackedStringArray = String(name).split("_")
+		if parts.size() < 2:
+			continue
+		var ev: String = parts[0]
+		var mat: String = String(name).substr(ev.length() + 1)
+		if not MATERIAL_FALLBACK.has(mat):
+			continue
+		var src: String = ev + "_" + str(MATERIAL_FALLBACK[mat])
+		if not _streams.has(src):
+			continue
+		_streams[name] = _streams[src]
+		if _pitch.has(src):
+			_pitch[name] = _pitch[src]
+		# The trim travels too: it was chosen against the source's own level.
+		_gain[name] = float(CATALOG[src].get("db", 0.0)) 			- float(CATALOG[name].get("db", 0.0)) + float(_gain.get(src, 0.0))
+		_borrowed.append(name)
 
 
 ## What is catalogued but not yet recorded, so it stays visible instead of just
@@ -361,6 +406,8 @@ func missing_report() -> String:
 	var extra := ""
 	if not _derived.is_empty():
 		extra = ", %d derived from steps" % _derived.size()
+	if not _borrowed.is_empty():
+		extra += ", %d borrowed from another material" % _borrowed.size()
 	if _missing.is_empty():
 		return "audio: every catalogued sound has a file behind it" + extra
 	var by_dir := {}

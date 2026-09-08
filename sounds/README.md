@@ -73,8 +73,8 @@ at the wrong pitch -- use `pitch_base`, where 0.9 is lower and 1.1 is higher.
 
 ### Naming
 
-Eight materials -- `rock`, `dirt`, `grass`, `wood`, `leaves`, `snow`, `metal`,
-`glass` -- times three events:
+Nine materials -- `rock`, `dirt`, `sand`, `grass`, `wood`, `leaves`, `snow`,
+`metal`, `glass` -- times four events:
 
 | event | takes | filenames | fires when |
 |---|---|---|---|
@@ -85,9 +85,16 @@ Eight materials -- `rock`, `dirt`, `grass`, `wood`, `leaves`, `snow`, `metal`,
 
 So `sounds/world/break_rock_1.wav`, `sounds/world/step_grass_4.wav`, and so on.
 
-Every block in the game maps to one of those eight. Slabs and stairs inherit
-from the block they were cut out of, and anything not in the table falls back to
+Every block in the game maps to one of those nine. Slabs and stairs inherit from
+the block they were cut out of, and anything not in the table falls back to
 `rock` -- so a new block makes a plausible noise the day it is added.
+
+`sand` is dust rather than soil: dry, fine, no moisture in it. Regolith is the
+whole surface of four archetypes, so on those worlds it is the sound of the
+entire planet. Until it has recordings it borrows `dirt`, which is what regolith
+sounded like before it had a slot -- a new material never makes something go
+quiet that used to make a noise. Drop `step_sand_1.wav` in and the borrowing
+stops on its own.
 
 Break, place and step are three different performances, not one sound at three
 volumes. A break is destructive and has a tail; a place is a firm set-down,
