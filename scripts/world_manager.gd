@@ -9,7 +9,14 @@ extends Node3D
 ## affordable because terrain generation got much cheaper (see the tree cache in
 ## Planet.generation_sample); the cold fill still happens behind the loading
 ## screen, and walking only ever pays for the shell entering the sphere.
-const RENDER_DISTANCE := 10
+## Chunk radius streamed around the player. A setting now rather than a
+## constant: it is the one number that decides both how far you can see and how
+## hard the machine has to work, and which of those matters more is not
+## something this file can know.
+var render_distance := RENDER_DISTANCE_DEFAULT
+const RENDER_DISTANCE_DEFAULT := 10
+const RENDER_DISTANCE_MIN := 4
+const RENDER_DISTANCE_MAX := 16
 const LOADS_PER_FRAME := 4        # chunks meshed per frame (spreads out hitches)
 const STREAM_MARGIN := 48.0       # extra reach (voxels) beyond a planet's surface
 
@@ -563,8 +570,8 @@ func _physics_process(delta: float) -> void:
 	for p in planets:
 		if p == active:
 			var reach := p.radius + p.terrain_amp + STREAM_MARGIN
-			if p.center_distance(here) <= reach + RENDER_DISTANCE * Blocks.CHUNK_SIZE:
-				p.stream(p.world_to_voxel(here), RENDER_DISTANCE)
+			if p.center_distance(here) <= reach + render_distance * Blocks.CHUNK_SIZE:
+				p.stream(p.world_to_voxel(here), render_distance)
 				p.process_load_queue(LOADS_PER_FRAME)
 				p.update_fauna(delta, here, self)
 				p.update_npcs(delta, here, self)

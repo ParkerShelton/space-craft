@@ -125,6 +125,7 @@ const SERVER_SAVE_EVERY := 60.0
 ## not to the world, and should survive starting a new one.
 const SETTINGS_PATH := "user://settings.cfg"
 var _settings := ConfigFile.new()
+var _fps_label: Label
 
 func _notification(what: int) -> void:
 	# Autosave when the window is closed (X button, Alt+F4, etc.). Never in a
@@ -147,6 +148,17 @@ func _notification(what: int) -> void:
 func _ready() -> void:
 	get_tree().set_auto_accept_quit(false)  # route window-close through _notification
 	_settings.load(SETTINGS_PATH)   # absent on a first run, which is not an error
+	var fps_layer := CanvasLayer.new()
+	fps_layer.layer = 8
+	add_child(fps_layer)
+	_fps_label = Label.new()
+	_fps_label.position = Vector2(16, 96)
+	_fps_label.add_theme_font_size_override("font_size", 14)
+	_fps_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	_fps_label.add_theme_constant_override("outline_size", 4)
+	_fps_label.visible = false
+	fps_layer.add_child(_fps_label)
+	_apply_settings()
 	_setup_environment()
 	var world := WorldManager.new()
 	world.name = "World"
@@ -311,8 +323,23 @@ func set_setting(key: String, value) -> void:
 
 
 func _apply_settings() -> void:
+	# Window settings apply whether or not a world is loaded; the rest need a
+	# player to apply to, and are applied again when one is made.
+	DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_FULLSCREEN
+		if bool(setting("fullscreen", false)) else DisplayServer.WINDOW_MODE_WINDOWED)
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_ENABLED
+		if bool(setting("vsync", true)) else DisplayServer.VSYNC_DISABLED)
+	if _fps_label != null:
+		_fps_label.visible = bool(setting("show_fps", false))
+	if _world != null:
+		_world.render_distance = int(setting("render_distance",
+			WorldManager.RENDER_DISTANCE_DEFAULT))
 	if _world != null and _world.player != null:
-		_world.player.ghost_enabled = bool(setting("placement_ghost", true))
+		var pl = _world.player
+		pl.ghost_enabled = bool(setting("placement_ghost", true))
+		pl.look_sensitivity = float(setting("sensitivity", 1.0))
+		pl.invert_look = bool(setting("invert_y", false))
+		pl.set_fov(float(setting("fov", 75.0)))
 
 
 # --- chat ---------------------------------------------------------------------
@@ -479,10 +506,53 @@ func _populate_game_menu() -> void:
 
 func _populate_settings_menu() -> void:
 	var vb := _menu_page("Settings")
+	# Kept short on purpose. Every one of these is something a player actually
+	# reaches for -- how far they can see, how fast the view turns, whether the
+	# window owns the screen -- rather than every number the engine happens to
+	# expose.
+	_game_menu_slider(vb, "Render distance", "chunks -- the big one for framerate",
+		"render_distance", float(WorldManager.RENDER_DISTANCE_DEFAULT),
+		float(WorldManager.RENDER_DISTANCE_MIN), float(WorldManager.RENDER_DISTANCE_MAX),
+		1.0, "%d")
+	_game_menu_slider(vb, "Field of view", "degrees", "fov", 75.0, 60.0, 110.0, 1.0, "%d")
+	_game_menu_slider(vb, "Mouse sensitivity", "", "sensitivity", 1.0, 0.25, 3.0, 0.05, "%.2fx")
+	_game_menu_check(vb, "Invert mouse Y", "", "invert_y", false)
+	_game_menu_check(vb, "Fullscreen", "", "fullscreen", false)
+	_game_menu_check(vb, "V-Sync", "smoother, at the cost of a little input lag",
+		"vsync", true)
+	_game_menu_check(vb, "Show FPS", "", "show_fps", false)
 	_game_menu_check(vb, "Placement preview",
 		"the ghost block showing where a block would go",
 		"placement_ghost", true)
 	_game_menu_button(vb, "Back", _populate_game_menu)
+
+
+## A labelled slider. Like the checkboxes, it takes effect as it moves: a
+## setting you have to confirm is a setting you cannot feel while you choose it,
+## and render distance in particular is a thing you want to SEE change.
+func _game_menu_slider(vb: VBoxContainer, text: String, hint: String, key: String,
+		dflt: float, lo: float, hi: float, step: float, fmt: String) -> void:
+	var head := Label.new()
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(head)
+	var sl := HSlider.new()
+	sl.min_value = lo
+	sl.max_value = hi
+	sl.step = step
+	sl.value = float(setting(key, dflt))
+	sl.custom_minimum_size = Vector2(280, 20)
+	head.text = "%s:  %s" % [text, fmt % sl.value]
+	sl.value_changed.connect(func(v: float):
+		head.text = "%s:  %s" % [text, fmt % v]
+		set_setting(key, v))
+	vb.add_child(sl)
+	if hint != "":
+		var l := Label.new()
+		l.text = hint
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.add_theme_font_size_override("font_size", 13)
+		l.modulate = Color(1, 1, 1, 0.5)
+		vb.add_child(l)
 
 
 ## A labelled on/off row. Takes effect and is written to disk the moment it is
@@ -771,7 +841,7 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	player.name = "Player"
 	player.world = world
 	player.menu_requested.connect(_toggle_game_menu)
-	player.ghost_enabled = bool(setting("placement_ghost", true))
+	_apply_settings()
 	player.position = home.find_spawn_point(Vector3.UP)
 	add_child(player)
 	world.player = player
@@ -1133,6 +1203,8 @@ func _process(delta: float) -> void:
 	# has neither, and it is the one machine whose clock everybody else is
 	# waiting on -- putting this after that return meant a field on a server
 	# would never grow at all.
+	if _fps_label != null and _fps_label.visible:
+		_fps_label.text = "%d fps" % int(round(Engine.get_frames_per_second()))
 	if _world != null:
 		_world.tick_crops(delta)
 	if _world == null or _world.player == null or _sky_mat == null:
@@ -1270,7 +1342,7 @@ func _process(delta: float) -> void:
 	# a clear day. Depth fog stays out of the way entirely until the far end of
 	# what is actually streamed, then closes the gap to the edge.
 	_env.fog_mode = Environment.FOG_MODE_DEPTH
-	var reach := float(WorldManager.RENDER_DISTANCE * Blocks.CHUNK_SIZE)
+	var reach := float(_world.render_distance * Blocks.CHUNK_SIZE)
 	# Underground the same fog closes right in, which is what makes a cave wall
 	# beyond the streamed chunks dissolve into black rather than end at an edge.
 	_env.fog_depth_begin = lerpf(reach * 0.58, 7.0, _underground)

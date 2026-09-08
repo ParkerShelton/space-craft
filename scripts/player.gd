@@ -22,6 +22,12 @@ const FLY_SPEED := 16.0
 const FLY_ACCEL := 6.0
 const FLY_DAMP := 3.0
 const MOUSE_SENS := 0.0025
+## Multiplies MOUSE_SENS. A setting, because what feels like a flick of the
+## wrist to one person is a whole arm to another.
+var look_sensitivity := 1.0
+## Looking straight down and dragging up moves the view up, unless you grew up
+## on a flight stick.
+var invert_look := false
 ## Eye height above the body's centre. The collision capsule is 1.8 tall, so its
 ## top is at 0.9 and the eye normally sits well inside it.
 const EYE_HEIGHT := 0.7
@@ -546,6 +552,16 @@ func _remove_item(id: int, n: int) -> int:
 			if n <= 0:
 				break
 	return n
+
+
+## -1 when the vertical axis is inverted, which is all "inverted" means.
+func _look_sign() -> float:
+	return -1.0 if invert_look else 1.0
+
+
+func set_fov(deg: float) -> void:
+	if _camera != null:
+		_camera.fov = deg
 
 
 func _selected_id() -> int:
@@ -1374,8 +1390,8 @@ func _is_standable(ship: Ship, c: Vector3i) -> bool:
 
 ## Manual voxel character controller in the ship's local frame.
 func _walk_interior(delta: float, ship: Ship) -> void:
-	rotation.y -= _look.x * MOUSE_SENS       # yaw around the ship's up
-	_pitch = clampf(_pitch - _look.y * MOUSE_SENS, -1.45, 1.45)
+	rotation.y -= _look.x * MOUSE_SENS * look_sensitivity   # yaw around the ship's up
+	_pitch = clampf(_pitch - _look.y * MOUSE_SENS * look_sensitivity * _look_sign(), -1.45, 1.45)
 	_camera.rotation.x = _pitch
 	_look = Vector2.ZERO
 
@@ -1514,8 +1530,8 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 
 	# Yaw around local up; pitch the camera.
 	if _look.x != 0.0:
-		rotate(up, -_look.x * MOUSE_SENS)
-	_pitch = clampf(_pitch - _look.y * MOUSE_SENS, -1.45, 1.45)
+		rotate(up, -_look.x * MOUSE_SENS * look_sensitivity)
+	_pitch = clampf(_pitch - _look.y * MOUSE_SENS * look_sensitivity * _look_sign(), -1.45, 1.45)
 	_camera.rotation.x = _pitch
 	_look = Vector2.ZERO
 
@@ -1811,7 +1827,7 @@ func _swim(delta: float, up: Vector3) -> void:
 	_align_up(up, delta)
 	if _look.x != 0.0:
 		rotate(up, -_look.x * MOUSE_SENS)
-	_pitch = clampf(_pitch - _look.y * MOUSE_SENS, -1.45, 1.45)
+	_pitch = clampf(_pitch - _look.y * MOUSE_SENS * look_sensitivity * _look_sign(), -1.45, 1.45)
 	_camera.rotation.x = _pitch
 	_look = Vector2.ZERO
 
@@ -1840,7 +1856,7 @@ func _process_float(delta: float) -> void:
 	# Free look: yaw around body up, pitch the camera. No forced orientation.
 	if _look.x != 0.0:
 		rotate(global_transform.basis.y, -_look.x * MOUSE_SENS)
-	_pitch = clampf(_pitch - _look.y * MOUSE_SENS, -1.45, 1.45)
+	_pitch = clampf(_pitch - _look.y * MOUSE_SENS * look_sensitivity * _look_sign(), -1.45, 1.45)
 	_camera.rotation.x = _pitch
 	_look = Vector2.ZERO
 
