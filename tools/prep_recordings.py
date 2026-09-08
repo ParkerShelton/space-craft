@@ -130,11 +130,23 @@ def main():
 	if args.write:
 		os.makedirs(RAW, exist_ok=True)
 
+	# Files built by derive_sounds.py are not recordings and must not be
+	# treated as such: trimming one would eat the transient that was added to
+	# it, and backing it up would put a generated file in recordings/raw/.
+	generated = set()
+	man = os.path.join(WORLD, ".generated")
+	if os.path.exists(man):
+		with open(man) as f:
+			generated = {ln.strip() for ln in f
+				if ln.strip() and not ln.startswith("#")}
+
 	skipped = []
 	print("%-24s %18s   %s" % ("file", "length", "level"))
 	print("-" * 66)
 	done = 0
 	for name in names:
+		if name in generated:
+			continue
 		ev = event_of(name)
 		if ev is None:
 			skipped.append(name)
@@ -167,6 +179,9 @@ def main():
 		done += 1
 
 	print("-" * 66)
+	if generated:
+		print("%d generated file(s) skipped (see sounds/world/.generated)"
+			% len(generated))
 	if skipped:
 		print("not touched (name does not match <event>_<material>_<n>.wav):")
 		for s in skipped:
