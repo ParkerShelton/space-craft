@@ -169,7 +169,7 @@ const CIRCUIT := 61    # refined + Metal -> functional stock (Fabricator: Drill,
 const INTERMEDIATE_IDS := [ALLOY, CIRCUIT]
 
 const INTERFACE := 65  # placeable trigger block: surround it with a recognized shell
-                        # pattern (see MULTIBLOCK_RECIPES) to build a bigger structure
+						# pattern (see MULTIBLOCK_RECIPES) to build a bigger structure
 const ROOF_SLAB := 66   # half-height roof block (real partial-height geometry, like water)
 const PATH := 67         # worn dirt/gravel walkway generated between settlement buildings
 const WARP_DRIVE := 68   # ship block: with the ship in space, unlocks the star map for warp travel
@@ -880,7 +880,7 @@ static func part_structure_diagram(def: Dictionary, with_name := true) -> String
 				cut += row[x]
 				x += step
 			out += "
-      " + cut
+	  " + cut
 			z += step
 		y += step
 	out += "
@@ -951,20 +951,29 @@ static func all_recipes() -> Array:
 
 
 ## The materials line for a recipe-book entry.
+## One requirement, in words.
+##
+## Shared by the reqs list and the `extra` slot because they are the same shape
+## -- which the `extra` reader used to assume meant a plain id, so the first
+## recipe whose extra offered a CHOICE of materials crashed the Recipe Book on
+## open. Anything that formats a requirement goes through here now.
+static func req_text(r: Dictionary) -> String:
+	if r.has("refined"):
+		return "%d Refined Material" % int(r["n"])
+	if r.has("any"):
+		return "%d %s" % [int(r["n"]), r.get("label", "items")]
+	return "%d %s" % [int(r["n"]), name_of(int(r["id"]))]
+
+
 static func recipe_needs(rec: Dictionary) -> String:
 	var parts := PackedStringArray()
 	for r in rec.get("reqs", []):
-		if r.has("refined"):
-			parts.append("%d Refined Material" % int(r["n"]))
-		elif r.has("any"):
-			parts.append("%d %s" % [int(r["n"]), r.get("label", "items")])
-		else:
-			parts.append("%d %s" % [int(r["n"]), name_of(int(r["id"]))])
+		parts.append(req_text(r))
 	if int(rec.get("cost", 0)) > 0:
 		parts.append("%d Refined Material" % int(rec["cost"]))
 	var ex: Dictionary = rec.get("extra", {})
 	if not ex.is_empty():
-		parts.append("%d %s" % [int(ex["n"]), name_of(int(ex["id"]))])
+		parts.append(req_text(ex))
 	if parts.is_empty():
 		return "no materials — assembled from placed blocks"
 	return ",  ".join(parts)

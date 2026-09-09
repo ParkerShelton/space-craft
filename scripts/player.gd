@@ -4946,7 +4946,7 @@ func _on_station_craft(craft: Dictionary) -> void:
 				"alloy": "Alloy Plating"}.get(mtype, "material")
 			var msg := "Need %d %s loaded" % [int(craft["cost"]), mat_label]
 			if craft.has("extra"):
-				msg += ", plus %d %s" % [int(craft["extra"]["n"]), Blocks.name_of(int(craft["extra"]["id"]))]
+				msg += ", plus " + Blocks.req_text(craft["extra"])
 			_toast(msg)
 	else:
 		_toast("Crafting %s…" % Blocks.name_of(int(craft["out"])))
