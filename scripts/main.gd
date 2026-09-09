@@ -824,6 +824,9 @@ const GIVEABLE := {
 	"hide": Blocks.HIDE, "bone": Blocks.BONE, "bonemeal": Blocks.BONEMEAL,
 	"torch": Blocks.TORCH, "hoe": Blocks.HOE, "seeds": Blocks.SEEDS,
 	"crop": Blocks.CROP, "meat": Blocks.RAW_MEAT,
+	# Both ends of the bucket, because "give me a full one" is the whole reason
+	# to reach for this while testing a field.
+	"bucket": Blocks.BUCKET, "waterbucket": Blocks.WATER_BUCKET,
 }
 
 
