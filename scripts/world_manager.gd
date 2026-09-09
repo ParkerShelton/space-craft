@@ -587,6 +587,54 @@ func nearest_planet(world_pos: Vector3) -> Planet:
 	return best
 
 
+# --- profiling ----------------------------------------------------------------
+#
+# A stutter is a thing you FEEL, and the only place the real answer lives is the
+# world you felt it in -- not a benchmark of a world built to be measured. So
+# the per-frame systems each keep a running total and a worst-single-call, and
+# /perf reads them out.
+#
+# Left on permanently: two clock reads around a call that already costs
+# microseconds is not worth a flag, and a profiler you have to enable is a
+# profiler you do not have when you need it.
+static var perf_total := {}   # system -> microseconds since the last report
+static var perf_worst := {}   # system -> worst single call, microseconds
+static var perf_calls := {}   # system -> how many times it ran
+static var perf_since := 0    # ticks_usec at the last report
+
+
+static func perf_mark(system: String, started: int) -> void:
+	var us := Time.get_ticks_usec() - started
+	perf_total[system] = int(perf_total.get(system, 0)) + us
+	perf_calls[system] = int(perf_calls.get(system, 0)) + 1
+	if us > int(perf_worst.get(system, 0)):
+		perf_worst[system] = us
+
+
+## Worst offenders since the last call, as lines of text, then resets.
+static func perf_report() -> Array:
+	var span := maxf(float(Time.get_ticks_usec() - perf_since) / 1000000.0, 0.001)
+	var rows: Array = []
+	for k in perf_total:
+		rows.append({"name": k, "total": int(perf_total[k]),
+			"worst": int(perf_worst.get(k, 0)), "calls": int(perf_calls.get(k, 0))})
+	rows.sort_custom(func(a, b): return a["total"] > b["total"])
+	var out: Array = ["over %.1fs -- ms/sec is the steady cost, worst is the spike" % span]
+	for r in rows:
+		if int(r["total"]) < 200:
+			continue   # under 0.2ms in the whole window: not what you felt
+		out.append("%-14s %6.2f ms/s   worst %5.2f ms   %d calls" % [
+			r["name"], float(r["total"]) / 1000.0 / span,
+			float(r["worst"]) / 1000.0, int(r["calls"])])
+	if out.size() == 1:
+		out.append("nothing measurable")
+	perf_total.clear()
+	perf_worst.clear()
+	perf_calls.clear()
+	perf_since = Time.get_ticks_usec()
+	return out
+
+
 func _physics_process(delta: float) -> void:
 	if player == null:
 		return
@@ -596,10 +644,18 @@ func _physics_process(delta: float) -> void:
 		if p == active:
 			var reach := p.radius + p.terrain_amp + STREAM_MARGIN
 			if p.center_distance(here) <= reach + render_distance * Blocks.CHUNK_SIZE:
+				var t := Time.get_ticks_usec()
 				p.stream(p.world_to_voxel(here), render_distance)
+				perf_mark("stream", t)
+				t = Time.get_ticks_usec()
 				p.process_load_queue(LOADS_PER_FRAME)
+				perf_mark("chunk build", t)
+				t = Time.get_ticks_usec()
 				p.update_fauna(delta, here, self)
+				perf_mark("fauna", t)
+				t = Time.get_ticks_usec()
 				p.update_npcs(delta, here, self)
+				perf_mark("npcs", t)
 		else:
 			if not p._creatures.is_empty():
 				p.clear_fauna()  # wildlife only exists meaningfully near the player

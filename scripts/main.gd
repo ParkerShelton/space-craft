@@ -530,7 +530,7 @@ func _run_command(line: String) -> void:
 	# Unknown first: a word that is not a command is not a command whether or
 	# not there is a world, and hearing "not in a world yet" for a typo sends
 	# you looking in the wrong place.
-	if not cmd in ["give", "bed", "time", "help"]:
+	if not cmd in ["give", "bed", "time", "perf", "help"]:
 		_on_chat_line("unknown command: /" + cmd + "  (try /help)")
 		return
 	# The rest need somewhere to put things. Saying so beats returning quietly,
@@ -580,8 +580,11 @@ func _run_command(line: String) -> void:
 					_on_chat_line("/time day  or  /time night")
 					return
 			_on_chat_line("set %s to %s" % [p.planet_name, when])
+		"perf":
+			for l in WorldManager.perf_report():
+				_on_chat_line(l)
 		"help":
-			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [day|night]")
+			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [day|night]  ·  /perf")
 		_:
 			pass   # unreachable: the list above is the same list
 

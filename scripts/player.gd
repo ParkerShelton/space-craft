@@ -154,6 +154,12 @@ const HEALTH_REGEN := 3.0         # health/sec while safe and oxygenated
 ## does not ask you to be well fed -- resting is the thing you do BECAUSE you
 ## are in a bad way.
 const BED_REGEN := 9.0
+## Lying down: the eye drops to about the height of the bedding, and the view
+## tips back toward the sky. Both eased rather than snapped, because the whole
+## point is that it reads as getting INTO something.
+const BED_EYE := 0.12
+const BED_PITCH := 0.85     # radians up from level, a bit over halfway to straight up
+const BED_SETTLE := 0.6     # seconds the view takes to tip back
 # --- hunger -----------------------------------------------------------------
 # Slow enough that food is an errand rather than a chore: a full meter lasts
 # roughly twelve minutes of ordinary play, less if you are working hard.
@@ -249,6 +255,7 @@ var bed_pos := Vector3.ZERO
 
 ## Lying in one. The world carries on around you -- this is rest, not a pause.
 var in_bed := false
+var _bed_settle := 0.0
 var _bed_panel: Control
 var _bed_planet_now: Planet
 
@@ -1174,6 +1181,16 @@ func _update_eye_clearance(delta: float) -> void:
 		# centimetres over your head is not a ceiling you are about to headbutt.
 		_camera.position.y = move_toward(_camera.position.y, EYE_HEIGHT, delta * 3.0)
 		return
+	if in_bed:
+		# No ceiling probe while lying down: the thing directly over you is
+		# often the roof you built over the bed, and letting it push the eye
+		# further down from an already-low position looks like sinking.
+		_camera.position.y = move_toward(_camera.position.y, BED_EYE, delta * 1.8)
+		if _bed_settle > 0.0:
+			_bed_settle = maxf(_bed_settle - delta, 0.0)
+			_pitch = move_toward(_pitch, BED_PITCH, delta * 2.2)
+			_camera.rotation.x = _pitch
+		return
 	var want := EYE_HEIGHT * (CROUCH_EYE_MULT if crouching else 1.0)
 	var space := get_world_3d().direct_space_state
 	if space != null:
@@ -1844,7 +1861,9 @@ func _life_support_text(ship: Ship) -> String:
 
 
 func _process_survival(delta: float) -> void:
+	var tb := Time.get_ticks_usec()
 	_update_base(delta)
+	WorldManager.perf_mark("base tick", tb)
 	# A ship only burns its tanks while you are actually living in it.
 	var ride: Ship = piloting if piloting != null else aboard
 	if ride != null and is_instance_valid(ride):
@@ -4550,6 +4569,10 @@ func _use_bed(st: Station) -> void:
 	bed_pos = st.global_position + up * 1.2
 	_bed_planet_now = p
 	in_bed = true
+	# Tipped back over the next half second rather than snapped, and only for
+	# that half second -- after it you are free to look wherever you like from
+	# where you are lying.
+	_bed_settle = BED_SETTLE
 	velocity = Vector3.ZERO
 	global_position = bed_pos
 	if p != null and p.is_night():
@@ -4622,6 +4645,12 @@ func _get_up() -> void:
 	if not in_bed:
 		return
 	in_bed = false
+	_bed_settle = 0.0
+	# Level again on the way out. Standing up still looking at the ceiling is
+	# the sort of thing that has you walking into a wall.
+	_pitch = clampf(_pitch, -1.45, 0.35)
+	if _camera != null:
+		_camera.rotation.x = _pitch
 	_bed_planet_now = null
 	_close_sleep_prompt()
 

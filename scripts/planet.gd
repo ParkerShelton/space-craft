@@ -2239,7 +2239,9 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 		# something. Before the first station existed machine_cores was empty
 		# and none of this ever ran, which is why the cost appeared the moment
 		# one was built and never went away again.
+		var tr := Time.get_ticks_usec()
 		_room = _flood_room(v) if (_near_base_machine(v) and _has_ceiling(v)) else {}
+		WorldManager.perf_mark("room scan", tr)
 		if _room.size() != was:
 			_room_temp = 1e9   # different room (or none): start from outside again
 		# Found once with the room rather than re-walked every tick: this scan is
@@ -4341,14 +4343,18 @@ func _water_target(c: Vector3i) -> int:
 
 
 func _process(delta: float) -> void:
+	var t := Time.get_ticks_usec()
 	_apply_ready_edits()
+	WorldManager.perf_mark("apply edits", t)
 	if water_style != WATER_LIQUID or _water_active.is_empty():
 		return
 	_flow_accum += delta
 	if _flow_accum < FLOW_DT:
 		return
 	_flow_accum = 0.0
+	var tw := Time.get_ticks_usec()
 	_sim_water()
+	WorldManager.perf_mark("water", tw)
 
 
 func _sim_water() -> void:
