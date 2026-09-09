@@ -4212,6 +4212,25 @@ func _item_tooltip(slot: Dictionary) -> String:
 	if id == Blocks.SUIT:
 		return "%s Insulated Suit%s\nHazard resist %d%%" % [
 			mname, suffix, int(round(float(mat.get("resist", 0.0)) * 100.0))]
+	# A seed is the one item whose whole value is what it BECOMES, and until now
+	# it said only whose seed it was. Two species can sit identically in the bag
+	# and be a meal and a shirt.
+	if id == Blocks.SEEDS or id == Blocks.SAPLING:
+		var sprops: Dictionary = slot.get("props", {})
+		var key := str(sprops.get("species", ""))
+		var lines := ["%s%s" % [mname, suffix]]
+		if id == Blocks.SAPLING:
+			lines.append("Plant on grass or dirt, and it grows into a tree")
+		elif key != "":
+			var g: Dictionary = Blocks.crop_growth(key)
+			lines.append(Blocks.crop_use_text(key))
+			lines.append("%d stages, about %ds to ripen" % [
+				int(g.get("stages", 3)), int(g.get("time", 180.0))])
+		var cls := str(sprops.get("class", ""))
+		if cls != "":
+			lines.append("From a class %s world" % cls)
+		return "
+".join(lines)
 	if Blocks.is_ore(id):
 		return "%s Ore%s\nUnidentified — refine to reveal its tier & stats" % [mname, suffix]
 	if Blocks.is_refined(id):

@@ -1299,7 +1299,27 @@ const USES := {
 	TITANIUM_ORE: "Advanced hull",
 	SILICON_ORE: "Glass & circuits",
 	URANIUM_ORE: "Reactor fuel",
+	FIBRE: "Spin into Cloth at a Carpenter's Bench",
+	CLOTH: "Soft stock — beds, suits",
+	LEATHER: "Soft stock — beds, suits",
+	HIDE: "Tan into Leather at a Carpenter's Bench",
+	BONE: "Grind into Bone Meal at a Carpenter's Bench",
+	BONEMEAL: "Right-click a growing plant to push it a stage on",
+	CROP: "Cook at a Campfire",
+	SEEDS: "Plant on tilled soil",
+	SAPLING: "Plant on grass or dirt",
 }
+
+
+## What a harvest of this species is FOR, in a couple of words. A crop that
+## looks like every other crop until you have grown one is a crop nobody
+## plants on purpose.
+static func crop_use_text(key: String) -> String:
+	match str(crop_growth(key).get("use", "food")):
+		"fibre":
+			return "Fibre crop — harvest for Plant Fibre"
+		_:
+			return "Food crop — harvest for Crop"
 
 # Seconds of continuous mining to break each block. Default 0.5 if unlisted.
 const HARDNESS := {
