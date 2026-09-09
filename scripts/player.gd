@@ -3382,8 +3382,12 @@ func _pick_up_station(st: Station) -> void:
 	_add_item(st.kind, 1)
 	# return whatever was inside to your inventory
 	for s in st.storage:
-		if s["count"] > 0:
+		if int(s.get("count", 0)) > 0:
 			_add_item(s["id"], s["count"], s.get("props", {}), s.get("src", ""), s.get("mat", {}))
+		# Change comes back too, one eighth at a time, which is how _add_eighth
+		# already knows to find or open the right stack.
+		for i in int(s.get("eighths", 0)):
+			_add_eighth(int(s["id"]))
 	if world != null:
 		world._stations.erase(st)
 	st.queue_free()
@@ -3838,7 +3842,7 @@ func _slot_ref(cont: String, index: int) -> Dictionary:
 
 func _slot_get_drag(_at: Vector2, cont: String, index: int, root: Control) -> Variant:
 	var slot := _slot_ref(cont, index)
-	if slot.is_empty() or int(slot["count"]) <= 0:
+	if not _slot_holds(slot):
 		return null
 	var pv := ColorRect.new()
 	pv.size = Vector2(44, 44)
@@ -3862,6 +3866,7 @@ func _slot_do_drop(_at: Vector2, data: Variant, cont: String, index: int) -> voi
 func _clear_slot(s: Dictionary) -> void:
 	s["id"] = Blocks.AIR
 	s["count"] = 0
+	s["eighths"] = 0
 	s["props"] = {}
 	s["src"] = ""
 	s["mat"] = {}
@@ -3870,9 +3875,20 @@ func _clear_slot(s: Dictionary) -> void:
 func _copy_slot(src: Dictionary, dst: Dictionary) -> void:
 	dst["id"] = src["id"]
 	dst["count"] = src["count"]
+	# The change travels with the blocks. Leaving it behind stranded a fraction
+	# of a block in a slot that looked empty, with no way to get it out again
+	# except by placing it.
+	dst["eighths"] = int(src.get("eighths", 0))
 	dst["props"] = src.get("props", {})
 	dst["src"] = src.get("src", "")
 	dst["mat"] = src.get("mat", {})
+
+
+## Whether a slot holds anything at all. Five eighths of a rock is something,
+## and every check that asked only about `count` treated it as nothing.
+func _slot_holds(s: Dictionary) -> bool:
+	return not s.is_empty() and (int(s.get("count", 0)) > 0
+		or int(s.get("eighths", 0)) > 0)
 
 
 func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
@@ -3885,7 +3901,7 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 		return
 	var from := _slot_ref(fc, fi)
 	var to := _slot_ref(tc, ti)
-	if from.is_empty() or to.is_empty() or int(from["count"]) <= 0:
+	if to.is_empty() or not _slot_holds(from):
 		return
 	# dropping INTO a machine's storage must match what it accepts (chests and the
 	# Carpenter's Bench take any plain resource; the rest are picky by design so
@@ -3917,22 +3933,37 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 		if int(to["count"]) > 0 and int(to["id"]) != int(from["id"]):
 			_toast("Move that item out first")
 			return
-	if to["count"] > 0 and to["id"] == from["id"] and to.get("src", "") == from.get("src", ""):
+	if _slot_holds(to) and to["id"] == from["id"] and to.get("src", "") == from.get("src", ""):
 		var cap: int = STACK_MAX if tc == "inv" else (1 if tc == "equip" else 100000)
-		var mv: int = mini(cap - to["count"], from["count"])
+		var mv: int = mini(cap - int(to["count"]), int(from["count"]))
 		to["count"] += mv
 		from["count"] -= mv
-		if from["count"] <= 0:
+		# Change only follows once the whole blocks have gone, because a partial
+		# move that split it would leave a fraction of a block in each place --
+		# two slots each showing a piece of one rock.
+		if int(from["count"]) <= 0 and int(from.get("eighths", 0)) > 0:
+			var e := int(to.get("eighths", 0)) + int(from["eighths"])
+			# Eight eighths are a block, and it becomes one rather than sitting
+			# there as a fraction that will not add up.
+			if e >= 8 and int(to["count"]) < cap:
+				to["count"] = int(to["count"]) + 1
+				e -= 8
+			if e < 8:
+				to["eighths"] = e
+				from["eighths"] = 0
+		if not _slot_holds(from):
 			_clear_slot(from)
-	elif to["count"] == 0:
+	elif not _slot_holds(to):
 		_copy_slot(from, to)
 		_clear_slot(from)
 	else:
-		var tmp := {"id": to["id"], "count": to["count"], "props": to.get("props", {}),
+		var tmp := {"id": to["id"], "count": to["count"],
+			"eighths": int(to.get("eighths", 0)), "props": to.get("props", {}),
 			"src": to.get("src", ""), "mat": to.get("mat", {})}
 		_copy_slot(from, to)
 		from["id"] = tmp["id"]
 		from["count"] = tmp["count"]
+		from["eighths"] = tmp["eighths"]
 		from["props"] = tmp["props"]
 		from["src"] = tmp["src"]
 		from["mat"] = tmp["mat"]

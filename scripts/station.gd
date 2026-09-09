@@ -80,14 +80,16 @@ func _init() -> void:
 func _ensure_storage() -> void:
 	var cap := capacity()
 	while storage.size() < cap:
-		storage.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}})
+		storage.append({"id": Blocks.AIR, "count": 0, "eighths": 0, "props": {},
+			"src": "", "mat": {}})
 	# Never shrink past something that is IN there. A station can now change kind
 	# under your feet -- a Forge whose metal you mined drops back to a Smelter --
 	# and a smaller capacity must not be a way to delete what you had stored.
 	if storage.size() > cap:
 		var keep := cap
 		for i in range(storage.size() - 1, cap - 1, -1):
-			if int((storage[i] as Dictionary).get("count", 0)) > 0:
+			var sl: Dictionary = storage[i]
+			if int(sl.get("count", 0)) > 0 or int(sl.get("eighths", 0)) > 0:
 				keep = i + 1
 				break
 		storage.resize(keep)
@@ -153,9 +155,12 @@ func store_add(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 			s["count"] += n
 			return 0
 	for s in storage:
-		if s["count"] == 0:
+		# A slot holding nothing but change is not a free slot. Treating it as
+		# one overwrote the fraction that was in it.
+		if int(s.get("count", 0)) == 0 and int(s.get("eighths", 0)) == 0:
 			s["id"] = id
 			s["count"] = n
+			s["eighths"] = 0
 			s["props"] = props
 			s["src"] = src
 			s["mat"] = mat
