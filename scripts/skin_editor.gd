@@ -28,10 +28,13 @@ var _undo: Array = []
 const UNDO_MAX := 40
 
 var _canvas: Control
+var _sheet_scroll: ScrollContainer
+var _sheet_panning := false
 var _tex: ImageTexture
 var _picker: ColorPicker
 var _preview_skin: RemotePlayer
 var _tool_btns := {}
+var _part_btns := {}
 
 # The figure you paint on. Orbit rather than a fixed view, because half a skin
 # is on faces a fixed camera never shows.
@@ -83,11 +86,15 @@ func _build() -> void:
 	title.add_theme_font_size_override("font_size", 20)
 	mid.add_child(title)
 	var how := Label.new()
-	how.text = "paint on the figure  ·  scroll to zoom  ·  hold the middle button to turn it"
+	how.text = "paint on it  ·  scroll to zoom  ·  middle button turns it  ·  switch pieces off to reach past them"
+	# WRAPPED, or the hint's own width becomes the middle column's minimum and
+	# the sheet beside it gets squeezed off the edge of the window by a sentence.
+	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	how.add_theme_font_size_override("font_size", 12)
 	how.modulate = Color(1, 1, 1, 0.5)
 	mid.add_child(how)
 	mid.add_child(_build_paint_view())
+	mid.add_child(_build_part_toggles())
 
 	root.add_child(_build_sheet())
 	_refresh()
@@ -149,6 +156,48 @@ func _build_paint_view() -> Control:
 	_preview_skin.show_nameplate(false)
 	_place_camera()
 	return _view
+
+
+## Take pieces off, so you can get at what they were covering.
+##
+## Sits under the figure rather than over in the tool column because it is about
+## the VIEW, not about painting: it changes what you are looking at, and it is
+## the thing you reach for in the middle of a stroke that turned out to land on
+## an arm you meant to paint past.
+##
+## Hiding is not only cosmetic -- a hidden part drops out of the pick as well.
+## Leaving it pickable would mean painting an arm you cannot see, which is worse
+## than not being able to reach past it in the first place.
+func _build_part_toggles() -> Control:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 4)
+	# Named for the FIGURE's left and right, the same way the skin's faces are.
+	for p in [["head", "Head"], ["body", "Body"], ["right_arm", "R arm"],
+			["left_arm", "L arm"], ["right_leg", "R leg"], ["left_leg", "L leg"]]:
+		var b := Button.new()
+		b.text = str(p[1])
+		b.toggle_mode = true
+		b.button_pressed = true
+		b.add_theme_font_size_override("font_size", 11)
+		b.tooltip_text = "Hide the %s to reach what is behind it" % str(p[1]).to_lower()
+		b.toggled.connect(func(on: bool):
+			# Dimmed when it is off. The theme's own pressed state reads as
+			# RAISED on these, so without this the pieces you have taken off are
+			# the ones that stand out.
+			b.modulate = Color(1, 1, 1, 1.0 if on else 0.45)
+			_show_part(str(p[0]), on))
+		_part_btns[str(p[0])] = b
+		row.add_child(b)
+	return row
+
+
+func _show_part(part: String, on: bool) -> void:
+	if _preview_skin == null:
+		return
+	for piece in _preview_skin.pieces():
+		if str(piece["part"]) == part:
+			(piece["node"] as MeshInstance3D).visible = on
 
 
 func _build_tools() -> Control:
@@ -248,9 +297,9 @@ func _build_sheet() -> Control:
 	lbl.add_theme_font_size_override("font_size", 13)
 	lbl.modulate = Color(1, 1, 1, 0.6)
 	col.add_child(lbl)
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	col.add_child(scroll)
+	_sheet_scroll = ScrollContainer.new()
+	_sheet_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col.add_child(_sheet_scroll)
 	_canvas = Control.new()
 	# Nearest, or a 64-pixel image blown up eight times is a blur. The 3D figure
 	# already sets this on its material; a canvas needs telling separately.
@@ -259,9 +308,9 @@ func _build_sheet() -> Control:
 	_canvas.mouse_filter = Control.MOUSE_FILTER_STOP
 	_canvas.draw.connect(_draw_canvas)
 	_canvas.gui_input.connect(_canvas_input)
-	scroll.add_child(_canvas)
+	_sheet_scroll.add_child(_canvas)
 	var hint := Label.new()
-	hint.text = "Faces the figure cannot show you -- soles, scalp, inner arms -- are reachable here."
+	hint.text = "Faces the figure cannot show you -- soles, scalp, inner arms -- are reachable here. Scroll to zoom, middle button to drag it around."
 	hint.add_theme_font_size_override("font_size", 12)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	hint.modulate = Color(1, 1, 1, 0.5)
@@ -353,6 +402,12 @@ func _canvas_input(e: InputEvent) -> void:
 		if e.button_index == MOUSE_BUTTON_WHEEL_DOWN and e.pressed:
 			_set_sheet_zoom(_zoom - 1)
 			return
+		# The same button that turns the figure moves the sheet: on both, the
+		# middle button is "get me a look at a different bit", and neither of
+		# them paints anything while you do it.
+		if e.button_index == MOUSE_BUTTON_MIDDLE:
+			_sheet_panning = e.pressed
+			return
 		if e.button_index == MOUSE_BUTTON_LEFT:
 			if e.pressed:
 				_push_undo()
@@ -364,8 +419,21 @@ func _canvas_input(e: InputEvent) -> void:
 			# Right-click picks, wherever you are and whatever tool is held. It
 			# is the one thing you want constantly and never want to switch to.
 			_pick_at(e.position)
-	elif e is InputEventMouseMotion and _painting:
-		_paint_at(e.position)
+	elif e is InputEventMouseMotion:
+		if _sheet_panning:
+			_pan_sheet(e.relative)
+		elif _painting:
+			_paint_at(e.position)
+
+
+## Drag the sheet under the window. The scroll offsets move OPPOSITE the mouse,
+## because you are dragging the paper rather than the viewport: pushing right
+## should bring what is off the left edge into view.
+func _pan_sheet(delta: Vector2) -> void:
+	if _sheet_scroll == null:
+		return
+	_sheet_scroll.scroll_horizontal -= int(delta.x)
+	_sheet_scroll.scroll_vertical -= int(delta.y)
 
 
 func _set_sheet_zoom(z: int) -> void:
@@ -583,6 +651,8 @@ func _pick_figure(pos: Vector2) -> Dictionary:
 	var out := {}
 	for piece in _preview_skin.pieces():
 		var mi: MeshInstance3D = piece["node"]
+		if not mi.visible:
+			continue   # taken off; paint what is behind it instead
 		var xf := mi.global_transform
 		var inv := xf.affine_inverse()
 		var lo := inv * from
