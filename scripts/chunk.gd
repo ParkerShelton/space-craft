@@ -905,27 +905,43 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 	# or conduit these DO collide -- you stand on the bench you built.
 	var pmap: Dictionary = snap.get(PARTS_KEY, {})
 	if not pmap.is_empty():
-		idx = 0
-		for z in CS:
-			for y in CS:
-				for x in CS:
-					if ids[idx] == Blocks.PARTS:
-						var gv := Vector3i(base.x + x, base.y + y, base.z + z)
-						var cell = pmap.get(gv)
-						if cell != null and (cell as PackedByteArray).size() == Blocks.PART_COUNT:
-							var lit := _face_light(snap, gv, Vector3i.ZERO)
-							for si in Blocks.PART_COUNT:
-								var pid: int = (cell as PackedByteArray)[si]
-								if pid == Blocks.AIR:
-									continue
-								var sx := si % Blocks.PART_DIM
-								var sy := (si / Blocks.PART_DIM) % Blocks.PART_DIM
-								var sz := si / (Blocks.PART_DIM * Blocks.PART_DIM)
-								var plo := Vector3(x + sx * 0.5, y + sy * 0.5, z + sz * 0.5)
-								_emit_free_box(plo, plo + Vector3(0.5, 0.5, 0.5),
-									_block_color(planet, pid), pid,
-									verts, normals, colors, uvs, uv2s, lit, cverts)
-					idx += 1
+		# Driven by the parts map rather than by a sweep of all 4096 voxels. A
+		# build is a handful of cells, and the sweep cost the same whether the
+		# chunk held one eighth-block or a thousand.
+		for gv in pmap:
+			var lx: int = int(gv.x) - base.x
+			var ly: int = int(gv.y) - base.y
+			var lz: int = int(gv.z) - base.z
+			if lx < 0 or ly < 0 or lz < 0 or lx >= CS or ly >= CS or lz >= CS:
+				continue
+			if ids[lx + ly * CS + lz * CS * CS] != Blocks.PARTS:
+				continue
+			var cell = pmap[gv]
+			if (cell as PackedByteArray).size() != Blocks.PART_COUNT:
+				continue
+			var lit := _face_light(snap, gv, Vector3i.ZERO)
+			for si in Blocks.PART_COUNT:
+				var pid: int = (cell as PackedByteArray)[si]
+				if pid == Blocks.AIR:
+					continue
+				var sx := si % Blocks.PART_DIM
+				var sy := (si / Blocks.PART_DIM) % Blocks.PART_DIM
+				var sz := si / (Blocks.PART_DIM * Blocks.PART_DIM)
+				# Every face pressed against another filled eighth is dropped.
+				# These are not just invisible, they are doubled: two boxes each
+				# drawing the surface between them, in the mesh AND in the
+				# collision shape you walk on.
+				var skip := 0
+				for fi in 6:
+					var nn: Vector3i = _WFACE[fi]
+					if _part_solid(pmap, gv, sx + nn.x, sy + nn.y, sz + nn.z):
+						skip |= 1 << fi
+				if skip == 63:
+					continue   # buried on all six sides: nothing of it is visible
+				var plo := Vector3(lx + sx * 0.5, ly + sy * 0.5, lz + sz * 0.5)
+				_emit_free_box(plo, plo + Vector3(0.5, 0.5, 0.5),
+					_block_color(planet, pid), pid,
+					verts, normals, colors, uvs, uv2s, lit, cverts, skip)
 
 	# ore lumps: decorative geometry on exposed ore faces (see _emit_ore_chunks)
 	idx = 0
@@ -957,17 +973,59 @@ static func _hash3(v: Vector3i, k: int) -> float:
 ## added to the collision list: these are decorative lumps a few centimetres
 ## proud of the wall, and making them solid would turn every ore vein into a
 ## surface the player snags on.
+## `skip` is a bitmask of faces to leave out, one bit per _WFACE direction.
+## Free boxes that touch each other -- eighth-block parts, mostly -- would
+## otherwise each draw the face they are pressed against, twice over and facing
+## each other, where neither can ever be seen.
 static func _emit_free_box(lo: Vector3, hi: Vector3, base_col: Color, bid: int,
 		verts: PackedVector3Array, normals: PackedVector3Array,
 		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array,
-		light: float = 0.0, cverts: PackedVector3Array = PackedVector3Array()) -> void:
+		light: float = 0.0, cverts: PackedVector3Array = PackedVector3Array(),
+		skip: int = 0) -> void:
 	for fi in 6:
+		if (skip & (1 << fi)) != 0:
+			continue
 		var n: Vector3i = _WFACE[fi]
 		var sh := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
 		var col := Color(base_col.r * sh, base_col.g * sh, base_col.b * sh, base_col.a)
 		var q := _box_face(lo, hi, fi)
 		_quad(q[0], q[1], q[2], q[3], Vector3(n), col, verts, normals, colors, uvs, uv2s, bid, sh,
 			light, cverts)
+
+
+## Is the sub-cell at these coordinates filled? Coordinates outside 0..PART_DIM-1
+## wrap into the neighbouring VOXEL's parts cell, so two eighth-blocks touching
+## across a block boundary hide each other's faces just as they would inside one
+## cell -- which is most of the boundaries in a build of any size.
+static func _part_solid(pmap: Dictionary, gv: Vector3i, nx: int, ny: int, nz: int) -> bool:
+	var d := Vector3i.ZERO
+	var m := Blocks.PART_DIM
+	if nx < 0:
+		d.x = -1
+		nx = m - 1
+	elif nx >= m:
+		d.x = 1
+		nx = 0
+	if ny < 0:
+		d.y = -1
+		ny = m - 1
+	elif ny >= m:
+		d.y = 1
+		ny = 0
+	if nz < 0:
+		d.z = -1
+		nz = m - 1
+	elif nz >= m:
+		d.z = 1
+		nz = 0
+	var cell = pmap.get(gv + d)
+	if cell == null or (cell as PackedByteArray).size() != Blocks.PART_COUNT:
+		return false
+	# The mesher's own occlusion table rather than "not air", so an eighth of
+	# something see-through does not hide its neighbour's face the way a solid
+	# one does -- the same rule whole blocks already follow.
+	var pid: int = (cell as PackedByteArray)[nx + ny * m + nz * m * m]
+	return pid != Blocks.AIR and _SEETHRU[pid & Blocks.ID_MASK] == 0
 
 
 ## Ore lumps standing proud of an ore block's exposed faces, so a vein reads as
