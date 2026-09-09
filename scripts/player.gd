@@ -764,9 +764,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				_edit_block(false)
 				return
 			var st := _looked_at_station()
-			if st != null and st.kind == Blocks.BED and not eva:
-				_use_bed(st)
-			elif st != null and not eva:
+			# Beds are not reached here -- a build made of eighths has no
+			# collider of its own, so see _try_assemble_machine below.
+			if st != null and not eva:
 				_open_station(st)
 			elif _try_eat():
 				pass
@@ -3032,7 +3032,16 @@ func _try_assemble_machine() -> bool:
 	if existing != null and (is_core or planet.machine_online_at(v)):
 		if not planet.machine_online_at(v):
 			_toast("%s is damaged -- replace the missing block" % existing.title())
-		_open_station(existing)
+			_open_station(existing)
+			return true
+		# A bed is not opened, it is got into. This is the path that catches it:
+		# a build made of eighths has no collider of its own -- the ray hits the
+		# blocks, and _looked_at_station only ever sees stations that ARE a
+		# node, so the check up in the click handler never fired for one.
+		if existing.kind == Blocks.BED:
+			_use_bed(existing)
+		else:
+			_open_station(existing)
 		return true
 	return false
 
@@ -4530,7 +4539,15 @@ func _use_bed(st: Station) -> void:
 	var p := world.nearest_planet(st.global_position)
 	bed_planet = p.planet_name if p != null else ""
 	# Stored a little above the frame so waking does not start you inside it.
-	bed_pos = st.global_position + st.global_transform.basis.y.normalized() * 1.2
+	# The planet's up, not the world's. On a cube world those are the same only
+	# on one face, and a bed on any other would have woken you sideways.
+	var up := Vector3.UP
+	if p != null:
+		up = p._axis_of(p.to_local(st.global_position))
+		if up == Vector3.ZERO:
+			up = Vector3.UP
+		up = (p.global_transform.basis * up).normalized()
+	bed_pos = st.global_position + up * 1.2
 	_bed_planet_now = p
 	in_bed = true
 	velocity = Vector3.ZERO
