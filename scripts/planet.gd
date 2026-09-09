@@ -2163,12 +2163,41 @@ func _near_base_machine(v: Vector3i) -> bool:
 
 ## Flood-fill the open space containing `start`. Returns the set of cells, or an
 ## empty dict if the space runs past ROOM_MAX_CELLS (i.e. it is the outdoors).
+## Does anything cover this cell? At most CEILING_PROBE lookups straight up,
+## against the flood's several thousand, and it settles the commonest case of
+## all -- standing outdoors somewhere near your own base -- without running the
+## fill at all.
+##
+## Safe because it can only say "no room" where the flood would have agreed:
+## a gap you can see sky through is a gap the fill escapes through. The one
+## thing it gives up is a sealed room taller than the probe, which at 900 cells
+## of volume is a shape nobody builds.
+const CEILING_PROBE := 40
+
+func _has_ceiling(v: Vector3i) -> bool:
+	var up := _axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+	var step := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
+	if step == Vector3i.ZERO:
+		step = Vector3i(0, 1, 0)
+	var c := v
+	for i in CEILING_PROBE:
+		c += step
+		if _seals(get_id(c)):
+			return true
+	return false
+
+
 func _flood_room(start: Vector3i) -> Dictionary:
 	if _cell_seals(start):
 		return {}
 	var seen := {start: true}
 	var queue: Array[Vector3i] = [start]
 	var head := 0
+	# Whether a cell seals, remembered for the length of this fill. A wall cell
+	# borders up to six air cells and was asked the same question once for each
+	# of them -- and the answer can cost a noise sample, because get_id falls
+	# through to generation for anything nobody has edited.
+	var seals := {}
 	while head < queue.size():
 		var c: Vector3i = queue[head]
 		head += 1
@@ -2176,7 +2205,11 @@ func _flood_room(start: Vector3i) -> Dictionary:
 			var q: Vector3i = c + n
 			if seen.has(q):
 				continue
-			if _cell_seals(q):
+			var blocked = seals.get(q)
+			if blocked == null:
+				blocked = _cell_seals(q)
+				seals[q] = blocked
+			if blocked:
 				continue
 			seen[q] = true
 			if seen.size() > ROOM_MAX_CELLS:
@@ -2202,7 +2235,11 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 		_room_scan_at = v
 		_room_age = 0.0
 		var was := _room.size()
-		_room = _flood_room(v) if _near_base_machine(v) else {}
+		# Both cheap tests first: near a machine at all, and standing under
+		# something. Before the first station existed machine_cores was empty
+		# and none of this ever ran, which is why the cost appeared the moment
+		# one was built and never went away again.
+		_room = _flood_room(v) if (_near_base_machine(v) and _has_ceiling(v)) else {}
 		if _room.size() != was:
 			_room_temp = 1e9   # different room (or none): start from outside again
 		# Found once with the room rather than re-walked every tick: this scan is
