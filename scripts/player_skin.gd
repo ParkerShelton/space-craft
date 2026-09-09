@@ -150,13 +150,18 @@ static func _quad(verts: PackedVector3Array, norms: PackedVector3Array,
 		[c, Vector2(u1, v1)], [d, Vector2(u0, v1)],
 	]
 	# Whichever way round actually faces outward, worked out from the corners
-	# rather than trusted to whoever typed them. Listing four corners the other
-	# way round is easy to do and invisible in code -- it cost every top and
-	# bottom face on the figure, after the same mistake had already cost all
-	# twenty-four of the others.
-	var order := [0, 2, 1, 0, 3, 2]
+	# rather than trusted to whoever typed them.
+	#
+	# The SIGN here is the whole thing, and it is not the one you would guess:
+	# Godot's front faces are wound so that the right-hand normal of the triangle
+	# points INTO the solid, opposite the shading normal. Checked against
+	# BoxMesh's own arrays rather than reasoned about -- every face of its cube
+	# comes back with (v1-v0) x (v2-v0) dotted against its normal equal to -1.
+	# Guessing the other way is what left the figure showing its far wall through
+	# its near one, and reads as the whole shape collapsing into a wedge.
+	var order := [0, 1, 2, 0, 2, 3]
 	if (c - a).cross(b - a).dot(n) < 0.0:
-		order = [0, 1, 2, 0, 2, 3]
+		order = [0, 2, 1, 0, 3, 2]
 	for i in order:
 		verts.append((corners[i] as Array)[0])
 		uvs.append((corners[i] as Array)[1])

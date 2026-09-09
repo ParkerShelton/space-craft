@@ -156,13 +156,26 @@ func _build_tools() -> Control:
 	col.custom_minimum_size = Vector2(250, 0)
 	col.add_theme_constant_override("separation", 6)
 
+	# The colour picker is tall, and on a short window it used to push Save off
+	# the bottom of the screen -- an editor you cannot save from. So the parts
+	# you BROWSE scroll, and the parts you FINISH with are pinned under them,
+	# always on screen whatever the window is doing.
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	col.add_child(scroll)
+	var top := VBoxContainer.new()
+	top.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	top.add_theme_constant_override("separation", 6)
+	scroll.add_child(top)
+
 	var lbl := Label.new()
 	lbl.text = "Tools"
 	lbl.add_theme_font_size_override("font_size", 13)
 	lbl.modulate = Color(1, 1, 1, 0.6)
-	col.add_child(lbl)
+	top.add_child(lbl)
 	var row := HBoxContainer.new()
-	col.add_child(row)
+	top.add_child(row)
 	for t in [[Tool.PENCIL, "Pencil"], [Tool.ERASER, "Eraser"],
 			[Tool.PICKER, "Pick"], [Tool.FILL, "Fill"]]:
 		var b := Button.new()
@@ -181,7 +194,7 @@ func _build_tools() -> Control:
 	cl.text = "Colour"
 	cl.add_theme_font_size_override("font_size", 13)
 	cl.modulate = Color(1, 1, 1, 0.6)
-	col.add_child(cl)
+	top.add_child(cl)
 	# Every colour, rather than thirty-two of them. A fixed palette is the right
 	# answer when the point is consistency between things; here the point is
 	# that it is YOUR character, and the shade of green you want is not
@@ -199,7 +212,7 @@ func _build_tools() -> Control:
 		if _tool == Tool.ERASER or _tool == Tool.PICKER:
 			# Reaching for a colour means you want to put it somewhere.
 			_set_tool(Tool.PENCIL))
-	col.add_child(_picker)
+	top.add_child(_picker)
 
 	col.add_child(_spacer(10))
 	var undo := Button.new()
@@ -475,15 +488,17 @@ func _place_camera() -> void:
 	if _cam == null:
 		return
 	var focus := Vector3(0, 0.05, 0)
-	# NEGATIVE z at yaw 0, because the figure faces -Z: without the sign the
-	# editor opened looking at the back of its head, and every "front" you
-	# painted went on the back.
-	var dir := Vector3(
-		cos(_pitch) * sin(_yaw),
-		sin(_pitch),
-		-cos(_pitch) * cos(_yaw))
-	_cam.position = focus + dir * _dist
-	_cam.look_at_from_position(_cam.position, focus, Vector3.UP)
+	# Built as a BASIS rather than aimed with look_at. look_at needs an up vector
+	# to disambiguate, and there is no up that survives the view going over the
+	# top of the figure -- which is exactly what removing the pitch limit asks it
+	# to do. Rotating a frame has no such singularity: the camera simply carries
+	# on and ends up upside down, which is what turning something over looks like.
+	#
+	# The half turn is because the figure faces -Z: at yaw 0 the camera has to be
+	# in FRONT of it. Without that the editor opened on the back of its head, and
+	# every "front" you painted went on the back.
+	var b := Basis(Vector3.UP, _yaw + PI) * Basis(Vector3.RIGHT, -_pitch)
+	_cam.transform = Transform3D(b, focus + b.z * _dist)
 
 
 func _view_input(e: InputEvent) -> void:
@@ -518,10 +533,15 @@ func _view_input(e: InputEvent) -> void:
 						_set_colour(img.get_pixelv(hit["texel"]))
 	elif e is InputEventMouseMotion:
 		if _orbiting:
+			# Drag right, the figure turns right -- so the camera goes the other
+			# way around it. The old placement built the orbit mirrored, which
+			# made this sign look correct in the source and behave backwards on
+			# screen; with the basis above it now does what it says.
 			_yaw -= e.relative.x * 0.01
-			# Stopped short of straight up and straight down, where the view
-			# flips over and the figure appears to spin on the spot.
-			_pitch = clampf(_pitch + e.relative.y * 0.01, -1.35, 1.35)
+			# Unclamped, both ways, as far as you like. There is nothing on this
+			# figure you should have to reach for from the sheet just because it
+			# is on the underside of something.
+			_pitch += e.relative.y * 0.01
 			_place_camera()
 		elif _painting:
 			_paint_on_figure(e.position)
