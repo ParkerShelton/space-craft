@@ -33,7 +33,7 @@ var skin_name := ""
 
 var _tool: int = Tool.PENCIL
 var _colour := Color("#2aa8c4")
-var _zoom := 8
+var _zoom := 6
 var _painting := false
 var _undo: Array = []
 const UNDO_MAX := 40
@@ -42,8 +42,20 @@ var _canvas: Control
 var _tex: ImageTexture
 var _swatch: ColorRect
 var _preview_skin: RemotePlayer
-var _spin := 0.0
 var _tool_btns := {}
+
+# The figure you paint on. Orbit rather than a fixed view, because half a skin
+# is on faces a fixed camera never shows.
+var _rig: Node3D
+var _cam: Camera3D
+var _view: SubViewportContainer
+var _vp: SubViewport
+var _yaw := 0.0
+var _pitch := 0.15
+var _dist := 2.4
+var _orbiting := false
+var _spin := 0.0
+var _touched := false   # stop the idle turn the moment it is being used
 
 
 func setup(name: String, image: Image) -> void:
@@ -71,28 +83,63 @@ func _build() -> void:
 
 	root.add_child(_build_tools())
 
-	# The canvas gets whatever room is left, because it is the thing being used.
+	# The FIGURE is the canvas now, and gets the room. Painting where the thing
+	# actually is beats painting a sheet and checking what happened.
 	var mid := VBoxContainer.new()
 	mid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	mid.add_theme_constant_override("separation", 8)
+	mid.add_theme_constant_override("separation", 6)
 	root.add_child(mid)
 	var title := Label.new()
 	title.text = "Painting  %s" % (skin_name if skin_name != "" else "a new character")
 	title.add_theme_font_size_override("font_size", 20)
 	mid.add_child(title)
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	mid.add_child(scroll)
-	_canvas = Control.new()
-	_canvas.custom_minimum_size = Vector2(PlayerSkin.ATLAS, PlayerSkin.ATLAS) * _zoom
-	_canvas.mouse_filter = Control.MOUSE_FILTER_STOP
-	_canvas.draw.connect(_draw_canvas)
-	_canvas.gui_input.connect(_canvas_input)
-	scroll.add_child(_canvas)
+	var how := Label.new()
+	how.text = "paint on the figure  ·  scroll to zoom  ·  hold the middle button to turn it"
+	how.add_theme_font_size_override("font_size", 12)
+	how.modulate = Color(1, 1, 1, 0.5)
+	mid.add_child(how)
+	mid.add_child(_build_paint_view())
 
-	root.add_child(_build_side())
+	root.add_child(_build_sheet())
 	_refresh()
+
+
+## The figure, paintable. Everything about it is a lie told to a raycast: there
+## is no canvas here, only a mesh whose triangles carry the UVs of the skin, so
+## a click lands on a texel by asking which triangle it hit and where.
+func _build_paint_view() -> Control:
+	_vp = SubViewport.new()
+	_vp.size = Vector2i(720, 720)
+	_vp.transparent_bg = true
+	_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_view = SubViewportContainer.new()
+	_view.stretch = true
+	_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_view.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_view.mouse_filter = Control.MOUSE_FILTER_STOP
+	_view.add_child(_vp)
+	_view.gui_input.connect(_view_input)
+
+	var lamp := DirectionalLight3D.new()
+	lamp.rotation_degrees = Vector3(-30, 35, 0)
+	lamp.light_energy = 0.75
+	_vp.add_child(lamp)
+	var fill_light := DirectionalLight3D.new()
+	fill_light.rotation_degrees = Vector3(-10, -150, 0)
+	fill_light.light_energy = 0.3
+	_vp.add_child(fill_light)
+	# A rig the camera orbits, so turning the view never turns the figure -- if
+	# the figure span instead, "the left arm" would depend on when you looked.
+	_rig = Node3D.new()
+	_vp.add_child(_rig)
+	_cam = Camera3D.new()
+	_vp.add_child(_cam)
+	_preview_skin = RemotePlayer.new()
+	_vp.add_child(_preview_skin)
+	_preview_skin.setup(1)
+	_preview_skin.show_nameplate(false)
+	_place_camera()
+	return _view
 
 
 func _build_tools() -> Control:
@@ -190,49 +237,35 @@ func _build_tools() -> Control:
 	return col
 
 
-## The figure, turning, wearing what is being painted. A skin is a thing seen in
-## the round -- the whole reason the atlas is hard to read is that it is not --
-## so the answer to "what have I actually made" has to be on screen beside it.
-func _build_side() -> Control:
+## The flat sheet, kept as a side panel rather than thrown away.
+##
+## Painting on the figure is better for everything you can see, and there are
+## pixels you cannot: the soles of the feet, the top of the head, the inside of
+## an arm. The sheet reaches all of them, and it is also where you go to check
+## that a face is what you think it is.
+func _build_sheet() -> Control:
 	var col := VBoxContainer.new()
-	col.custom_minimum_size = Vector2(240, 0)
+	col.custom_minimum_size = Vector2(400, 0)
 	col.add_theme_constant_override("separation", 6)
 	var lbl := Label.new()
-	lbl.text = "Preview"
+	lbl.text = "The whole sheet"
 	lbl.add_theme_font_size_override("font_size", 13)
 	lbl.modulate = Color(1, 1, 1, 0.6)
 	col.add_child(lbl)
-
-	var vp := SubViewport.new()
-	vp.size = Vector2i(240, 360)
-	vp.transparent_bg = true
-	vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
-	var holder := SubViewportContainer.new()
-	holder.custom_minimum_size = Vector2(240, 360)
-	holder.add_child(vp)
-	col.add_child(holder)
-
-	var lamp := DirectionalLight3D.new()
-	lamp.rotation_degrees = Vector3(-30, 35, 0)
-	lamp.light_energy = 0.75
-	vp.add_child(lamp)
-	var fill_light := DirectionalLight3D.new()
-	fill_light.rotation_degrees = Vector3(-10, -150, 0)
-	fill_light.light_energy = 0.3
-	vp.add_child(fill_light)
-	var cam := Camera3D.new()
-	cam.position = Vector3(0, 0.05, 3.1)
-	vp.add_child(cam)
-	_preview_skin = RemotePlayer.new()
-	vp.add_child(_preview_skin)
-	_preview_skin.setup(1)
-	_preview_skin.show_nameplate(false)
-	col.add_child(_spacer(6))
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	col.add_child(scroll)
+	_canvas = Control.new()
+	_canvas.custom_minimum_size = Vector2(PlayerSkin.ATLAS, PlayerSkin.ATLAS) * _zoom
+	_canvas.mouse_filter = Control.MOUSE_FILTER_STOP
+	_canvas.draw.connect(_draw_canvas)
+	_canvas.gui_input.connect(_canvas_input)
+	scroll.add_child(_canvas)
 	var hint := Label.new()
-	hint.text = "Each face is outlined and named on the canvas."
+	hint.text = "Faces the figure cannot show you -- soles, scalp, inner arms -- are reachable here."
 	hint.add_theme_font_size_override("font_size", 12)
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.modulate = Color(1, 1, 1, 0.55)
+	hint.modulate = Color(1, 1, 1, 0.5)
 	col.add_child(hint)
 	return col
 
@@ -250,9 +283,13 @@ func _set_tool(t: int) -> void:
 
 
 func _process(delta: float) -> void:
-	if _preview_skin != null:
-		_spin += delta * 0.6
-		_preview_skin.rotation.y = _spin
+	# Turns gently on its own until you take hold of it, then stays where you
+	# put it. A model that keeps moving while you aim at it is unpaintable.
+	if _touched or _cam == null:
+		return
+	_spin += delta * 0.4
+	_yaw = _spin
+	_place_camera()
 
 
 # --- canvas -------------------------------------------------------------------
@@ -418,3 +455,158 @@ func _refresh() -> void:
 		_canvas.queue_redraw()
 	if _preview_skin != null:
 		_preview_skin.set_skin(img)
+
+
+# --- painting on the figure ---------------------------------------------------
+
+const ZOOM_MIN := 1.4
+const ZOOM_MAX := 6.0
+
+
+## Camera on a sphere around the figure's middle. Rebuilt from yaw/pitch/dist
+## rather than nudged, so it cannot drift out of shape over a long session.
+func _place_camera() -> void:
+	if _cam == null:
+		return
+	var focus := Vector3(0, 0.05, 0)
+	# NEGATIVE z at yaw 0, because the figure faces -Z: without the sign the
+	# editor opened looking at the back of its head, and every "front" you
+	# painted went on the back.
+	var dir := Vector3(
+		cos(_pitch) * sin(_yaw),
+		sin(_pitch),
+		-cos(_pitch) * cos(_yaw))
+	_cam.position = focus + dir * _dist
+	_cam.look_at_from_position(_cam.position, focus, Vector3.UP)
+
+
+func _view_input(e: InputEvent) -> void:
+	if e is InputEventMouseButton:
+		match e.button_index:
+			MOUSE_BUTTON_WHEEL_UP:
+				if e.pressed:
+					_touched = true
+					_dist = clampf(_dist * 0.88, ZOOM_MIN, ZOOM_MAX)
+					_place_camera()
+			MOUSE_BUTTON_WHEEL_DOWN:
+				if e.pressed:
+					_touched = true
+					_dist = clampf(_dist / 0.88, ZOOM_MIN, ZOOM_MAX)
+					_place_camera()
+			MOUSE_BUTTON_MIDDLE:
+				_touched = true
+				_orbiting = e.pressed
+			MOUSE_BUTTON_LEFT:
+				_touched = true
+				if e.pressed:
+					_push_undo()
+					_painting = true
+					_paint_on_figure(e.position)
+				else:
+					_painting = false
+			MOUSE_BUTTON_RIGHT:
+				if e.pressed:
+					_touched = true
+					var hit := _pick_figure(e.position)
+					if not hit.is_empty():
+						_colour = img.get_pixelv(hit["texel"])
+						if _swatch != null:
+							_swatch.color = _colour
+	elif e is InputEventMouseMotion:
+		if _orbiting:
+			_yaw -= e.relative.x * 0.01
+			# Stopped short of straight up and straight down, where the view
+			# flips over and the figure appears to spin on the spot.
+			_pitch = clampf(_pitch + e.relative.y * 0.01, -1.35, 1.35)
+			_place_camera()
+		elif _painting:
+			_paint_on_figure(e.position)
+
+
+func _paint_on_figure(pos: Vector2) -> void:
+	var hit := _pick_figure(pos)
+	if hit.is_empty():
+		return
+	var t: Vector2i = hit["texel"]
+	match _tool:
+		Tool.PENCIL:
+			img.set_pixelv(t, _colour)
+		Tool.ERASER:
+			img.set_pixelv(t, Color(0, 0, 0, 0))
+		Tool.PICKER:
+			_colour = img.get_pixelv(t)
+			if _swatch != null:
+				_swatch.color = _colour
+		Tool.FILL:
+			_fill(t)
+	_refresh()
+
+
+## Which texel is under the cursor.
+##
+## Done by hand against the triangles rather than with a physics ray, because a
+## physics hit gives a point and this needs a UV -- and the meshes are ours: six
+## boxes, twelve triangles each, built right here with their UVs attached. Two
+## dozen triangles is nothing to test exhaustively, and it is exact.
+func _pick_figure(pos: Vector2) -> Dictionary:
+	if _cam == null or _view == null or _preview_skin == null:
+		return {}
+	# The container may be showing the viewport at a different size than it
+	# renders at; the ray has to be cast in the viewport's own coordinates.
+	var scale_v := Vector2(_vp.size) / _view.size
+	var vpos := pos * scale_v
+	var from := _cam.project_ray_origin(vpos)
+	var dir := _cam.project_ray_normal(vpos)
+	var best := INF
+	var out := {}
+	for piece in _preview_skin.pieces():
+		var mi: MeshInstance3D = piece["node"]
+		var xf := mi.global_transform
+		var inv := xf.affine_inverse()
+		var lo := inv * from
+		var ld := (inv.basis * dir).normalized()
+		var arr := (mi.mesh as ArrayMesh).surface_get_arrays(0)
+		var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
+		var uvs: PackedVector2Array = arr[Mesh.ARRAY_TEX_UV]
+		for i in range(0, verts.size(), 3):
+			var r := _ray_triangle(lo, ld, verts[i], verts[i + 1], verts[i + 2])
+			if r.is_empty():
+				continue
+			# Compared in LOCAL distance, which is fine because these transforms
+			# do not scale -- if they ever do, this has to move to world space.
+			var d: float = r["t"]
+			if d >= best:
+				continue
+			best = d
+			var b: Vector3 = r["bary"]
+			var uv: Vector2 = uvs[i] * b.x + uvs[i + 1] * b.y + uvs[i + 2] * b.z
+			var texel := Vector2i(
+				clampi(int(uv.x * PlayerSkin.ATLAS), 0, PlayerSkin.ATLAS - 1),
+				clampi(int(uv.y * PlayerSkin.ATLAS), 0, PlayerSkin.ATLAS - 1))
+			out = {"texel": texel, "part": piece["part"]}
+	return out
+
+
+## Moller-Trumbore. Returns the distance along the ray and the barycentric
+## weights, which are what turn a hit into a point on the texture.
+func _ray_triangle(o: Vector3, d: Vector3, a: Vector3, b: Vector3, c: Vector3) -> Dictionary:
+	const EPS := 0.0000001
+	var e1 := b - a
+	var e2 := c - a
+	var h := d.cross(e2)
+	var det := e1.dot(h)
+	if absf(det) < EPS:
+		return {}   # parallel to the triangle
+	var inv := 1.0 / det
+	var s := o - a
+	var u := inv * s.dot(h)
+	if u < 0.0 or u > 1.0:
+		return {}
+	var q := s.cross(e1)
+	var v := inv * d.dot(q)
+	if v < 0.0 or u + v > 1.0:
+		return {}
+	var t := inv * e2.dot(q)
+	if t <= EPS:
+		return {}   # behind the camera
+	return {"t": t, "bary": Vector3(1.0 - u - v, u, v)}

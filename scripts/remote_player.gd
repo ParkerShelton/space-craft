@@ -33,6 +33,7 @@ var _have_last := false
 var _mat: StandardMaterial3D
 var _skin_tex: ImageTexture
 var _pieces: Array = []
+var _piece_parts: Array = []
 
 
 func setup(id: int) -> void:
@@ -104,7 +105,17 @@ func _part(parent: Node3D, part: String, size: Vector3, pos: Vector3) -> MeshIns
 	mi.position = pos
 	parent.add_child(mi)
 	_pieces.append(mi)
+	_piece_parts.append(part)
 	return mi
+
+
+## The body, piece by piece, for anything that needs to turn a point on the
+## figure back into a point on the skin -- which is what painting on it is.
+func pieces() -> Array:
+	var out: Array = []
+	for i in _pieces.size():
+		out.append({"node": _pieces[i], "part": _piece_parts[i]})
+	return out
 
 
 ## Put a skin on.
