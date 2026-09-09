@@ -1275,6 +1275,23 @@ func _machine_block_changed(v: Vector3i) -> void:
 
 ## The headless Station backing the machine covering `v`, or null.
 ## Which station, if any, this voxel belongs to -- its anchor, or null.
+## Which way the long side of a built structure runs, in world space.
+##
+## A pattern is written with its length along its own +X -- a bed and a bench
+## are both four cells wide and two deep -- and `rot` turns that a quarter turn
+## at a time before the planet's axes map it onto the world. So the answer is
+## the pattern's +X, rotated, then mapped.
+func machine_long_axis(anchor: Vector3i) -> Vector3:
+	var m: Dictionary = _machines.get(anchor, {})
+	if m.is_empty():
+		return Vector3.ZERO
+	var turned := [Vector3i(1, 0, 0), Vector3i(0, 0, 1),
+		Vector3i(-1, 0, 0), Vector3i(0, 0, -1)]
+	var d: Vector3i = turned[posmod(int(m.get("rot", 0)), 4)]
+	var local := Vector3(_pattern_to_world(d, _pattern_axes(anchor)))
+	return (global_transform.basis * local).normalized()
+
+
 func machine_anchor_at(v: Vector3i):
 	return _machine_at.get(v)
 

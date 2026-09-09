@@ -256,6 +256,7 @@ var bed_pos := Vector3.ZERO
 ## Lying in one. The world carries on around you -- this is rest, not a pause.
 var in_bed := false
 var _bed_settle := 0.0
+var _bed_yaw_to := Vector3.ZERO
 var _bed_panel: Control
 var _bed_planet_now: Planet
 
@@ -1190,6 +1191,17 @@ func _update_eye_clearance(delta: float) -> void:
 			_bed_settle = maxf(_bed_settle - delta, 0.0)
 			_pitch = move_toward(_pitch, BED_PITCH, delta * 2.2)
 			_camera.rotation.x = _pitch
+			if _bed_yaw_to != Vector3.ZERO:
+				# Turned a little each frame toward lying along it, over the
+				# same half second as the tip back, so the two read as one
+				# movement of getting into bed.
+				var up_now := global_transform.basis.y.normalized()
+				var fwd := -global_transform.basis.z
+				var err := fwd.signed_angle_to(_bed_yaw_to, up_now)
+				if absf(err) < 0.01:
+					_bed_yaw_to = Vector3.ZERO
+				else:
+					rotate(up_now, clampf(err, -delta * 4.0, delta * 4.0))
 		return
 	var want := EYE_HEIGHT * (CROUCH_EYE_MULT if crouching else 1.0)
 	var space := get_world_3d().direct_space_state
@@ -3058,7 +3070,7 @@ func _try_assemble_machine() -> bool:
 		# blocks, and _looked_at_station only ever sees stations that ARE a
 		# node, so the check up in the click handler never fired for one.
 		if existing.kind == Blocks.BED:
-			_use_bed(existing)
+			_use_bed(existing, planet.machine_long_axis(planet.machine_anchor_at(v)))
 		else:
 			_open_station(existing)
 		return true
@@ -4552,7 +4564,10 @@ func _craft_button_labels() -> Array:
 ## it. Claiming is the whole feature for now: it is the half that behaves
 ## identically alone and in co-op, where skipping the night has to decide whose
 ## night it is.
-func _use_bed(st: Station) -> void:
+## `along` is the direction the bed's long side runs, or ZERO if unknown. You
+## lie ALONG a bed, not across it, so the view turns to match it -- which is
+## most of what makes it read as a bed rather than as a spot on the floor.
+func _use_bed(st: Station, along: Vector3 = Vector3.ZERO) -> void:
 	if world == null:
 		return
 	var p := world.nearest_planet(st.global_position)
@@ -4573,6 +4588,19 @@ func _use_bed(st: Station) -> void:
 	# that half second -- after it you are free to look wherever you like from
 	# where you are lying.
 	_bed_settle = BED_SETTLE
+	_bed_yaw_to = Vector3.ZERO
+	if along != Vector3.ZERO:
+		var up_now := global_transform.basis.y.normalized()
+		# Flatten it onto the ground plane: the bed's axis and the player's
+		# facing have to be compared in the same plane or the turn is wrong on
+		# any slope.
+		var flat := (along - up_now * along.dot(up_now)).normalized()
+		if flat.length() > 0.01:
+			# Either end of the bed will do. Take whichever is the shorter turn
+			# from where you were already looking, so lying down never spins you
+			# most of the way round.
+			var fwd := -global_transform.basis.z
+			_bed_yaw_to = flat if flat.dot(fwd) >= 0.0 else -flat
 	velocity = Vector3.ZERO
 	global_position = bed_pos
 	if p != null and p.is_night():
@@ -4646,6 +4674,7 @@ func _get_up() -> void:
 		return
 	in_bed = false
 	_bed_settle = 0.0
+	_bed_yaw_to = Vector3.ZERO
 	# Level again on the way out. Standing up still looking at the ceiling is
 	# the sort of thing that has you walking into a wall.
 	_pitch = clampf(_pitch, -1.45, 0.35)
