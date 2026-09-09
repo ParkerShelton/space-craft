@@ -77,6 +77,13 @@ var day_phase := 0.0
 ## where every world is at dawn at once would be a strange sight from orbit.
 const MORNING_PHASE := 0.05
 
+## Is the sun below the horizon here? The whole day/night system is this one
+## sine of the phase -- the light swings around the up axis rather than the
+## world turning -- so asking it here keeps "is it dark" as one answer rather
+## than a comparison rewritten at each call site.
+func is_night() -> bool:
+	return sin(day_phase * TAU) < 0.0
+
 # --- built machines ----------------------------------------------------------
 # Machines that must be physically constructed. Only the CONTROLLER position is
 # persisted: the blocks themselves already save, so re-validating around each

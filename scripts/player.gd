@@ -150,6 +150,10 @@ const O2_DRAIN := 4.0             # oxygen/sec with no air (space / airless / un
 const O2_REFILL := 30.0           # oxygen/sec while breathing (in atmosphere or a ship)
 const SUFFOCATE_DMG := 7.0        # health/sec once oxygen hits zero
 const HEALTH_REGEN := 3.0         # health/sec while safe and oxygenated
+## Lying down heals faster than standing about, and unlike standing about it
+## does not ask you to be well fed -- resting is the thing you do BECAUSE you
+## are in a bad way.
+const BED_REGEN := 9.0
 # --- hunger -----------------------------------------------------------------
 # Slow enough that food is an errand rather than a chore: a full meter lasts
 # roughly twelve minutes of ordinary play, less if you are working hard.
@@ -242,6 +246,11 @@ var _body_shape: CollisionShape3D
 ## none claimed, and death falls back to the home world's spawn point as before.
 var bed_planet := ""
 var bed_pos := Vector3.ZERO
+
+## Lying in one. The world carries on around you -- this is rest, not a pause.
+var in_bed := false
+var _bed_panel: Control
+var _bed_planet_now: Planet
 
 var _home_parent: Node            # where the player lives when not parented to a ship
 const ARTIFICIAL_G := 9.0         # interior gravity toward the ship floor
@@ -784,7 +793,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cycle_slot(1)
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			if _station_open != null:
+			if in_bed:
+				_get_up()
+			elif _station_open != null:
 				_close_station()
 			elif book_open:
 				_toggle_book()
@@ -1856,8 +1867,16 @@ func _process_survival(delta: float) -> void:
 		health = maxf(health - SUFFOCATE_DMG * delta, 0.0)
 	if hz > 0.0:
 		health = maxf(health - hz * delta, 0.0)
+	elif in_bed and air and oxygen > 0.0 and health < MAX_HEALTH:
+		# No hunger requirement: resting is what you do BECAUSE you are in a bad
+		# way, and a bed that refused to help the starving would be no use on
+		# the night it is most needed.
+		health = minf(health + BED_REGEN * delta, MAX_HEALTH)
 	elif air and oxygen > 0.0 and health < MAX_HEALTH and hunger >= HUNGER_REGEN_MIN:
 		health = minf(health + HEALTH_REGEN * delta, MAX_HEALTH)
+	# Lie down at dusk and the question comes to you when the sun actually goes.
+	if in_bed and _bed_panel == null and _bed_planet_now != null 			and _bed_planet_now.is_night():
+		_open_sleep_prompt(_bed_planet_now)
 	if health <= 0.0:
 		_respawn()
 	_update_survival_ui()
@@ -1894,6 +1913,7 @@ func _ground_ready() -> bool:
 
 
 func _respawn() -> void:
+	_get_up()
 	if eva:
 		_end_eva()
 	if piloting != null:
@@ -2021,6 +2041,14 @@ func _snap_to_axis(v: Vector3) -> Vector3:
 
 func _move_input() -> Vector2:
 	if menu_open or ui_typing:
+		return Vector2.ZERO
+	if in_bed:
+		# Getting out of bed is just moving. The input that did it is spent on
+		# standing up rather than also taking a step, so you do not shuffle off
+		# the frame in the same instant.
+		if key_down("forward") or key_down("back") or key_down("left") 				or key_down("right") or key_down("jump"):
+			_get_up()
+			_toast("Up and about")
 		return Vector2.ZERO
 	var x := 0.0
 	var y := 0.0
@@ -4475,7 +4503,82 @@ func _use_bed(st: Station) -> void:
 	bed_planet = p.planet_name if p != null else ""
 	# Stored a little above the frame so waking does not start you inside it.
 	bed_pos = st.global_position + st.global_transform.basis.y.normalized() * 1.2
-	_toast("You will wake up here")
+	_bed_planet_now = p
+	in_bed = true
+	velocity = Vector3.ZERO
+	global_position = bed_pos
+	if p != null and p.is_night():
+		_open_sleep_prompt(p)
+	else:
+		_toast("Resting. Move to get up.")
+
+
+## Night, and something to decide. During the day lying down just heals, so
+## there is nothing to ask.
+func _open_sleep_prompt(p: Planet) -> void:
+	if _bed_panel != null:
+		return
+	_bed_panel = Control.new()
+	_bed_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_bed_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var center := CenterContainer.new()
+	center.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_bed_panel.add_child(center)
+	var box := PanelContainer.new()
+	center.add_child(box)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 10)
+	box.add_child(vb)
+	var head := Label.new()
+	head.text = "Sleep through the night?"
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	head.add_theme_font_size_override("font_size", 18)
+	vb.add_child(head)
+	if world != null and world.net != null and world.net.active:
+		var note := Label.new()
+		note.text = "This ends the night for everyone."
+		note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		note.add_theme_font_size_override("font_size", 13)
+		note.modulate = Color(1, 1, 1, 0.65)
+		vb.add_child(note)
+	var yes := Button.new()
+	yes.text = "Sleep until morning"
+	yes.custom_minimum_size = Vector2(240, 38)
+	yes.pressed.connect(_confirm_sleep.bind(p))
+	vb.add_child(yes)
+	var no := Button.new()
+	no.text = "Just lie down"
+	no.custom_minimum_size = Vector2(240, 32)
+	no.pressed.connect(_close_sleep_prompt)
+	vb.add_child(no)
+	_ui_layer.add_child(_bed_panel)
+	menu_open = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+func _close_sleep_prompt() -> void:
+	if _bed_panel != null:
+		_bed_panel.queue_free()
+		_bed_panel = null
+	menu_open = false
+	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+func _confirm_sleep(p: Planet) -> void:
+	_close_sleep_prompt()
+	if world != null and p != null:
+		world.sleep_through_night(p)
+	_get_up()
+	_toast("Morning.")
+
+
+## Out of bed, however it ended.
+func _get_up() -> void:
+	if not in_bed:
+		return
+	in_bed = false
+	_bed_planet_now = null
+	_close_sleep_prompt()
 
 
 func _open_station(st: Station) -> void:

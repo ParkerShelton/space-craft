@@ -583,6 +583,43 @@ func request_feed(planet_name: String, v: Vector3i) -> void:
 	crop_stages.rpc(planet_name, [[v, stage]])
 
 
+# --- sleeping ---------------------------------------------------------------
+#
+# Any one player may end the night for everybody. Requiring all of them in bed
+# is the version of this rule that gets a co-op session stuck waiting for
+# whoever wandered off, and with two people that is most of the time.
+#
+# The phase is sent as an absolute value for the same reason a fed crop is: the
+# player who asked has already applied it so their own night ends instantly, and
+# they hear their request come back. Setting a clock to morning twice is setting
+# it once.
+func slept(planet_name: String, phase: float) -> void:
+	if not active:
+		return
+	if is_host:
+		apply_phase.rpc(planet_name, phase)
+	else:
+		request_sleep.rpc_id(1, planet_name)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_sleep(planet_name: String, phase: float = Planet.MORNING_PHASE) -> void:
+	if not is_host:
+		return
+	var p := _planet(planet_name)
+	if p == null:
+		return
+	p.day_phase = phase
+	apply_phase.rpc(planet_name, phase)
+
+
+@rpc("authority", "call_remote", "reliable")
+func apply_phase(planet_name: String, phase: float) -> void:
+	var p := _planet(planet_name)
+	if p != null:
+		p.day_phase = phase
+
+
 ## Host -> everyone: crops that moved a stage this tick, batched.
 func crops_grew(planet_name: String, changes: Array) -> void:
 	if active and is_host and not changes.is_empty():

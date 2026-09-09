@@ -219,6 +219,14 @@ func plant(p: Planet, v: Vector3i, key: String, tree: bool) -> bool:
 	return ok
 
 
+## Morning, for everyone on this world. Applied here first so the player who
+## asked sees their own night end at once.
+func sleep_through_night(p: Planet) -> void:
+	p.day_phase = Planet.MORNING_PHASE
+	if net != null and net.active:
+		net.slept(p.planet_name, Planet.MORNING_PHASE)
+
+
 ## Bone meal on a growing plant. Applied here and now whoever asked, so it
 ## feels instant, and then told to the network -- which answers with the stage
 ## it settled on rather than with "one more".
