@@ -419,6 +419,7 @@ func _menu_skins() -> void:
 		var img = PlayerSkin.default_image(DEFAULT_SKIN_HUE) if n == "" else PlayerSkin.load_skin(n)
 		if img != null:
 			_skin_tile(_skin_row, i, n, img)
+	_new_skin_tile(_skin_row)
 	var right := Button.new()
 	right.text = ">"
 	right.custom_minimum_size = Vector2(40, 132)
@@ -439,7 +440,6 @@ func _menu_skins() -> void:
 		# way out of it.
 		set_setting("skin", _picked_skin())
 		_menu_populate(false))
-	_menu_button("New character", _menu_new_skin)
 	if _picked_skin() != "":
 		_menu_button("Delete", func():
 			PlayerSkin.delete_skin(_picked_skin())
@@ -467,11 +467,42 @@ func _step_skin(d: int) -> void:
 func _highlight_skin() -> void:
 	if _skin_row == null:
 		return
-	for i in _skin_row.get_child_count():
+	# The plus sits in the row but is not one of the characters, so it keeps its
+	# own brightness instead of being dimmed as "not the one you are on".
+	for i in mini(_skin_names.size(), _skin_row.get_child_count()):
 		var tile: Control = _skin_row.get_child(i)
 		tile.modulate = Color(1, 1, 1, 1.0 if i == _skin_index else 0.4)
 	if _skin_index < _skin_row.get_child_count() and _skin_scroll != null:
 		_skin_scroll.ensure_control_visible(_skin_row.get_child(_skin_index))
+
+
+## The last thing in the row: one more of these, please.
+##
+## A tile rather than a button underneath, because making a new character is the
+## same KIND of act as choosing one -- so it belongs among the characters, at
+## the end, which is where your eye already is once you have looked at them all
+## and not found the one you wanted.
+func _new_skin_tile(row: HBoxContainer) -> void:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	row.add_child(col)
+	var b := Button.new()
+	b.text = "+"
+	b.add_theme_font_size_override("font_size", 40)
+	b.custom_minimum_size = Vector2(78, 108)
+	b.tooltip_text = "Make another character"
+	b.modulate = Color(1, 1, 1, 0.7)
+	# Straight into the editor: the only reason to make one is to paint it.
+	b.pressed.connect(func():
+		_menu_new_skin()
+		_open_skin_editor())
+	col.add_child(b)
+	var cap := Label.new()
+	cap.text = "New"
+	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cap.add_theme_font_size_override("font_size", 11)
+	cap.modulate = Color(1, 1, 1, 0.6)
+	col.add_child(cap)
 
 
 ## One character in the row. Clicking one is the same as arrowing to it: the
