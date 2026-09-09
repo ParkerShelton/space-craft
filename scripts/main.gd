@@ -154,6 +154,20 @@ func _notification(what: int) -> void:
 		get_tree().quit()
 
 
+func _still_loaded(p: Planet, v: Vector3i, rd: int) -> float:
+	# Pretend every wanted chunk arrived, then time the standing-still tick.
+	for cc in p._wanted:
+		p.loaded_chunks[cc] = null
+	var total := 0
+	for i in 20:
+		p._stream_last_ms = 0
+		var t := Time.get_ticks_usec()
+		p.stream(v, rd)
+		total += Time.get_ticks_usec() - t
+	p.loaded_chunks.clear()
+	return total / 20000.0
+
+
 func _ready() -> void:
 	get_tree().set_auto_accept_quit(false)  # route window-close through _notification
 	_settings.load(settings_path)   # absent on a first run, which is not an error
