@@ -478,12 +478,83 @@ func _close_chat(send: bool) -> void:
 	if _chat_entry == null:
 		return
 	if send:
-		_net.say(_chat_entry.text)
+		var line := _chat_entry.text.strip_edges()
+		# A line starting with / is for this machine, not for the room.
+		if line.begins_with("/"):
+			_run_command(line)
+		elif line != "":
+			_net.say(line)
 	_chat_entry.text = ""
 	_chat_entry.visible = false
 	_chat_entry.release_focus()
 	if _world != null and _world.player != null:
 		_world.player.ui_typing = false
+
+
+# --- chat commands -----------------------------------------------------------
+#
+# Testing aids, not cheats meant for play. They exist because the alternative is
+# editing the starting inventory, and the starting inventory says "you start
+# with NOTHING, everything comes out of the world" -- which is a rule worth
+# keeping true even while something is being tried out.
+#
+# Local only: nothing here is sent to anyone else, and on a server it changes
+# only the inventory of whoever typed it.
+const GIVEABLE := {
+	"wood": Blocks.WOOD, "plank": Blocks.PLANK, "rock": Blocks.ROCK,
+	"metal": Blocks.METAL, "glass": Blocks.GLASS,
+	"cloth": Blocks.CLOTH, "leather": Blocks.LEATHER, "fibre": Blocks.FIBRE,
+	"hide": Blocks.HIDE, "bone": Blocks.BONE, "bonemeal": Blocks.BONEMEAL,
+	"torch": Blocks.TORCH, "hoe": Blocks.HOE, "seeds": Blocks.SEEDS,
+	"crop": Blocks.CROP, "meat": Blocks.RAW_MEAT,
+}
+
+
+func _run_command(line: String) -> void:
+	var parts := line.substr(1).split(" ", false)
+	if parts.is_empty():
+		return
+	var cmd := String(parts[0]).to_lower()
+	var pl = _world.player if _world != null else null
+	match cmd:
+		"give":
+			if pl == null:
+				return
+			if parts.size() < 2:
+				_on_chat_line("give what? try: " + ", ".join(GIVEABLE.keys()))
+				return
+			var what := String(parts[1]).to_lower()
+			if not GIVEABLE.has(what):
+				_on_chat_line("no such item: " + what)
+				return
+			var n := int(parts[2]) if parts.size() > 2 else 1
+			n = clampi(n, 1, 999)
+			pl._add_item(int(GIVEABLE[what]), n)
+			pl._refresh_slots()
+			_on_chat_line("gave you %d %s" % [n, Blocks.name_of(int(GIVEABLE[what]))])
+		"bed":
+			# The one that prompted all this: exactly what a Bed pattern costs,
+			# which is a block of wood and a block of soft stock, in eighths.
+			if pl == null:
+				return
+			pl._add_item(Blocks.WOOD, 4)
+			pl._add_item(Blocks.CLOTH, 4)
+			pl._refresh_slots()
+			_on_chat_line("gave you 4 Wood and 4 Cloth -- a bed needs 8 eighths of each, so that is four beds' worth")
+		"time":
+			if _world == null or _world.planets.is_empty():
+				return
+			var p: Planet = _world.nearest_planet(pl.global_position) if pl != null else _world.planets[0]
+			if parts.size() > 1 and String(parts[1]).to_lower() == "night":
+				p.day_phase = 0.75
+			else:
+				p.day_phase = Planet.MORNING_PHASE
+			_on_chat_line("set the clock to %s on %s" % [
+				"night" if p.is_night() else "morning", p.planet_name])
+		"help":
+			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [night]")
+		_:
+			_on_chat_line("unknown command: /" + cmd + "  (try /help)")
 
 
 ## Enter opens chat and sends it; Escape backs out without saying anything.
