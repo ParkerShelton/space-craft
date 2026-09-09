@@ -104,6 +104,22 @@ const ORE_NAME_PRE := ["Vel", "Cryo", "Pyr", "Aur", "Fer", "Lum", "Xen", "Tor",
 	"Zin", "Mag", "Cor", "Nyx", "Hal", "Ryn", "Quar", "Bas", "Dra", "Eos"]
 const ORE_NAME_SUF := ["ite", "ium", "ex", "ora", "yte", "ine", "ar", "onite", "ax", "yr"]
 
+# Syllables for inventing PLANT names, per planet, the same way ores and
+# creatures get theirs. A world whose grass is called Meadow Grass like every
+# other world's grass is a world you have already been to.
+#
+# The ending depends on what kind of plant it is, because "Virewood" reads as a
+# tree and "Virereed" does not, and a name that fights its own shape is worse
+# than no name at all.
+const FLORA_NAME_PRE := ["Vire", "Sable", "Mor", "Tass", "Ely", "Bram", "Silt",
+	"Ashen", "Corr", "Dun", "Wyl", "Fen", "Gale", "Hesp", "Iri", "Ker", "Lune",
+	"Marr", "Nyss", "Orv", "Pell", "Quill", "Rhe", "Sten", "Thry", "Umb"]
+const FLORA_NAME_SUF := {
+	"grass": ["grass", "reed", "sedge", "blade", "fescue", "tussock"],
+	"bush":  ["bush", "berry", "thistle", "bramble", "shrub", "vine"],
+	"tree":  ["wood", "bark", "crown", "pine", "bough", "cedar"],
+}
+
 # Syllables for inventing creature/fish species names (per-planet, like ores).
 const FAUNA_NAME_PRE := ["Grum", "Ska", "Bri", "Lox", "Fen", "Wob", "Thal", "Kree",
 	"Mun", "Snap", "Grov", "Piv", "Ux", "Yar", "Zeph", "Bok", "Crin", "Dus"]
@@ -1470,23 +1486,43 @@ static func is_plant(id: int) -> bool:
 # Seeds are not an item per species: they are all SEEDS or SAPLING carrying the
 # species in their props, the same way an ore carries which ore it is. Sixty
 # plants would otherwise be sixty block ids for things that are never blocks.
+# Two or three of each kind per class, so a world can grow more than one thing
+# and two worlds of the same class are not the same world. With one grass and
+# one tree to a class there was nothing for the roll to choose BETWEEN: every
+# temperate planet grew the same grass, and every seed you ever found off tall
+# grass was that grass.
+#
+# Each class also has at least one FIBRE species, so landing anywhere leaves you
+# able to make cloth without first finding a better planet. The `name` here is
+# only a fallback -- a world renames whatever grows on it (see
+# Planet.flora_here), so these are what a species is called in the abstract.
 const FLORA := [
 	# class M -- temperate
 	{"key": "meadow", "name": "Meadow Grass", "kind": "grass", "classes": ["M"]},
+	{"key": "ryegrass", "name": "Rye Grass", "kind": "grass", "classes": ["M"]},
 	{"key": "clover", "name": "Clover", "kind": "bush", "classes": ["M"]},
+	{"key": "briar", "name": "Briar", "kind": "bush", "classes": ["M", "P"]},
 	{"key": "broadleaf", "name": "Broadleaf", "kind": "tree", "classes": ["M"]},
+	{"key": "silverbark", "name": "Silverbark", "kind": "tree", "classes": ["M", "P"]},
 	# class P -- frozen
 	{"key": "frostgrass", "name": "Frost Grass", "kind": "grass", "classes": ["P"]},
+	{"key": "tundramoss", "name": "Tundra Moss", "kind": "grass", "classes": ["P"]},
 	{"key": "snowberry", "name": "Snowberry", "kind": "bush", "classes": ["P"]},
+	{"key": "rimeberry", "name": "Rime Berry", "kind": "bush", "classes": ["P"]},
 	{"key": "icepine", "name": "Ice Pine", "kind": "tree", "classes": ["P"]},
 	# class H -- arid
 	{"key": "duneweed", "name": "Dune Weed", "kind": "grass", "classes": ["H"]},
+	{"key": "sandsedge", "name": "Sand Sedge", "kind": "grass", "classes": ["H", "Y"]},
 	{"key": "thornbush", "name": "Thorn Bush", "kind": "bush", "classes": ["H", "Y"]},
+	{"key": "ironroot", "name": "Ironroot", "kind": "tree", "classes": ["H", "Y"]},
 	# class Y -- scorched
 	{"key": "ashgrass", "name": "Ash Grass", "kind": "grass", "classes": ["Y"]},
+	{"key": "cinderweed", "name": "Cinder Weed", "kind": "grass", "classes": ["Y"]},
 	# class O -- ocean
 	{"key": "kelpvine", "name": "Kelp Vine", "kind": "grass", "classes": ["O"]},
+	{"key": "reedgrass", "name": "Reed Grass", "kind": "grass", "classes": ["O"]},
 	{"key": "coralbush", "name": "Coral Bush", "kind": "bush", "classes": ["O"]},
+	{"key": "mangrove", "name": "Mangrove", "kind": "tree", "classes": ["O"]},
 	# nothing lives on a class D world. That is what makes it barren.
 ]
 
@@ -1533,6 +1569,23 @@ const CROP_GROWTH := {
 	"kelpvine":   {"stages": 2, "time": 120.0, "yield_n": 3, "use": "fibre", "food": 2.5,
 		"spread": 0.22, "spread_n": 3},
 	"coralbush":  {"stages": 3, "time": 190.0, "yield_n": 3, "food": 3.5,
+		"spread": 0.20, "spread_n": 3},
+	# The second and third species of each class. Every one of them is either a
+	# better food or a fibre than the one beside it at something, so which you
+	# plant is a choice rather than a coin toss.
+	"ryegrass":   {"stages": 3, "time": 140.0, "yield_n": 2, "food": 3.2,
+		"spread": 0.12, "spread_n": 1},
+	"briar":      {"stages": 4, "time": 230.0, "yield_n": 2, "use": "fibre", "food": 2.0,
+		"spread": 0.11, "spread_n": 2},
+	"tundramoss": {"stages": 3, "time": 210.0, "yield_n": 2, "use": "fibre", "food": 2.0,
+		"spread": 0.14, "spread_n": 2},
+	"rimeberry":  {"stages": 4, "time": 250.0, "yield_n": 3, "food": 4.2,
+		"spread": 0.13, "spread_n": 2},
+	"sandsedge":  {"stages": 3, "time": 180.0, "yield_n": 2, "food": 3.0,
+		"spread": 0.10, "spread_n": 1},
+	"cinderweed": {"stages": 4, "time": 260.0, "yield_n": 2, "use": "fibre", "food": 2.0,
+		"spread": 0.09, "spread_n": 1},
+	"reedgrass":  {"stages": 2, "time": 140.0, "yield_n": 2, "food": 2.8,
 		"spread": 0.20, "spread_n": 3},
 }
 

@@ -180,13 +180,49 @@ func flora_here() -> Array:
 	# A world with no life at all is a real outcome, not an accident.
 	if fr.randf() < 0.18:
 		return _flora_here
-	for f in pool:
+	# SHUFFLED before rolling. Walking the pool in table order and keeping each
+	# with 70% chance is not a random subset: whatever is listed first survives
+	# nearly every time, so every class M world grew the same first grass and
+	# the same first tree, and the seeds you found said so.
+	var order: Array = pool.duplicate()
+	for i in range(order.size() - 1, 0, -1):
+		var j := fr.randi() % (i + 1)
+		var tmp = order[i]
+		order[i] = order[j]
+		order[j] = tmp
+	for f in order:
 		if fr.randf() < 0.7:
 			_flora_here.append(f)
 	# ...but if the dice took everything, keep one: an empty world should be the
 	# roll above saying so, not the leftovers of this one.
 	if _flora_here.is_empty():
 		_flora_here.append(pool[fr.randi() % pool.size()])
+	# Name each of them for THIS world. The species keeps its key -- growth
+	# times, yields and what it is good for are all still looked up by that --
+	# and only what it is called changes.
+	var named: Array = []
+	var used := {}
+	for f in _flora_here:
+		var e: Dictionary = (f as Dictionary).duplicate()
+		var kind := str(e.get("kind", "grass"))
+		var suf: Array = Blocks.FLORA_NAME_SUF.get(kind, Blocks.FLORA_NAME_SUF["grass"])
+		# Drawn until it is one this world has not used. Two species sharing a
+		# name is worse than either having a dull one -- a world grew two trees
+		# both called Thrycedar, and no amount of looking at them would tell you
+		# they were different plants.
+		var nm := ""
+		for _try in 24:
+			nm = Blocks.FLORA_NAME_PRE[fr.randi() % Blocks.FLORA_NAME_PRE.size()] 				+ str(suf[fr.randi() % suf.size()])
+			if not used.has(nm):
+				break
+		# Vanishingly unlikely, but a name is not worth a loop that might not end.
+		if used.has(nm):
+			nm += " " + str(used.size() + 1)
+		used[nm] = true
+		e["name"] = nm
+		_flora_names[str(e["key"])] = nm
+		named.append(e)
+	_flora_here = named
 	return _flora_here
 
 
@@ -198,12 +234,29 @@ func random_flora(rng_v: float) -> Dictionary:
 	return here[int(rng_v * here.size()) % here.size()]
 
 
-## The species of a given kind growing here ("grass", "tree", "bush"), or {}.
+## The name this species goes by on THIS world. Falls back to the table name,
+## which is what a species nobody has rolled for is still called.
+func flora_name(key: String) -> String:
+	if _flora_names.has(key):
+		return str(_flora_names[key])
+	var sp := Blocks.flora_by_key(key)
+	return str(sp.get("name", "Crop")) if not sp.is_empty() else "Crop"
+
+
+## A species of a given kind growing here ("grass", "tree", "bush"), or {}.
+##
+## Picked at random from the ones present rather than being the first match. A
+## world can grow three grasses, and always handing back the same one made the
+## other two invisible -- you could farm a planet for an hour and never learn
+## they were there.
 func flora_of_kind(kind: String) -> Dictionary:
+	var of_kind: Array = []
 	for f in flora_here():
 		if str(f["kind"]) == kind:
-			return f
-	return {}
+			of_kind.append(f)
+	if of_kind.is_empty():
+		return {}
+	return of_kind[randi() % of_kind.size()]
 
 
 func class_title() -> String:
@@ -213,6 +266,7 @@ func class_title() -> String:
 var hazard_dps := 0.0    # health/sec when exposed on the surface without protection
 var _flora_here: Array = []   # memo for flora_here()
 var _flora_rolled := false
+var _flora_names: Dictionary = {}   # species key -> the name IT has HERE
 
 # --- flora (derived from seed in configure) ---
 const TREE_CELL := 7          # default spacing grid for tree placement

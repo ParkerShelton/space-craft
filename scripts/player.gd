@@ -2555,7 +2555,7 @@ func _drop_flora_seed(planet: Planet, kind: String, item: int) -> void:
 	if sp.is_empty():
 		return          # nothing grows here to have seeded it
 	_give_seeds(planet, sp, 1)
-	_toast("Found " + _seed_label(sp))
+	_toast("Found " + _seed_label(sp, planet))
 
 
 ## The seed item for a species, in the player's hands.
@@ -2568,12 +2568,19 @@ func _give_seeds(planet: Planet, sp: Dictionary, n: int) -> void:
 		return
 	var give: int = Blocks.SAPLING if str(sp["kind"]) == "tree" else Blocks.SEEDS
 	_add_item(give, n, {"species": str(sp["key"]), "class": planet.planet_class()},
-		planet.planet_name, {"name": _seed_label(sp), "color": Blocks.color_of(give)})
+		planet.planet_name, {"name": _seed_label(sp, planet),
+		"color": Blocks.color_of(give)})
 
 
-func _seed_label(sp: Dictionary) -> String:
-	return "%s %s" % [str(sp["name"]),
-		"Sapling" if str(sp["kind"]) == "tree" else "Seeds"]
+## Always resolved through the planet, so a seed and the harvest it came from
+## call the plant the same thing. Reading the name straight off the species had
+## them disagreeing: the table calls it Meadow Grass everywhere, and the world
+## it grew on does not.
+func _seed_label(sp: Dictionary, planet: Planet = null) -> String:
+	var nm := str(sp.get("name", "Crop"))
+	if planet != null:
+		nm = planet.flora_name(str(sp.get("key", "")))
+	return "%s %s" % [nm, "Sapling" if str(sp["kind"]) == "tree" else "Seeds"]
 
 
 # --- farming ------------------------------------------------------------------
@@ -2677,7 +2684,9 @@ func _try_harvest(tgt: Dictionary) -> bool:
 	if got.is_empty():
 		return false
 	var sp := Blocks.flora_by_key(str(got["key"]))
-	var nm: String = str(sp.get("name", "Crop")) if not sp.is_empty() else "Crop"
+	# Named by the WORLD, not by the table: a seed found here said one thing and
+	# the harvest said another, because only the seed knew where it came from.
+	var nm: String = planet.flora_name(str(got["key"]))
 	# What comes up depends on the species, not on the act: a fibre crop is
 	# harvested exactly like a food one and simply yields something else.
 	var out := Blocks.crop_yield(str(got["key"]))
