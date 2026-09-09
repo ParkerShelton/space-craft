@@ -55,7 +55,12 @@ const CATALOG := {
 	# inaudible here -- it just sounds like a different handful of leaves, which
 	# is exactly right for the one material that should never sound twice the
 	# same.
-	"break_leaves": {"files": ["_takes", WORLD + "break_leaves", 4], "pitch": 0.40, "throttle": 45},
+	# Trimmed harder than any other material, on purpose. A leaf break sits
+	# around 3.3 kHz where the others sit near 1 -- and equal-loudness being
+	# what it is, the bright one is heard as the loud one at the same level.
+	# You also clear leaves by the armful rather than a block at a time.
+	"break_leaves": {"files": ["_takes", WORLD + "break_leaves", 4], "db": -8.0,
+		"pitch": 0.40, "throttle": 45},
 	"break_snow": {"files": ["_takes", WORLD + "break_snow", 4], "pitch": 0.15, "throttle": 45},
 	"break_metal": {"files": ["_takes", WORLD + "break_metal", 4], "pitch": 0.12, "throttle": 45},
 	"break_glass": {"files": ["_takes", WORLD + "break_glass", 4], "pitch": 0.15, "throttle": 45},
@@ -64,7 +69,7 @@ const CATALOG := {
 	"place_sand": {"files": ["_takes", WORLD + "place_sand", 3], "pitch": 0.15, "throttle": 45},
 	"place_grass": {"files": ["_takes", WORLD + "place_grass", 3], "pitch": 0.15, "throttle": 45},
 	"place_wood": {"files": ["_takes", WORLD + "place_wood", 3], "pitch": 0.15, "throttle": 45},
-	"place_leaves": {"files": ["_takes", WORLD + "place_leaves", 3], "pitch": 0.18, "throttle": 45},
+	"place_leaves": {"files": ["_takes", WORLD + "place_leaves", 3], "db": -8.0, "pitch": 0.18, "throttle": 45},
 	"place_snow": {"files": ["_takes", WORLD + "place_snow", 3], "pitch": 0.15, "throttle": 45},
 	"place_metal": {"files": ["_takes", WORLD + "place_metal", 3], "pitch": 0.12, "throttle": 45},
 	"place_glass": {"files": ["_takes", WORLD + "place_glass", 3], "pitch": 0.15, "throttle": 45},
@@ -75,7 +80,7 @@ const CATALOG := {
 	"mine_sand": {"files": ["_takes", WORLD + "mine_sand", 3], "pitch": 0.16, "throttle": 190},
 	"mine_grass": {"files": ["_takes", WORLD + "mine_grass", 3], "pitch": 0.16, "throttle": 190},
 	"mine_wood": {"files": ["_takes", WORLD + "mine_wood", 3], "pitch": 0.16, "throttle": 190},
-	"mine_leaves": {"files": ["_takes", WORLD + "mine_leaves", 3], "pitch": 0.18, "throttle": 190},
+	"mine_leaves": {"files": ["_takes", WORLD + "mine_leaves", 3], "db": -8.0, "pitch": 0.18, "throttle": 190},
 	"mine_snow": {"files": ["_takes", WORLD + "mine_snow", 3], "pitch": 0.16, "throttle": 190},
 	"mine_metal": {"files": ["_takes", WORLD + "mine_metal", 3], "pitch": 0.14, "throttle": 190},
 	"mine_glass": {"files": ["_takes", WORLD + "mine_glass", 3], "pitch": 0.16, "throttle": 190},
@@ -86,7 +91,7 @@ const CATALOG := {
 	"step_sand": {"files": ["_takes", WORLD + "step_sand", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_grass": {"files": ["_takes", WORLD + "step_grass", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_wood": {"files": ["_takes", WORLD + "step_wood", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
-	"step_leaves": {"files": ["_takes", WORLD + "step_leaves", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
+	"step_leaves": {"files": ["_takes", WORLD + "step_leaves", 6], "db": -14.0, "pitch": 0.2, "throttle": 120},
 	"step_snow": {"files": ["_takes", WORLD + "step_snow", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_metal": {"files": ["_takes", WORLD + "step_metal", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
 	"step_glass": {"files": ["_takes", WORLD + "step_glass", 6], "db": -8.0, "pitch": 0.2, "throttle": 120},
