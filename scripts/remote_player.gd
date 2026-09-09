@@ -83,6 +83,13 @@ func setup(id: int) -> void:
 	add_child(_label)
 
 
+## Off in the skin editor's preview, where the figure is you rather than
+## somebody across the map who needs labelling.
+func show_nameplate(on: bool) -> void:
+	if _label != null:
+		_label.visible = on
+
+
 func _pivot(pos: Vector3) -> Node3D:
 	var n := Node3D.new()
 	n.position = pos

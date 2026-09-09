@@ -76,6 +76,7 @@ var _menu_layer: CanvasLayer
 var _net: Net
 var _join_ip: LineEdit
 var _menu_skin_corner: MarginContainer
+var _skin_editor: SkinEditor
 var _net_mode := "single"
 var _client_seed := 0
 var _client_system := 0
@@ -394,6 +395,14 @@ func _menu_skins() -> void:
 		if img != null:
 			_skin_tile(grid, n, img)
 	_menu_label(" ", 6)
+	if skin_name() != "":
+		_menu_button("Edit \"%s\"" % skin_name(), _open_skin_editor)
+	else:
+		# The built-in one is everybody's starting point and stays as it is.
+		# Editing it makes a copy, which is what "edit the default" means anyway.
+		_menu_button("Edit a copy of this", func():
+			_menu_new_skin()
+			_open_skin_editor())
 	_menu_button("New character", _menu_new_skin)
 	if skin_name() != "":
 		_menu_button("Delete \"%s\"" % skin_name(), func():
@@ -429,6 +438,29 @@ func _skin_tile(grid: GridContainer, name: String, img: Image) -> void:
 	cap.add_theme_font_size_override("font_size", 12)
 	cap.modulate = Color(1, 1, 1, 1.0 if worn else 0.5)
 	col.add_child(cap)
+
+
+## The editor, over the whole screen. It is a room you go into rather than a
+## panel you open: painting wants the space, and there is nothing else on the
+## menu you would want to see at the same time.
+func _open_skin_editor() -> void:
+	if skin_name() == "" or _skin_editor != null:
+		return
+	# The menu goes away rather than being covered. Relying on one full-screen
+	# panel to sit over another is how you end up with a stray button poking
+	# through a corner of it.
+	_menu_vb.get_parent().visible = false
+	_refresh_menu_skin(false)
+	_skin_editor = SkinEditor.new()
+	_menu_layer.add_child(_skin_editor)
+	_skin_editor.setup(skin_name(), current_skin_image())
+	_skin_editor.closed.connect(func(saved: bool):
+		if saved:
+			PlayerSkin.save_skin(skin_name(), _skin_editor.img)
+		_skin_editor.queue_free()
+		_skin_editor = null
+		_menu_vb.get_parent().visible = true
+		_menu_skins())
 
 
 ## A new character to work on. It starts as a copy of whatever is being worn, so
