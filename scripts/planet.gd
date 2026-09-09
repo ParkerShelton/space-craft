@@ -4591,6 +4591,8 @@ func water_fill(v: Vector3i) -> float:
 
 
 func _set_water(c: Vector3i, level: int, dirty: Dictionary) -> void:
+	if _is_solid_block(c):
+		return   # something is standing here; water does not write over it
 	_wlev[c] = level
 	var cc := chunk_of(c)
 	if not _edits_by_chunk.has(cc):
@@ -4602,7 +4604,13 @@ func _set_water(c: Vector3i, level: int, dirty: Dictionary) -> void:
 func _clear_water(c: Vector3i, dirty: Dictionary) -> void:
 	_wlev.erase(c)
 	var d = _edits_by_chunk.get(chunk_of(c))
-	if d != null:
+	# ONLY if the edit here is still water. Something else may have been put in
+	# this cell since -- placing a block underwater is exactly that -- and
+	# erasing the edit reverts the cell to generation, which takes the block
+	# with it. That is a block that appears, is spent from the inventory, and
+	# then vanishes a moment later, in the places water had flowed and nowhere
+	# else.
+	if d != null and int(d.get(c, Blocks.AIR)) == Blocks.WATER:
 		d.erase(c)  # revert to generation (air on land, ocean below sea level)
 	_mark_borders(c, dirty)
 
