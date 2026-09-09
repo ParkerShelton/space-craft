@@ -75,6 +75,7 @@ var _day := 1.0                    # 0 = night, 1 = full day (eased, see _proces
 var _menu_layer: CanvasLayer
 var _net: Net
 var _join_ip: LineEdit
+var _menu_skin_corner: MarginContainer
 var _net_mode := "single"
 var _client_seed := 0
 var _client_system := 0
@@ -236,6 +237,17 @@ func _build_menu() -> void:
 	_menu_vb.add_theme_constant_override("separation", 14)
 	_menu_vb.alignment = BoxContainer.ALIGNMENT_CENTER
 	center.add_child(_menu_vb)
+	# Who you are, standing in the corner of the room you choose a world in. Out
+	# here rather than in a settings page because a skin is not a setting -- it
+	# is the character you are about to play as -- and in the corner rather than
+	# in the button stack because it is not a thing you DO, it is a thing that
+	# is true, and it should be visible whichever page you are on.
+	_menu_skin_corner = MarginContainer.new()
+	_menu_skin_corner.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_menu_skin_corner.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_menu_skin_corner.add_theme_constant_override("margin_left", 28)
+	_menu_skin_corner.add_theme_constant_override("margin_bottom", 28)
+	_menu_layer.add_child(_menu_skin_corner)
 	_menu_populate(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
@@ -285,12 +297,8 @@ func _menu_populate(confirm_delete: bool) -> void:
 		return
 	_menu_label("SPACECRAFT", 52)
 	_menu_label("a voxel game in space", 18, 0.55)
-	_menu_label(" ", 8)
-	# Who you are, before where you are going. A skin is chosen out here rather
-	# than in a settings page because it is not a setting -- it is the character
-	# you are about to play as, and this is the last screen before you do.
-	_menu_skin_button()
-	_menu_label(" ", 8)
+	_menu_label(" ", 14)
+	_refresh_menu_skin(true)
 	var has_world: bool = _world.saved_world_seed() >= 0
 	if has_world:
 		_menu_button("Continue", func(): _start_world(true))
@@ -330,16 +338,23 @@ func current_skin_image() -> Image:
 const DEFAULT_SKIN_HUE := 0.55
 
 
-## The figure on the front page: a picture of who you will be, that opens the
-## wardrobe when clicked.
-func _menu_skin_button() -> void:
+## The figure in the corner: a picture of who you will be, that opens the
+## wardrobe when clicked. Rebuilt rather than updated, because it is four nodes
+## and the alternative is four references to keep in step.
+func _refresh_menu_skin(shown: bool) -> void:
+	if _menu_skin_corner == null:
+		return
+	for c in _menu_skin_corner.get_children():
+		c.queue_free()
+	_menu_skin_corner.visible = shown
+	if not shown:
+		return
 	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 14)
-	_menu_vb.add_child(row)
+	row.add_theme_constant_override("separation", 12)
+	_menu_skin_corner.add_child(row)
 	var b := Button.new()
 	b.icon = PlayerSkin.portrait_texture(current_skin_image(), 3)
-	b.custom_minimum_size = Vector2(96, 128)
+	b.custom_minimum_size = Vector2(76, 108)
 	b.expand_icon = true
 	b.tooltip_text = "Choose or edit your character"
 	b.pressed.connect(_menu_skins)
@@ -349,12 +364,12 @@ func _menu_skin_button() -> void:
 	row.add_child(side)
 	var who := Label.new()
 	who.text = skin_name() if skin_name() != "" else "Default"
-	who.add_theme_font_size_override("font_size", 20)
+	who.add_theme_font_size_override("font_size", 17)
 	side.add_child(who)
 	var hint := Label.new()
 	hint.text = "click to change"
-	hint.add_theme_font_size_override("font_size", 13)
-	hint.modulate = Color(1, 1, 1, 0.55)
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.modulate = Color(1, 1, 1, 0.5)
 	side.add_child(hint)
 
 
@@ -362,6 +377,7 @@ func _menu_skin_button() -> void:
 func _menu_skins() -> void:
 	for c in _menu_vb.get_children():
 		c.queue_free()
+	_refresh_menu_skin(false)
 	_menu_label("Your character", 30)
 	_menu_label("this is who you play as -- it travels with you into a game", 14, 0.55)
 	_menu_label(" ", 6)
