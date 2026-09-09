@@ -645,6 +645,14 @@ const LEATHER := 123
 ## an item. Its job is your respawn point: somewhere you chose, instead of the
 ## one spot on the home world every death sends you back to.
 const BED := 124
+## Water you can carry. Two ids rather than one with a flag, so a glance at the
+## bar tells you whether it is full -- and so a full one stacks separately from
+## the empties, which is the whole point of carrying several.
+##
+## What it is FOR is farming: tilled soil has to be near water (see
+## Player.TILL_RANGE), which without this means every field is on a shoreline.
+const BUCKET := 125
+const WATER_BUCKET := 126
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
@@ -1237,6 +1245,11 @@ const STATION_CRAFTS := {
 		# putting it behind rare drops would just make the early game dark.
 		{"label": "Hoe", "out": HOE, "n": 1,
 			"reqs": [{"any": WOOD_IDS, "n": 3, "label": "Wood"}]},
+		# Metal, at the bench you can reach with nothing -- so it costs a trip
+		# to a smelter and no more than that. A field has to be near water, and
+		# a bucket is what stops that meaning "on a beach".
+		{"label": "Bucket", "out": BUCKET, "n": 1,
+			"reqs": [{"id": METAL, "n": 3}]},
 		{"label": "Torch x4", "out": TORCH, "n": 4,
 			"reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
 		# Burns the ore itself: how bright and how far comes from that ore's
@@ -1299,6 +1312,8 @@ const NAMES := {
 	CROP: "Crop",
 	YOUNG_TREE: "Young Tree",
 	HOE: "Hoe",
+	BUCKET: "Bucket",
+	WATER_BUCKET: "Water Bucket",
 	COOKED_CROP: "Cooked Vegetables",
 	BONEMEAL: "Bone Meal",
 	FIBRE: "Plant Fibre",
@@ -1447,6 +1462,8 @@ const COLORS := {
 	CROP: Color(0.46, 0.68, 0.30),
 	YOUNG_TREE: Color(0.44, 0.33, 0.20),
 	HOE: Color(0.72, 0.58, 0.34),
+	BUCKET: Color(0.68, 0.70, 0.74),
+	WATER_BUCKET: Color(0.34, 0.52, 0.78),
 	COOKED_CROP: Color(0.78, 0.55, 0.24),
 	RAW_MEAT: Color(0.72, 0.26, 0.28),
 	COOKED_MEAT: Color(0.55, 0.34, 0.18),

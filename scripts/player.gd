@@ -789,6 +789,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				pass
 			elif _try_till(_raycast_voxel()):
 				pass
+			elif _try_bucket(_raycast_voxel()):
+				pass
 			elif _try_assemble_machine():
 				pass
 			elif _try_toggle_door():
@@ -2651,6 +2653,109 @@ func _try_till(tgt: Dictionary) -> bool:
 		return true
 	world.edit_block(planet, v, Blocks.TILLED)
 	return true
+
+
+## Fill an empty bucket from water, or pour a full one out.
+##
+## Pouring makes a SPRING, not a puddle: it holds itself full and feeds what is
+## around it, the same way the sea does. A single cell that drained away the
+## moment you turned round would be no use for the one thing this is for --
+## working soil somewhere that is not a shoreline.
+func _try_bucket(tgt: Dictionary) -> bool:
+	var sel := _selected_id()
+	if sel != Blocks.BUCKET and sel != Blocks.WATER_BUCKET:
+		return false
+	if sel == Blocks.BUCKET:
+		var got := _water_under_crosshair()
+		if got.is_empty():
+			_toast("Nothing here to fill it from")
+			return true
+		var from: Planet = got["planet"]
+		var wv: Vector3i = got["voxel"]
+		# Only a full cell. The shallow end of a stream is an eighth of a cell
+		# of water, and carrying that away as a whole bucketful would turn any
+		# spill into an infinite supply.
+		if from.water_fill(wv) < 0.999:
+			_toast("Too shallow to fill from")
+			return true
+		# The open sea is left alone -- see Planet.water_is_native. Water that
+		# somebody poured or that flowed here is really carried away.
+		if not from.water_is_native(wv):
+			world.edit_block(from, wv, Blocks.AIR)
+		_swap_held(Blocks.WATER_BUCKET)
+		return true
+	if tgt.get("kind", "") != "planet" or not tgt.get("hit", false):
+		return false        # nothing aimed at: fall through to the normal chain
+	var planet := tgt["obj"] as Planet
+	var v: Vector3i = tgt["place"]
+	if planet.get_id(v) != Blocks.AIR:
+		_toast("There is no room for it there")
+		return true
+	world.edit_block(planet, v, Blocks.WATER)
+	_swap_held(Blocks.BUCKET)
+	return true
+
+
+## Trade the thing in your hand for one of another kind, in the SAME slot where
+## possible: an empty bucket that jumps to the far end of the bar is one you
+## have to go looking for in the middle of a field.
+func _swap_held(to_id: int) -> void:
+	_place_flash = 0.3
+	_swing_t = 0.0
+	var s = inv[active_slot]
+	s["count"] = int(s["count"]) - 1
+	if int(s["count"]) <= 0:
+		s["id"] = to_id
+		s["count"] = 1
+		s["props"] = {}
+		s["src"] = ""
+		s["mat"] = {}
+	elif _add_item(to_id, 1) > 0:
+		_toast("No room for the bucket")
+	_refresh_slots()
+
+
+## The first water under the crosshair, within reach.
+##
+## Its own march rather than _raycast_voxel, which deliberately passes THROUGH
+## water: everything else you can aim at is solid, and a ray that stopped at the
+## surface of a lake would put blocks on top of it instead of on the bed.
+func _water_under_crosshair() -> Dictionary:
+	if world == null or _camera == null:
+		return {}
+	var planet := world.nearest_planet(_camera.global_position)
+	if planet == null:
+		return {}
+	var o := planet.to_local(_camera.global_position)
+	var d := (planet.global_transform.basis.inverse()
+		* -_camera.global_transform.basis.z).normalized()
+	var v := Vector3i(floori(o.x), floori(o.y), floori(o.z))
+	var step := Vector3i(1 if d.x >= 0.0 else -1, 1 if d.y >= 0.0 else -1,
+		1 if d.z >= 0.0 else -1)
+	var tmax := Vector3(_tmax(o.x, d.x), _tmax(o.y, d.y), _tmax(o.z, d.z))
+	var tdelta := Vector3(_tdelta(d.x), _tdelta(d.y), _tdelta(d.z))
+	var travelled := 0.0
+	for i in 24:
+		if travelled > REACH:
+			break
+		var id := planet.get_id(v)
+		if id == Blocks.WATER:
+			return {"planet": planet, "voxel": v}
+		if id != Blocks.AIR:
+			return {}      # something solid comes first: nothing to fill from
+		if tmax.x < tmax.y and tmax.x < tmax.z:
+			travelled = tmax.x
+			v.x += step.x
+			tmax.x += tdelta.x
+		elif tmax.y < tmax.z:
+			travelled = tmax.y
+			v.y += step.y
+			tmax.y += tdelta.y
+		else:
+			travelled = tmax.z
+			v.z += step.z
+			tmax.z += tdelta.z
+	return {}
 
 
 func _water_within(planet: Planet, v: Vector3i, r: int) -> bool:

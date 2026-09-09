@@ -4262,6 +4262,16 @@ func set_block(v: Vector3i, id: int, quiet := false) -> void:
 	# -- another player, a machine, anything added later -- gets the same answer.
 	# `quiet` edits are a world being replayed rather than changed, and waking
 	# the whole of a loaded save at once is not a thing worth doing.
+	# A water block written through HERE is one somebody poured, because the
+	# simulation writes its own cells straight into the edit table rather than
+	# through this function. So it becomes a spring, and emptying the cell again
+	# -- with a bucket, or by building in it -- takes the spring with it. Done
+	# for replayed edits too: this is state, not an event, and a client applying
+	# the host's edits has to arrive at the same water the host has.
+	if id == Blocks.WATER:
+		_wlev[v] = W_SOURCE
+	elif was == Blocks.WATER:
+		_wlev.erase(v)
 	if not quiet and water_style == WATER_LIQUID:
 		flow_water(v)
 	_edit_remesh(cc)
@@ -4351,6 +4361,13 @@ const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
 # and recedes when its source is cut off. Dynamic water is stored as WATER edits
 # (so it renders/collides/streams like any block); `_wlev` holds the levels.
 const W_FULL := 8
+## A cell that is a SPRING rather than a puddle: it holds itself full and feeds
+## its neighbours, and nothing drains it. Generated ocean behaves this way
+## because it is a function of the seed; this is how a bucket of water poured on
+## dry ground does the same. Stored as a level above full so it rides along in
+## the level table, the save file and the network message that already exist --
+## a second table of which cells are special is a second table to keep in step.
+const W_SOURCE := 9
 const FLOW_DT := 0.10          # simulation tick interval (seconds)
 const FLOW_BUDGET := 256       # cells evaluated per tick (keeps ticks cheap)
 const MAX_WATER := 24000       # safety cap on total dynamic water cells
@@ -4431,6 +4448,8 @@ func _is_solid_block(c: Vector3i) -> bool:
 
 # Undug, generated ocean = an infinite full source.
 func _ocean_source(c: Vector3i) -> bool:
+	if int(_wlev.get(c, 0)) == W_SOURCE:
+		return true      # poured from a bucket, and it stays
 	var d = _edits_by_chunk.get(chunk_of(c))
 	if d != null and d.has(c):
 		return false
@@ -4442,7 +4461,7 @@ func _ocean_source(c: Vector3i) -> bool:
 func _wlevel(c: Vector3i) -> int:
 	if _ocean_source(c):
 		return W_FULL
-	return _wlev.get(c, 0)
+	return mini(int(_wlev.get(c, 0)), W_FULL)
 
 
 func _water_target(c: Vector3i) -> int:
@@ -4560,6 +4579,15 @@ func apply_water(rows: Array) -> void:
 	_flush_water_meshes()
 
 
+## Is this cell simply the sea the world generated, rather than water somebody
+## put there? An untouched sea is a function of the seed and infinite by
+## construction, so a bucket does not dent it -- writing a hole into the surface
+## would leave a permanent dip wherever anyone had ever filled one. Anything the
+## simulation is actually tracking can be taken away.
+func water_is_native(v: Vector3i) -> bool:
+	return not _wlev.has(v) and _ocean_source(v)
+
+
 ## Every dynamic water cell and how deep it is, for the save file and for a
 ## joining client. Generated ocean is not in here: it is a function of the seed,
 ## and the far side of a world nobody has touched should cost the save nothing.
@@ -4587,7 +4615,7 @@ func water_fill(v: Vector3i) -> float:
 	# cell the world generated, which is full.
 	if not _wlev.has(v):
 		return 1.0
-	return clampf(float(_wlev[v]) / float(W_FULL), 0.0, 1.0)
+	return clampf(float(_wlev[v]) / float(W_FULL), 0.0, 1.0)   # a spring reads as full
 
 
 func _set_water(c: Vector3i, level: int, dirty: Dictionary) -> void:
