@@ -204,15 +204,12 @@ func flora_here() -> Array:
 	var used := {}
 	for f in _flora_here:
 		var e: Dictionary = (f as Dictionary).duplicate()
-		var kind := str(e.get("kind", "grass"))
-		var suf: Array = Blocks.FLORA_NAME_SUF.get(kind, Blocks.FLORA_NAME_SUF["grass"])
-		# Drawn until it is one this world has not used. Two species sharing a
-		# name is worse than either having a dull one -- a world grew two trees
-		# both called Thrycedar, and no amount of looking at them would tell you
-		# they were different plants.
+		# Only the front is rolled: the ending belongs to the species, so two
+		# plants can no longer end up sharing a name by accident, and a name
+		# that DOES turn up on two worlds is the same plant on both.
 		var nm := ""
 		for _try in 24:
-			nm = Blocks.FLORA_NAME_PRE[fr.randi() % Blocks.FLORA_NAME_PRE.size()] 				+ str(suf[fr.randi() % suf.size()])
+			nm = Blocks.flora_name(fr, e)
 			if not used.has(nm):
 				break
 		# Vanishingly unlikely, but a name is not worth a loop that might not end.
@@ -674,8 +671,13 @@ func _make_drops(rng: RandomNumberGenerator, kind: String, body: String, scale: 
 
 
 func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
-	var sname: String = Blocks.FAUNA_NAME_PRE[rng.randi() % Blocks.FAUNA_NAME_PRE.size()] \
-		+ Blocks.FAUNA_NAME_SUF[rng.randi() % Blocks.FAUNA_NAME_SUF.size()]
+	# As with ores: the planet decides it has a creature of this kind, and the
+	# creature is then built entirely out of its own name -- from here on `rng`
+	# IS the name's stream, so a Grumhide is the same animal wherever you meet
+	# one. The ending carries the kind, so a name cannot be a fish on one world
+	# and something that walks on the next.
+	var sname: String = Blocks.fauna_name(rng, kind)
+	rng = Blocks.identity_rng(sname)
 	var body: String
 	match kind:
 		"fish": body = "fish"
@@ -1090,29 +1092,37 @@ func _derive_ores() -> void:
 # Invent one ore: a unique name & color for this planet, with tier-derived stats.
 func _make_ore(orng: RandomNumberGenerator, slot: int, tier: int,
 		force_shallow: bool = false) -> Dictionary:
-	var name: String = Blocks.ORE_NAME_PRE[orng.randi() % Blocks.ORE_NAME_PRE.size()] \
-		+ Blocks.ORE_NAME_SUF[orng.randi() % Blocks.ORE_NAME_SUF.size()]
+	# The planet chooses WHICH ore it has; the ore itself comes from its name.
+	# Everything below is drawn from `irng`, seeded by that name, so two worlds
+	# landing on Velite describe the same mineral rather than two different ones
+	# that happen to share a label. The ending carries the tier, so a name
+	# cannot be common here and exotic there.
+	#
+	# How MUCH of it there is and how deep it sits stay with the PLANET, drawn
+	# from orng below: that is how this world holds the ore, not what it is.
+	var name: String = Blocks.ore_name(orng, tier)
+	var irng := Blocks.identity_rng(name)
 	# colour: random hue, saturation/value that read as a mineral; a touch brighter
 	# and more saturated at higher tiers so exotic ores catch the eye.
-	var hue := orng.randf()
-	var sat := 0.45 + 0.12 * tier + orng.randf_range(-0.05, 0.05)
-	var val := 0.55 + 0.08 * tier + orng.randf_range(-0.05, 0.05)
+	var hue := irng.randf()
+	var sat := 0.45 + 0.12 * tier + irng.randf_range(-0.05, 0.05)
+	var val := 0.55 + 0.08 * tier + irng.randf_range(-0.05, 0.05)
 	var color := Color.from_hsv(hue, clampf(sat, 0.3, 0.95), clampf(val, 0.4, 0.9))
 	# props: tier archetype +/- per-ore variance
 	var base: Dictionary = Blocks.TIER_PROPS[tier]
 	var props := {}
 	for k in Blocks.PROP_KEYS:
-		props[k] = clampi(int(round(float(base[k]) * orng.randf_range(0.85, 1.15))), 1, 100)
+		props[k] = clampi(int(round(float(base[k]) * irng.randf_range(0.85, 1.15))), 1, 100)
 	# Combustion swings far wider than the other properties, and deliberately
 	# ignores tier: roughly a third of ores come out volatile. That means a
 	# common surface ore can be the best fuel on the planet, which gives an
 	# early world something worth mining and makes "which ore burns best here"
 	# a real question rather than "whichever is rarest".
-	if orng.randf() < 0.34:
-		props["c"] = clampi(int(round(orng.randf_range(62.0, 100.0))), 1, 100)
+	if irng.randf() < 0.34:
+		props["c"] = clampi(int(round(irng.randf_range(62.0, 100.0))), 1, 100)
 	else:
-		props["c"] = clampi(int(round(orng.randf_range(4.0, 40.0))), 1, 100)
-	var hardness: float = Blocks.TIER_HARDNESS[tier] * orng.randf_range(0.9, 1.1)
+		props["c"] = clampi(int(round(irng.randf_range(4.0, 40.0))), 1, 100)
+	var hardness: float = Blocks.TIER_HARDNESS[tier] * irng.randf_range(0.9, 1.1)
 	var deep := not force_shallow and (tier >= 2 or orng.randf() < 0.4)
 	# A depth in BLOCKS, not a fraction of the planet. A quarter of the radius is
 	# 375 blocks down on a home world -- deeper than any cave goes, so an ore

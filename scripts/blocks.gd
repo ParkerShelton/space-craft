@@ -100,9 +100,49 @@ const TIER_HARDNESS := [1.0, 1.4, 2.0, 2.8]   # base mining seconds (before hand
 const TIER_MIN_POWER := [1.0, 1.0, 1.6, 2.4]  # mine_power needed to break at all (hands=1.0)
 
 # Syllables for inventing ore names (planet combines a prefix + suffix from its seed).
+# --- names are identities ----------------------------------------------------
+#
+# Two planets that land on the same name for an ore, a creature or a plant now
+# describe THE SAME THING, rather than two unrelated things wearing one label.
+# It works by turning the usual arrangement around: the name is not a decoration
+# generated alongside the properties, it is the SEED they are all generated
+# from. Same name in, same colour, same stats, same everything out.
+#
+# The other half is that the name pools are partitioned -- by tier for ores, by
+# kind for creatures, by species for plants -- so a name cannot belong to two
+# different sorts of thing in the first place. A "-ite" is always common, a
+# "-gill" is always a fish, and a "-fescue" is always the same grass.
+#
+# Repeats are made rare by the size of the pools, and harmless by the above.
+static func identity_rng(name: String) -> RandomNumberGenerator:
+	var r := RandomNumberGenerator.new()
+	r.seed = hash(name)
+	return r
+
+
 const ORE_NAME_PRE := ["Vel", "Cryo", "Pyr", "Aur", "Fer", "Lum", "Xen", "Tor",
-	"Zin", "Mag", "Cor", "Nyx", "Hal", "Ryn", "Quar", "Bas", "Dra", "Eos"]
-const ORE_NAME_SUF := ["ite", "ium", "ex", "ora", "yte", "ine", "ar", "onite", "ax", "yr"]
+	"Zin", "Mag", "Cor", "Nyx", "Hal", "Ryn", "Quar", "Bas", "Dra", "Eos",
+	"Grav", "Ith", "Kal", "Myr", "Ob", "Phos", "Sel", "Tarn", "Ulth", "Ves",
+	"Wex", "Yttr", "Zeb", "Ang", "Bry", "Cind",
+	# The pools are deliberately long. A repeated name is harmless now -- it is
+	# the same ore -- but it should still be a thing you notice and remark on
+	# rather than something that happens on the next planet along.
+	"Del", "Emb", "Fyr", "Gald", "Hyx", "Irr", "Jov", "Krel", "Lath", "Mir",
+	"Nal", "Osp", "Pell", "Quin", "Rav", "Syl", "Thex", "Urn", "Vand", "Wroth",
+	"Xal", "Ymir", "Zor", "Ael", "Bor", "Cald", "Dros", "Ekt", "Fal", "Gorm"]
+## Split by TIER, so an ore's ending says what it is: the same name can never be
+## a common ore on one world and an exotic one on the next.
+const ORE_NAME_SUF := [
+	["ite", "ar", "ide", "ash", "stone", "grit"],     # tier 0 -- Common
+	["ium", "ine", "ora", "yte", "lith", "spar"],     # tier 1 -- Uncommon
+	["ex", "onite", "yr", "isk", "crys", "vein"],     # tier 2 -- Rare
+	["ax", "yx", "arch", "ovar", "helion", "core"],   # tier 3 -- Exotic
+]
+
+
+static func ore_name(r: RandomNumberGenerator, tier: int) -> String:
+	var suf: Array = ORE_NAME_SUF[clampi(tier, 0, ORE_NAME_SUF.size() - 1)]
+	return ORE_NAME_PRE[r.randi() % ORE_NAME_PRE.size()] 		+ str(suf[r.randi() % suf.size()])
 
 # Syllables for inventing PLANT names, per planet, the same way ores and
 # creatures get theirs. A world whose grass is called Meadow Grass like every
@@ -113,18 +153,59 @@ const ORE_NAME_SUF := ["ite", "ium", "ex", "ora", "yte", "ine", "ar", "onite", "
 # than no name at all.
 const FLORA_NAME_PRE := ["Vire", "Sable", "Mor", "Tass", "Ely", "Bram", "Silt",
 	"Ashen", "Corr", "Dun", "Wyl", "Fen", "Gale", "Hesp", "Iri", "Ker", "Lune",
-	"Marr", "Nyss", "Orv", "Pell", "Quill", "Rhe", "Sten", "Thry", "Umb"]
-const FLORA_NAME_SUF := {
-	"grass": ["grass", "reed", "sedge", "blade", "fescue", "tussock"],
-	"bush":  ["bush", "berry", "thistle", "bramble", "shrub", "vine"],
-	"tree":  ["wood", "bark", "crown", "pine", "bough", "cedar"],
-}
+	"Marr", "Nyss", "Orv", "Pell", "Quill", "Rhe", "Sten", "Thry", "Umb",
+	"Vess", "Wend", "Yarr", "Zell", "Alder", "Brack", "Cael", "Drift",
+	# Longest of the three pools: a world grows several plants and you meet them
+	# constantly, so this is where a repeat would be noticed soonest.
+	"Ember", "Fallow", "Gloam", "Hollow", "Inkle", "Juniper", "Kindle",
+	"Larkin", "Mellow", "Nettle", "Osier", "Prattle", "Quicken", "Rowan",
+	"Sorrel", "Tamar", "Ussel", "Verdant", "Willow", "Yarrow", "Amber",
+	"Bracken", "Cinder", "Dapple", "Elder", "Frost", "Golden", "Hazel",
+	"Ivory", "Jasper", "Kestrel", "Linden", "Murk", "Nimble", "Oaken",
+	"Pallid", "Quiver", "Russet", "Sallow", "Thicket"]
+
+
+## Only the front of the name is rolled. The ending belongs to the SPECIES (see
+## the `suffix` on each entry below), so a "-fescue" is the same grass on every
+## world that grows one -- which is the whole point: a repeated name is a
+## repeated plant, not a coincidence.
+static func flora_name(r: RandomNumberGenerator, sp: Dictionary) -> String:
+	var suf := str(sp.get("suffix", "grass"))
+	# Skip a front that already says the ending: "Frost" + "frost" is
+	# Frostfrost, and "Ashen" + "ash" is Ashenash. Both are in the pools because
+	# they are good plant words, so the fix is to not put them together rather
+	# than to lose them.
+	for _try in 12:
+		var pre := str(FLORA_NAME_PRE[r.randi() % FLORA_NAME_PRE.size()])
+		var low := pre.to_lower()
+		if not (low.contains(suf) or suf.contains(low)):
+			return pre + suf
+	return str(FLORA_NAME_PRE[r.randi() % FLORA_NAME_PRE.size()]) + suf
 
 # Syllables for inventing creature/fish species names (per-planet, like ores).
 const FAUNA_NAME_PRE := ["Grum", "Ska", "Bri", "Lox", "Fen", "Wob", "Thal", "Kree",
-	"Mun", "Snap", "Grov", "Piv", "Ux", "Yar", "Zeph", "Bok", "Crin", "Dus"]
-const FAUNA_NAME_SUF := ["ling", "back", "hide", "fang", "snout", "wing", "tail",
-	"claw", "hopper", "crawler", "gill", "fin", "runt", "beast"]
+	"Mun", "Snap", "Grov", "Piv", "Ux", "Yar", "Zeph", "Bok", "Crin", "Dus",
+	"Hesk", "Jarn", "Klu", "Morv", "Nub", "Ozz", "Prit", "Quon", "Rusk", "Tev",
+	"Vunt", "Warl", "Xob", "Yeld",
+	"Abb", "Blun", "Chit", "Dorv", "Emm", "Frul", "Gnash", "Hurl", "Ick",
+	"Jub", "Knar", "Lurk", "Meep", "Nix", "Obb", "Purr", "Quag", "Ripp",
+	"Scud", "Thrum", "Udd", "Vray", "Whel", "Yop", "Zunk", "Blep", "Crox",
+	"Dweb", "Flet", "Gulp"]
+## Split by KIND. A "-gill" is a fish wherever you meet it, so the same name can
+## never be a fish on one world and something that walks on the next.
+const FAUNA_NAME_SUF := {
+	"fish":  ["gill", "fin", "scale", "minnow"],
+	"air":   ["wing", "flit", "soar", "quill"],
+	"cave":  ["crawler", "burrow", "grub", "creep"],
+	"land":  ["back", "hide", "snout", "hopper", "beast", "hoof"],
+	"npc":   ["folk", "kin", "wright", "tender"],
+	"enemy": ["fang", "claw", "render", "maw"],
+}
+
+
+static func fauna_name(r: RandomNumberGenerator, kind: String) -> String:
+	var suf: Array = FAUNA_NAME_SUF.get(kind, FAUNA_NAME_SUF["land"])
+	return FAUNA_NAME_PRE[r.randi() % FAUNA_NAME_PRE.size()] 		+ str(suf[r.randi() % suf.size()])
 
 const PROP_KEYS := ["h", "d", "e", "r", "c"]
 const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy",
@@ -1498,31 +1579,31 @@ static func is_plant(id: int) -> bool:
 # Planet.flora_here), so these are what a species is called in the abstract.
 const FLORA := [
 	# class M -- temperate
-	{"key": "meadow", "name": "Meadow Grass", "kind": "grass", "classes": ["M"]},
-	{"key": "ryegrass", "name": "Rye Grass", "kind": "grass", "classes": ["M"]},
-	{"key": "clover", "name": "Clover", "kind": "bush", "classes": ["M"]},
-	{"key": "briar", "name": "Briar", "kind": "bush", "classes": ["M", "P"]},
-	{"key": "broadleaf", "name": "Broadleaf", "kind": "tree", "classes": ["M"]},
-	{"key": "silverbark", "name": "Silverbark", "kind": "tree", "classes": ["M", "P"]},
+	{"key": "meadow", "name": "Meadow Grass", "suffix": "grass", "kind": "grass", "classes": ["M"]},
+	{"key": "ryegrass", "name": "Rye Grass", "suffix": "rye", "kind": "grass", "classes": ["M"]},
+	{"key": "clover", "name": "Clover", "suffix": "clover", "kind": "bush", "classes": ["M"]},
+	{"key": "briar", "name": "Briar", "suffix": "briar", "kind": "bush", "classes": ["M", "P"]},
+	{"key": "broadleaf", "name": "Broadleaf", "suffix": "leaf", "kind": "tree", "classes": ["M"]},
+	{"key": "silverbark", "name": "Silverbark", "suffix": "bark", "kind": "tree", "classes": ["M", "P"]},
 	# class P -- frozen
-	{"key": "frostgrass", "name": "Frost Grass", "kind": "grass", "classes": ["P"]},
-	{"key": "tundramoss", "name": "Tundra Moss", "kind": "grass", "classes": ["P"]},
-	{"key": "snowberry", "name": "Snowberry", "kind": "bush", "classes": ["P"]},
-	{"key": "rimeberry", "name": "Rime Berry", "kind": "bush", "classes": ["P"]},
-	{"key": "icepine", "name": "Ice Pine", "kind": "tree", "classes": ["P"]},
+	{"key": "frostgrass", "name": "Frost Grass", "suffix": "frost", "kind": "grass", "classes": ["P"]},
+	{"key": "tundramoss", "name": "Tundra Moss", "suffix": "moss", "kind": "grass", "classes": ["P"]},
+	{"key": "snowberry", "name": "Snowberry", "suffix": "berry", "kind": "bush", "classes": ["P"]},
+	{"key": "rimeberry", "name": "Rime Berry", "suffix": "rime", "kind": "bush", "classes": ["P"]},
+	{"key": "icepine", "name": "Ice Pine", "suffix": "pine", "kind": "tree", "classes": ["P"]},
 	# class H -- arid
-	{"key": "duneweed", "name": "Dune Weed", "kind": "grass", "classes": ["H"]},
-	{"key": "sandsedge", "name": "Sand Sedge", "kind": "grass", "classes": ["H", "Y"]},
-	{"key": "thornbush", "name": "Thorn Bush", "kind": "bush", "classes": ["H", "Y"]},
-	{"key": "ironroot", "name": "Ironroot", "kind": "tree", "classes": ["H", "Y"]},
+	{"key": "duneweed", "name": "Dune Weed", "suffix": "weed", "kind": "grass", "classes": ["H"]},
+	{"key": "sandsedge", "name": "Sand Sedge", "suffix": "sedge", "kind": "grass", "classes": ["H", "Y"]},
+	{"key": "thornbush", "name": "Thorn Bush", "suffix": "thorn", "kind": "bush", "classes": ["H", "Y"]},
+	{"key": "ironroot", "name": "Ironroot", "suffix": "root", "kind": "tree", "classes": ["H", "Y"]},
 	# class Y -- scorched
-	{"key": "ashgrass", "name": "Ash Grass", "kind": "grass", "classes": ["Y"]},
-	{"key": "cinderweed", "name": "Cinder Weed", "kind": "grass", "classes": ["Y"]},
+	{"key": "ashgrass", "name": "Ash Grass", "suffix": "ash", "kind": "grass", "classes": ["Y"]},
+	{"key": "cinderweed", "name": "Cinder Weed", "suffix": "cinder", "kind": "grass", "classes": ["Y"]},
 	# class O -- ocean
-	{"key": "kelpvine", "name": "Kelp Vine", "kind": "grass", "classes": ["O"]},
-	{"key": "reedgrass", "name": "Reed Grass", "kind": "grass", "classes": ["O"]},
-	{"key": "coralbush", "name": "Coral Bush", "kind": "bush", "classes": ["O"]},
-	{"key": "mangrove", "name": "Mangrove", "kind": "tree", "classes": ["O"]},
+	{"key": "kelpvine", "name": "Kelp Vine", "suffix": "kelp", "kind": "grass", "classes": ["O"]},
+	{"key": "reedgrass", "name": "Reed Grass", "suffix": "reed", "kind": "grass", "classes": ["O"]},
+	{"key": "coralbush", "name": "Coral Bush", "suffix": "coral", "kind": "bush", "classes": ["O"]},
+	{"key": "mangrove", "name": "Mangrove", "suffix": "mangrove", "kind": "tree", "classes": ["O"]},
 	# nothing lives on a class D world. That is what makes it barren.
 ]
 
