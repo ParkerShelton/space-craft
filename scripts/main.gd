@@ -77,6 +77,10 @@ var _net: Net
 var _join_ip: LineEdit
 var _menu_skin_corner: MarginContainer
 var _skin_editor: SkinEditor
+var _skin_names: Array = []
+var _skin_index := 0
+var _skin_row: HBoxContainer
+var _skin_scroll: ScrollContainer
 var _net_mode := "single"
 var _client_seed := 0
 var _client_system := 0
@@ -374,69 +378,125 @@ func _refresh_menu_skin(shown: bool) -> void:
 	side.add_child(hint)
 
 
-## The wardrobe: everything you have made, plus a way to make another.
+## The wardrobe: one row of characters you page through, and what to do with
+## the one you have landed on.
+##
+## A row rather than a grid because the list is short and the choice is one
+## thing, not a layout: arrows step through it, and everything underneath acts
+## on whichever is in front of you.
 func _menu_skins() -> void:
 	for c in _menu_vb.get_children():
 		c.queue_free()
 	_refresh_menu_skin(false)
+	# "" is the built-in one, always first and never deletable.
+	_skin_names = [""]
+	for n in PlayerSkin.list_skins():
+		_skin_names.append(n)
+	_skin_index = clampi(_skin_names.find(skin_name()), 0, _skin_names.size() - 1)
+
 	_menu_label("Your character", 30)
 	_menu_label("this is who you play as -- it travels with you into a game", 14, 0.55)
 	_menu_label(" ", 6)
-	var grid := GridContainer.new()
-	grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-	grid.columns = 5
-	grid.add_theme_constant_override("h_separation", 8)
-	grid.add_theme_constant_override("v_separation", 8)
-	_menu_vb.add_child(grid)
-	# The built-in one is always offered, and cannot be deleted or edited away.
-	_skin_tile(grid, "", PlayerSkin.default_image(DEFAULT_SKIN_HUE))
-	for n in PlayerSkin.list_skins():
-		var img = PlayerSkin.load_skin(n)
+
+	var row := HBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	row.add_theme_constant_override("separation", 10)
+	_menu_vb.add_child(row)
+	var left := Button.new()
+	left.text = "<"
+	left.custom_minimum_size = Vector2(40, 132)
+	left.pressed.connect(func(): _step_skin(-1))
+	row.add_child(left)
+	_skin_scroll = ScrollContainer.new()
+	_skin_scroll.custom_minimum_size = Vector2(468, 138)
+	_skin_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	row.add_child(_skin_scroll)
+	_skin_row = HBoxContainer.new()
+	_skin_row.add_theme_constant_override("separation", 8)
+	_skin_scroll.add_child(_skin_row)
+	for i in _skin_names.size():
+		var n: String = _skin_names[i]
+		var img = PlayerSkin.default_image(DEFAULT_SKIN_HUE) if n == "" else PlayerSkin.load_skin(n)
 		if img != null:
-			_skin_tile(grid, n, img)
-	_menu_label(" ", 6)
-	if skin_name() != "":
-		_menu_button("Edit \"%s\"" % skin_name(), _open_skin_editor)
-	else:
-		# The built-in one is everybody's starting point and stays as it is.
-		# Editing it makes a copy, which is what "edit the default" means anyway.
-		_menu_button("Edit a copy of this", func():
+			_skin_tile(_skin_row, i, n, img)
+	var right := Button.new()
+	right.text = ">"
+	right.custom_minimum_size = Vector2(40, 132)
+	right.pressed.connect(func(): _step_skin(1))
+	row.add_child(right)
+	_menu_label(" ", 8)
+
+	_menu_button("Edit", func():
+		# The built-in one is everybody's starting point and stays as it is;
+		# editing it means editing a copy, which is what you wanted anyway.
+		if _picked_skin() == "":
 			_menu_new_skin()
-			_open_skin_editor())
+		else:
+			set_setting("skin", _picked_skin())
+		_open_skin_editor())
+	_menu_button("Select", func():
+		# Wearing it is the decision this screen exists for, so it is also the
+		# way out of it.
+		set_setting("skin", _picked_skin())
+		_menu_populate(false))
 	_menu_button("New character", _menu_new_skin)
-	if skin_name() != "":
-		_menu_button("Delete \"%s\"" % skin_name(), func():
-			PlayerSkin.delete_skin(skin_name())
-			set_setting("skin", "")
+	if _picked_skin() != "":
+		_menu_button("Delete", func():
+			PlayerSkin.delete_skin(_picked_skin())
+			if skin_name() == _picked_skin():
+				set_setting("skin", "")
 			_menu_skins(), "ui_back")
 	_menu_button("Back", func(): _menu_populate(false), "ui_back")
+	_highlight_skin()
 
 
-## One choice in the wardrobe.
-##
-## The one being worn is shown at full strength and the rest are dimmed, which
-## reads across a row of tiles from any distance -- a pressed button state does
-## not, because a pressed button and a hovered one look much the same.
-func _skin_tile(grid: GridContainer, name: String, img: Image) -> void:
+func _picked_skin() -> String:
+	if _skin_index < 0 or _skin_index >= _skin_names.size():
+		return ""
+	return str(_skin_names[_skin_index])
+
+
+## Move along the row, and bring what you moved to into view.
+func _step_skin(d: int) -> void:
+	if _skin_names.is_empty():
+		return
+	_skin_index = posmod(_skin_index + d, _skin_names.size())
+	_highlight_skin()
+
+
+func _highlight_skin() -> void:
+	if _skin_row == null:
+		return
+	for i in _skin_row.get_child_count():
+		var tile: Control = _skin_row.get_child(i)
+		tile.modulate = Color(1, 1, 1, 1.0 if i == _skin_index else 0.4)
+	if _skin_index < _skin_row.get_child_count() and _skin_scroll != null:
+		_skin_scroll.ensure_control_visible(_skin_row.get_child(_skin_index))
+
+
+## One character in the row. Clicking one is the same as arrowing to it: the
+## arrows are for when your hand is already on them, not the only way through.
+func _skin_tile(row: HBoxContainer, index: int, name: String, img: Image) -> void:
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 2)
-	grid.add_child(col)
+	row.add_child(col)
 	var b := Button.new()
 	b.icon = PlayerSkin.portrait_texture(img, 2)
-	b.custom_minimum_size = Vector2(72, 104)
+	b.custom_minimum_size = Vector2(78, 108)
 	b.expand_icon = true
 	b.tooltip_text = name if name != "" else "The built-in character"
-	var worn: bool = name == skin_name()
-	b.modulate = Color(1, 1, 1, 1.0 if worn else 0.45)
 	b.pressed.connect(func():
-		set_setting("skin", name)
-		_menu_skins())
+		_skin_index = index
+		_highlight_skin())
 	col.add_child(b)
 	var cap := Label.new()
-	cap.text = (name if name != "" else "Default")
+	# Which one you are WEARING has to stay visible while you page past others,
+	# or you lose track of what you will be if you just leave.
+	cap.text = ("%s  (worn)" % [name if name != "" else "Default"]
+		if name == skin_name() else (name if name != "" else "Default"))
 	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	cap.add_theme_font_size_override("font_size", 12)
-	cap.modulate = Color(1, 1, 1, 1.0 if worn else 0.5)
+	cap.add_theme_font_size_override("font_size", 11)
+	cap.modulate = Color(1, 1, 1, 0.75)
 	col.add_child(cap)
 
 

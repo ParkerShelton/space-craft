@@ -101,6 +101,10 @@ func _build_paint_view() -> Control:
 	_vp.size = Vector2i(720, 720)
 	_vp.transparent_bg = true
 	_vp.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	# Its own world, or it shares the game's -- which means the game's
+	# environment decides how this figure is lit no matter what is set here, and
+	# these two lights get added to the world the player walks around in.
+	_vp.own_world_3d = true
 	_view = SubViewportContainer.new()
 	_view.stretch = true
 	_view.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -109,20 +113,21 @@ func _build_paint_view() -> Control:
 	_view.add_child(_vp)
 	_view.gui_input.connect(_view_input)
 
-	# Mostly ambient, with just enough directional to tell the faces apart.
-	# A preview exists to answer "what colour is that", and a key light strong
-	# enough to model the shape washes the lit faces to white -- which is the
-	# one thing it must not do.
+	# Almost entirely ambient, with a whisper of directional to separate the
+	# faces. Anything stronger and the light decides the colour rather than the
+	# skin does: with a key light from above, the DARKEST texture on the figure
+	# -- the top of the head -- came out the brightest thing on screen, which is
+	# exactly backwards from what the sheet beside it shows.
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	e.ambient_light_color = Color(1, 1, 1)
-	e.ambient_light_energy = 0.85
+	e.ambient_light_energy = 1.0
 	env.environment = e
 	_vp.add_child(env)
 	var lamp := DirectionalLight3D.new()
 	lamp.rotation_degrees = Vector3(-35, 30, 0)
-	lamp.light_energy = 0.35
+	lamp.light_energy = 0.16
 	_vp.add_child(lamp)
 	# From behind and the other side, weakly. Without it the faces turned away
 	# fall to near black, and a face you cannot see the colour of is a face you
@@ -130,7 +135,7 @@ func _build_paint_view() -> Control:
 	# them at any moment.
 	var fill_light := DirectionalLight3D.new()
 	fill_light.rotation_degrees = Vector3(10, -160, 0)
-	fill_light.light_energy = 0.22
+	fill_light.light_energy = 0.1
 	_vp.add_child(fill_light)
 	# A rig the camera orbits, so turning the view never turns the figure -- if
 	# the figure span instead, "the left arm" would depend on when you looked.
@@ -195,19 +200,6 @@ func _build_tools() -> Control:
 			# Reaching for a colour means you want to put it somewhere.
 			_set_tool(Tool.PENCIL))
 	col.add_child(_picker)
-
-	col.add_child(_spacer(10))
-	var zoom_row := HBoxContainer.new()
-	col.add_child(zoom_row)
-	for z in [4, 6, 8, 12]:
-		var zb := Button.new()
-		zb.text = "%dx" % z
-		zb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		zb.pressed.connect(func():
-			_zoom = z
-			_canvas.custom_minimum_size = Vector2(PlayerSkin.ATLAS, PlayerSkin.ATLAS) * _zoom
-			_canvas.queue_redraw())
-		zoom_row.add_child(zb)
 
 	col.add_child(_spacer(10))
 	var undo := Button.new()
@@ -340,6 +332,14 @@ func _abbr(part: String) -> String:
 
 func _canvas_input(e: InputEvent) -> void:
 	if e is InputEventMouseButton:
+		# The sheet zooms the same way the figure does, which is why the row of
+		# zoom buttons is gone: two ways to do one thing, one of them worse.
+		if e.button_index == MOUSE_BUTTON_WHEEL_UP and e.pressed:
+			_set_sheet_zoom(_zoom + 1)
+			return
+		if e.button_index == MOUSE_BUTTON_WHEEL_DOWN and e.pressed:
+			_set_sheet_zoom(_zoom - 1)
+			return
 		if e.button_index == MOUSE_BUTTON_LEFT:
 			if e.pressed:
 				_push_undo()
@@ -353,6 +353,12 @@ func _canvas_input(e: InputEvent) -> void:
 			_pick_at(e.position)
 	elif e is InputEventMouseMotion and _painting:
 		_paint_at(e.position)
+
+
+func _set_sheet_zoom(z: int) -> void:
+	_zoom = clampi(z, 2, 16)
+	_canvas.custom_minimum_size = Vector2(PlayerSkin.ATLAS, PlayerSkin.ATLAS) * _zoom
+	_canvas.queue_redraw()
 
 
 func _texel_at(pos: Vector2) -> Vector2i:
