@@ -417,8 +417,12 @@ func _fade_chat(delta: float) -> void:
 	_chat_label.modulate.a = clampf(_chat_fade, 0.0, 1.0)
 
 
+## Built whether or not anyone else is listening. It was multiplayer-only, on
+## the reasonable grounds that talking to nobody is not a feature -- but the
+## same box is now where commands are typed, so in single player it is the
+## console and there is nothing to talk to.
 func _build_chat() -> void:
-	if _chat_layer != null or _net == null or not _net.active:
+	if _chat_layer != null:
 		return
 	_chat_layer = CanvasLayer.new()
 	_chat_layer.layer = 9      # under the game menu, over the world
@@ -437,7 +441,9 @@ func _build_chat() -> void:
 	_chat_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	box.add_child(_chat_label)
 	_chat_entry = LineEdit.new()
-	_chat_entry.placeholder_text = "say something -- Enter to send, Esc to cancel"
+	_chat_entry.placeholder_text = ("say something -- Enter to send, Esc to cancel"
+		if _net != null and _net.active
+		else "type a command -- /help, Esc to cancel")
 	_chat_entry.custom_minimum_size = Vector2(560, 30)
 	_chat_entry.max_length = Net.CHAT_MAX
 	_chat_entry.visible = false
@@ -483,7 +489,12 @@ func _close_chat(send: bool) -> void:
 		if line.begins_with("/"):
 			_run_command(line)
 		elif line != "":
-			_net.say(line)
+			if _net != null and _net.active:
+				_net.say(line)
+			else:
+				# Nobody to say it to. Say so, rather than eating the line and
+				# leaving it looking like chat is broken.
+				_on_chat_line("no one else is here -- try /help")
 	_chat_entry.text = ""
 	_chat_entry.visible = false
 	_chat_entry.release_focus()
@@ -516,10 +527,19 @@ func _run_command(line: String) -> void:
 		return
 	var cmd := String(parts[0]).to_lower()
 	var pl = _world.player if _world != null else null
+	# Unknown first: a word that is not a command is not a command whether or
+	# not there is a world, and hearing "not in a world yet" for a typo sends
+	# you looking in the wrong place.
+	if not cmd in ["give", "bed", "time", "help"]:
+		_on_chat_line("unknown command: /" + cmd + "  (try /help)")
+		return
+	# The rest need somewhere to put things. Saying so beats returning quietly,
+	# which looks exactly like a broken command.
+	if pl == null and cmd != "help":
+		_on_chat_line("not in a world yet")
+		return
 	match cmd:
 		"give":
-			if pl == null:
-				return
 			if parts.size() < 2:
 				_on_chat_line("give what? try: " + ", ".join(GIVEABLE.keys()))
 				return
@@ -535,16 +555,15 @@ func _run_command(line: String) -> void:
 		"bed":
 			# The one that prompted all this: exactly what a Bed pattern costs,
 			# which is a block of wood and a block of soft stock, in eighths.
-			if pl == null:
-				return
 			pl._add_item(Blocks.WOOD, 4)
 			pl._add_item(Blocks.CLOTH, 4)
 			pl._refresh_slots()
 			_on_chat_line("gave you 4 Wood and 4 Cloth -- a bed needs 8 eighths of each, so that is four beds' worth")
 		"time":
 			if _world == null or _world.planets.is_empty():
+				_on_chat_line("no planets yet")
 				return
-			var p: Planet = _world.nearest_planet(pl.global_position) if pl != null else _world.planets[0]
+			var p: Planet = _world.nearest_planet(pl.global_position)
 			var when := String(parts[1]).to_lower() if parts.size() > 1 else ""
 			match when:
 				"day":
@@ -564,7 +583,7 @@ func _run_command(line: String) -> void:
 		"help":
 			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [day|night]")
 		_:
-			_on_chat_line("unknown command: /" + cmd + "  (try /help)")
+			pass   # unreachable: the list above is the same list
 
 
 ## Enter opens chat and sends it; Escape backs out without saying anything.
