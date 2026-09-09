@@ -239,7 +239,7 @@ static func light_def(raw: int) -> Dictionary:
 		return {"range": 13.0 + t * 4.5, "energy": 1.6 + t * 0.45,
 			"color": Color(1.0, 0.66, 0.30).lerp(Color(1.0, 0.93, 0.72), t / 3.0)}
 	if id == TORCH:
-		return {"range": 11.0, "energy": 1.5, "color": Color(1.0, 0.72, 0.38)}
+		return {"range": 14.0, "energy": 1.6, "color": Color(1.0, 0.72, 0.38)}
 	return {"range": 15.0, "energy": 1.8, "color": Color(0.92, 0.95, 1.0)}
 
 # Half-height version of each shapeable material. One id per material is still

@@ -342,14 +342,19 @@ void fragment() {
 	// A CONSTANT floor underground, owing nothing to the sun. This is what makes
 	// a cave the same darkness at noon and at midnight: it is not sunlight
 	// reduced, it is the small amount of light there always is down there.
-	EMISSION = base * emit * 2.6 + base * lamp * bl * bl * 1.9
+	// Falloff was SQUARED, which is what made a torch die so quickly a few
+	// blocks out: at half reach it was down to a quarter brightness. The flood
+	// fill still carries the same distance -- this only changes how much of
+	// that distance is bright enough to see by, which is the part that reads as
+	// "how far the torch throws".
+	EMISSION = base * emit * 2.6 + base * lamp * bl * (0.45 + 0.55 * bl) * 1.9
 		// A CONSTANT floor underground, owing nothing to the sun. This is what
 		// makes a cave the same darkness at noon and at midnight: not sunlight
 		// reduced, but the small amount of light there always is down there.
-		+ base * 0.085 * (1.0 - sky)
+		+ base * 0.145 * (1.0 - sky)
 		// Starlight on anything open to the sky. Invisible against daylight;
 		// at night it is the difference between dark and unreadable.
-		+ base * 0.075 * sky
+		+ base * 0.13 * sky
 		// Ambient, but only where the sky can reach. This is the piece the
 		// renderer used to add for us, unconditionally.
 		+ base * ambient_color * ambient_energy * sky;
