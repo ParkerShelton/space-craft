@@ -75,6 +75,12 @@ var _day := 1.0                    # 0 = night, 1 = full day (eased, see _proces
 var _menu_layer: CanvasLayer
 var _net: Net
 var _join_ip: LineEdit
+var _menu_skin_corner: MarginContainer
+var _skin_editor: SkinEditor
+var _skin_names: Array = []
+var _skin_index := 0
+var _skin_row: HBoxContainer
+var _skin_scroll: ScrollContainer
 var _net_mode := "single"
 var _client_seed := 0
 var _client_system := 0
@@ -236,6 +242,17 @@ func _build_menu() -> void:
 	_menu_vb.add_theme_constant_override("separation", 14)
 	_menu_vb.alignment = BoxContainer.ALIGNMENT_CENTER
 	center.add_child(_menu_vb)
+	# Who you are, standing in the corner of the room you choose a world in. Out
+	# here rather than in a settings page because a skin is not a setting -- it
+	# is the character you are about to play as -- and in the corner rather than
+	# in the button stack because it is not a thing you DO, it is a thing that
+	# is true, and it should be visible whichever page you are on.
+	_menu_skin_corner = MarginContainer.new()
+	_menu_skin_corner.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_menu_skin_corner.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	_menu_skin_corner.add_theme_constant_override("margin_left", 28)
+	_menu_skin_corner.add_theme_constant_override("margin_bottom", 28)
+	_menu_layer.add_child(_menu_skin_corner)
 	_menu_populate(false)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
@@ -286,6 +303,7 @@ func _menu_populate(confirm_delete: bool) -> void:
 	_menu_label("SPACECRAFT", 52)
 	_menu_label("a voxel game in space", 18, 0.55)
 	_menu_label(" ", 14)
+	_refresh_menu_skin(true)
 	var has_world: bool = _world.saved_world_seed() >= 0
 	if has_world:
 		_menu_button("Continue", func(): _start_world(true))
@@ -299,6 +317,280 @@ func _menu_populate(confirm_delete: bool) -> void:
 	_menu_button("Host Co-op Game", func(): _start_world(false, "host"))
 	_menu_button("Join Co-op Game", func(): _menu_join())
 	_menu_button("Quit", func(): get_tree().quit())
+
+
+# --- skins --------------------------------------------------------------------
+
+## Which skin is worn. Empty means the built-in one.
+func skin_name() -> String:
+	return str(setting("skin", ""))
+
+
+## The image currently being worn, falling back to the built-in default -- which
+## is also what a missing or deleted file gets you, rather than an error.
+func current_skin_image() -> Image:
+	var n := skin_name()
+	if n != "":
+		var img = PlayerSkin.load_skin(n)
+		if img != null:
+			return img
+	return PlayerSkin.default_image(DEFAULT_SKIN_HUE)
+
+
+## The hue the built-in skin is built from. Fixed rather than per-peer here: out
+## on the menu there is no peer id yet, and a character that changed colour on
+## joining would not be the one you picked.
+const DEFAULT_SKIN_HUE := 0.55
+
+
+## A character standing in the middle of a box.
+##
+## The portrait is a TextureRect laid over the button rather than the button's
+## own icon. Button draws an expanded icon hard against one corner of its
+## content box, so every character sat off to one side of the panel behind it
+## with a stripe of empty grey down the other -- which is not a thing you can
+## nudge back into place with padding, because the size it picks depends on the
+## box. A rect that keeps its aspect and centres itself is symmetric by
+## construction, at any size either of these two places asks for.
+func _portrait_button(image: Image, box: Vector2) -> Button:
+	var b := Button.new()
+	b.custom_minimum_size = box
+	b.clip_contents = true
+	var tr := TextureRect.new()
+	# Scaled by whole pixels first, and drawn with a nearest filter, or a
+	# 16-texel-wide character stretched to fit is a smudge.
+	tr.texture = PlayerSkin.portrait_texture(image, 4)
+	tr.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tr.offset_left = 7
+	tr.offset_top = 7
+	tr.offset_right = -7
+	tr.offset_bottom = -7
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(tr)
+	return b
+
+
+## The figure in the corner: a picture of who you will be, that opens the
+## wardrobe when clicked. Rebuilt rather than updated, because it is four nodes
+## and the alternative is four references to keep in step.
+func _refresh_menu_skin(shown: bool) -> void:
+	if _menu_skin_corner == null:
+		return
+	for c in _menu_skin_corner.get_children():
+		c.queue_free()
+	_menu_skin_corner.visible = shown
+	if not shown:
+		return
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 12)
+	_menu_skin_corner.add_child(row)
+	var b := _portrait_button(current_skin_image(), Vector2(76, 108))
+	b.tooltip_text = "Choose or edit your character"
+	b.pressed.connect(_menu_skins)
+	row.add_child(b)
+	var side := VBoxContainer.new()
+	side.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_child(side)
+	var who := Label.new()
+	who.text = skin_name() if skin_name() != "" else "Default"
+	who.add_theme_font_size_override("font_size", 17)
+	side.add_child(who)
+	var hint := Label.new()
+	hint.text = "click to change"
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.modulate = Color(1, 1, 1, 0.5)
+	side.add_child(hint)
+
+
+## The wardrobe: one row of characters you page through, and what to do with
+## the one you have landed on.
+##
+## A row rather than a grid because the list is short and the choice is one
+## thing, not a layout: arrows step through it, and everything underneath acts
+## on whichever is in front of you.
+func _menu_skins() -> void:
+	for c in _menu_vb.get_children():
+		c.queue_free()
+	_refresh_menu_skin(false)
+	# "" is the built-in one, always first and never deletable.
+	_skin_names = [""]
+	for n in PlayerSkin.list_skins():
+		_skin_names.append(n)
+	_skin_index = clampi(_skin_names.find(skin_name()), 0, _skin_names.size() - 1)
+
+	_menu_label("Your character", 30)
+	_menu_label("this is who you play as -- it travels with you into a game", 14, 0.55)
+	_menu_label(" ", 6)
+
+	var row := HBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	row.add_theme_constant_override("separation", 10)
+	_menu_vb.add_child(row)
+	var left := Button.new()
+	left.text = "<"
+	left.custom_minimum_size = Vector2(40, 132)
+	left.pressed.connect(func(): _step_skin(-1))
+	row.add_child(left)
+	_skin_scroll = ScrollContainer.new()
+	_skin_scroll.custom_minimum_size = Vector2(468, 138)
+	_skin_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	row.add_child(_skin_scroll)
+	_skin_row = HBoxContainer.new()
+	_skin_row.add_theme_constant_override("separation", 8)
+	_skin_scroll.add_child(_skin_row)
+	for i in _skin_names.size():
+		var n: String = _skin_names[i]
+		var img = PlayerSkin.default_image(DEFAULT_SKIN_HUE) if n == "" else PlayerSkin.load_skin(n)
+		if img != null:
+			_skin_tile(_skin_row, i, n, img)
+	_new_skin_tile(_skin_row)
+	var right := Button.new()
+	right.text = ">"
+	right.custom_minimum_size = Vector2(40, 132)
+	right.pressed.connect(func(): _step_skin(1))
+	row.add_child(right)
+	_menu_label(" ", 8)
+
+	_menu_button("Edit", func():
+		# The built-in one is everybody's starting point and stays as it is;
+		# editing it means editing a copy, which is what you wanted anyway.
+		if _picked_skin() == "":
+			_menu_new_skin()
+		else:
+			set_setting("skin", _picked_skin())
+		_open_skin_editor())
+	_menu_button("Select", func():
+		# Wearing it is the decision this screen exists for, so it is also the
+		# way out of it.
+		set_setting("skin", _picked_skin())
+		_menu_populate(false))
+	if _picked_skin() != "":
+		_menu_button("Delete", func():
+			PlayerSkin.delete_skin(_picked_skin())
+			if skin_name() == _picked_skin():
+				set_setting("skin", "")
+			_menu_skins(), "ui_back")
+	_menu_button("Back", func(): _menu_populate(false), "ui_back")
+	_highlight_skin()
+
+
+func _picked_skin() -> String:
+	if _skin_index < 0 or _skin_index >= _skin_names.size():
+		return ""
+	return str(_skin_names[_skin_index])
+
+
+## Move along the row, and bring what you moved to into view.
+func _step_skin(d: int) -> void:
+	if _skin_names.is_empty():
+		return
+	_skin_index = posmod(_skin_index + d, _skin_names.size())
+	_highlight_skin()
+
+
+func _highlight_skin() -> void:
+	if _skin_row == null:
+		return
+	# The plus sits in the row but is not one of the characters, so it keeps its
+	# own brightness instead of being dimmed as "not the one you are on".
+	for i in mini(_skin_names.size(), _skin_row.get_child_count()):
+		var tile: Control = _skin_row.get_child(i)
+		tile.modulate = Color(1, 1, 1, 1.0 if i == _skin_index else 0.4)
+	if _skin_index < _skin_row.get_child_count() and _skin_scroll != null:
+		_skin_scroll.ensure_control_visible(_skin_row.get_child(_skin_index))
+
+
+## The last thing in the row: one more of these, please.
+##
+## A tile rather than a button underneath, because making a new character is the
+## same KIND of act as choosing one -- so it belongs among the characters, at
+## the end, which is where your eye already is once you have looked at them all
+## and not found the one you wanted.
+func _new_skin_tile(row: HBoxContainer) -> void:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	row.add_child(col)
+	var b := Button.new()
+	b.text = "+"
+	b.add_theme_font_size_override("font_size", 40)
+	b.custom_minimum_size = Vector2(78, 108)
+	b.tooltip_text = "Make another character"
+	b.modulate = Color(1, 1, 1, 0.7)
+	# Straight into the editor: the only reason to make one is to paint it.
+	b.pressed.connect(func():
+		_menu_new_skin()
+		_open_skin_editor())
+	col.add_child(b)
+	var cap := Label.new()
+	cap.text = "New"
+	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cap.add_theme_font_size_override("font_size", 11)
+	cap.modulate = Color(1, 1, 1, 0.6)
+	col.add_child(cap)
+
+
+## One character in the row. Clicking one is the same as arrowing to it: the
+## arrows are for when your hand is already on them, not the only way through.
+func _skin_tile(row: HBoxContainer, index: int, name: String, img: Image) -> void:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	row.add_child(col)
+	var b := _portrait_button(img, Vector2(78, 108))
+	b.tooltip_text = name if name != "" else "The built-in character"
+	b.pressed.connect(func():
+		_skin_index = index
+		_highlight_skin())
+	col.add_child(b)
+	var cap := Label.new()
+	# Which one you are WEARING has to stay visible while you page past others,
+	# or you lose track of what you will be if you just leave.
+	cap.text = ("%s  (worn)" % [name if name != "" else "Default"]
+		if name == skin_name() else (name if name != "" else "Default"))
+	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cap.add_theme_font_size_override("font_size", 11)
+	cap.modulate = Color(1, 1, 1, 0.75)
+	col.add_child(cap)
+
+
+## The editor, over the whole screen. It is a room you go into rather than a
+## panel you open: painting wants the space, and there is nothing else on the
+## menu you would want to see at the same time.
+func _open_skin_editor() -> void:
+	if skin_name() == "" or _skin_editor != null:
+		return
+	# The menu goes away rather than being covered. Relying on one full-screen
+	# panel to sit over another is how you end up with a stray button poking
+	# through a corner of it.
+	_menu_vb.get_parent().visible = false
+	_refresh_menu_skin(false)
+	_skin_editor = SkinEditor.new()
+	_menu_layer.add_child(_skin_editor)
+	_skin_editor.setup(skin_name(), current_skin_image())
+	_skin_editor.closed.connect(func(saved: bool):
+		if saved:
+			PlayerSkin.save_skin(skin_name(), _skin_editor.img)
+		_skin_editor.queue_free()
+		_skin_editor = null
+		_menu_vb.get_parent().visible = true
+		_menu_skins())
+
+
+## A new character to work on. It starts as a copy of whatever is being worn, so
+## "new" means "another one like this" rather than a blank figure -- editing
+## something is a much easier start than painting one from nothing.
+func _menu_new_skin() -> void:
+	var name := PlayerSkin.free_name("Character")
+	var img := current_skin_image()
+	# A different hue from the one it was copied from, so a new character is
+	# visibly a different character before a single pixel has been painted.
+	if skin_name() == "":
+		img = PlayerSkin.default_image(randf())
+	if PlayerSkin.save_skin(name, img):
+		set_setting("skin", name)
+	_menu_skins()
 
 
 ## The join screen: somewhere to type the host's address.
@@ -1184,6 +1476,9 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	# ...and now there is somewhere to put an inventory, tell the host who we are
 	# so it can hand back whatever we left with.
 	_net.say_hello()
+	# ...and what we look like, which unlike the inventory is the same for
+	# everyone rather than a private thing the host keeps for us.
+	_net.announce_skin(current_skin_image().save_png_to_buffer())
 	_build_chat()
 
 	# player: drop in just above dry land on the home world
@@ -1525,6 +1820,9 @@ func _sync_players(delta: float) -> void:
 			add_child(av)
 			av.setup(int(id))
 			_avatars[id] = av
+		var png = st.get("skin", null)
+		if png is PackedByteArray:
+			av.wear_png(png)
 		var pos: Vector3 = st["pos"]
 		var pl: Planet = _world.nearest_planet(pos)
 		# SNAPPED to an axis, because that is how a player stands: Player._walk is
