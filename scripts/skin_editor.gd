@@ -15,17 +15,6 @@ extends Control
 
 signal closed(saved: bool)
 
-const PALETTE := [
-	Color("#000000"), Color("#3f3f3f"), Color("#6b6b6b"), Color("#9c9c9c"),
-	Color("#cdcdcd"), Color("#ffffff"), Color("#5a2b12"), Color("#8b4a1e"),
-	Color("#c07a3e"), Color("#e6b077"), Color("#f2d6b3"), Color("#ffe9d0"),
-	Color("#7a0d0d"), Color("#c11f1f"), Color("#e85d3a"), Color("#f2a03d"),
-	Color("#f5d13b"), Color("#b7d43a"), Color("#4f9b2e"), Color("#1f6b3a"),
-	Color("#1d7f7a"), Color("#2aa8c4"), Color("#2f6ec4"), Color("#26408f"),
-	Color("#4b2f8f"), Color("#7a3fbf"), Color("#b25fd1"), Color("#e07ab8"),
-	Color("#f2a8c4"), Color("#3a2a24"), Color("#1a1f2b"), Color("#0b0d12"),
-]
-
 enum Tool { PENCIL, ERASER, PICKER, FILL }
 
 var img: Image
@@ -40,7 +29,7 @@ const UNDO_MAX := 40
 
 var _canvas: Control
 var _tex: ImageTexture
-var _swatch: ColorRect
+var _picker: ColorPicker
 var _preview_skin: RemotePlayer
 var _tool_btns := {}
 
@@ -120,13 +109,28 @@ func _build_paint_view() -> Control:
 	_view.add_child(_vp)
 	_view.gui_input.connect(_view_input)
 
+	# Mostly ambient, with just enough directional to tell the faces apart.
+	# A preview exists to answer "what colour is that", and a key light strong
+	# enough to model the shape washes the lit faces to white -- which is the
+	# one thing it must not do.
+	var env := WorldEnvironment.new()
+	var e := Environment.new()
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+	e.ambient_light_color = Color(1, 1, 1)
+	e.ambient_light_energy = 0.85
+	env.environment = e
+	_vp.add_child(env)
 	var lamp := DirectionalLight3D.new()
-	lamp.rotation_degrees = Vector3(-30, 35, 0)
-	lamp.light_energy = 0.75
+	lamp.rotation_degrees = Vector3(-35, 30, 0)
+	lamp.light_energy = 0.35
 	_vp.add_child(lamp)
+	# From behind and the other side, weakly. Without it the faces turned away
+	# fall to near black, and a face you cannot see the colour of is a face you
+	# cannot paint -- which on a figure you are turning constantly is half of
+	# them at any moment.
 	var fill_light := DirectionalLight3D.new()
-	fill_light.rotation_degrees = Vector3(-10, -150, 0)
-	fill_light.light_energy = 0.3
+	fill_light.rotation_degrees = Vector3(10, -160, 0)
+	fill_light.light_energy = 0.22
 	_vp.add_child(fill_light)
 	# A rig the camera orbits, so turning the view never turns the figure -- if
 	# the figure span instead, "the left arm" would depend on when you looked.
@@ -144,7 +148,7 @@ func _build_paint_view() -> Control:
 
 func _build_tools() -> Control:
 	var col := VBoxContainer.new()
-	col.custom_minimum_size = Vector2(190, 0)
+	col.custom_minimum_size = Vector2(250, 0)
 	col.add_theme_constant_override("separation", 6)
 
 	var lbl := Label.new()
@@ -173,37 +177,24 @@ func _build_tools() -> Control:
 	cl.add_theme_font_size_override("font_size", 13)
 	cl.modulate = Color(1, 1, 1, 0.6)
 	col.add_child(cl)
-	_swatch = ColorRect.new()
-	_swatch.custom_minimum_size = Vector2(0, 26)
-	_swatch.color = _colour
-	col.add_child(_swatch)
-	var grid := GridContainer.new()
-	grid.columns = 8
-	grid.add_theme_constant_override("h_separation", 2)
-	grid.add_theme_constant_override("v_separation", 2)
-	col.add_child(grid)
-	for c in PALETTE:
-		var sw := Button.new()
-		sw.custom_minimum_size = Vector2(21, 21)
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = c
-		sw.add_theme_stylebox_override("normal", sb)
-		sw.add_theme_stylebox_override("hover", sb)
-		sw.add_theme_stylebox_override("pressed", sb)
-		sw.pressed.connect(func():
-			_colour = c
-			_swatch.color = c
-			_set_tool(Tool.PENCIL))
-		grid.add_child(sw)
-	var pick := ColorPickerButton.new()
-	pick.text = "Any colour..."
-	pick.color = _colour
-	pick.custom_minimum_size = Vector2(0, 28)
-	pick.color_changed.connect(func(c: Color):
+	# Every colour, rather than thirty-two of them. A fixed palette is the right
+	# answer when the point is consistency between things; here the point is
+	# that it is YOUR character, and the shade of green you want is not
+	# necessarily one somebody chose for you.
+	_picker = ColorPicker.new()
+	_picker.color = _colour
+	_picker.picker_shape = ColorPicker.SHAPE_HSV_RECTANGLE
+	_picker.edit_alpha = false
+	_picker.can_add_swatches = false
+	_picker.sampler_visible = false
+	_picker.color_modes_visible = false
+	_picker.presets_visible = false
+	_picker.color_changed.connect(func(c: Color):
 		_colour = c
-		_swatch.color = c
-		_set_tool(Tool.PENCIL))
-	col.add_child(pick)
+		if _tool == Tool.ERASER or _tool == Tool.PICKER:
+			# Reaching for a colour means you want to put it somewhere.
+			_set_tool(Tool.PENCIL))
+	col.add_child(_picker)
 
 	col.add_child(_spacer(10))
 	var zoom_row := HBoxContainer.new()
@@ -256,6 +247,9 @@ func _build_sheet() -> Control:
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	col.add_child(scroll)
 	_canvas = Control.new()
+	# Nearest, or a 64-pixel image blown up eight times is a blur. The 3D figure
+	# already sets this on its material; a canvas needs telling separately.
+	_canvas.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
 	_canvas.custom_minimum_size = Vector2(PlayerSkin.ATLAS, PlayerSkin.ATLAS) * _zoom
 	_canvas.mouse_filter = Control.MOUSE_FILTER_STOP
 	_canvas.draw.connect(_draw_canvas)
@@ -390,9 +384,15 @@ func _pick_at(pos: Vector2) -> void:
 	var t := _texel_at(pos)
 	if not _in_atlas(t):
 		return
-	_colour = img.get_pixelv(t)
-	if _swatch != null:
-		_swatch.color = _colour
+	_set_colour(img.get_pixelv(t))
+
+
+## One place the current colour is set, so the picker and the value it paints
+## with cannot disagree.
+func _set_colour(c: Color) -> void:
+	_colour = c
+	if _picker != null:
+		_picker.color = c
 
 
 ## Flood fill, penned inside the face that was clicked.
@@ -509,9 +509,7 @@ func _view_input(e: InputEvent) -> void:
 					_touched = true
 					var hit := _pick_figure(e.position)
 					if not hit.is_empty():
-						_colour = img.get_pixelv(hit["texel"])
-						if _swatch != null:
-							_swatch.color = _colour
+						_set_colour(img.get_pixelv(hit["texel"]))
 	elif e is InputEventMouseMotion:
 		if _orbiting:
 			_yaw -= e.relative.x * 0.01
@@ -534,9 +532,7 @@ func _paint_on_figure(pos: Vector2) -> void:
 		Tool.ERASER:
 			img.set_pixelv(t, Color(0, 0, 0, 0))
 		Tool.PICKER:
-			_colour = img.get_pixelv(t)
-			if _swatch != null:
-				_swatch.color = _colour
+			_set_colour(img.get_pixelv(t))
 		Tool.FILL:
 			_fill(t)
 	_refresh()

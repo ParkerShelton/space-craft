@@ -140,15 +140,27 @@ static func _quad(verts: PackedVector3Array, norms: PackedVector3Array,
 	var v0 := (float(r.position.y) + INSET) / ATLAS
 	var u1 := (float(r.position.x + r.size.x) - INSET) / ATLAS
 	var v1 := (float(r.position.y + r.size.y) - INSET) / ATLAS
-	for p in [a, b, c, a, c, d]:
-		verts.append(p)
+	# Corner and its texture coordinate together, then emitted by index. Listing
+	# the two in parallel is how they drift apart: the winding was reversed here
+	# once already, and every face of every part was being culled as a result --
+	# the figure was inside out, and what you saw was the far wall of a hollow
+	# box, which reads as a shape collapsing into a wedge.
+	var corners := [
+		[a, Vector2(u0, v0)], [b, Vector2(u1, v0)],
+		[c, Vector2(u1, v1)], [d, Vector2(u0, v1)],
+	]
+	# Whichever way round actually faces outward, worked out from the corners
+	# rather than trusted to whoever typed them. Listing four corners the other
+	# way round is easy to do and invisible in code -- it cost every top and
+	# bottom face on the figure, after the same mistake had already cost all
+	# twenty-four of the others.
+	var order := [0, 2, 1, 0, 3, 2]
+	if (c - a).cross(b - a).dot(n) < 0.0:
+		order = [0, 1, 2, 0, 2, 3]
+	for i in order:
+		verts.append((corners[i] as Array)[0])
+		uvs.append((corners[i] as Array)[1])
 		norms.append(n)
-	uvs.append(Vector2(u0, v0))
-	uvs.append(Vector2(u1, v0))
-	uvs.append(Vector2(u1, v1))
-	uvs.append(Vector2(u0, v0))
-	uvs.append(Vector2(u1, v1))
-	uvs.append(Vector2(u0, v1))
 
 
 ## Nearest-neighbour, unshaded-ish, and lit by the world.
