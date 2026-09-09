@@ -1574,6 +1574,16 @@ static func is_plant(id: int) -> bool:
 	return b == TALL_GRASS or b == CROP
 
 
+## Swept away by water rather than left standing in it.
+##
+## Wild ground cover only, and deliberately NOT a crop: soil has to be near
+## water to be worked at all (see Player.TILL_RANGE), so a rule that drowned
+## what you planted the moment you supplied the water it needs would be the game
+## arguing with itself.
+static func is_washable(id: int) -> bool:
+	return bottom_of(id) == TALL_GRASS
+
+
 # --- flora ---------------------------------------------------------------
 #
 # Every plant that can exist, and the planet classes it can live on (see

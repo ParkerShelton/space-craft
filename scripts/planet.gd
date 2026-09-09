@@ -4443,7 +4443,10 @@ func _wdown(c: Vector3i) -> Vector3i:
 
 func _is_solid_block(c: Vector3i) -> bool:
 	var id := get_id(c)
-	return id != Blocks.AIR and id != Blocks.WATER
+	# Tall grass does not dam a stream. Water flows into its cell and takes it
+	# with it, rather than parting around a blade of grass and leaving it
+	# standing in the middle of the water.
+	return id != Blocks.AIR and id != Blocks.WATER and not Blocks.is_washable(id)
 
 
 # Undug, generated ocean = an infinite full source.
@@ -4639,7 +4642,16 @@ func _clear_water(c: Vector3i, dirty: Dictionary) -> void:
 	# then vanishes a moment later, in the places water had flowed and nowhere
 	# else.
 	if d != null and int(d.get(c, Blocks.AIR)) == Blocks.WATER:
-		d.erase(c)  # revert to generation (air on land, ocean below sea level)
+		# Reverting to generation is only right where generation is NOTHING. A
+		# cell the world grows a stalk of grass in would grow it back the moment
+		# the water left -- including grass that had been cut long before the
+		# water ever got there, which is where this was first noticed: break the
+		# grass, flood the cell, take the water away, and the grass is back.
+		var g := generation_sample(c.x, c.y, c.z)
+		if g == Blocks.AIR or g == Blocks.WATER:
+			d.erase(c)   # air on land, ocean below sea level: generation is right
+		else:
+			d[c] = Blocks.AIR
 	_mark_borders(c, dirty)
 
 
