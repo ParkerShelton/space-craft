@@ -701,25 +701,15 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 
 	# water: one box per cell, its height set by the water level (shallow water
 	# renders lower). Fill is along the cell's outward axis (radial-snapped).
-	var wfull := float(Planet.W_FULL)
 	var idx := 0
 	for z in CS:
 		for y in CS:
 			for x in CS:
 				if ids[idx] == Blocks.WATER:
 					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
-					var level: int = wsnap.get(gv, int(wfull))
-					var h := clampf(float(level) / wfull, 0.12, 1.0)
 					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
-					var lo := Vector3(x, y, z)
-					var hi := Vector3(x + 1, y + 1, z + 1)
-					if up.x > 0.5: hi.x = lo.x + h
-					elif up.x < -0.5: lo.x = hi.x - h
-					elif up.y > 0.5: hi.y = lo.y + h
-					elif up.y < -0.5: lo.y = hi.y - h
-					elif up.z > 0.5: hi.z = lo.z + h
-					elif up.z < -0.5: lo.z = hi.z - h
-					_emit_water_cell(lo, hi, gv, planet, snap, wverts, wnormals, wcolors, wuvs, wuv2s)
+					_emit_water_cell(Vector3(x, y, z), gv, up, _water_h(wsnap, gv),
+						planet, snap, wsnap, wverts, wnormals, wcolors, wuvs, wuv2s)
 				idx += 1
 
 	# roof slabs: a half-height OPAQUE box per cell (real geometry, not just a
@@ -1241,15 +1231,64 @@ static func _half_toward(lo: Vector3, hi: Vector3, dir: Vector3) -> Array:
 	return [l, h]
 
 
-static func _emit_water_cell(lo: Vector3, hi: Vector3, gv: Vector3i, planet: Planet,
-		snap: Dictionary, wverts: PackedVector3Array, wnormals: PackedVector3Array,
+## How full a water cell is, 0..1. The floor is there because a cell holding an
+## eighth of a cell of water still has to be visible from the side.
+static func _water_h(wsnap: Dictionary, gv: Vector3i) -> float:
+	return clampf(float(int(wsnap.get(gv, Planet.W_FULL))) / float(Planet.W_FULL), 0.12, 1.0)
+
+
+## One cell of water: a box as tall as the water in it, wearing only the faces
+## that something can actually see.
+##
+## The interesting case is a water NEIGHBOUR. Skipping that face outright -- the
+## rule that is right for solid blocks -- is wrong here, because two cells of
+## water are rarely the same depth: where this one stands taller than the one
+## beside it, the difference is a wall of water with nothing drawn on it, and you
+## see straight through the side of the stream. That is the seam between levels.
+## So a shared face is drawn for the BAND this cell has and its neighbour does
+## not, and skipped only when the neighbour is at least as deep.
+static func _emit_water_cell(clo: Vector3, gv: Vector3i, up: Vector3, h: float,
+		planet: Planet, snap: Dictionary, wsnap: Dictionary,
+		wverts: PackedVector3Array, wnormals: PackedVector3Array,
 		wcolors: PackedColorArray, wuvs: PackedVector2Array, wuv2s: PackedVector2Array) -> void:
 	var base := planet.color_of(Blocks.WATER)
+	var chi := clo + Vector3.ONE
+	# The axis water fills along, and which end of the cell it fills from.
+	var ax := 0 if absf(up.x) > 0.5 else (1 if absf(up.y) > 0.5 else 2)
+	var rising := up[ax] > 0.0
+	var upi := Vector3i(int(round(up.x)), int(round(up.y)), int(round(up.z)))
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
 		var wnid := _id_at(planet, snap, gv + n)
-		if wnid != Blocks.AIR and not Blocks.is_leaf(Blocks.bottom_of(wnid)):
-			continue  # only the faces exposed to air are drawn
+		var air := wnid == Blocks.AIR or Blocks.is_leaf(Blocks.bottom_of(wnid))
+		# The bottom of this face, as a fraction up the cell. Zero unless a
+		# neighbouring body of water already covers the lower part of it.
+		var from := 0.0
+		if not air:
+			if wnid != Blocks.WATER:
+				continue          # solid: nothing of this face is visible
+			var hn := _water_h(wsnap, gv + n)
+			if n == upi:
+				# Water directly above. Only a cell that is not brim-full has
+				# any surface left to show under it.
+				if h >= 0.999:
+					continue
+			elif n == -upi:
+				# Water below, hanging short of this cell's floor.
+				if hn >= 0.999:
+					continue
+			else:
+				if hn >= h - 0.001:
+					continue      # the neighbour is as deep or deeper
+				from = hn
+		var lo := clo
+		var hi := chi
+		if rising:
+			hi[ax] = clo[ax] + h
+			lo[ax] = clo[ax] + from
+		else:
+			lo[ax] = chi[ax] - h
+			hi[ax] = chi[ax] - from
 		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
 		# Water keeps its OWN alpha. Unlike terrain, water is drawn with a plain
 		# StandardMaterial3D that reads vertex alpha as opacity -- so writing the
