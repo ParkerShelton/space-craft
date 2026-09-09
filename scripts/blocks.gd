@@ -795,8 +795,8 @@ const PART_STRUCTURES := [
 		"result": BED,
 		"size": Vector3i(4, 2, 2),
 		"layers": [
-			["WWWW", "WWWW"],            # frame
-			["TTTT", "TTTT"],            # cloth or leather over the top
+			["W..W", "W..W"],            # a leg at each end, open underneath
+			["TTTT", "TTTT"],            # cloth or leather across the top
 		],
 	},
 	{

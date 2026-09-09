@@ -572,7 +572,7 @@ func _run_command(line: String) -> void:
 			pl._add_item(Blocks.WOOD, 4)
 			pl._add_item(Blocks.CLOTH, 4)
 			pl._refresh_slots()
-			_on_chat_line("gave you 4 Wood and 4 Cloth -- a bed needs 8 eighths of each, so that is four beds' worth")
+			_on_chat_line("gave you 4 Wood and 4 Cloth -- a bed takes 4 eighths of wood and 8 of cloth, so the cloth is what runs out first")
 		"time":
 			if _world == null or _world.planets.is_empty():
 				_on_chat_line("no planets yet")
