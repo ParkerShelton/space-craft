@@ -545,14 +545,24 @@ func _run_command(line: String) -> void:
 			if _world == null or _world.planets.is_empty():
 				return
 			var p: Planet = _world.nearest_planet(pl.global_position) if pl != null else _world.planets[0]
-			if parts.size() > 1 and String(parts[1]).to_lower() == "night":
-				p.day_phase = 0.75
-			else:
-				p.day_phase = Planet.MORNING_PHASE
-			_on_chat_line("set the clock to %s on %s" % [
-				"night" if p.is_night() else "morning", p.planet_name])
+			var when := String(parts[1]).to_lower() if parts.size() > 1 else ""
+			match when:
+				"day":
+					p.day_phase = Planet.MORNING_PHASE
+				"night":
+					p.day_phase = 0.75
+				"":
+					# Bare /time reports rather than sets. It used to quietly
+					# mean morning, which also meant a typo meant morning.
+					_on_chat_line("%s: %s (phase %.2f)" % [p.planet_name,
+						"night" if p.is_night() else "day", p.day_phase])
+					return
+				_:
+					_on_chat_line("/time day  or  /time night")
+					return
+			_on_chat_line("set %s to %s" % [p.planet_name, when])
 		"help":
-			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [night]")
+			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [day|night]")
 		_:
 			_on_chat_line("unknown command: /" + cmd + "  (try /help)")
 
