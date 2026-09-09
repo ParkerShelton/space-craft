@@ -30,6 +30,11 @@ var _last_pos := Vector3.ZERO
 var _have_last := false
 
 
+var _mat: StandardMaterial3D
+var _skin_tex: ImageTexture
+var _pieces: Array = []
+
+
 func setup(id: int) -> void:
 	# One node holding the whole figure, so crouching moves it as a piece rather
 	# than as eight separate offsets that have to agree with each other.
@@ -37,30 +42,34 @@ func setup(id: int) -> void:
 	add_child(_body)
 	peer_id = id
 	# A stable colour per player, so the same person is the same colour all
-	# session and no two are nearly the same shade.
+	# session and no two are nearly the same shade. It is the DEFAULT skin now
+	# rather than the only one: nobody's figure changes the day skins arrive, it
+	# just becomes something they can paint over.
 	var hue := fposmod(float(id) * 0.618034, 1.0)
-	var body := Color.from_hsv(hue, 0.55, 0.85)
-	var trim := Color.from_hsv(hue, 0.65, 0.55)
 	# EVERY height here is measured from the body CENTRE, because that is where a
 	# player's origin sits: its collision capsule is 1.8 tall and centred on the
 	# node. Building from the feet up left the figure hovering above the ground.
 	const FEET := -0.9
-	_box(_body, Vector3(0.62, 0.72, 0.38), Vector3(0, FEET + 1.14, 0), body)   # torso
-	_box(_body, Vector3(0.46, 0.42, 0.42), Vector3(0, FEET + 1.71, 0), trim)   # head
-	for sx in [-1.0, 1.0]:
-		_box(_body, Vector3(0.10, 0.10, 0.06),
-			Vector3(sx * 0.11, FEET + 1.77, -0.22), Color(0.05, 0.05, 0.06))  # eyes
+	# The eyes used to be two small boxes stuck to the front of the head. They
+	# are four pixels of the skin now, which is rather the point of having one.
+	_part(_body, "body", Vector3(0.62, 0.72, 0.38), Vector3(0, FEET + 1.14, 0))
+	_part(_body, "head", Vector3(0.46, 0.42, 0.42), Vector3(0, FEET + 1.71, 0))
 
 	# Limbs hang from PIVOTS at the shoulder and hip, with the box offset below
 	# so it swings from its top end. Rotating a centred box instead spins it
 	# about its middle, which reads as a limb detaching and spinning in place.
+	# -X is the figure's own right (it faces -Z), so that side wears the right
+	# arm and leg. Mirroring this is the classic way to end up with a skin whose
+	# left sleeve is on the wrong arm.
 	for sx in [1.0, -1.0]:
+		var side := "right" if sx < 0.0 else "left"
 		var sh := _pivot(Vector3(sx * 0.40, FEET + 1.47, 0))
-		_box(sh, Vector3(0.18, 0.66, 0.26), Vector3(0, -0.33, 0), trim)
+		_part(sh, side + "_arm", Vector3(0.18, 0.66, 0.26), Vector3(0, -0.33, 0))
 		_arms.append(sh)
 		var hip := _pivot(Vector3(sx * 0.17, FEET + 0.78, 0))
-		_box(hip, Vector3(0.24, 0.78, 0.28), Vector3(0, -0.39, 0), trim)
+		_part(hip, side + "_leg", Vector3(0.24, 0.78, 0.28), Vector3(0, -0.39, 0))
 		_legs.append(hip)
+	set_skin(PlayerSkin.default_image(hue))
 
 	_label = Label3D.new()
 	# Peer ids are large random numbers; the last four digits are enough to tell
@@ -79,6 +88,34 @@ func _pivot(pos: Vector3) -> Node3D:
 	n.position = pos
 	_body.add_child(n)
 	return n
+
+
+## One body part, wearing its own rectangles of the skin.
+func _part(parent: Node3D, part: String, size: Vector3, pos: Vector3) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = PlayerSkin.part_mesh(part, size)
+	mi.position = pos
+	parent.add_child(mi)
+	_pieces.append(mi)
+	return mi
+
+
+## Put a skin on.
+##
+## Every part shares ONE material, so changing skin is changing one texture
+## rather than rebuilding the figure -- which is what will let the editor show
+## its changes as they are painted.
+func set_skin(img: Image) -> void:
+	if _mat == null:
+		_mat = PlayerSkin.make_material(PlayerSkin.texture_from(img))
+		for p in _pieces:
+			(p as MeshInstance3D).material_override = _mat
+		return
+	_skin_tex = _mat.albedo_texture as ImageTexture
+	if _skin_tex != null and _skin_tex.get_size() == Vector2(PlayerSkin.ATLAS, PlayerSkin.ATLAS):
+		_skin_tex.update(img)   # same size: reuse the texture rather than remaking it
+	else:
+		_mat.albedo_texture = PlayerSkin.texture_from(img)
 
 
 func _box(parent: Node3D, size: Vector3, pos: Vector3, col: Color) -> MeshInstance3D:
