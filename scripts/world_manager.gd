@@ -256,6 +256,20 @@ func tick_crops(delta: float) -> void:
 			net.crops_grew(p.planet_name, changed)
 
 
+## Water moves on the host and is reported, exactly as crops are: see
+## Planet.water_simulated for why it is not simulated in both places.
+func tick_water(delta: float) -> void:
+	var sim := not (net != null and net.active and not net.is_host)
+	for p in planets:
+		p.water_simulated = sim
+	if not sim:
+		return
+	for p in planets:
+		var changed: Array = p.flow_tick(delta)
+		if not changed.is_empty() and net != null and net.active:
+			net.water_moved(p.planet_name, changed)
+
+
 func save_game() -> bool:
 	var data := {
 		"version": SAVE_VERSION,
@@ -263,6 +277,7 @@ func save_game() -> bool:
 		"current_system_index": current_system_index,
 		"player": {},
 		"planets": {},   # planet name -> edits_by_chunk
+		"water": {},     # planet name -> [[voxel, level], ...] for water that flowed
 		"ships": [],
 		"stations": [],
 	}
@@ -292,6 +307,12 @@ func save_game() -> bool:
 	for p in planets:
 		if not p._edits_by_chunk.is_empty():
 			data["planets"][p.planet_name] = p._edits_by_chunk
+		# Saved SEPARATELY from the blocks, because a water cell is a block plus
+		# a depth: without the depths a reloaded world turns every puddle it had
+		# spread into a full one, and a shallow spill becomes a flood.
+		var wrows: Array = p.water_rows()
+		if not wrows.is_empty():
+			data["water"][p.planet_name] = wrows
 		if not p._parts_by_chunk.is_empty():
 			data["parts"][p.planet_name] = p._parts_by_chunk
 		data["day_phase"][p.planet_name] = p.day_phase
@@ -365,10 +386,14 @@ func load_game() -> bool:
 		net.profiles = data.get("profiles", {})
 
 	# planets: swap in the saved edits and re-mesh anything already loaded
+	var pwater: Dictionary = data.get("water", {})
 	var pedits: Dictionary = data.get("planets", {})
 	var pphase: Dictionary = data.get("day_phase", {})
 	for p in planets:
 		p._parts_by_chunk = (data.get("parts", {}) as Dictionary).get(p.planet_name, {})
+		# Depths first: load_edits re-meshes what is already loaded, and a chunk
+		# rebuilt before its levels arrive draws every cell full.
+		p.load_water(pwater.get(p.planet_name, []))
 		p.load_edits(pedits.get(p.planet_name, {}))
 		p.day_phase = float(pphase.get(p.planet_name, p.day_phase))
 		p.machine_cores = (data.get("machines", {}).get(p.planet_name, []) as Array).duplicate()

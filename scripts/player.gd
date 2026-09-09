@@ -1991,7 +1991,23 @@ func _in_water(wp: Vector3) -> bool:
 	var p := world.nearest_planet(wp)
 	if p == null or p.water_style != p.WATER_LIQUID:
 		return false
-	return p.get_id(p.world_to_voxel(wp)) == Blocks.WATER
+	# How DEEP, not merely whether there is water here. A cell holding an eighth
+	# of a cell of water is a wet floor, and starting to swim in one -- which is
+	# what asking only for the block id does -- means a spill across a plain
+	# turns into a lake you cannot walk over.
+	var v := p.world_to_voxel(wp)
+	if p.get_id(v) != Blocks.WATER:
+		return false
+	var fill := p.water_fill(v)
+	if fill >= 0.999:
+		return true
+	# Inside the cell: water fills it from the cell's DOWN face upward, which is
+	# what the mesher draws, so how far up the point sits is what decides whether
+	# it is under the surface. Measured along the cell's own up axis, because on
+	# the far side of a planet that is a different direction entirely.
+	var up := p._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+	var l := p.to_local(wp) - Vector3(v) - Vector3(0.5, 0.5, 0.5)
+	return l.dot(up) + 0.5 <= fill
 
 
 # Buoyant, draggy movement: swim relative to the camera, hold Space to rise / Shift
@@ -3247,7 +3263,6 @@ func _process_mining(delta: float) -> void:
 			return
 		if planet != null:
 			world.edit_block(planet, v, Blocks.AIR)
-			planet.flow_water(v)  # let adjacent water pour into the gap
 			if is_ore:
 				_add_item(id, 1, od["props"], planet.planet_name,
 					{"name": od["name"], "color": od["color"], "tier": od["tier"]})

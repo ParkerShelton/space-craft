@@ -1866,6 +1866,7 @@ func _process(delta: float) -> void:
 		_fps_label.text = "%d fps" % int(round(Engine.get_frames_per_second()))
 	if _world != null:
 		_world.tick_crops(delta)
+		_world.tick_water(delta)
 	if _world == null or _world.player == null or _sky_mat == null:
 		return
 	var ppos: Vector3 = _world.player.global_position

@@ -185,6 +185,15 @@ func world_built() -> void:
 				var pc := _planet(e[1])
 				if pc != null:
 					pc.load_crops(e[2])
+			"water":
+				var pw := _planet(e[1])
+				if pw != null:
+					pw.apply_water(e[2])
+			"allwater":
+				var pw2 := _planet(e[1])
+				if pw2 != null:
+					pw2.load_water(e[2])
+					pw2.apply_water(e[2])
 			_:
 				_apply_bulk(e[1], e[2], e[3])
 	_pending.clear()
@@ -247,6 +256,11 @@ func _on_peer_connected(id: int) -> void:
 		var crows: Array = p.crops_snapshot()
 		if not crows.is_empty():
 			world_crops.rpc_id(id, p.planet_name, crows)
+		# Water that has moved. The blocks themselves already went out with the
+		# edits above; what is missing without this is how deep each one is.
+		var wrows: Array = p.water_rows()
+		if not wrows.is_empty():
+			world_water.rpc_id(id, p.planet_name, wrows)
 
 
 func _on_peer_disconnected(id: int) -> void:
@@ -639,6 +653,33 @@ func crop_stages(planet_name: String, changes: Array) -> void:
 		return
 	for c in changes:
 		p.set_crop_stage(c[0], int(c[1]))
+
+
+func water_moved(planet_name: String, rows: Array) -> void:
+	if active and is_host and not rows.is_empty():
+		water_levels.rpc(planet_name, rows)
+
+
+@rpc("authority", "call_remote", "reliable")
+func water_levels(planet_name: String, rows: Array) -> void:
+	if not _world_built:
+		_pending.append(["water", planet_name, rows, null])
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		p.apply_water(rows)
+
+
+## Host -> a joining client: every puddle that is not simply the seed's ocean.
+@rpc("authority", "call_remote", "reliable")
+func world_water(planet_name: String, rows: Array) -> void:
+	if not _world_built:
+		_pending.append(["allwater", planet_name, rows, null])
+		return
+	var p := _planet(planet_name)
+	if p != null:
+		p.load_water(rows)
+		p.apply_water(rows)
 
 
 ## Host -> a joining client: the whole field, however far along it is.

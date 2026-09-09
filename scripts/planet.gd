@@ -3956,6 +3956,8 @@ func _spawn_chunk_node(cc: Vector3i) -> Chunk:
 	chunk.position = Vector3(cc * CS)
 	add_child(chunk)
 	loaded_chunks[cc] = chunk
+	if water_style == WATER_LIQUID and not _water_stalled.is_empty():
+		_resume_water(cc)
 	return chunk
 
 
@@ -4255,6 +4257,13 @@ func set_block(v: Vector3i, id: int, quiet := false) -> void:
 		_temp_solid.erase(v)
 	if Blocks.bottom_of(id) == Blocks.WIRE or Blocks.bottom_of(was) == Blocks.WIRE:
 		_grid_cache.clear()   # the conduit network just changed shape
+	# Every hole in the ground is a hole water can find. Asked HERE rather than
+	# at the one place a player swings a pick, so that a block broken by anyone
+	# -- another player, a machine, anything added later -- gets the same answer.
+	# `quiet` edits are a world being replayed rather than changed, and waking
+	# the whole of a loaded save at once is not a thing worth doing.
+	if not quiet and water_style == WATER_LIQUID:
+		flow_water(v)
 	_edit_remesh(cc)
 	# a change on a chunk border also changes the neighbor's visible faces
 	var local := v - cc * CS
@@ -4345,23 +4354,69 @@ const W_FULL := 8
 const FLOW_DT := 0.10          # simulation tick interval (seconds)
 const FLOW_BUDGET := 256       # cells evaluated per tick (keeps ticks cheap)
 const MAX_WATER := 24000       # safety cap on total dynamic water cells
+## A chunk is rebuilt at most this often WHILE water is moving through it. The
+## simulation steps ten times a second and a spreading flood touches a dozen
+## chunks; rebuilding every one of them on every step is far more work than
+## anybody can see, and it is what would make a burst dam cost frames rather
+## than merely look like it should.
+const FLOW_REMESH_DT := 0.25
+## Cells waiting on terrain nobody has generated. Bounded, because a channel cut
+## toward the horizon would otherwise keep a list of every place the water would
+## eventually have got to.
+const MAX_STALLED := 8000
 var _wlev := {}                # Vector3i -> level 1..W_FULL
 var _water_active := {}        # cells to (re)evaluate next tick
+var _water_stalled := {}       # chunk -> {cell: true}, woken when that chunk loads
+var _water_dirty := {}         # chunks whose water moved, waiting on a re-mesh
+var _water_remesh_at := {}     # chunk -> earliest next re-mesh, in msec
 var _flow_accum := 0.0
+## False on a network client: water is decided by the host and sent, the same way
+## crops are. Two machines running the same automaton on slightly different
+## timing do not stay in step, and water that disagrees about where it is is
+## water you drown in on one screen and walk through on the other.
+var water_simulated := true
 
 
-# Called after a block is broken at `v`. Flowing water is currently DISABLED --
-# generated rivers/lakes/oceans stay put as static full cells. The cellular-automaton
-# machinery below (_wake/_sim_water/etc.) is left dormant; re-enable by restoring the
-# _wake(v) call here.
-func flow_water(_v: Vector3i) -> void:
-	return
+## Something opened a hole at `v`. Let whatever is next to it come and find out.
+func flow_water(v: Vector3i) -> void:
+	if water_style != WATER_LIQUID or not water_simulated:
+		return
+	_wake(v)
 
 
 func _wake(c: Vector3i) -> void:
-	_water_active[c] = true
+	_wake_one(c)
 	for n in _NEIGH6:
-		_water_active[c + n] = true
+		_wake_one(c + n)
+
+
+## A cell can only be simulated where there is a chunk to show the result in.
+##
+## Water reaching the edge of what is loaded WAITS there rather than crawling on
+## out of sight: it would spread through terrain nobody has generated, into a
+## level table that never stops growing, and then be finished by the time you
+## walked out to look at it. Stalled cells are picked up again when their chunk
+## loads, so following the water means arriving with it.
+func _wake_one(c: Vector3i) -> void:
+	var cc := chunk_of(c)
+	if loaded_chunks.has(cc):
+		_water_active[c] = true
+		return
+	if _water_stalled.size() > MAX_STALLED:
+		return
+	if not _water_stalled.has(cc):
+		_water_stalled[cc] = {}
+	_water_stalled[cc][c] = true
+
+
+## A chunk just came in; anything that was waiting on it can carry on.
+func _resume_water(cc: Vector3i) -> void:
+	var held = _water_stalled.get(cc)
+	if held == null:
+		return
+	_water_stalled.erase(cc)
+	for c in held:
+		_water_active[c] = true
 
 
 func _wdown(c: Vector3i) -> Vector3i:
@@ -4403,25 +4458,40 @@ func _water_target(c: Vector3i) -> int:
 	return best
 
 
-func _process(delta: float) -> void:
+func _process(_delta: float) -> void:
 	var t := Time.get_ticks_usec()
 	_apply_ready_edits()
 	WorldManager.perf_mark("apply edits", t)
-	if water_style != WATER_LIQUID or _water_active.is_empty():
-		return
+
+
+## One step of the water, if one is due. Returns the cells that changed as
+## [Vector3i, level] rows -- level 0 meaning it drained -- so a host can tell
+## everyone else what the water did, exactly the way crops are reported.
+##
+## Driven from WorldManager rather than from _process, because whether this
+## planet simulates at all is a question about the SESSION, not about the planet.
+func flow_tick(delta: float) -> Array:
+	if water_style != WATER_LIQUID:
+		return []
 	_flow_accum += delta
 	if _flow_accum < FLOW_DT:
-		return
+		return []
 	_flow_accum = 0.0
+	# Flushed BEFORE the early exit, or the last step of a flood is the one that
+	# never gets drawn: the water stops moving and the chunk keeps its old shape.
+	_flush_water_meshes()
+	if _water_active.is_empty():
+		return []
 	var tw := Time.get_ticks_usec()
-	_sim_water()
+	var changed := _sim_water()
 	WorldManager.perf_mark("water", tw)
+	return changed
 
 
-func _sim_water() -> void:
+func _sim_water() -> Array:
 	var todo: Array = _water_active.keys()
 	_water_active = {}
-	var dirty := {}
+	var changed: Array = []
 	var count := 0
 	for c in todo:
 		if count >= FLOW_BUDGET:
@@ -4430,23 +4500,94 @@ func _sim_water() -> void:
 		count += 1
 		if _ocean_source(c):
 			for n in _NEIGH6:
-				_water_active[c + n] = true  # ocean keeps feeding its neighbors
+				var q: Vector3i = c + n
+				# ONLY cells that could actually change. Waking neighbouring
+				# ocean -- which is nearly all of a sea's neighbours -- makes
+				# every tick wake six more sources, and the wave walks out
+				# through the whole ocean and never arrives anywhere. That is a
+				# simulation that never stops running and an active list that
+				# never stops growing, which is what had this switched off.
+				if _ocean_source(q) or _is_solid_block(q):
+					continue
+				_wake_one(q)
 			continue
 		if _is_solid_block(c):
 			if _wlev.has(c):
-				_clear_water(c, dirty)
+				_clear_water(c, _water_dirty)
+				changed.append([c, 0])
 			continue
 		var cur: int = _wlev.get(c, 0)
 		var t := _water_target(c)
 		if t <= 0:
 			if cur > 0:
-				_clear_water(c, dirty)
+				_clear_water(c, _water_dirty)
+				changed.append([c, 0])
 				_wake(c)
 		elif t != cur and (_wlev.size() < MAX_WATER or _wlev.has(c)):
-			_set_water(c, t, dirty)
+			_set_water(c, t, _water_dirty)
+			changed.append([c, t])
 			_wake(c)
-	for cc in dirty:
-		_rebuild_if_loaded(cc)  # queues an async re-mesh; won't block the main thread
+	_flush_water_meshes()
+	return changed
+
+
+## Rebuild the chunks the water has moved through, no more often than any one of
+## them is worth rebuilding. A chunk that is not due yet keeps its place in the
+## list and goes on the next pass, so nothing is left showing water that has
+## already gone somewhere else.
+func _flush_water_meshes() -> void:
+	if _water_dirty.is_empty():
+		return
+	var now := Time.get_ticks_msec()
+	for cc in _water_dirty.keys():
+		if now < int(_water_remesh_at.get(cc, 0)):
+			continue
+		_water_remesh_at[cc] = now + int(FLOW_REMESH_DT * 1000.0)
+		_water_dirty.erase(cc)
+		_rebuild_if_loaded(cc)   # async; never blocks the main thread
+
+
+## What the host says the water is doing. Applied wholesale rather than worked
+## out again locally -- see water_simulated.
+func apply_water(rows: Array) -> void:
+	for r in rows:
+		var c: Vector3i = r[0]
+		var lv := int(r[1])
+		if lv <= 0:
+			_clear_water(c, _water_dirty)
+		else:
+			_set_water(c, lv, _water_dirty)
+	_flush_water_meshes()
+
+
+## Every dynamic water cell and how deep it is, for the save file and for a
+## joining client. Generated ocean is not in here: it is a function of the seed,
+## and the far side of a world nobody has touched should cost the save nothing.
+func water_rows() -> Array:
+	var out: Array = []
+	for c in _wlev:
+		out.append([c, int(_wlev[c])])
+	return out
+
+
+## Put the water back where it was, on load or on joining.
+func load_water(rows: Array) -> void:
+	for r in rows:
+		_wlev[r[0]] = int(r[1])
+
+
+## How full a cell is, 0.0 to 1.0. Generated ocean is full; anything the
+## simulation put there is as deep as the simulation left it.
+func water_fill(v: Vector3i) -> float:
+	if get_id(v) != Blocks.WATER:
+		return 0.0
+	# Deliberately NOT _wlevel: that asks generation_sample whether the cell is
+	# ocean, and this is on the movement path, several times a frame. Anything
+	# the simulation is holding a depth for is that deep; anything else is a
+	# cell the world generated, which is full.
+	if not _wlev.has(v):
+		return 1.0
+	return clampf(float(_wlev[v]) / float(W_FULL), 0.0, 1.0)
 
 
 func _set_water(c: Vector3i, level: int, dirty: Dictionary) -> void:
