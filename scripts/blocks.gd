@@ -1574,14 +1574,20 @@ static func is_plant(id: int) -> bool:
 	return b == TALL_GRASS or b == CROP
 
 
-## Swept away by water rather than left standing in it.
+## Swept away by water rather than left standing in it: the things you walk
+## through, crops included.
 ##
-## Wild ground cover only, and deliberately NOT a crop: soil has to be near
-## water to be worked at all (see Player.TILL_RANGE), so a rule that drowned
-## what you planted the moment you supplied the water it needs would be the game
-## arguing with itself.
+## Crops were left out of this at first on the theory that soil has to be near
+## water to be worked at all, so drowning a field would be the game arguing with
+## itself. It is not: you dig the water into the ground and till at the same
+## level beside it, and then the water is never in the crop's cell. A plant
+## standing in the middle of a stream is the thing that looks wrong.
+##
+## Kept as its own question rather than calling is_plant at each site: "does
+## this stop the player" and "does this survive a flood" happen to have the same
+## answer today and are not the same idea.
 static func is_washable(id: int) -> bool:
-	return bottom_of(id) == TALL_GRASS
+	return is_plant(id)
 
 
 # --- flora ---------------------------------------------------------------

@@ -4270,6 +4270,12 @@ func set_block(v: Vector3i, id: int, quiet := false) -> void:
 	# the host's edits has to arrive at the same water the host has.
 	if id == Blocks.WATER:
 		_wlev[v] = W_SOURCE
+		# Water poured straight onto a crop washes it away like any other, and
+		# the growth table has to hear about it: a row left behind goes on
+		# ripening under the water and hands back a harvest from a plant that is
+		# not there. _set_water does the same for water that FLOWS onto one.
+		if not _crops.is_empty():
+			_crops.erase(v)
 	elif was == Blocks.WATER:
 		_wlev.erase(v)
 	if not quiet and water_style == WATER_LIQUID:
@@ -4624,6 +4630,12 @@ func water_fill(v: Vector3i) -> float:
 func _set_water(c: Vector3i, level: int, dirty: Dictionary) -> void:
 	if _is_solid_block(c):
 		return   # something is standing here; water does not write over it
+	# A crop washed away has to stop being a crop as well as stop being a block.
+	# The growth table is keyed by cell and ticked on its own, so a row left in
+	# it would go on ripening under the water and hand back a harvest from a
+	# plant that is no longer there.
+	if not _crops.is_empty() and _crops.has(c):
+		_crops.erase(c)
 	_wlev[c] = level
 	var cc := chunk_of(c)
 	if not _edits_by_chunk.has(cc):
