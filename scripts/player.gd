@@ -2630,14 +2630,18 @@ func _try_harvest(tgt: Dictionary) -> bool:
 		return false
 	var sp := Blocks.flora_by_key(str(got["key"]))
 	var nm: String = str(sp.get("name", "Crop")) if not sp.is_empty() else "Crop"
-	_add_item(Blocks.CROP, int(got["n"]), {"species": str(got["key"])}, planet.planet_name,
-		{"name": nm, "color": Blocks.color_of(Blocks.CROP)})
+	# What comes up depends on the species, not on the act: a fibre crop is
+	# harvested exactly like a food one and simply yields something else.
+	var out := Blocks.crop_yield(str(got["key"]))
+	var label: String = nm if out == Blocks.CROP else Blocks.name_of(out)
+	_add_item(out, int(got["n"]), {"species": str(got["key"])}, planet.planet_name,
+		{"name": label, "color": Blocks.color_of(out)})
 	# ...and its seed back. A crop that ate its own seed would make farming a
 	# way to run out of plants, so a harvest always replaces itself; a second
 	# seed now and then is how a field grows.
 	var seeds := Blocks.seed_return(str(got["key"]))
 	_give_seeds(planet, sp, seeds)
-	_toast("Harvested %d %s, and %d seed%s" % [int(got["n"]), nm, seeds,
+	_toast("Harvested %d %s, and %d seed%s" % [int(got["n"]), label, seeds,
 		"" if seeds == 1 else "s"])
 	return true
 

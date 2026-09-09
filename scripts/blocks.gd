@@ -537,6 +537,13 @@ const COOKED_CROP := 119
 ## thing Bone has ever been for -- and the first time hunting feeds farming
 ## rather than the two lines running past each other.
 const BONEMEAL := 120
+## Soft stock: the second line of materials, next to metal. Fibre is cut from
+## the crops that were never worth eating, Leather is what Hide becomes, and
+## both meet at Cloth -- so a bed, a bag or a coat costs a field and a hunt
+## rather than another ingot.
+const FIBRE := 121
+const CLOTH := 122
+const LEATHER := 123
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
@@ -1120,6 +1127,14 @@ const STATION_CRAFTS := {
 		# only, so the supply is already gated by what you can bring down.
 		{"label": "Bone Meal x3", "out": BONEMEAL, "n": 3,
 			"reqs": [{"id": BONE, "n": 1}]},
+		# Soft stock. Cloth is the cheaper of the two to reach -- a field is
+		# renewable and a herd is not -- and Leather is the one you get without
+		# having farmed at all, so whichever way you played first, something
+		# soft is available.
+		{"label": "Cloth", "out": CLOTH, "n": 1,
+			"reqs": [{"id": FIBRE, "n": 4}]},
+		{"label": "Leather", "out": LEATHER, "n": 1,
+			"reqs": [{"id": HIDE, "n": 2}]},
 		{"label": "Door", "out": DOOR, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 6}, {"id": METAL, "n": 2}]},
 		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": METAL, "n": 1}]},
 		{"label": "Climate Unit", "out": CLIMATE_UNIT, "n": 1,
@@ -1150,6 +1165,9 @@ const NAMES := {
 	HOE: "Hoe",
 	COOKED_CROP: "Cooked Vegetables",
 	BONEMEAL: "Bone Meal",
+	FIBRE: "Plant Fibre",
+	CLOTH: "Cloth",
+	LEATHER: "Leather",
 	RAW_MEAT: "Raw Meat",
 	COOKED_MEAT: "Cooked Meat",
 	HIDE: "Hide",
@@ -1278,6 +1296,9 @@ const COLORS := {
 	HIDE: Color(0.60, 0.45, 0.30),
 	BONE: Color(0.88, 0.86, 0.76),
 	BONEMEAL: Color(0.83, 0.87, 0.70),
+	FIBRE: Color(0.76, 0.72, 0.48),
+	CLOTH: Color(0.87, 0.84, 0.78),
+	LEATHER: Color(0.55, 0.38, 0.24),
 	CAMPFIRE: Color(0.86, 0.45, 0.16),
 	ROCK: Color(0.44, 0.44, 0.50),
 	DIRT: Color(0.40, 0.29, 0.20),
@@ -1420,15 +1441,25 @@ const FLORA := [
 ## gives back, and `spread_n` is how many extra when it does. This is where a
 ## plant's temperament lives: some put out one of themselves and no more, and
 ## some go like potatoes -- one in, a handful out, but only now and then.
+## `use` says what a harvest of this species yields: "food" gives the generic
+## Crop, "fibre" gives Plant Fibre instead. It is a property of the species
+## rather than a new plant, because nine crops that differ only in how fast they
+## grow are nine crops doing one job.
+##
+## The three fibre species are the three the numbers already pointed at. Kelp
+## Vine is the fastest grower and the worst food in the game at 2.5, so nothing
+## is lost by making it cordage; Dune Weed has the lowest yield; Thornbush is
+## the slowest of the steady ones. They also sit on different planet classes, so
+## wherever you land, something makes rope.
 const CROP_GROWTH := {
 	# The steady ones. A row of these stays a row unless you work at it.
 	"meadow":     {"stages": 3, "time": 150.0, "yield_n": 2, "food": 3.0,
 		"spread": 0.10, "spread_n": 1},
 	"frostgrass": {"stages": 4, "time": 260.0, "yield_n": 2, "food": 4.0,
 		"spread": 0.08, "spread_n": 1},
-	"duneweed":   {"stages": 3, "time": 200.0, "yield_n": 1, "food": 3.5,
+	"duneweed":   {"stages": 3, "time": 200.0, "yield_n": 1, "use": "fibre", "food": 3.5,
 		"spread": 0.12, "spread_n": 1},
-	"thornbush":  {"stages": 4, "time": 280.0, "yield_n": 2, "food": 4.0,
+	"thornbush":  {"stages": 4, "time": 280.0, "yield_n": 2, "use": "fibre", "food": 4.0,
 		"spread": 0.10, "spread_n": 1},
 	# Slow, but generous when it finally does.
 	"ashgrass":   {"stages": 5, "time": 320.0, "yield_n": 2, "food": 5.0,
@@ -1438,7 +1469,7 @@ const CROP_GROWTH := {
 		"spread": 0.18, "spread_n": 2},
 	"snowberry":  {"stages": 4, "time": 240.0, "yield_n": 3, "food": 4.5,
 		"spread": 0.15, "spread_n": 2},
-	"kelpvine":   {"stages": 2, "time": 120.0, "yield_n": 3, "food": 2.5,
+	"kelpvine":   {"stages": 2, "time": 120.0, "yield_n": 3, "use": "fibre", "food": 2.5,
 		"spread": 0.22, "spread_n": 3},
 	"coralbush":  {"stages": 3, "time": 190.0, "yield_n": 3, "food": 3.5,
 		"spread": 0.20, "spread_n": 3},
@@ -1458,6 +1489,11 @@ static func seed_return(key: String) -> int:
 ## entry of its own yet.
 static func crop_growth(key: String) -> Dictionary:
 	return CROP_GROWTH.get(key, {"stages": 3, "time": 180.0, "yield_n": 1, "food": 3.0})
+
+
+## What a harvest of this species actually puts in your hands.
+static func crop_yield(key: String) -> int:
+	return FIBRE if str(crop_growth(key).get("use", "food")) == "fibre" else CROP
 
 
 ## How long a young tree stands before it becomes a tree, in seconds.
