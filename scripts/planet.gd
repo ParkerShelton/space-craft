@@ -3651,6 +3651,8 @@ func stream(center_voxel: Vector3i, rd: int) -> void:
 			var node: Node = loaded_chunks[cc]
 			loaded_chunks.erase(cc)
 			node.queue_free()
+			# Nothing needs stand-in collision in a chunk that is gone.
+			_clear_temp_colliders(cc, true)
 	# drop queued loads that are no longer wanted
 	_load_queue = _load_queue.filter(func(cc): return wanted.has(cc))
 	_load_queue_set.clear()
@@ -3970,7 +3972,15 @@ func _add_temp_collider(v: Vector3i) -> void:
 
 
 ## Drop the stand-ins for a chunk once its real collision exists.
-func _clear_temp_colliders(cc: Vector3i) -> void:
+##
+## `force` is for a chunk being UNLOADED. The stand-ins are children of the
+## planet rather than of the chunk, so freeing the chunk does not take them, and
+## the guard below would otherwise refuse to clear a chunk that still owed a
+## rebuild it is never now going to get. That left a physics body per placed
+## block behind for the rest of the session, every time you built something and
+## walked away -- which builds up exactly as slowly and as invisibly as it
+## sounds.
+func _clear_temp_colliders(cc: Vector3i, force: bool = false) -> void:
 	if _temp_solid.is_empty():
 		return
 	# Not while this chunk is still owed a rebuild.
@@ -3981,7 +3991,7 @@ func _clear_temp_colliders(cc: Vector3i) -> void:
 	# rebuild arrives, which is how you fall through the pillar you are standing
 	# on. It only happens when a chunk was busy for some other reason at the
 	# instant you placed, which is why it is intermittent.
-	if _dirty.has(cc):
+	if _dirty.has(cc) and not force:
 		return
 	for v in _temp_solid.keys():
 		if chunk_of(v) != cc:
