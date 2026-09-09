@@ -60,6 +60,8 @@ static func capacity_of(k: int) -> int:
 		return 2   # spare filters / elements: no recipes, just somewhere to stash parts
 	if k == Blocks.FORGE:
 		return 16  # a multiblock-built upgrade over the hand-built Smelter
+	if k == Blocks.BED:
+		return 0   # you sleep in it; there is nowhere to put anything
 	if k == Blocks.SHAPER:
 		# One INPUT slot -- you feed it a single block and pick a shape -- plus
 		# one for the result to land in. A literal single slot leaves the

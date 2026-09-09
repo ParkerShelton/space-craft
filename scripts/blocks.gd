@@ -67,7 +67,7 @@ const CHEST := 52     # pure storage (bigger than a machine)
 const CARPENTER := 62 # base-building bench: structural blocks from plain resources
 const FORGE := 63     # multiblock-built smelter upgrade: bigger + faster
 const CLIMATE_UNIT := 64  # planet base shelter: negates hazard damage nearby
-const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER, GENERATOR, OXYGEN_PLANT, HEATER, COOLER, POWER_BAY, CAMPFIRE]
+const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER, GENERATOR, OXYGEN_PLANT, HEATER, COOLER, POWER_BAY, CAMPFIRE, BED]
 
 # --- procedural ore slots ---------------------------------------------------
 # Each planet invents its own ores (unique name + color) and assigns each to a
@@ -544,6 +544,10 @@ const BONEMEAL := 120
 const FIBRE := 121
 const CLOTH := 122
 const LEATHER := 123
+## Built in the world out of eighths, like the Campfire, rather than crafted as
+## an item. Its job is your respawn point: somewhere you chose, instead of the
+## one spot on the home world every death sends you back to.
+const BED := 124
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
@@ -670,6 +674,7 @@ const PART_CLASSES := {
 	"C": [CIRCUIT],
 	"G": [GLASS],
 	"K": [MACHINE_CORE],                 # the works inside a machine
+	"T": [CLOTH, LEATHER],               # textile: either soft stock will do
 }
 
 # Eighth-block patterns. These are the CORE stations -- the only ones with a
@@ -682,6 +687,19 @@ const PART_STRUCTURES := [
 		"layers": [
 			["W..W", "W..W"],            # a leg at each end
 			["WWWW", "WWWW"],            # worktop across the top
+		],
+	},
+	{
+		# A frame with something soft over it. Same footprint as the bench --
+		# two blocks long, one wide, one tall -- because that is the shape of a
+		# thing you lie on, and because the bench already proved it reads as
+		# furniture rather than as a wall.
+		"name": "Bed",
+		"result": BED,
+		"size": Vector3i(4, 2, 2),
+		"layers": [
+			["WWWW", "WWWW"],            # frame
+			["TTTT", "TTTT"],            # cloth or leather over the top
 		],
 	},
 	{
@@ -1094,7 +1112,6 @@ const STATION_CRAFTS := {
 		{"label": "Shipworks", "out": SHIPWORKS, "n": 1,
 			"reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 		{"label": "Drill", "out": DRILL, "n": 1, "cost": 3},
-		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 3},
 		{"label": "Melee Weapon", "out": WEAPON, "n": 1, "cost": 3},
 		{"label": "Pulse Pistol", "out": PULSE_PISTOL, "n": 1, "cost": 4},
 	],
@@ -1135,6 +1152,17 @@ const STATION_CRAFTS := {
 			"reqs": [{"id": FIBRE, "n": 4}]},
 		{"label": "Leather", "out": LEATHER, "n": 1,
 			"reqs": [{"id": HIDE, "n": 2}]},
+		# Moved off the Fabricator, where it was three of Circuitry -- an odd
+		# recipe for a garment whose entire job is insulation, and the reason
+		# the hazard worlds asked for another ingot rather than for a farm.
+		#
+		# It still takes refined material, because that is where the GRADE comes
+		# from: suit_resist reads the ore's Density, so which ore you line it
+		# with is the difference between 30% and 90% protection. What changed is
+		# that the padding is now real -- cloth or leather, either one, so a
+		# farmer and a hunter can both make one.
+		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 2,
+			"extra": {"any": [CLOTH, LEATHER], "n": 3, "label": "Cloth or Leather"}},
 		{"label": "Door", "out": DOOR, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 6}, {"id": METAL, "n": 2}]},
 		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": METAL, "n": 1}]},
 		{"label": "Climate Unit", "out": CLIMATE_UNIT, "n": 1,
@@ -1153,7 +1181,9 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	ROCK_STAIR, DIRT_STAIR, GRASS_STAIR, REGOLITH_STAIR, ICE_STAIR, SNOW_STAIR,
 	CRYSTAL_STAIR, METAL_STAIR, WOOD_STAIR, GLASS_STAIR,
 	TORCH, GLOW_LAMP, EMBER_TORCH, MACHINE_CORE, WIRE,
-	PLANK, PLANK_PALE, PLANK_DARK]
+	PLANK, PLANK_PALE, PLANK_DARK,
+	# is_partable gates eighth-placement on this list, and a bed is soft on top.
+	CLOTH, LEATHER]
 
 const NAMES := {
 	TALL_GRASS: "Tall Grass",
@@ -1168,6 +1198,7 @@ const NAMES := {
 	FIBRE: "Plant Fibre",
 	CLOTH: "Cloth",
 	LEATHER: "Leather",
+	BED: "Bed",
 	RAW_MEAT: "Raw Meat",
 	COOKED_MEAT: "Cooked Meat",
 	HIDE: "Hide",
@@ -1299,6 +1330,7 @@ const COLORS := {
 	FIBRE: Color(0.76, 0.72, 0.48),
 	CLOTH: Color(0.87, 0.84, 0.78),
 	LEATHER: Color(0.55, 0.38, 0.24),
+	BED: Color(0.72, 0.30, 0.34),
 	CAMPFIRE: Color(0.86, 0.45, 0.16),
 	ROCK: Color(0.44, 0.44, 0.50),
 	DIRT: Color(0.40, 0.29, 0.20),

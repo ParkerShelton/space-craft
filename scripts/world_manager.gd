@@ -268,6 +268,8 @@ func save_game() -> bool:
 			"suit_slot": pl.suit_slot,
 			"known_recipes": pl.known_recipes,
 			"all_known": pl.all_known,
+			"bed_planet": pl.bed_planet,
+			"bed_pos": pl.bed_pos,
 		}
 	# What each player was carrying. Only a server has these (in single player the
 	# one player's inventory is saved above), and they travel with the world so a
@@ -429,6 +431,9 @@ func load_game() -> bool:
 		# blanket "everything known" rather than losing every recipe.
 		pl.known_recipes = pd.get("known_recipes", {})
 		pl.all_known = bool(pd.get("all_known", true))
+		# Saves from before beds existed simply have no bed claimed.
+		pl.bed_planet = str(pd.get("bed_planet", ""))
+		pl.bed_pos = pd.get("bed_pos", Vector3.ZERO)
 		pl.velocity = Vector3.ZERO
 		pl._refresh_slots()
 	return true

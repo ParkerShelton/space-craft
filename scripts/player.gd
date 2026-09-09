@@ -238,6 +238,11 @@ var _tether: MeshInstance3D
 var _iv_y := 0.0                  # interior vertical velocity (ship-local)
 var _interior_floor := false
 var _body_shape: CollisionShape3D
+## Where a bed has been claimed, and on which planet. Empty planet name means
+## none claimed, and death falls back to the home world's spawn point as before.
+var bed_planet := ""
+var bed_pos := Vector3.ZERO
+
 var _home_parent: Node            # where the player lives when not parented to a ship
 const ARTIFICIAL_G := 9.0         # interior gravity toward the ship floor
 const TETHER_LEN := 18.0          # max EVA tether distance
@@ -750,7 +755,9 @@ func _unhandled_input(event: InputEvent) -> void:
 				_edit_block(false)
 				return
 			var st := _looked_at_station()
-			if st != null and not eva:
+			if st != null and st.kind == Blocks.BED and not eva:
+				_use_bed(st)
+			elif st != null and not eva:
 				_open_station(st)
 			elif _try_eat():
 				pass
@@ -1899,13 +1906,26 @@ func _respawn() -> void:
 	oxygen = MAX_OXYGEN
 	hunger = MAX_HUNGER
 	velocity = Vector3.ZERO
-	if world != null and not world.planets.is_empty():
+	var woke_in_bed := false
+	if world != null and bed_planet != "":
+		for p in world.planets:
+			if p.planet_name == bed_planet:
+				global_position = bed_pos
+				woke_in_bed = true
+				break
+		if not woke_in_bed:
+			# The bed is on a world that is not in this system any more. Say so
+			# rather than silently sending them home wondering where it went.
+			bed_planet = ""
+			_toast("Your bed is somewhere you cannot get back to")
+	if not woke_in_bed and world != null and not world.planets.is_empty():
 		global_position = world.planets[0].find_spawn_point(Vector3.UP)
 	# Hold still until there is ground. Chunks stream in asynchronously, so for
 	# the first moments after a respawn there is nothing under you and gravity
 	# drops you straight through the world.
 	_await_ground = 6.0
-	_toast("You blacked out — respawned at home")
+	_toast("You blacked out — woke up in your bed" if woke_in_bed
+		else "You blacked out — respawned at home")
 
 
 # --- SWIMMING -----------------------------------------------------------------
@@ -4442,6 +4462,20 @@ func _craft_button_labels() -> Array:
 	for b in _craft_buttons:
 		out.append(b.text)
 	return out
+
+
+## A bed has no contents, so right-clicking one claims it instead of opening
+## it. Claiming is the whole feature for now: it is the half that behaves
+## identically alone and in co-op, where skipping the night has to decide whose
+## night it is.
+func _use_bed(st: Station) -> void:
+	if world == null:
+		return
+	var p := world.nearest_planet(st.global_position)
+	bed_planet = p.planet_name if p != null else ""
+	# Stored a little above the frame so waking does not start you inside it.
+	bed_pos = st.global_position + st.global_transform.basis.y.normalized() * 1.2
+	_toast("You will wake up here")
 
 
 func _open_station(st: Station) -> void:
