@@ -343,6 +343,36 @@ func current_skin_image() -> Image:
 const DEFAULT_SKIN_HUE := 0.55
 
 
+## A character standing in the middle of a box.
+##
+## The portrait is a TextureRect laid over the button rather than the button's
+## own icon. Button draws an expanded icon hard against one corner of its
+## content box, so every character sat off to one side of the panel behind it
+## with a stripe of empty grey down the other -- which is not a thing you can
+## nudge back into place with padding, because the size it picks depends on the
+## box. A rect that keeps its aspect and centres itself is symmetric by
+## construction, at any size either of these two places asks for.
+func _portrait_button(image: Image, box: Vector2) -> Button:
+	var b := Button.new()
+	b.custom_minimum_size = box
+	b.clip_contents = true
+	var tr := TextureRect.new()
+	# Scaled by whole pixels first, and drawn with a nearest filter, or a
+	# 16-texel-wide character stretched to fit is a smudge.
+	tr.texture = PlayerSkin.portrait_texture(image, 4)
+	tr.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tr.offset_left = 7
+	tr.offset_top = 7
+	tr.offset_right = -7
+	tr.offset_bottom = -7
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.texture_filter = CanvasItem.TEXTURE_FILTER_NEAREST
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(tr)
+	return b
+
+
 ## The figure in the corner: a picture of who you will be, that opens the
 ## wardrobe when clicked. Rebuilt rather than updated, because it is four nodes
 ## and the alternative is four references to keep in step.
@@ -357,10 +387,7 @@ func _refresh_menu_skin(shown: bool) -> void:
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 12)
 	_menu_skin_corner.add_child(row)
-	var b := Button.new()
-	b.icon = PlayerSkin.portrait_texture(current_skin_image(), 3)
-	b.custom_minimum_size = Vector2(76, 108)
-	b.expand_icon = true
+	var b := _portrait_button(current_skin_image(), Vector2(76, 108))
 	b.tooltip_text = "Choose or edit your character"
 	b.pressed.connect(_menu_skins)
 	row.add_child(b)
@@ -511,10 +538,7 @@ func _skin_tile(row: HBoxContainer, index: int, name: String, img: Image) -> voi
 	var col := VBoxContainer.new()
 	col.add_theme_constant_override("separation", 2)
 	row.add_child(col)
-	var b := Button.new()
-	b.icon = PlayerSkin.portrait_texture(img, 2)
-	b.custom_minimum_size = Vector2(78, 108)
-	b.expand_icon = true
+	var b := _portrait_button(img, Vector2(78, 108))
 	b.tooltip_text = name if name != "" else "The built-in character"
 	b.pressed.connect(func():
 		_skin_index = index
