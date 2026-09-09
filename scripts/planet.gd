@@ -3188,6 +3188,19 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 		var big := _cave_strength(gx, gy, gz) > (cave_breach_threshold if near_surface else cave_threshold)
 		var fine := _cave_strength_fine(gx, gy, gz) > (cave_breach_threshold_fine if near_surface else cave_threshold_fine)
 		if big or fine:
+			# A cave under the sea is FLOODED, not an air pocket with an ocean
+			# resting on the roof. Answered here, in the terrain function, rather
+			# than by running the simulation over the world as it loads: this is
+			# free, it is right in chunks nobody has loaded, it needs no entry in
+			# the level table and none in the save file, and it reaches caverns
+			# that are sealed off from the sea -- which a flood spreading from
+			# the water it can reach never would.
+			#
+			# Liquid worlds only. On a frozen one the same rule would pack every
+			# cave below the ice solid, which does not flood a cave so much as
+			# delete it.
+			if water_style == WATER_LIQUID and d <= water_level:
+				return Blocks.WATER
 			return Blocks.AIR
 	if depth < 1.0:
 		if not settlements.is_empty():
