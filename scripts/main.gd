@@ -285,7 +285,12 @@ func _menu_populate(confirm_delete: bool) -> void:
 		return
 	_menu_label("SPACECRAFT", 52)
 	_menu_label("a voxel game in space", 18, 0.55)
-	_menu_label(" ", 14)
+	_menu_label(" ", 8)
+	# Who you are, before where you are going. A skin is chosen out here rather
+	# than in a settings page because it is not a setting -- it is the character
+	# you are about to play as, and this is the last screen before you do.
+	_menu_skin_button()
+	_menu_label(" ", 8)
 	var has_world: bool = _world.saved_world_seed() >= 0
 	if has_world:
 		_menu_button("Continue", func(): _start_world(true))
@@ -299,6 +304,130 @@ func _menu_populate(confirm_delete: bool) -> void:
 	_menu_button("Host Co-op Game", func(): _start_world(false, "host"))
 	_menu_button("Join Co-op Game", func(): _menu_join())
 	_menu_button("Quit", func(): get_tree().quit())
+
+
+# --- skins --------------------------------------------------------------------
+
+## Which skin is worn. Empty means the built-in one.
+func skin_name() -> String:
+	return str(setting("skin", ""))
+
+
+## The image currently being worn, falling back to the built-in default -- which
+## is also what a missing or deleted file gets you, rather than an error.
+func current_skin_image() -> Image:
+	var n := skin_name()
+	if n != "":
+		var img = PlayerSkin.load_skin(n)
+		if img != null:
+			return img
+	return PlayerSkin.default_image(DEFAULT_SKIN_HUE)
+
+
+## The hue the built-in skin is built from. Fixed rather than per-peer here: out
+## on the menu there is no peer id yet, and a character that changed colour on
+## joining would not be the one you picked.
+const DEFAULT_SKIN_HUE := 0.55
+
+
+## The figure on the front page: a picture of who you will be, that opens the
+## wardrobe when clicked.
+func _menu_skin_button() -> void:
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
+	_menu_vb.add_child(row)
+	var b := Button.new()
+	b.icon = PlayerSkin.portrait_texture(current_skin_image(), 3)
+	b.custom_minimum_size = Vector2(96, 128)
+	b.expand_icon = true
+	b.tooltip_text = "Choose or edit your character"
+	b.pressed.connect(_menu_skins)
+	row.add_child(b)
+	var side := VBoxContainer.new()
+	side.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_child(side)
+	var who := Label.new()
+	who.text = skin_name() if skin_name() != "" else "Default"
+	who.add_theme_font_size_override("font_size", 20)
+	side.add_child(who)
+	var hint := Label.new()
+	hint.text = "click to change"
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.modulate = Color(1, 1, 1, 0.55)
+	side.add_child(hint)
+
+
+## The wardrobe: everything you have made, plus a way to make another.
+func _menu_skins() -> void:
+	for c in _menu_vb.get_children():
+		c.queue_free()
+	_menu_label("Your character", 30)
+	_menu_label("this is who you play as -- it travels with you into a game", 14, 0.55)
+	_menu_label(" ", 6)
+	var grid := GridContainer.new()
+	grid.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	grid.columns = 5
+	grid.add_theme_constant_override("h_separation", 8)
+	grid.add_theme_constant_override("v_separation", 8)
+	_menu_vb.add_child(grid)
+	# The built-in one is always offered, and cannot be deleted or edited away.
+	_skin_tile(grid, "", PlayerSkin.default_image(DEFAULT_SKIN_HUE))
+	for n in PlayerSkin.list_skins():
+		var img = PlayerSkin.load_skin(n)
+		if img != null:
+			_skin_tile(grid, n, img)
+	_menu_label(" ", 6)
+	_menu_button("New character", _menu_new_skin)
+	if skin_name() != "":
+		_menu_button("Delete \"%s\"" % skin_name(), func():
+			PlayerSkin.delete_skin(skin_name())
+			set_setting("skin", "")
+			_menu_skins(), "ui_back")
+	_menu_button("Back", func(): _menu_populate(false), "ui_back")
+
+
+## One choice in the wardrobe.
+##
+## The one being worn is shown at full strength and the rest are dimmed, which
+## reads across a row of tiles from any distance -- a pressed button state does
+## not, because a pressed button and a hovered one look much the same.
+func _skin_tile(grid: GridContainer, name: String, img: Image) -> void:
+	var col := VBoxContainer.new()
+	col.add_theme_constant_override("separation", 2)
+	grid.add_child(col)
+	var b := Button.new()
+	b.icon = PlayerSkin.portrait_texture(img, 2)
+	b.custom_minimum_size = Vector2(72, 104)
+	b.expand_icon = true
+	b.tooltip_text = name if name != "" else "The built-in character"
+	var worn: bool = name == skin_name()
+	b.modulate = Color(1, 1, 1, 1.0 if worn else 0.45)
+	b.pressed.connect(func():
+		set_setting("skin", name)
+		_menu_skins())
+	col.add_child(b)
+	var cap := Label.new()
+	cap.text = (name if name != "" else "Default")
+	cap.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	cap.add_theme_font_size_override("font_size", 12)
+	cap.modulate = Color(1, 1, 1, 1.0 if worn else 0.5)
+	col.add_child(cap)
+
+
+## A new character to work on. It starts as a copy of whatever is being worn, so
+## "new" means "another one like this" rather than a blank figure -- editing
+## something is a much easier start than painting one from nothing.
+func _menu_new_skin() -> void:
+	var name := PlayerSkin.free_name("Character")
+	var img := current_skin_image()
+	# A different hue from the one it was copied from, so a new character is
+	# visibly a different character before a single pixel has been painted.
+	if skin_name() == "":
+		img = PlayerSkin.default_image(randf())
+	if PlayerSkin.save_skin(name, img):
+		set_setting("skin", name)
+	_menu_skins()
 
 
 ## The join screen: somewhere to type the host's address.

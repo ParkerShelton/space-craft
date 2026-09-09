@@ -209,3 +209,112 @@ static func _draw_face(img: Image, ink: Color) -> void:
 	for dx in [2, 5]:
 		img.set_pixel(f.position.x + dx, f.position.y + 3, ink)
 		img.set_pixel(f.position.x + dx, f.position.y + 4, ink)
+
+
+# --- saved skins --------------------------------------------------------------
+#
+# One PNG per skin in a folder of its own, named by the player. A file rather
+# than a blob in the settings because a skin IS a picture: it can be opened in
+# any editor, sent to somebody, or dropped in from elsewhere, and none of that
+# works if it lives inside a config file as base64.
+
+const DIR := "user://skins"
+
+
+static func skins_dir() -> String:
+	DirAccess.make_dir_recursive_absolute(DIR)
+	return DIR
+
+
+## Every saved skin, by name, alphabetical.
+static func list_skins() -> PackedStringArray:
+	var out := PackedStringArray()
+	var d := DirAccess.open(skins_dir())
+	if d == null:
+		return out
+	for f in d.get_files():
+		if f.to_lower().ends_with(".png"):
+			out.append(f.substr(0, f.length() - 4))
+	out.sort()
+	return out
+
+
+static func skin_path(name: String) -> String:
+	return "%s/%s.png" % [skins_dir(), name]
+
+
+## Load one by name, or null if it is missing or not a skin-shaped image.
+static func load_skin(name: String):
+	var path := skin_path(name)
+	if not FileAccess.file_exists(path):
+		return null
+	var img := Image.load_from_file(path)
+	if img == null:
+		return null
+	# Anything can be dropped into that folder, including a photograph. Only
+	# accept squares of the right size rather than stretching whatever turns up.
+	if img.get_width() != ATLAS or img.get_height() != ATLAS:
+		return null
+	img.convert(Image.FORMAT_RGBA8)
+	return img
+
+
+static func save_skin(name: String, img: Image) -> bool:
+	return img.save_png(skin_path(name)) == OK
+
+
+static func delete_skin(name: String) -> void:
+	var d := DirAccess.open(skins_dir())
+	if d != null:
+		d.remove("%s.png" % name)
+
+
+## A name nobody is using yet, based on `base`.
+static func free_name(base: String) -> String:
+	var taken := {}
+	for n in list_skins():
+		taken[n] = true
+	if not taken.has(base):
+		return base
+	var i := 2
+	while taken.has("%s %d" % [base, i]):
+		i += 1
+	return "%s %d" % [base, i]
+
+
+# --- portrait -----------------------------------------------------------------
+
+## The figure seen from the front, assembled out of the skin's own front faces.
+##
+## Drawn from the atlas rather than rendered in 3D on purpose: it is what the
+## skin IS, at exactly its own resolution, with no camera, lighting or angle in
+## the way. A menu wants to show you which skin this is, not what it looks like
+## in a particular light.
+##
+## The arrangement is the classic proportions -- 16 texels across by 32 down --
+## because those are the shapes the layout's rectangles already are.
+const PORTRAIT_W := 16
+const PORTRAIT_H := 32
+
+static func portrait(img: Image) -> Image:
+	var out := Image.create(PORTRAIT_W, PORTRAIT_H, false, Image.FORMAT_RGBA8)
+	out.fill(Color(0, 0, 0, 0))
+	var place := [
+		["head", Vector2i(4, 0)],
+		["body", Vector2i(4, 8)],
+		["right_arm", Vector2i(0, 8)],
+		["left_arm", Vector2i(12, 8)],
+		["right_leg", Vector2i(4, 20)],
+		["left_leg", Vector2i(8, 20)],
+	]
+	for e in place:
+		var r: Rect2i = LAYOUT[str(e[0])]["front"]
+		out.blit_rect(img, r, e[1] as Vector2i)
+	return out
+
+
+## The portrait as a texture, blown up by whole pixels so it stays pixel art.
+static func portrait_texture(img: Image, scale: int = 4) -> ImageTexture:
+	var p := portrait(img)
+	p.resize(PORTRAIT_W * scale, PORTRAIT_H * scale, Image.INTERPOLATE_NEAREST)
+	return ImageTexture.create_from_image(p)
