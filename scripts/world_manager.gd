@@ -219,6 +219,18 @@ func plant(p: Planet, v: Vector3i, key: String, tree: bool) -> bool:
 	return ok
 
 
+## Bone meal on a growing plant. Applied here and now whoever asked, so it
+## feels instant, and then told to the network -- which answers with the stage
+## it settled on rather than with "one more".
+func feed_crop(p: Planet, v: Vector3i) -> bool:
+	var stage := p.advance_crop(v)
+	if stage == Planet.FEED_NOTHING:
+		return false
+	if net != null and net.active:
+		net.fed(p.planet_name, v, stage)
+	return true
+
+
 func harvest_crop(p: Planet, v: Vector3i) -> Dictionary:
 	var got := p.harvest(v)
 	if not got.is_empty() and net != null and net.active:

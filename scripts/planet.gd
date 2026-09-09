@@ -1276,6 +1276,30 @@ func set_crop_stage(v: Vector3i, stage: int) -> void:
 	_remesh_at(v)
 
 
+## One stage of growth, bought rather than waited for. Returns the stage it
+## landed on, -1 if it was a sapling and became a tree, or NOTHING if there is
+## nothing here to feed or it has already finished growing.
+##
+## The return value is what makes this safe to replicate: an absolute stage can
+## be applied twice without landing twice, where "advance one" cannot.
+const FEED_NOTHING := -2
+
+func advance_crop(v: Vector3i) -> int:
+	var c: Dictionary = _crops.get(v, {})
+	if c.is_empty():
+		return FEED_NOTHING
+	if bool(c.get("tree", false)):
+		_grow_tree_at(v)
+		return -1
+	var last: int = int(Blocks.crop_growth(str(c["key"]))["stages"]) - 1
+	if int(c["stage"]) >= last:
+		return FEED_NOTHING   # ripe already: pull it, do not feed it
+	c["stage"] = int(c["stage"]) + 1
+	c["t"] = 0.0
+	_remesh_at(v)
+	return int(c["stage"])
+
+
 ## Everything planted here, flat, for saving and for handing to a new arrival.
 func crops_snapshot() -> Array:
 	var out: Array = []
@@ -1333,6 +1357,12 @@ func grow_crops(delta: float) -> Array:
 ## A young tree becomes a real one: the trunk and canopy the generator would
 ## have put here, written in as edits.
 func _grow_tree_at(v: Vector3i) -> void:
+	# Nothing planted here means this has already happened. Without the guard a
+	# second call would clear the trunk block standing where the sapling was and
+	# grow another tree through it, which is exactly what an absolute stage of
+	# -1 arriving twice would do.
+	if not _crops.has(v):
+		return
 	_crops.erase(v)
 	set_block(v, Blocks.AIR)
 	var centre := Vector3(v) + Vector3(0.5, 0.5, 0.5)

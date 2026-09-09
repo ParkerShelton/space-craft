@@ -554,6 +554,35 @@ func apply_harvest(planet_name: String, v: Vector3i) -> void:
 		p.clear_crop(v)
 
 
+## Bone meal. The one place a crop changes by a RELATIVE amount, which is
+## exactly what must not be sent as one: whoever asked has already applied it,
+## and would apply the broadcast on top. So the answer is the stage it ended on,
+## and setting a stage twice is setting it once. It also rides the existing
+## crop_stages RPC rather than needing an apply of its own.
+func fed(planet_name: String, v: Vector3i, stage: int) -> void:
+	if not active:
+		return
+	if is_host:
+		crop_stages.rpc(planet_name, [[v, stage]])
+	else:
+		request_feed.rpc_id(1, planet_name, v)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_feed(planet_name: String, v: Vector3i) -> void:
+	if not is_host:
+		return
+	var p := _planet(planet_name)
+	if p == null:
+		return
+	# The host works out the stage from ITS OWN state, so a client that was
+	# behind or ahead is corrected by the same message that confirms it.
+	var stage := p.advance_crop(v)
+	if stage == Planet.FEED_NOTHING:
+		return
+	crop_stages.rpc(planet_name, [[v, stage]])
+
+
 ## Host -> everyone: crops that moved a stage this tick, batched.
 func crops_grew(planet_name: String, changes: Array) -> void:
 	if active and is_host and not changes.is_empty():

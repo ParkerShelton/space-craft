@@ -757,6 +757,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			# Farming comes before building: with a hoe or a seed in hand, the
 			# ground under the crosshair is what you mean, and a block placed
 			# instead of a row sown is a whole minute undone.
+			elif _try_feed(_raycast_voxel()):
+				pass
 			elif _try_harvest(_raycast_voxel()):
 				pass
 			elif _try_plant(_raycast_voxel()):
@@ -2588,6 +2590,28 @@ func _try_plant(tgt: Dictionary) -> bool:
 		_toast("Crops need soil worked with a hoe")
 		return true
 	if not world.plant(planet, v, str(props.get("species", "meadow")), tree):
+		return true
+	_consume_active()
+	return true
+
+
+## Bone meal: one stage of growth, or a sapling straight into a tree.
+##
+## Sits BEFORE harvesting in the right-click chain so that a handful of meal and
+## a ripe crop do not fight over the same click -- feeding refuses a finished
+## plant, and the harvest below then takes it.
+func _try_feed(tgt: Dictionary) -> bool:
+	var held := _active_item()
+	if int(held.get("id", Blocks.AIR)) != Blocks.BONEMEAL:
+		return false
+	if tgt.get("kind", "") != "planet":
+		return false
+	var planet := tgt["obj"] as Planet
+	var v: Vector3i = tgt["voxel"]
+	if planet.crop_at(v).is_empty():
+		return false
+	if not world.feed_crop(planet, v):
+		_toast("That is ready to pull up")
 		return true
 	_consume_active()
 	return true

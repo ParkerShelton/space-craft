@@ -533,6 +533,10 @@ const HOE := 118
 ## A meal made of what you grew. One dish for now -- later, which plants went
 ## into it is what will separate a good meal from a filling one.
 const COOKED_CROP := 119
+## Ground bone, spread on a growing plant to push it one stage on. The first
+## thing Bone has ever been for -- and the first time hunting feeds farming
+## rather than the two lines running past each other.
+const BONEMEAL := 120
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
@@ -1111,6 +1115,11 @@ const STATION_CRAFTS := {
 			"reqs": [{"refined": true, "n": 1}, {"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
 		{"label": "Chest", "out": CHEST, "n": 1,
 			"reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
+		# Three from one bone, because the point is to make a field worth
+		# tending rather than to ration it. Bone comes off the big creatures
+		# only, so the supply is already gated by what you can bring down.
+		{"label": "Bone Meal x3", "out": BONEMEAL, "n": 3,
+			"reqs": [{"id": BONE, "n": 1}]},
 		{"label": "Door", "out": DOOR, "n": 1, "reqs": [{"any": WOOD_IDS, "n": 6}, {"id": METAL, "n": 2}]},
 		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": METAL, "n": 1}]},
 		{"label": "Climate Unit", "out": CLIMATE_UNIT, "n": 1,
@@ -1140,6 +1149,7 @@ const NAMES := {
 	YOUNG_TREE: "Young Tree",
 	HOE: "Hoe",
 	COOKED_CROP: "Cooked Vegetables",
+	BONEMEAL: "Bone Meal",
 	RAW_MEAT: "Raw Meat",
 	COOKED_MEAT: "Cooked Meat",
 	HIDE: "Hide",
@@ -1267,6 +1277,7 @@ const COLORS := {
 	COOKED_MEAT: Color(0.55, 0.34, 0.18),
 	HIDE: Color(0.60, 0.45, 0.30),
 	BONE: Color(0.88, 0.86, 0.76),
+	BONEMEAL: Color(0.83, 0.87, 0.70),
 	CAMPFIRE: Color(0.86, 0.45, 0.16),
 	ROCK: Color(0.44, 0.44, 0.50),
 	DIRT: Color(0.40, 0.29, 0.20),
