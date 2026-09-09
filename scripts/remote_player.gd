@@ -136,6 +136,32 @@ func set_skin(img: Image) -> void:
 		_mat.albedo_texture = PlayerSkin.texture_from(img)
 
 
+## Which skin is on, as the hash of the bytes it came from. Only used to notice
+## that a new one has arrived: decoding a PNG every frame to find out it is the
+## same PNG would be the most expensive thing this class does.
+var skin_tag := 0
+
+
+## Wear the skin the network sent, if it is one we have not got on already.
+## Anything that fails to decode, or is not a skin sheet, is IGNORED rather than
+## reported: the cost of a bad packet should be that this player keeps the
+## default figure, not that everyone's log fills up. A rejected packet still
+## claims the tag, because this is called every frame from the bytes the network
+## left in the peer record -- otherwise one bad skin would be decoded, and fail,
+## sixty times a second for as long as that player stayed connected.
+func wear_png(png: PackedByteArray) -> void:
+	var tag := hash(png)
+	if png.is_empty() or tag == skin_tag:
+		return
+	skin_tag = tag
+	var img := Image.new()
+	if img.load_png_from_buffer(png) != OK:
+		return
+	if img.get_width() != PlayerSkin.ATLAS or img.get_height() != PlayerSkin.ATLAS:
+		return
+	set_skin(img)
+
+
 func _box(parent: Node3D, size: Vector3, pos: Vector3, col: Color) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var m := BoxMesh.new()

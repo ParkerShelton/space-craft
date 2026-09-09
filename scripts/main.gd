@@ -1452,6 +1452,9 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	# ...and now there is somewhere to put an inventory, tell the host who we are
 	# so it can hand back whatever we left with.
 	_net.say_hello()
+	# ...and what we look like, which unlike the inventory is the same for
+	# everyone rather than a private thing the host keeps for us.
+	_net.announce_skin(current_skin_image().save_png_to_buffer())
 	_build_chat()
 
 	# player: drop in just above dry land on the home world
@@ -1793,6 +1796,9 @@ func _sync_players(delta: float) -> void:
 			add_child(av)
 			av.setup(int(id))
 			_avatars[id] = av
+		var png = st.get("skin", null)
+		if png is PackedByteArray:
+			av.wear_png(png)
 		var pos: Vector3 = st["pos"]
 		var pl: Planet = _world.nearest_planet(pos)
 		# SNAPPED to an axis, because that is how a player stands: Player._walk is

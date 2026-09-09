@@ -205,6 +205,9 @@ func _on_peer_connected(id: int) -> void:
 	# Hand the newcomer the world it has to build. Nothing else can happen until
 	# it has this: its terrain would not match ours.
 	world_info.rpc_id(id, _seed, _system, _day_phases())
+	# ...who everyone here is, so the newcomer does not spend the session
+	# looking at a field of default characters.
+	_send_skins_to(id)
 	# ...and everything that has been built or dug since the world was made.
 	# Without this a late joiner sees the world as it was GENERATED: it would
 	# generate the same terrain from the seed and then be missing every change
@@ -860,3 +863,70 @@ func _write_chat_log(line: String) -> void:
 func broadcast_state(pos: Vector3, facing: Vector3, action: int) -> void:
 	if active:
 		player_state.rpc(pos, facing, action)
+
+
+# --- what everyone looks like ----------------------------------------------
+#
+# A skin is 64x64 pixels: under two kilobytes as a PNG, sent once when you
+# arrive rather than with every position update. It rides in the same peer
+# record as the position so a late-arriving skin has somewhere to sit until the
+# avatar that wears it exists -- which is the usual case, since a joining player
+# announces itself long before anybody has drawn it.
+
+## Longest skin accepted. A real one is a couple of kilobytes; this is only here
+## so a bad peer cannot hand everyone a hundred-megabyte image to decode.
+const SKIN_MAX := 65536
+
+## What this player is wearing, kept so the host can pass it on to whoever joins
+## next -- who was not connected when it was first announced.
+var my_skin := PackedByteArray()
+
+
+## Tell everyone what you look like. Called once the world is up, on host and
+## client alike: the host is a player too, and its own skin has to travel.
+func announce_skin(png: PackedByteArray) -> void:
+	my_skin = png
+	if active:
+		skin_worn.rpc(png)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func skin_worn(png: PackedByteArray) -> void:
+	var id := multiplayer.get_remote_sender_id()
+	if png.size() > SKIN_MAX:
+		return
+	if not peers.has(id):
+		peers[id] = {}
+	peers[id]["skin"] = png
+	# The host is the only one who sees everybody, so it is the only one who can
+	# introduce them to each other. Relayed with the id spelled out, because the
+	# sender of THIS message is the host rather than the player it describes.
+	if is_host:
+		for other in peers:
+			if int(other) != id:
+				skin_of.rpc_id(int(other), id, png)
+
+
+## Host -> one client: "this is what that player looks like." Sent for everyone
+## already here when somebody joins, and for each new arrival after that.
+@rpc("authority", "call_remote", "reliable")
+func skin_of(id: int, png: PackedByteArray) -> void:
+	if png.size() > SKIN_MAX:
+		return
+	if not peers.has(id):
+		peers[id] = {}
+	peers[id]["skin"] = png
+
+
+## Everything the newcomer missed: the host's own skin, and every skin the host
+## has been told about so far.
+func _send_skins_to(id: int) -> void:
+	if not my_skin.is_empty():
+		skin_of.rpc_id(id, 1, my_skin)
+	for other in peers:
+		var o := int(other)
+		if o == id:
+			continue
+		var png = peers[other].get("skin", PackedByteArray())
+		if png is PackedByteArray and not (png as PackedByteArray).is_empty():
+			skin_of.rpc_id(id, o, png)
