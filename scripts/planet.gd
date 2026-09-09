@@ -292,6 +292,67 @@ var ground_contrast := 1.0    # how far those shades spread
 var rock_grain := 1.0
 var rock_contrast := 1.0
 
+# --- biomes ------------------------------------------------------------------
+#
+# Regions of ONE world that differ in ground, vegetation and relief.
+#
+# Big worlds only. A moon you can walk around in a few minutes reads as one
+# place, and cutting it into six makes it read as a mess rather than as a
+# journey; the size test is what stops a region being smaller than the walk
+# across it. Moons generate at 240-420 and planets at 1100-1900, so this line
+# falls cleanly between the two kinds of body rather than through the middle of
+# either.
+const BIOME_MIN_RADIUS := 700.0
+## Roughly how many biome-widths fit across a planet. Bigger worlds therefore
+## get MORE regions rather than larger ones, which is what keeps a region a
+## walk rather than an expedition whatever size the world is.
+const BIOME_SCALE := 3.2
+
+## What a region can differ in.
+##
+## Every one of these is expressed in the planet's OWN materials -- its topsoil,
+## its subsoil, its rock -- rather than in a fixed set of earth biomes. A world
+## with violet ground and no trees should have regions of violet ground, not a
+## pine forest and a savannah; inventing a climate model to stop that happening
+## would be a much bigger thing than this, and would still get it wrong.
+##
+## `top` picks which of the planet's three ground materials is exposed:
+## 0 topsoil, 1 subsoil, 2 rock. `trees` and `grass` scale the planet's own
+## densities, so a world with no trees stays a world with no trees. `amp` scales
+## the height variation and `lift` moves the whole surface up or down -- which,
+## since sea level is a property of the planet, is also what turns a basin into
+## a lake and a highland into somewhere above the weather.
+##
+## `lift` is a MULTIPLE of the planet's own terrain amplitude rather than a
+## number of blocks. Amplitudes run from a few blocks to sixty depending on the
+## world, and a fixed nine-block basin is a canyon on one planet and a dip you
+## would not notice on the next.
+##
+## The ORDER is the axis they are laid out along: neighbours in this list are
+## neighbours on the ground, so a basin runs into plains and never straight into
+## barrens. Relief is interpolated between neighbours, which is why that matters
+## -- a hard edge between amp 0.5 and amp 2.4 is a cliff around the whole region.
+const BIOME_KINDS := [
+	{"name": "Basin",     "top": 1, "trees": 0.15, "grass": 0.80, "amp": 0.45, "lift": -0.45},
+	{"name": "Plains",    "top": 0, "trees": 0.30, "grass": 1.40, "amp": 0.70, "lift": 0.0},
+	{"name": "Forest",    "top": 0, "trees": 2.30, "grass": 1.00, "amp": 0.95, "lift": 0.03},
+	{"name": "Scrubland", "top": 1, "trees": 0.55, "grass": 0.35, "amp": 1.05, "lift": 0.10},
+	{"name": "Highland",  "top": 0, "trees": 0.45, "grass": 0.60, "amp": 1.90, "lift": 0.50},
+	{"name": "Barrens",   "top": 2, "trees": 0.00, "grass": 0.00, "amp": 1.35, "lift": 0.30},
+]
+
+## The biomes this world actually has, as parallel arrays rather than an array of
+## dictionaries: these are read per voxel during generation, and a dictionary
+## lookup per field per voxel is the kind of cost that only shows up as "the
+## world takes longer to load than it used to".
+var biome_names: Array = []
+var _b_top := PackedInt32Array()
+var _b_trees := PackedFloat32Array()
+var _b_grass := PackedFloat32Array()
+var _b_amp := PackedFloat32Array()
+var _b_lift := PackedFloat32Array()
+var biome_noise := FastNoiseLite.new()
+
 var tree_density := 0.0       # 0 = desert (no trees), up to ~0.6 = dense forest
 ## How thickly this world carpets its soil with tall grass. Rolled per planet, so
 ## some are lush and some are close-cropped.
@@ -465,6 +526,10 @@ func configure(cfg: Dictionary) -> void:
 
 	alien_palette = cfg.get("alien", false)
 	_derive_palette()
+	# BEFORE everything below it: flora siting, ore depth, water and settlements
+	# all ask where the surface is, and on a world with regions that answer
+	# depends on which region.
+	_derive_biomes()
 	_derive_flora(cfg.get("tree_density", 0.0))
 	var grng := RandomNumberGenerator.new()
 	grng.seed = _seed + 3131
@@ -1057,7 +1122,15 @@ func _max_reach() -> float:
 	# Mountains count: without them in here, every peak is sliced off flat at
 	# whatever height this returns, because generation_sample treats anything
 	# past it as air.
-	return maxf(radius + terrain_amp + mountain_amp
+	# Biome relief counts for the same reason mountains do: a highland lifted
+	# nine blocks and stretched to twice the amplitude would be sliced off flat
+	# at whatever this returns.
+	var b_amp := 1.0
+	var b_lift := 0.0
+	for i in _b_amp.size():
+		b_amp = maxf(b_amp, _b_amp[i])
+		b_lift = maxf(b_lift, _b_lift[i])
+	return maxf(radius + terrain_amp * (b_amp + b_lift) + mountain_amp
 		+ maxf(tree_reach, settlement_reach), water_level)
 
 
@@ -2644,6 +2717,93 @@ func color_of(id: int) -> Color:
 	return c if c != null else Blocks.color_of(id)
 
 
+## Which regions this world is made of, and how big they are.
+##
+## A CONTIGUOUS run of the table rather than a scattered pick, because the table
+## is an axis: a world that had a basin and barrens and nothing in between would
+## put a cliff of dead rock straight against a lake. Where the run starts and how
+## long it is are the roll, so one world is basins-through-scrub and the next is
+## forest-through-barrens.
+func _derive_biomes() -> void:
+	biome_names.clear()
+	_b_top.clear()
+	_b_trees.clear()
+	_b_grass.clear()
+	_b_amp.clear()
+	_b_lift.clear()
+	if radius < BIOME_MIN_RADIUS:
+		return
+	var r := RandomNumberGenerator.new()
+	r.seed = _seed + 1717
+	var n := r.randi_range(3, 5)
+	var start := r.randi_range(0, BIOME_KINDS.size() - n)
+	for i in n:
+		var b: Dictionary = BIOME_KINDS[start + i]
+		biome_names.append(str(b["name"]))
+		_b_top.append(int(b["top"]))
+		# Jittered per world, so two planets that happen to draw the same run are
+		# still not the same planet.
+		_b_trees.append(float(b["trees"]) * r.randf_range(0.75, 1.3))
+		_b_grass.append(float(b["grass"]) * r.randf_range(0.75, 1.3))
+		_b_amp.append(float(b["amp"]) * r.randf_range(0.85, 1.15))
+		_b_lift.append(float(b["lift"]) * r.randf_range(0.8, 1.2))
+	biome_noise.seed = _seed + 1718
+	biome_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	biome_noise.frequency = BIOME_SCALE / maxf(radius, 1.0)
+	# Two octaves, so a region has a ragged coast rather than the outline of a
+	# single noise blob.
+	biome_noise.fractal_octaves = 2
+
+
+func has_biomes() -> bool:
+	return not _b_amp.is_empty()
+
+
+## Where a point on the surface sits along this world's biome axis, 0 to 1.
+## Continuous on purpose: the relief either side of a border is blended across
+## it, and only the ground material and the vegetation snap.
+func _biome_pos(dir: Vector3) -> float:
+	var v := biome_noise.get_noise_3d(dir.x * radius, dir.y * radius, dir.z * radius)
+	return clampf(v * 0.85 + 0.5, 0.0, 1.0)
+
+
+## Which region a point actually belongs to, for the things that cannot be half
+## one and half the other: what the ground is made of, and what grows on it.
+##
+## EQUAL shares of the axis. Handing each region the span nearest its own index
+## instead gives the two ends half a share each, which with three regions put
+## two thirds of the world in the middle one -- a planet of plains with a rumour
+## of forest at either end.
+func _biome_slot(pos: float) -> int:
+	return clampi(int(pos * float(_b_amp.size())), 0, _b_amp.size() - 1)
+
+
+## Relief at a point: the amplitude multiplier and the height offset, blended
+## across the border between two regions.
+##
+## Measured between the CENTRES of neighbouring shares, so the blend is at its
+## purest in the middle of a region and half-and-half exactly where the ground
+## material changes -- and flat past the outermost centres, or the far end of a
+## world would keep sinking after it had run out of basin.
+func _biome_relief(pos: float) -> Vector2:
+	var n := _b_amp.size()
+	var at := pos * float(n) - 0.5
+	var i := clampi(int(floorf(at)), 0, n - 1)
+	var j := clampi(i + 1, 0, n - 1)
+	var f := clampf(at - float(i), 0.0, 1.0)
+	return Vector2(lerpf(_b_amp[i], _b_amp[j], f), lerpf(_b_lift[i], _b_lift[j], f))
+
+
+## What this world calls the place you are standing.
+func biome_at(world_pos: Vector3) -> String:
+	if not has_biomes():
+		return ""
+	var d := (world_pos - global_position)
+	if d.length_squared() < 0.0001:
+		return ""
+	return str(biome_names[_biome_slot(_biome_pos(d.normalized()))])
+
+
 func _derive_flora(density: float) -> void:
 	tree_density = density
 	if tree_density <= 0.0:
@@ -2836,11 +2996,21 @@ func surface_radius(dir: Vector3) -> float:
 	return _surf(dir)
 
 
-func _surf(dir: Vector3) -> float:
+## `bpos` is this column's place on the biome axis, passed in by callers that
+## have already worked it out. It is one noise lookup, and generation asks for
+## the surface height several times per voxel.
+func _surf(dir: Vector3, bpos := -1.0) -> float:
 	var x := dir.x * radius
 	var y := dir.y * radius
 	var z := dir.z * radius
-	var h := radius + surface_noise.get_noise_3d(x, y, z) * terrain_amp
+	var n := surface_noise.get_noise_3d(x, y, z)
+	var amp := terrain_amp
+	var lift := 0.0
+	if not _b_amp.is_empty():
+		var relief := _biome_relief(bpos if bpos >= 0.0 else _biome_pos(dir))
+		amp = terrain_amp * relief.x
+		lift = relief.y
+	var h := radius + n * amp + lift * terrain_amp
 	if mountain_amp <= 0.0:
 		return h
 	# Ranges only rise where the land is ALREADY high. Ridged noise on its own
@@ -2848,8 +3018,14 @@ func _surf(dir: Vector3) -> float:
 	# than a world with mountains in it; gating on the rolling-hills height that
 	# has just been computed gathers them into the high country and leaves the
 	# basins rolling. It costs nothing -- the number is already here.
-	var hill := (h - radius) / maxf(terrain_amp, 0.001)
-	var where := smoothstep(0.0, 0.65, hill)
+	#
+	# Read off the raw noise rather than off the finished height, which is the
+	# same number on a world without regions and the RIGHT one on a world with
+	# them: a basin is lower because it is a basin, not because the land there
+	# is low, and gating on the finished height would refuse it mountains on
+	# principle while giving every highland a range whether the land called for
+	# one or not.
+	var where := smoothstep(0.0, 0.65, n)
 	if where <= 0.0:
 		return h
 	var m := mountain_noise.get_noise_3d(x, y, z)
@@ -2937,7 +3113,20 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 		return Blocks.AIR
 	var l2 := p.length()
 	var dir := p / maxf(l2, 0.0001)
-	var surf := _surf(dir)
+	# One lookup, shared by the height below, the ground material and the
+	# vegetation -- all three are properties of this column, not of this voxel.
+	var bpos := _biome_pos(dir) if not _b_amp.is_empty() else -1.0
+	var surf := _surf(dir, bpos)
+	var top := pal_top
+	var sub := pal_sub
+	var grass_here := grass_density
+	if bpos >= 0.0:
+		var slot := _biome_slot(bpos)
+		match _b_top[slot]:
+			1: top = pal_sub
+			2: top = pal_rock
+		sub = pal_sub if _b_top[slot] < 2 else pal_rock
+		grass_here = grass_density * _b_grass[slot]
 
 	# A settlement grades its own ground: each building sits on a small flat pad
 	# at ITS OWN local terrain height (not a single height for the whole
@@ -2971,9 +3160,9 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 			if t != Blocks.AIR:
 				return t
 		# Ground cover, in the ONE cell above the surface and only over soil.
-		if grass_density > 0.0 and d - surf <= 1.0 and pal_top == Blocks.GRASS \
+		if grass_here > 0.0 and d - surf <= 1.0 and top == Blocks.GRASS \
 				and (water_style == WATER_NONE or surf > water_level + 0.5) \
-				and _hash01(Vector3i(gx, gy, gz), 91) < grass_density:
+				and _hash01(Vector3i(gx, gy, gz), 91) < grass_here:
 			# And only where there is actually SOIL under it. "One cell above the
 			# surface" is a nominal height, not a promise that anything is there --
 			# where a cave breaks through the ground has been carved away, and the
@@ -3005,9 +3194,9 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 			var path_id := _settlement_path_block(p)
 			if path_id != Blocks.AIR:
 				return path_id
-		return pal_top
+		return top
 	if depth < 4.0:
-		return pal_sub
+		return sub
 	# rock layer: sometimes an ore vein
 	if not ore_defs.is_empty() and ore_noise.get_noise_3d(gx, gy, gz) > ore_threshold:
 		var o := _pick_ore(gx, gy, gz, depth)
@@ -3061,9 +3250,16 @@ func _dist_to_segment(p: Vector3, a: Vector3, b: Vector3) -> float:
 ## The tree, if any, rooted in one cell. Empty array means none. Split out of
 ## _tree_at so it can be memoised per chunk build (see the tcache argument).
 func _tree_in_cell(cc: Vector3i, c: float) -> Array:
-	if _hash01(cc, 0) >= tree_density:
-		return []
 	var cdir := (Vector3(cc) * c + Vector3(c * 0.5, c * 0.5, c * 0.5)).normalized()
+	# The region the tree is ROOTED in decides whether it is there at all, which
+	# is what makes a forest a forest and the plain beside it a plain. Tested
+	# here rather than per voxel: a tree that half exists because its canopy
+	# crosses a border is a tree with half a canopy.
+	var density := tree_density
+	if not _b_amp.is_empty():
+		density *= _b_trees[_biome_slot(_biome_pos(cdir))]
+	if _hash01(cc, 0) >= density:
+		return []
 	var base := _surface_point(cdir)
 	# one tree per cell: only if its base actually sits in this cell
 	if Vector3i(floori(base.x / c), floori(base.y / c), floori(base.z / c)) != cc:

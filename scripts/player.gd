@@ -5238,6 +5238,13 @@ func _update_ui() -> void:
 	_hotbar_label.modulate = Color(1.0, 0.82, 0.35) if fine_place else Color(1, 1, 1)
 	var p := world.nearest_planet(global_position) if world else null
 	var pname := p.planet_name if p else "Deep Space"
+	# Which part of the world, when the world is big enough to have parts. A
+	# region you can see the edge of but cannot name is scenery; a named one is
+	# somewhere you can tell somebody to meet you.
+	if p != null and p.has_biomes():
+		var bn: String = p.biome_at(global_position)
+		if bn != "":
+			pname = "%s  ·  %s" % [pname, bn]
 	_mode_label.text = "%s  |  %s" % ["GROUNDED" if grounded else "FLOATING (6-axis)", pname]
 
 	var ship := world.nearest_ship(global_position) if world else null
