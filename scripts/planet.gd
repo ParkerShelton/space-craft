@@ -4988,8 +4988,31 @@ func _water_target(c: Vector3i) -> int:
 	for n in _NEIGH6:
 		if n == down or n == -down:
 			continue  # horizontal neighbors only spread sideways
-		best = maxi(best, _wlevel(c + n) - 1)
+		var q: Vector3i = c + n
+		var lv := _wlevel(q)
+		if lv <= 0:
+			continue
+		# Water with somewhere to FALL does not also run sideways. It is the
+		# rule that makes a stream behave like a stream: reach the lip of a pit
+		# and the whole flow turns down it, instead of the pit filling from a
+		# sheet that carried on spreading seven blocks past the edge as though
+		# the hole were not there.
+		#
+		# The open sea is exempt. It is infinite and its surface is level by
+		# definition -- a hole in the seabed does not stop the sea beside it
+		# being sea, and making it stop would tear a dry ring around every
+		# breach.
+		if not _ocean_source(q) and _falls_from(q, down):
+			continue
+		best = maxi(best, lv - 1)
 	return best
+
+
+## Has this cell somewhere to drop into? Anything but solid ground under it, not
+## already brim full.
+func _falls_from(q: Vector3i, down: Vector3i) -> bool:
+	var b := q + down
+	return not _is_solid_block(b) and _wlevel(b) < W_FULL
 
 
 func _process(_delta: float) -> void:
