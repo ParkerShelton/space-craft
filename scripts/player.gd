@@ -1291,13 +1291,13 @@ func _physics_process(delta: float) -> void:
 	var up := -g.normalized() if g.length() > 0.01 else Vector3.UP
 	if _in_water(global_position + up * 0.5) or _in_water(global_position - up * 0.8):
 		# align to the snapped axis (like walking) so you stay upright vs gravity
-		var sup := -_snap_to_axis(g) if g.length() > 0.01 else Vector3.UP
+		var sup := _face_up(g)
 		crouching = false
 		_swim(delta, sup)
 	else:
 		grounded = g.length() > FLIGHT_THRESHOLD
 		if grounded:
-			_walk(delta, -_snap_to_axis(g), g.length())
+			_walk(delta, _face_up(g), g.length())
 		else:
 			crouching = false
 			_process_float(delta)
@@ -2077,6 +2077,77 @@ func _process_float(delta: float) -> void:
 
 
 ## Nearest of the six cardinal directions to `v`, as a unit vector.
+## Which face of the world you are standing on, and the body it belongs to.
+##
+## Remembered rather than worked out fresh, because the answer has to be STICKY
+## -- see _face_up.
+var _up_axis := Vector3.ZERO
+var _up_body: int = 0
+## How far past the lip you have to get before the next face is yours. A couple
+## of blocks -- just enough that standing exactly on the line does not flicker.
+const FACE_LIP := 2.0
+
+
+## Up, on a cube world, without changing its mind while you dig.
+##
+## The face is chosen from where you are, but it does not change the instant
+## another axis edges ahead. Near an edge the two are within a hair of each
+## other, and digging DOWN there moves you closer to the middle along your own
+## axis -- which is enough to hand the lead to the neighbour. Gravity would then
+## turn ninety degrees because you dug a hole, and the shaft you were standing
+## in would become a wall.
+##
+## Going over the edge is a different motion: it carries you clear along the
+## neighbour's axis rather than shortening your own, so it passes the margin
+## easily and the face changes as it should.
+func _face_up(g: Vector3) -> Vector3:
+	if g.length() < 0.01:
+		return Vector3.UP
+	var planet := world.nearest_planet(global_position) if world != null else null
+	if planet == null or not planet.shape_cube:
+		_up_axis = Vector3.ZERO
+		return -_snap_to_axis(g)
+	var body := planet.get_instance_id()
+	var rel := global_position - planet.global_position
+	if _up_axis == Vector3.ZERO or body != _up_body:
+		_up_axis = _snap_to_axis(rel)
+		_up_body = body
+	_up_axis = _face_axis(rel, planet.radius, _up_axis)
+	return _up_axis
+
+
+## The face a point belongs to, given the face it was on.
+##
+## Not "whichever axis is biggest", which is the answer that flips: near an edge
+## the two are within a hair of each other, and digging DOWN there shortens your
+## own axis, which is enough to hand the lead to the neighbour.
+##
+## A face is a COLUMN, not a wedge. The +Y face of a cube covers every point
+## whose other two coordinates are inside the cube's half-width, at any height
+## and any depth -- so a shaft sunk a hundred blocks from the lip is still that
+## face's shaft, however deep it goes. You are on another face once you are
+## outside the column, which is what going over the edge means and what digging
+## under one never does. That is exact, and needs no fudge factor to tune.
+static func _face_axis(rel: Vector3, radius: float, current: Vector3) -> Vector3:
+	var lim := radius + FACE_LIP
+	var inside := true
+	for a in 3:
+		if absf(current[a]) > 0.5:
+			continue          # the face's own axis is free to be anything
+		if absf(rel[a]) > lim:
+			inside = false
+	if inside:
+		return current
+	var ax := absf(rel.x)
+	var ay := absf(rel.y)
+	var az := absf(rel.z)
+	if ax >= ay and ax >= az:
+		return Vector3(signf(rel.x), 0, 0)
+	elif ay >= az:
+		return Vector3(0, signf(rel.y), 0)
+	return Vector3(0, 0, signf(rel.z))
+
+
 func _snap_to_axis(v: Vector3) -> Vector3:
 	var ax := absf(v.x)
 	var ay := absf(v.y)

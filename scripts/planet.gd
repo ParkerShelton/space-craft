@@ -332,12 +332,20 @@ const BIOME_SCALE := 3.2
 ## neighbours on the ground, so a basin runs into plains and never straight into
 ## barrens. Relief is interpolated between neighbours, which is why that matters
 ## -- a hard edge between amp 0.5 and amp 2.4 is a cliff around the whole region.
+## Mostly the world's own TOPSOIL, in different colours, carrying different
+## amounts of different plants. Exposing the subsoil or the bare rock is a
+## strong statement -- it says "nothing grows here" -- and a table that made
+## half its regions out of it produced a world of grass, dirt and stone rather
+## than a world with places in it. Two regions at the dry end still do it,
+## because a barrens should exist; the rest are all the same soil, told apart by
+## what colour it is and what is standing on it.
 const BIOME_KINDS := [
-	{"name": "Basin",     "top": 1, "trees": 0.15, "grass": 0.80, "amp": 0.45, "lift": -0.45},
-	{"name": "Plains",    "top": 0, "trees": 0.30, "grass": 1.40, "amp": 0.70, "lift": 0.0},
-	{"name": "Forest",    "top": 0, "trees": 2.30, "grass": 1.00, "amp": 0.95, "lift": 0.03},
-	{"name": "Scrubland", "top": 1, "trees": 0.55, "grass": 0.35, "amp": 1.05, "lift": 0.10},
-	{"name": "Highland",  "top": 0, "trees": 0.45, "grass": 0.60, "amp": 1.90, "lift": 0.50},
+	{"name": "Wetland",   "top": 0, "trees": 0.90, "grass": 1.60, "amp": 0.40, "lift": -0.45},
+	{"name": "Meadow",    "top": 0, "trees": 0.20, "grass": 1.90, "amp": 0.60, "lift": -0.10},
+	{"name": "Woodland",  "top": 0, "trees": 2.60, "grass": 1.00, "amp": 0.90, "lift": 0.00},
+	{"name": "Heath",     "top": 0, "trees": 0.35, "grass": 0.70, "amp": 1.00, "lift": 0.12},
+	{"name": "Highland",  "top": 0, "trees": 0.55, "grass": 0.50, "amp": 1.90, "lift": 0.50},
+	{"name": "Steppe",    "top": 1, "trees": 0.15, "grass": 0.30, "amp": 0.80, "lift": 0.16},
 	{"name": "Barrens",   "top": 2, "trees": 0.00, "grass": 0.00, "amp": 1.35, "lift": 0.30},
 ]
 
@@ -2774,7 +2782,7 @@ func _derive_biomes() -> void:
 		return
 	var r := RandomNumberGenerator.new()
 	r.seed = _seed + 1717
-	var n := r.randi_range(3, 5)
+	var n := r.randi_range(4, 6)
 	var start := r.randi_range(0, BIOME_KINDS.size() - n)
 	for i in n:
 		var b: Dictionary = BIOME_KINDS[start + i]
@@ -2791,9 +2799,13 @@ func _derive_biomes() -> void:
 		# two ends of its palette. Rolling each one loose puts the greenest
 		# meadow next to the greyest moor as often as not.
 		var t := 0.0 if n <= 1 else float(i) / float(n - 1)
-		_b_hue.append(lerpf(-0.055, 0.055, t) * r.randf_range(0.7, 1.3))
-		_b_sat.append(lerpf(1.25, 0.62, t) * r.randf_range(0.92, 1.08))
-		_b_val.append(lerpf(0.92, 1.12, t) * r.randf_range(0.96, 1.04))
+		# A wide turn of hue, not a nudge. At a twentieth of the wheel the
+		# regions were three greens you had to be told apart; at a seventh they
+		# are a yellow-green, a green and a blue-green, which is the difference
+		# between a meadow and a moor as anybody would actually describe it.
+		_b_hue.append(lerpf(-0.14, 0.14, t) * r.randf_range(0.75, 1.25))
+		_b_sat.append(lerpf(1.40, 0.48, t) * r.randf_range(0.9, 1.1))
+		_b_val.append(lerpf(0.86, 1.20, t) * r.randf_range(0.95, 1.05))
 	biome_noise.seed = _seed + 1718
 	biome_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 	biome_noise.frequency = BIOME_SCALE / maxf(radius, 1.0)
@@ -4118,10 +4130,19 @@ func is_solid(v: Vector3i) -> bool:
 ## Gravity acceleration vector (world space) this planet exerts at a world point.
 func gravity_at(world_pos: Vector3) -> Vector3:
 	var to_center := global_position - world_pos
-	var d := to_center.length()
-	if d < 0.001:
+	if to_center.length_squared() < 0.000001:
 		return Vector3.ZERO
-	var dir := to_center / d
+	# A CUBE pulls toward the face you are over, not toward its middle. Pulling
+	# radially is what a sphere does, and on a cube it means that everywhere
+	# except the centre of a face the ground is not level: it tilts more the
+	# further out you walk, and at an edge it is pulling you sideways as much as
+	# down. Everything downstream was quietly correcting for that by snapping
+	# the direction to an axis itself, which is the same answer arrived at six
+	# times over -- and creatures and dropped things were not doing it at all.
+	var dir := -_axis_of(-to_center) if shape_cube else to_center.normalized()
+	# Distance measured the same way the planet is SHAPED, or the corners read as
+	# far away and their gravity fades for no reason a player could see.
+	var d := _norm(-to_center)
 	var g: float
 	if d >= radius:
 		g = surface_gravity * (radius * radius) / (d * d)  # inverse-square falloff outside
