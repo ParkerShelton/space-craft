@@ -4345,13 +4345,42 @@ func _max_oxygen() -> float:
 
 
 # Paint any slot cell from a slot dict. `highlight` toggles the active-slot glow.
+## The picture layer for a slot, made the first time that slot needs one.
+##
+## A child of the swatch rather than a sibling, so it inherits the swatch's rect
+## for free -- including the taller one a two-cell item spills into.
+func _cell_icon(cell: Dictionary) -> TextureRect:
+	var got = cell.get("icon")
+	if got != null and is_instance_valid(got):
+		return got
+	var sw: ColorRect = cell["swatch"]
+	var tr := TextureRect.new()
+	tr.set_anchors_preset(Control.PRESET_FULL_RECT)
+	tr.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	tr.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	tr.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sw.add_child(tr)
+	cell["icon"] = tr
+	return tr
+
+
 func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 	var swatch: ColorRect = cell["swatch"]
 	var count: Label = cell["count"]
+	var icon := _cell_icon(cell)
 	var eighths := int(slot.get("eighths", 0)) if not slot.is_empty() else 0
 	if not slot.is_empty() and (slot["count"] > 0 or eighths > 0):
 		var mat: Dictionary = slot.get("mat", {})
-		swatch.color = mat["color"] if mat.has("color") else Blocks.color_of(slot["id"])
+		var col: Color = mat["color"] if mat.has("color") else Blocks.color_of(slot["id"])
+		# A picture where there is one to take, and the flat colour where there
+		# is not -- tools have no shape to photograph yet. The swatch stays
+		# behind the picture either way, faint, so a slot still reads as full at
+		# a glance and a block still reads as its own material.
+		var tex := ItemIcon.of(int(slot["id"]), col,
+			world.nearest_planet(global_position) if world != null else null)
+		icon.texture = tex
+		icon.visible = tex != null
+		swatch.color = Color(col.r, col.g, col.b, 0.22) if tex != null else col
 		# Change shown as a real fraction rather than a second number: eighths
 		# land exactly on the glyphs a font already has.
 		const EIGHTH_GLYPH := ["", "⅛", "¼", "⅜", "½",
@@ -4361,6 +4390,8 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 		cell["root"].tooltip_text = _item_tooltip(slot)
 	else:
 		swatch.color = Color(0.15, 0.15, 0.18, 0.6)
+		icon.texture = null
+		icon.visible = false
 		count.text = ""
 		cell["root"].tooltip_text = ""
 	cell["root"].modulate = Color(1.4, 1.4, 0.7) if highlight else Color(1, 1, 1)

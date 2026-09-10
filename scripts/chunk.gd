@@ -1342,6 +1342,59 @@ static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int
 			_face_light(snap, gv, n), cverts)
 
 
+## The mesh for an item's picture: this block on its own, every face showing.
+##
+## Built HERE rather than wherever the icons are drawn, because everything it
+## needs is here -- the shape a block occupies inside its cell, the per-face
+## shading, and the exact vertex layout the block shader reads its id, its
+## orientation and its light out of. An icon that guessed at that layout would
+## be a picture of a different-looking block, which is worse than a coloured
+## square: it would be confidently wrong.
+##
+## Centred on the origin and one unit across, so whatever photographs it can
+## point a camera at nothing in particular and get the whole thing.
+static func icon_mesh(raw: int, col: Color) -> ArrayMesh:
+	var verts := PackedVector3Array()
+	var normals := PackedVector3Array()
+	var colors := PackedColorArray()
+	var uvs := PackedVector2Array()
+	var uv2s := PackedVector2Array()
+	# Up is plain +Y here. On a planet it is whichever axis the cell faces, but
+	# an icon is not standing anywhere -- and a slab drawn lying down is what a
+	# slab looks like.
+	var boxes := shape_boxes(raw, Vector3.UP)
+	if boxes.is_empty():
+		boxes = [[Vector3.ZERO, Vector3.ONE]]
+	# A half-height block is described by build_mesh_data rather than by
+	# shape_boxes, so it is repeated here -- the one shape that would otherwise
+	# come out a full cube and quietly lie about what you are carrying.
+	if raw == Blocks.ROOF_SLAB or Blocks.is_slab(raw) or Blocks.is_stacked_slab(raw):
+		boxes = [[Vector3.ZERO, Vector3(1.0, 0.5, 1.0)]]
+	var half := Vector3(0.5, 0.5, 0.5)
+	for b in boxes:
+		var lo: Vector3 = (b[0] as Vector3) - half
+		var hi: Vector3 = (b[1] as Vector3) - half
+		for fi in 6:
+			var n: Vector3i = _WFACE[fi]
+			var sh := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
+			# Alpha is DAYLIGHT, not opacity (see _quad). An icon is always in
+			# the open, so it is always full.
+			var c := Color(col.r * sh, col.g * sh, col.b * sh, 1.0)
+			var q := _box_face(lo, hi, fi)
+			_quad(q[0], q[1], q[2], q[3], Vector3(n), c,
+				verts, normals, colors, uvs, uv2s, raw, sh, 0.0)
+	var arr := []
+	arr.resize(Mesh.ARRAY_MAX)
+	arr[Mesh.ARRAY_VERTEX] = verts
+	arr[Mesh.ARRAY_NORMAL] = normals
+	arr[Mesh.ARRAY_COLOR] = colors
+	arr[Mesh.ARRAY_TEX_UV] = uvs
+	arr[Mesh.ARRAY_TEX_UV2] = uv2s
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
+	return mesh
+
+
 static func _box_face(lo: Vector3, hi: Vector3, fi: int) -> Array:
 	match fi:
 		0: return [Vector3(hi.x, lo.y, lo.z), Vector3(hi.x, hi.y, lo.z), Vector3(hi.x, hi.y, hi.z), Vector3(hi.x, lo.y, hi.z)]  # +X
