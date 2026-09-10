@@ -305,12 +305,15 @@ func save_game() -> bool:
 	data["machines"] = {}
 	data["parts"] = {}
 	for p in planets:
-		if not p._edits_by_chunk.is_empty():
-			data["planets"][p.planet_name] = p._edits_by_chunk
+		# Not _edits_by_chunk itself: water the simulation placed is left out,
+		# because loading the world works it out again. See Planet.saveable_edits.
+		var pe: Dictionary = p.saveable_edits()
+		if not pe.is_empty():
+			data["planets"][p.planet_name] = pe
 		# Saved SEPARATELY from the blocks, because a water cell is a block plus
 		# a depth: without the depths a reloaded world turns every puddle it had
 		# spread into a full one, and a shallow spill becomes a flood.
-		var wrows: Array = p.water_rows()
+		var wrows: Array = p.water_rows(true)
 		if not wrows.is_empty():
 			data["water"][p.planet_name] = wrows
 		if not p._parts_by_chunk.is_empty():

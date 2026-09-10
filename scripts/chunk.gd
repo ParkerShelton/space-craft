@@ -684,10 +684,19 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 	var gnormals := PackedVector3Array()
 	var gcolors := PackedColorArray()
 	var guvs := PackedVector2Array()
+	# Water in this chunk with somewhere to go: a cell with air against it.
+	#
+	# Collected HERE because this is the one pass that already walks every cell
+	# of the chunk and asks each water cell what is beside it. The simulation
+	# only ever runs where something wakes it, and until now the only thing that
+	# did was an edit -- so a sea sitting over a cave mouth the world generated
+	# hung there, unsupported, until you happened to break a block near it.
+	var wetfall := PackedVector3Array()
 	if not any_solid:
 		return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s, "lights": PackedVector3Array(),
 			"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors,
-			"gverts": gverts, "gnormals": gnormals, "gcolors": gcolors, "guvs": guvs}
+			"gverts": gverts, "gnormals": gnormals, "gcolors": gcolors, "guvs": guvs,
+			"wetfall": wetfall}
 
 	# opaque terrain via greedy meshing (water is skipped here, handled below)
 	var strides := [1, CS, CS * CS]
@@ -709,7 +718,8 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
 					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
 					_emit_water_cell(Vector3(x, y, z), gv, up, _water_h(wsnap, gv),
-						planet, snap, wsnap, wverts, wnormals, wcolors, wuvs, wuv2s)
+						planet, snap, wsnap, wverts, wnormals, wcolors, wuvs, wuv2s,
+						wetfall)
 				idx += 1
 
 	# roof slabs: a half-height OPAQUE box per cell (real geometry, not just a
@@ -946,7 +956,8 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 
 	return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s, "lights": lights,
 		"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors,
-		"gverts": gverts, "gnormals": gnormals, "gcolors": gcolors, "guvs": guvs}
+		"gverts": gverts, "gnormals": gnormals, "gcolors": gcolors, "guvs": guvs,
+		"wetfall": wetfall}
 
 
 const _WFACE := [Vector3i(1,0,0), Vector3i(-1,0,0), Vector3i(0,1,0),
@@ -1250,7 +1261,8 @@ static func _water_h(wsnap: Dictionary, gv: Vector3i) -> float:
 static func _emit_water_cell(clo: Vector3, gv: Vector3i, up: Vector3, h: float,
 		planet: Planet, snap: Dictionary, wsnap: Dictionary,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array,
-		wcolors: PackedColorArray, wuvs: PackedVector2Array, wuv2s: PackedVector2Array) -> void:
+		wcolors: PackedColorArray, wuvs: PackedVector2Array, wuv2s: PackedVector2Array,
+		wetfall: PackedVector3Array = PackedVector3Array()) -> void:
 	var base := planet.color_of(Blocks.WATER)
 	var chi := clo + Vector3.ONE
 	# The axis water fills along, and which end of the cell it fills from.
@@ -1261,6 +1273,10 @@ static func _emit_water_cell(clo: Vector3, gv: Vector3i, up: Vector3, h: float,
 		var n: Vector3i = _WFACE[fi]
 		var wnid := _id_at(planet, snap, gv + n)
 		var air := wnid == Blocks.AIR or Blocks.is_leaf(Blocks.bottom_of(wnid))
+		# Somewhere for this cell to go. Recorded once per cell, and only for
+		# real air -- leaves are drawn through, not fallen through.
+		if wnid == Blocks.AIR and (wetfall.is_empty() or wetfall[wetfall.size() - 1] != Vector3(gv)):
+			wetfall.append(Vector3(gv))
 		# The bottom of this face, as a fraction up the cell. Zero unless a
 		# neighbouring body of water already covers the lower part of it.
 		var from := 0.0

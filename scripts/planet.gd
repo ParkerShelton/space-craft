@@ -3188,19 +3188,6 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 		var big := _cave_strength(gx, gy, gz) > (cave_breach_threshold if near_surface else cave_threshold)
 		var fine := _cave_strength_fine(gx, gy, gz) > (cave_breach_threshold_fine if near_surface else cave_threshold_fine)
 		if big or fine:
-			# A cave under the sea is FLOODED, not an air pocket with an ocean
-			# resting on the roof. Answered here, in the terrain function, rather
-			# than by running the simulation over the world as it loads: this is
-			# free, it is right in chunks nobody has loaded, it needs no entry in
-			# the level table and none in the save file, and it reaches caverns
-			# that are sealed off from the sea -- which a flood spreading from
-			# the water it can reach never would.
-			#
-			# Liquid worlds only. On a frozen one the same rule would pack every
-			# cave below the ice solid, which does not flood a cave so much as
-			# delete it.
-			if water_style == WATER_LIQUID and d <= water_level:
-				return Blocks.WATER
 			return Blocks.AIR
 	if depth < 1.0:
 		if not settlements.is_empty():
@@ -4115,6 +4102,7 @@ func process_load_queue(_budget: int) -> int:
 		var node = loaded_chunks.get(cc)
 		if node != null and is_instance_valid(node):
 			node.apply_mesh_data(data)
+			wake_water_boundary(data.get("wetfall", PackedVector3Array()))
 			_clear_temp_colliders(cc)
 		_edit_priority.erase(cc)
 		applied += 1
@@ -4255,6 +4243,20 @@ func _wlev_snapshot(snap: Dictionary) -> Dictionary:
 	return w
 
 
+## Water a freshly-built chunk says has somewhere to go.
+##
+## The sea does not decide to move on its own -- the simulation only runs where
+## something wakes it. Waking it as the ground under it arrives is what makes a
+## generated cave mouth pour rather than hold an ocean up, and it is the same
+## fall you already get by breaking a block beside one: down the hole, out
+## across the floor, and stop.
+func wake_water_boundary(cells: PackedVector3Array) -> void:
+	if cells.is_empty() or water_style != WATER_LIQUID or not water_simulated:
+		return
+	for c in cells:
+		_wake(Vector3i(c))
+
+
 ## Build one chunk synchronously on the main thread (used at spawn so there's
 ## ground under the player immediately).
 func build_chunk_sync(cc: Vector3i) -> void:
@@ -4264,7 +4266,9 @@ func build_chunk_sync(cc: Vector3i) -> void:
 		return
 	var node := _spawn_chunk_node(cc)
 	var snap := _edits_snapshot(cc)
-	node.apply_mesh_data(Chunk.build_mesh_data(self, cc, snap, _wlev_snapshot(snap)))
+	var data := Chunk.build_mesh_data(self, cc, snap, _wlev_snapshot(snap))
+	node.apply_mesh_data(data)
+	wake_water_boundary(data.get("wetfall", PackedVector3Array()))
 
 
 ## Quick reject: is any part of this chunk possibly inside the solid body?
@@ -4351,6 +4355,7 @@ func _apply_ready_edits() -> void:
 		var node = loaded_chunks.get(cc)
 		if node != null and is_instance_valid(node):
 			node.apply_mesh_data(data)
+			wake_water_boundary(data.get("wetfall", PackedVector3Array()))
 			_clear_temp_colliders(cc)
 		_edit_priority.erase(cc)
 		# A chunk re-dirtied while it was meshing (a fast second click) gets its
@@ -4584,8 +4589,22 @@ const W_FULL := 8
 ## a second table of which cells are special is a second table to keep in step.
 const W_SOURCE := 9
 const FLOW_DT := 0.10          # simulation tick interval (seconds)
-const FLOW_BUDGET := 256       # cells evaluated per tick (keeps ticks cheap)
-const MAX_WATER := 24000       # safety cap on total dynamic water cells
+const FLOW_BUDGET := 4096      # hard ceiling on cells per tick
+## How long a step may spend, in microseconds.
+##
+## A CELL count was the wrong knob. What a cell costs depends on where it is --
+## one in open water asks the terrain function about its neighbours, one buried
+## in rock is dismissed in two comparisons -- so a fixed 256 of them was half a
+## millisecond in a trench and eight milliseconds along a coast, which is a
+## stutter ten times a second rather than a stream running. A time budget is the
+## thing that was actually meant: the sea takes longer to arrive where there is
+## more of it to work out, and the frame never notices either way.
+const FLOW_SLICE_USEC := 2500
+## Safety cap on how much water the simulation may be holding at once. Generous
+## because a real coast pours into every cave mouth along it -- eight thousand
+## cells for a hundred and twenty-five chunks of seabed -- and this is a guard
+## against something running away, not a water allowance.
+const MAX_WATER := 400000
 ## A chunk is rebuilt at most this often WHILE water is moving through it. The
 ## simulation steps ten times a second and a spreading flood touches a dozen
 ## chunks; rebuilding every one of them on every step is far more work than
@@ -4602,6 +4621,12 @@ var _water_stalled := {}       # chunk -> {cell: true}, woken when that chunk lo
 var _water_dirty := {}         # chunks whose water moved, waiting on a re-mesh
 var _water_remesh_at := {}     # chunk -> earliest next re-mesh, in msec
 var _flow_accum := 0.0
+## Answers to "is this cell open sea", for the length of ONE simulation step.
+## The same cells are asked about again and again within a step -- each cell
+## asks about six neighbours, and those neighbours are each other -- and the
+## answer cannot change while a step is running. Cleared every step, so it stays
+## the size of the work in front of it rather than growing with the world.
+var _src_memo := {}
 ## False on a network client: water is decided by the host and sent, the same way
 ## crops are. Two machines running the same automaton on slightly different
 ## timing do not stay in step, and water that disagrees about where it is is
@@ -4673,7 +4698,40 @@ func _ocean_source(c: Vector3i) -> bool:
 		return false
 	if _wlev.has(c):
 		return false
-	return generation_sample(c.x, c.y, c.z) == Blocks.WATER
+	if water_style != WATER_LIQUID:
+		return false
+	# Asked the CHEAP way rather than through generation_sample.
+	#
+	# The generator's rule for open sea is "above the ground and below the
+	# waterline" -- so that is what is tested, in two noise fields instead of
+	# the whole terrain function with its caves, ore veins and tree cells. It
+	# matters because this is the simulation's hottest line: every cell it looks
+	# at asks about six neighbours, and the full function put a tick of water at
+	# fifteen milliseconds, which is a stutter ten times a second rather than a
+	# stream running.
+	var was = _src_memo.get(c)
+	if was != null:
+		return bool(was)
+	# A cheap REJECT before the real answer, not instead of it. The generator's
+	# rule for open sea is "above the ground and below the waterline", so
+	# anything failing that cannot be sea and is dismissed in two noise fields
+	# rather than in the whole terrain function with its caves, ore veins and
+	# tree cells. Inside a cave -- which is where this runs most -- every
+	# neighbour fails on the first test.
+	#
+	# It matters because this is the simulation's hottest line: every cell it
+	# looks at asks about six neighbours, and going the long way round put a
+	# tick of water at fifteen milliseconds, which is a stutter ten times a
+	# second rather than a stream running.
+	var p := Vector3(c) + Vector3(0.5, 0.5, 0.5)
+	var dist := _norm(p)
+	var ans := false
+	if dist <= water_level:
+		var l2 := p.length()
+		if dist > _surf(p / maxf(l2, 0.0001)):
+			ans = generation_sample(c.x, c.y, c.z) == Blocks.WATER
+	_src_memo[c] = ans
+	return ans
 
 
 func _wlevel(c: Vector3i) -> int:
@@ -4726,15 +4784,23 @@ func flow_tick(delta: float) -> Array:
 
 
 func _sim_water() -> Array:
+	_src_memo.clear()
+	# A SNAPSHOT to walk, with the live set left in place and each cell taken out
+	# of it as it is dealt with. Emptying the set and putting the leftovers back
+	# one at a time cost a dictionary insert per waiting cell per step, and along
+	# a coast there are twenty thousand of them waiting -- so most of a step went
+	# on rewriting the list of work rather than on doing any.
 	var todo: Array = _water_active.keys()
-	_water_active = {}
 	var changed: Array = []
 	var count := 0
+	var until := Time.get_ticks_usec() + FLOW_SLICE_USEC
 	for c in todo:
-		if count >= FLOW_BUDGET:
-			_water_active[c] = true  # defer to next tick
-			continue
 		count += 1
+		# Checked in batches: asking the clock per cell costs more than some of
+		# the cells do.
+		if (count & 15) == 0 and (count >= FLOW_BUDGET or Time.get_ticks_usec() > until):
+			break                    # the rest keep their place for the next step
+		_water_active.erase(c)
 		if _ocean_source(c):
 			for n in _NEIGH6:
 				var q: Vector3i = c + n
@@ -4806,13 +4872,40 @@ func water_is_native(v: Vector3i) -> bool:
 	return not _wlev.has(v) and _ocean_source(v)
 
 
+## The edits worth writing down.
+##
+## Water the simulation put somewhere is DERIVED -- from the springs, the
+## terrain, and the holes people have dug -- and it is worked out again as the
+## world loads, because loading a chunk wakes the water on its boundary. Writing
+## it into the save is storing an answer that is recomputed anyway, and on a
+## coast that answer runs to thousands of cells per hundred chunks. A spring
+## somebody poured is NOT derived and stays.
+func saveable_edits() -> Dictionary:
+	if _wlev.is_empty():
+		return _edits_by_chunk
+	var out := {}
+	for cc in _edits_by_chunk:
+		var src: Dictionary = _edits_by_chunk[cc]
+		var keep := {}
+		for v in src:
+			if int(src[v]) == Blocks.WATER and int(_wlev.get(v, 0)) != W_SOURCE:
+				continue
+			keep[v] = src[v]
+		if not keep.is_empty():
+			out[cc] = keep
+	return out
+
+
 ## Every dynamic water cell and how deep it is, for the save file and for a
 ## joining client. Generated ocean is not in here: it is a function of the seed,
 ## and the far side of a world nobody has touched should cost the save nothing.
-func water_rows() -> Array:
+func water_rows(sources_only := false) -> Array:
 	var out: Array = []
 	for c in _wlev:
-		out.append([c, int(_wlev[c])])
+		var lv := int(_wlev[c])
+		if sources_only and lv != W_SOURCE:
+			continue
+		out.append([c, lv])
 	return out
 
 
