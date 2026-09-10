@@ -4765,13 +4765,22 @@ func toggle_door(v: Vector3i) -> bool:
 
 # Queue a loaded chunk to be re-meshed on a worker thread (never blocks the main
 # thread). Applied a frame or two later via process_load_queue.
-func _rebuild_if_loaded(cc: Vector3i) -> void:
+func _rebuild_if_loaded(cc: Vector3i, urgent := true) -> void:
 	if loaded_chunks.has(cc):
 		_dirty[cc] = true
 		# Remember that this one came from an EDIT, so its finished mesh jumps
 		# the queue below. Without it a broken block could sit visible for a
 		# second or more behind whatever terrain happened to be streaming.
-		_edit_priority[cc] = true
+		#
+		# NOT everything that moves water is urgent, and this is where saying so
+		# matters. The sea finding the caves under a coast redraws hundreds of
+		# chunks a second; marking every one of them urgent puts hundreds of
+		# things in the queue that exists to hold the ONE thing you just did, and
+		# your own block then waits behind all of them. That is water taking two
+		# minutes to visibly move while the simulation had already finished
+		# moving it.
+		if urgent:
+			_edit_priority[cc] = true
 
 
 const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
@@ -5112,11 +5121,15 @@ func _flush_water_meshes() -> void:
 		return
 	var now := Time.get_ticks_msec()
 	for cc in _water_dirty.keys():
-		if now < int(_water_remesh_at.get(cc, 0)):
+		# The throttle is there to stop the sea redrawing a chunk ten times a
+		# second while it settles. It has no business holding up the splash you
+		# are standing in front of.
+		if not bool(_water_dirty[cc]) and now < int(_water_remesh_at.get(cc, 0)):
 			continue
 		_water_remesh_at[cc] = now + int(FLOW_REMESH_DT * 1000.0)
+		var urgent := bool(_water_dirty[cc])
 		_water_dirty.erase(cc)
-		_rebuild_if_loaded(cc)   # async; never blocks the main thread
+		_rebuild_if_loaded(cc, urgent)   # async; never blocks the main thread
 
 
 ## What the host says the water is doing. Applied wholesale rather than worked
@@ -5238,13 +5251,24 @@ func _clear_water(c: Vector3i, dirty: Dictionary) -> void:
 	_mark_borders(c, dirty)
 
 
+## Chunks needing a redraw because water moved in them. The VALUE says whether
+## anybody is standing over it: water you set off yourself is urgent, the sea's
+## own business is not, and that is what decides where its redraw sits in the
+## queue.
 func _mark_borders(c: Vector3i, dirty: Dictionary) -> void:
+	var urgent := not _waking_bg
 	var cc := chunk_of(c)
-	dirty[cc] = true
+	dirty[cc] = urgent or bool(dirty.get(cc, false))
 	var local := c - cc * CS
-	if local.x == 0: dirty[cc + Vector3i(-1, 0, 0)] = true
-	if local.x == CS - 1: dirty[cc + Vector3i(1, 0, 0)] = true
-	if local.y == 0: dirty[cc + Vector3i(0, -1, 0)] = true
-	if local.y == CS - 1: dirty[cc + Vector3i(0, 1, 0)] = true
-	if local.z == 0: dirty[cc + Vector3i(0, 0, -1)] = true
-	if local.z == CS - 1: dirty[cc + Vector3i(0, 0, 1)] = true
+	if local.x == 0: _mark_one(dirty, cc + Vector3i(-1, 0, 0), urgent)
+	if local.x == CS - 1: _mark_one(dirty, cc + Vector3i(1, 0, 0), urgent)
+	if local.y == 0: _mark_one(dirty, cc + Vector3i(0, -1, 0), urgent)
+	if local.y == CS - 1: _mark_one(dirty, cc + Vector3i(0, 1, 0), urgent)
+	if local.z == 0: _mark_one(dirty, cc + Vector3i(0, 0, -1), urgent)
+	if local.z == CS - 1: _mark_one(dirty, cc + Vector3i(0, 0, 1), urgent)
+
+
+## Never downgrade: a chunk somebody is waiting on stays waited on, even if the
+## sea touches it again in the same step.
+func _mark_one(dirty: Dictionary, cc: Vector3i, urgent: bool) -> void:
+	dirty[cc] = urgent or bool(dirty.get(cc, false))
