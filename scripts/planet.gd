@@ -357,6 +357,18 @@ var tree_density := 0.0       # 0 = desert (no trees), up to ~0.6 = dense forest
 ## How thickly this world carpets its soil with tall grass. Rolled per planet, so
 ## some are lush and some are close-cropped.
 var grass_density := 0.0
+## One entry per biome: the trees THAT region grows. A world's regions differ in
+## what stands on them as much as in what they are made of -- a pine wood and a
+## broad green wood are the difference between two places far more than another
+## shade of dirt is.
+##
+## Every variant is rolled from the same world, so they read as one biosphere
+## with local kinds rather than as a sampler of other planets' trees. And they
+## all keep the base roll's SHAPE FAMILY: the grid trees are spaced on is one
+## number for the whole world, sized for the biggest canopy it grows, so a
+## region of giants next to a region of ordinary trees would leave the ordinary
+## ones scattered three cells apart.
+var flora_variants: Array = []
 var flora_leaves: Array = []  # this planet's leaf-color palette (subset of Blocks.LEAF_IDS)
 var flora_wood := Blocks.WOOD
 var flora_shape := 0          # 0 round, 1 pine, 2 wide, 3 giant, 4 coral
@@ -525,11 +537,12 @@ func configure(cfg: Dictionary) -> void:
 	ore_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX
 
 	alien_palette = cfg.get("alien", false)
-	_derive_palette()
-	# BEFORE everything below it: flora siting, ore depth, water and settlements
+	# BEFORE everything below it. Flora siting, ore depth, water and settlements
 	# all ask where the surface is, and on a world with regions that answer
-	# depends on which region.
+	# depends on which region -- and the palette wants to know whether it is
+	# dressing one place or six.
 	_derive_biomes()
+	_derive_palette()
 	_derive_flora(cfg.get("tree_density", 0.0))
 	var grng := RandomNumberGenerator.new()
 	grng.seed = _seed + 3131
@@ -1538,13 +1551,23 @@ func _grow_tree_at(v: Vector3i) -> void:
 	# wrong tree.
 	var cell := Vector3i(floori(centre.x / float(tree_cell)),
 		floori(centre.y / float(tree_cell)), floori(centre.z / float(tree_cell)))
-	var th := trunk_min + int(_hash01(cell, 1) * float(trunk_max - trunk_min + 1))
-	var cr := canopy_min + _hash01(cell, 2) * (canopy_max - canopy_min)
-	var info: Array = [Vector3(v) + Vector3(0.5, 0.0, 0.5), up, th, cr, cell]
+	# The kind of tree THIS ground grows, so a sapling planted in a pine wood
+	# comes up a pine.
+	var vi := 0
+	if not _b_amp.is_empty():
+		vi = _biome_slot(_biome_pos(centre.normalized()))
+	var fv := _flora_of(vi)
+	var tmin := int(fv.get("trunk_min", trunk_min))
+	var tmax := int(fv.get("trunk_max", trunk_max))
+	var cmin := float(fv.get("canopy_min", canopy_min))
+	var cmax := float(fv.get("canopy_max", canopy_max))
+	var th := tmin + int(_hash01(cell, 1) * float(tmax - tmin + 1))
+	var cr := cmin + _hash01(cell, 2) * (cmax - cmin)
+	var info: Array = [Vector3(v) + Vector3(0.5, 0.0, 0.5), up, th, cr, cell, vi]
 	# Everything the tree can reach. Generous, and clipped by the shape code
 	# itself -- a box that is too small crops the canopy, and one that is too
 	# big only costs a few thousand cheap misses once.
-	var reach := int(ceil(maxf(cr * 1.6, trunk_rad * 2.0))) + 2
+	var reach := int(ceil(maxf(cr * 1.6, float(fv.get("trunk_rad", trunk_rad)) * 2.0))) + 2
 	var high := th + int(ceil(cr * 2.0)) + 2
 	for dx in range(-reach, reach + 1):
 		for dz in range(-reach, reach + 1):
@@ -2674,8 +2697,13 @@ func _derive_palette() -> void:
 		tint[w] = Color.from_hsv(wood_h, r.randf_range(0.25, 0.6), r.randf_range(0.22, 0.46))
 	for i in Blocks.PLANK_IDS.size():
 		tint[Blocks.PLANK_IDS[i]] = (tint[Blocks.WOOD_IDS[i]] as Color).lightened(0.25)
-	# Leaves spread around the biosphere hue so one canopy has variety in it.
+	# Leaves spread around the biosphere hue so one canopy has variety in it --
+	# and WIDER on a world with regions, because each region takes its foliage
+	# from its own stretch of this ramp. At the one-canopy width the stretches
+	# are a hundredth of a hue apart, which is the same green twice.
 	var spread: float = 0.10 if homely else 0.26
+	if has_biomes():
+		spread *= 2.2
 	for li in Blocks.LEAF_IDS.size():
 		var h := fposmod(life_h + (float(li) / float(Blocks.LEAF_IDS.size()) - 0.5) * spread, 1.0)
 		tint[Blocks.LEAF_IDS[li]] = Color.from_hsv(h, life_s, r.randf_range(0.45, 0.85))
@@ -2806,54 +2834,120 @@ func biome_at(world_pos: Vector3) -> String:
 
 func _derive_flora(density: float) -> void:
 	tree_density = density
+	flora_variants.clear()
 	if tree_density <= 0.0:
 		return
 	var fr := RandomNumberGenerator.new()
 	fr.seed = _seed + 555
-	var pool: Array = Blocks.LEAF_IDS.duplicate()
+	# The world's own trees first, rolled exactly as they always were -- so a
+	# moon, or a world with one region, grows precisely what it used to.
+	var kinds := maxi(_b_amp.size(), 1)
+	var base_v := _roll_flora(fr, -1, 0, kinds)
+	flora_variants.append(base_v)
+	# Then one kind per region, in the same shape family. Rolled from the same
+	# generator, in order, so adding regions cannot change the first roll.
+	for i in range(1, kinds):
+		flora_variants.append(_roll_flora(fr, int(base_v["shape"]), i, kinds))
+	# The planet's own fields stay the FIRST variant's, because a sapling
+	# planted before any of this existed is that tree, and because everything
+	# that asks the planet what its trees are like means the ordinary ones.
+	flora_leaves = base_v["leaves"]
+	flora_wood = int(base_v["wood"])
+	flora_shape = int(base_v["shape"])
+	trunk_min = int(base_v["trunk_min"])
+	trunk_max = int(base_v["trunk_max"])
+	trunk_rad = float(base_v["trunk_rad"])
+	canopy_min = float(base_v["canopy_min"])
+	canopy_max = float(base_v["canopy_max"])
+	tree_cell = int(base_v["cell"])
+	# Bounds are the WORST case across every kind the world grows. These decide
+	# how far above the ground terrain generation bothers to look and how many
+	# neighbouring cells a voxel consults -- so a bound taken from the average
+	# would slice the canopy off whichever region grows the biggest tree.
+	var reach_max := 0.0
+	var scan_max := 1
+	for v in flora_variants:
+		var vd: Dictionary = v
+		reach_max = maxf(reach_max,
+			float(int(vd["trunk_max"])) + float(vd["canopy_max"]) * 2.0 + 2.0)
+		scan_max = maxi(scan_max,
+			int(ceil(float(vd["canopy_max"]) * 1.15 / float(int(vd["cell"])))))
+	tree_reach = reach_max
+	_tree_scan = scan_max
+
+
+## One kind of tree. `force_shape` of -1 rolls the shape freely; anything else
+## keeps to that family, which is what stops one region's giants setting the
+## spacing for a neighbour's ordinary wood.
+func _roll_flora(fr: RandomNumberGenerator, force_shape: int,
+		slot := 0, slots := 1) -> Dictionary:
+	# Each region draws its foliage from ITS OWN stretch of the world's leaf
+	# ramp, which is a spread of hues around the biosphere's own colour -- so
+	# walking out of one wood and into the next is a change of shade rather than
+	# the same green a second time. With one region there is one stretch and it
+	# is the whole ramp, which is what a moon and every old world gets.
+	var ramp: Array = Blocks.LEAF_IDS
+	var span := maxi(3, int(ceil(float(ramp.size()) / float(maxi(slots, 1)))))
+	var start := 0
+	if slots > 1:
+		start = clampi(int(round(float(slot) * float(ramp.size() - span)
+			/ float(slots - 1))), 0, ramp.size() - span)
+	var pool: Array = ramp.slice(start, start + span)
+	var leaves: Array = []
 	var n := fr.randi_range(1, 3)
 	for i in n:
-		flora_leaves.append(pool.pop_at(fr.randi() % pool.size()))
-	flora_wood = Blocks.WOOD_IDS[fr.randi() % Blocks.WOOD_IDS.size()]
+		leaves.append(pool.pop_at(fr.randi() % pool.size()))
+	var wood: int = Blocks.WOOD_IDS[fr.randi() % Blocks.WOOD_IDS.size()]
 	# Shape follows the palette: a homely world grows recognisable trees, a
 	# strange one is where the giants and the coral live. Colour alone was not
 	# enough -- normal tree silhouettes read as Earth whatever their hue.
+	var shape := 0
 	if strangeness < 0.35:
-		flora_shape = fr.randi() % 3
+		shape = fr.randi() % 3
 	elif strangeness < 0.65:
-		flora_shape = [0, 2, 3, 4][fr.randi() % 4]
+		shape = [0, 2, 3, 4][fr.randi() % 4]
 	else:
-		flora_shape = [3, 4, 4, 2][fr.randi() % 4]
-	trunk_min = fr.randi_range(3, 4)
-	trunk_max = trunk_min + fr.randi_range(2, 4)
-	canopy_min = fr.randf_range(2.5, 3.5)
-	canopy_max = canopy_min + fr.randf_range(1.5, 3.0)
-	trunk_rad = 0.7
-	if flora_shape == 3:
+		shape = [3, 4, 4, 2][fr.randi() % 4]
+	if force_shape >= 0:
+		# Same family as the world's own trees. Giants stay giants and coral
+		# stays coral; everything else is free to be round, pine or wide, which
+		# is the difference you actually read walking from one wood into another.
+		shape = force_shape if force_shape >= 3 else (fr.randi() % 3)
+	var tmin := fr.randi_range(3, 4)
+	var tmax := tmin + fr.randi_range(2, 4)
+	var cmin := fr.randf_range(2.5, 3.5)
+	var cmax := cmin + fr.randf_range(1.5, 3.0)
+	var trad := 0.7
+	var cell := TREE_CELL
+	if shape == 3:
 		# GIANT: a pillar of a tree with a canopy you can build a house under.
-		trunk_min = fr.randi_range(26, 34)
-		trunk_max = trunk_min + fr.randi_range(6, 14)
-		trunk_rad = fr.randf_range(2.2, 3.4)
+		tmin = fr.randi_range(26, 34)
+		tmax = tmin + fr.randi_range(6, 14)
+		trad = fr.randf_range(2.2, 3.4)
 		# A crown in proportion to the trunk. Affordable because giants stand
 		# far apart -- the canopy still fits inside a single (much larger) cell.
-		tree_cell = 22
-		canopy_min = fr.randf_range(11.0, 13.5)
-		canopy_max = canopy_min + fr.randf_range(2.0, 4.0)
-	elif flora_shape == 4:
+		cell = 22
+		cmin = fr.randf_range(11.0, 13.5)
+		cmax = cmin + fr.randf_range(2.0, 4.0)
+	elif shape == 4:
 		# CORAL: no single canopy -- a cluster of lobes budding off a short,
 		# fat stem, which reads as something that grew underwater.
-		trunk_min = fr.randi_range(2, 4)
-		trunk_max = trunk_min + fr.randi_range(1, 3)
-		trunk_rad = fr.randf_range(1.0, 1.8)
-		tree_cell = 10
-		canopy_min = fr.randf_range(2.4, 3.4)
-		canopy_max = canopy_min + fr.randf_range(1.2, 2.6)
-	tree_reach = float(trunk_max) + canopy_max * 2.0 + 2.0
-	# A canopy wider than one cell would be sliced off at the cell boundary.
-	# Only what the canopy can actually reach. Over-estimating here costs every
-	# world 125 cell tests per voxel instead of 27, to fix clipping that only
-	# the giants suffer.
-	_tree_scan = maxi(1, int(ceil(canopy_max * 1.15 / float(tree_cell))))
+		tmin = fr.randi_range(2, 4)
+		tmax = tmin + fr.randi_range(1, 3)
+		trad = fr.randf_range(1.0, 1.8)
+		cell = 10
+		cmin = fr.randf_range(2.4, 3.4)
+		cmax = cmin + fr.randf_range(1.2, 2.6)
+	return {"leaves": leaves, "wood": wood, "shape": shape,
+		"trunk_min": tmin, "trunk_max": tmax, "trunk_rad": trad,
+		"canopy_min": cmin, "canopy_max": cmax, "cell": cell}
+
+
+## The kind of tree a given region grows.
+func _flora_of(vi: int) -> Dictionary:
+	if flora_variants.is_empty():
+		return {}
+	return flora_variants[clampi(vi, 0, flora_variants.size() - 1)]
 
 
 # --- settlements: invent small-to-large civilizations from the seed, exactly ----
@@ -3256,8 +3350,10 @@ func _tree_in_cell(cc: Vector3i, c: float) -> Array:
 	# here rather than per voxel: a tree that half exists because its canopy
 	# crosses a border is a tree with half a canopy.
 	var density := tree_density
+	var vi := 0
 	if not _b_amp.is_empty():
-		density *= _b_trees[_biome_slot(_biome_pos(cdir))]
+		vi = _biome_slot(_biome_pos(cdir))
+		density *= _b_trees[vi]
 	if _hash01(cc, 0) >= density:
 		return []
 	var base := _surface_point(cdir)
@@ -3275,11 +3371,17 @@ func _tree_in_cell(cc: Vector3i, c: float) -> Array:
 	# On a cube, trees grow straight out of the flat face (axis-aligned), not
 	# toward the center -- otherwise they lean on diagonal faces.
 	var up := _axis_of(cdir) if shape_cube else cdir
-	var th := trunk_min + int(_hash01(cc, 1) * float(trunk_max - trunk_min + 1))
-	var cr := canopy_min + _hash01(cc, 2) * (canopy_max - canopy_min)
+	var fv := _flora_of(vi)
+	var tmin := int(fv.get("trunk_min", trunk_min))
+	var tmax := int(fv.get("trunk_max", trunk_max))
+	var cmin := float(fv.get("canopy_min", canopy_min))
+	var cmax := float(fv.get("canopy_max", canopy_max))
+	var th := tmin + int(_hash01(cc, 1) * float(tmax - tmin + 1))
+	var cr := cmin + _hash01(cc, 2) * (cmax - cmin)
 	# The cell itself rides along: every hash that decides this tree's look --
-	# lobe angles, which leaf colour, canopy wobble -- is seeded from it.
-	return [base, up, th, cr, cc]
+	# lobe angles, which leaf colour, canopy wobble -- is seeded from it. So
+	# does the KIND, so a canopy is built from the same tree its trunk is.
+	return [base, up, th, cr, cc, vi]
 
 
 func _tree_at(p: Vector3, dir: Vector3, _surf_unused: float, tcache = null) -> int:
@@ -3360,6 +3462,13 @@ func _tree_block_for(p: Vector3, info: Array) -> int:
 	var th: int = info[2]
 	var cr: float = info[3]
 	var cc: Vector3i = info[4]
+	# Which kind of tree this one is. Older callers pass five elements and mean
+	# the world's ordinary trees.
+	var fv := _flora_of(int(info[5]) if info.size() > 5 else 0)
+	var f_leaves: Array = fv.get("leaves", flora_leaves)
+	var f_wood: int = int(fv.get("wood", flora_wood))
+	var f_shape: int = int(fv.get("shape", flora_shape))
+	var f_rad: float = float(fv.get("trunk_rad", trunk_rad))
 	var rel := p - base
 	var along := rel.dot(up)
 	var horiz := (rel - up * along).length()
@@ -3367,9 +3476,9 @@ func _tree_block_for(p: Vector3, info: Array) -> int:
 	# spans several ground columns and on any slope some of them sit
 	# lower -- without this the uphill side floats and the tree stops
 	# reading as rooted in anything.
-	var sink := 1.0 + trunk_rad * 2.0
-	if along >= -sink and along <= float(th) and horiz < trunk_rad:
-		return flora_wood
+	var sink := 1.0 + f_rad * 2.0
+	if along >= -sink and along <= float(th) and horiz < f_rad:
+		return f_wood
 	# Nothing else in this tree can reach p, so skip the canopy and
 	# coral-lobe work outright. That work is the expensive half of
 	# terrain generation -- a coral tree walks every lobe with trig
@@ -3377,9 +3486,9 @@ func _tree_block_for(p: Vector3, info: Array) -> int:
 	# cells are nowhere near the voxel being asked about. The bounds
 	# are deliberately loose; they are verified to reproduce the
 	# previous terrain voxel-for-voxel.
-	if horiz > cr * 1.3 + trunk_rad + 1.0 						or along > float(th) * 1.15 + cr * 1.6 + 1.0 						or along < minf(-sink - 1.0, float(th) - cr * 2.2 - 1.0):
+	if horiz > cr * 1.3 + f_rad + 1.0 						or along > float(th) * 1.15 + cr * 1.6 + 1.0 						or along < minf(-sink - 1.0, float(th) - cr * 2.2 - 1.0):
 		return Blocks.AIR
-	if flora_shape == 4:
+	if f_shape == 4:
 		# CORAL: lobes budding off the stem at different heights and
 		# bearings. Each is joined to the stem by a real BRANCH --
 		# without one the lobes hang in mid-air well clear of the
@@ -3398,8 +3507,8 @@ func _tree_block_for(p: Vector3, info: Array) -> int:
 		# around it, which is what "trees with no leaves" turns out
 		# to be on these worlds.
 		if (p - (base + up * (float(th) + cr * 0.15))).length() 							< cr * (0.45 + _hash01(cc, 70) * 0.20):
-			return flora_leaves[int(_hash01(cc, 71)
-				* flora_leaves.size()) % flora_leaves.size()]
+			return f_leaves[int(_hash01(cc, 71)
+				* f_leaves.size()) % f_leaves.size()]
 		var lobes := 3 + int(_hash01(cc, 8) * 3.0)
 		var arms: Array = []
 		for lb in lobes:
@@ -3414,16 +3523,16 @@ func _tree_block_for(p: Vector3, info: Array) -> int:
 			var lc := base + up * hgt + (ax * cos(a) + bx * sin(a)) * reach
 			var lr := cr * (0.30 + _hash01(cc, 50 + lb) * 0.15)
 			if (p - lc).length() < lr:
-				return flora_leaves[int(_hash01(cc, 60 + lb)
-					* flora_leaves.size()) % flora_leaves.size()]
+				return f_leaves[int(_hash01(cc, 60 + lb)
+					* f_leaves.size()) % f_leaves.size()]
 			arms.append([base + up * (hgt * 0.55), lc])
 		for arm in arms:
-			if _dist_to_segment(p, arm[0], arm[1]) < maxf(trunk_rad * 0.55, 0.75):
-				return flora_wood
+			if _dist_to_segment(p, arm[0], arm[1]) < maxf(f_rad * 0.55, 0.75):
+				return f_wood
 		return Blocks.AIR
 	# canopy (ellipsoid, shape-dependent, with lumpy edge)
-	var vscale := 1.5 if flora_shape == 1 else (0.7 if flora_shape == 2 else 1.0)
-	if flora_shape == 3:
+	var vscale := 1.5 if f_shape == 1 else (0.7 if f_shape == 2 else 1.0)
+	if f_shape == 3:
 		vscale = 0.55     # a giant spreads far wider than it is deep
 	var ch := cr * vscale
 	# Overlap the crown with the top of the trunk rather than
@@ -3434,7 +3543,7 @@ func _tree_block_for(p: Vector3, info: Array) -> int:
 	var cvert := rc.dot(up)
 	var choriz := (rc - up * cvert).length()
 	var rad := cr
-	if flora_shape == 1:  # pine: taper toward the top
+	if f_shape == 1:  # pine: taper toward the top
 		var t := clampf((cvert + ch) / (2.0 * ch), 0.0, 1.0)
 		rad = cr * (1.0 - t * 0.8)
 	var e := (choriz * choriz) / maxf(rad * rad, 0.01) + (cvert * cvert) / maxf(ch * ch, 0.01)
@@ -3450,7 +3559,7 @@ func _tree_block_for(p: Vector3, info: Array) -> int:
 	var lump := maxf(0.0, _hash01(Vector3i(floori(p.x * 0.5),
 		floori(p.y * 0.5), floori(p.z * 0.5)), 7) * 0.26 - 0.09)
 	if e < 1.0 + lump:
-		var li: int = flora_leaves[int(_hash01(cc, 3) * flora_leaves.size()) % flora_leaves.size()]
+		var li: int = f_leaves[int(_hash01(cc, 3) * f_leaves.size()) % f_leaves.size()]
 		return li
 	return Blocks.AIR
 	return Blocks.AIR
