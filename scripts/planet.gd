@@ -4458,7 +4458,7 @@ func wake_water_boundary(cells: PackedVector3Array) -> void:
 	if cells.is_empty() or water_style != WATER_LIQUID or not water_simulated:
 		return
 	for c in cells:
-		_wake(Vector3i(c))
+		_wake_bg(Vector3i(c))
 
 
 ## Build one chunk synchronously on the main thread (used at spawn so there's
@@ -4820,7 +4820,24 @@ const FLOW_REMESH_DT := 0.25
 ## eventually have got to.
 const MAX_STALLED := 8000
 var _wlev := {}                # Vector3i -> level 1..W_FULL
-var _water_active := {}        # cells to (re)evaluate next tick
+## Two queues, not one.
+##
+## Loading the ground around you wakes every cell of sea that has somewhere to
+## go -- nineteen thousand of them along a coast -- and that is BACKGROUND work:
+## the sea quietly finding the caves under it, which nobody is watching and
+## which can take a minute. Breaking a block is not: it is a thing you just did
+## and are standing over waiting for.
+##
+## With one queue the second waits behind the first, and a bucket emptied into a
+## hole you dug looks like it is not working at all -- which is precisely how it
+## looked. So an edit and everything that cascades from it go in front of all of
+## the ambient work, however much of it there is.
+var _water_active := {}        # cells to (re)evaluate next tick -- yours
+var _water_bg := {}            # ...and the sea's own business
+## Which queue a cell woken RIGHT NOW belongs in. Set around the loop rather
+## than passed down, because waking happens six calls deep and the answer is a
+## property of the whole pass, not of any one cell.
+var _waking_bg := false
 var _water_stalled := {}       # chunk -> {cell: true}, woken when that chunk loads
 var _water_dirty := {}         # chunks whose water moved, waiting on a re-mesh
 var _water_remesh_at := {}     # chunk -> earliest next re-mesh, in msec
@@ -4851,6 +4868,14 @@ func _wake(c: Vector3i) -> void:
 		_wake_one(c + n)
 
 
+## The sea's own business: slower, and always behind anything you did.
+func _wake_bg(c: Vector3i) -> void:
+	var was := _waking_bg
+	_waking_bg = true
+	_wake_one(c)
+	_waking_bg = was
+
+
 ## A cell can only be simulated where there is a chunk to show the result in.
 ##
 ## Water reaching the edge of what is loaded WAITS there rather than crawling on
@@ -4861,7 +4886,14 @@ func _wake(c: Vector3i) -> void:
 func _wake_one(c: Vector3i) -> void:
 	var cc := chunk_of(c)
 	if loaded_chunks.has(cc):
-		_water_active[c] = true
+		if _waking_bg:
+			# Never demote: a cell already in the fast lane stays there even if
+			# the background pass reaches it too.
+			if not _water_active.has(c):
+				_water_bg[c] = true
+		else:
+			_water_active[c] = true
+			_water_bg.erase(c)
 		return
 	if _water_stalled.size() > MAX_STALLED:
 		return
@@ -4877,7 +4909,10 @@ func _resume_water(cc: Vector3i) -> void:
 		return
 	_water_stalled.erase(cc)
 	for c in held:
-		_water_active[c] = true
+		# Water that was waiting on ground to arrive is the sea's own business,
+		# not something anybody is standing over.
+		if not _water_active.has(c):
+			_water_bg[c] = true
 
 
 func _wdown(c: Vector3i) -> Vector3i:
@@ -4979,32 +5014,38 @@ func flow_tick(delta: float) -> Array:
 	# Flushed BEFORE the early exit, or the last step of a flood is the one that
 	# never gets drawn: the water stops moving and the chunk keeps its old shape.
 	_flush_water_meshes()
-	if _water_active.is_empty():
+	if _water_active.is_empty() and _water_bg.is_empty():
 		return []
 	var tw := Time.get_ticks_usec()
-	var changed := _sim_water()
+	var until := Time.get_ticks_usec() + FLOW_SLICE_USEC
+	var changed := _sim_water(_water_active, false, until)
+	# The sea gets whatever is left of the slice. Usually almost all of it,
+	# because what you just did is a few hundred cells and is finished inside
+	# one step.
+	if Time.get_ticks_usec() < until:
+		changed.append_array(_sim_water(_water_bg, true, until))
 	WorldManager.perf_mark("water", tw)
 	return changed
 
 
-func _sim_water() -> Array:
+func _sim_water(queue: Dictionary, background: bool, until: int) -> Array:
 	_src_memo.clear()
+	_waking_bg = background
 	# A SNAPSHOT to walk, with the live set left in place and each cell taken out
 	# of it as it is dealt with. Emptying the set and putting the leftovers back
 	# one at a time cost a dictionary insert per waiting cell per step, and along
 	# a coast there are twenty thousand of them waiting -- so most of a step went
 	# on rewriting the list of work rather than on doing any.
-	var todo: Array = _water_active.keys()
+	var todo: Array = queue.keys()
 	var changed: Array = []
 	var count := 0
-	var until := Time.get_ticks_usec() + FLOW_SLICE_USEC
 	for c in todo:
 		count += 1
 		# Checked in batches: asking the clock per cell costs more than some of
 		# the cells do.
 		if (count & 15) == 0 and (count >= FLOW_BUDGET or Time.get_ticks_usec() > until):
 			break                    # the rest keep their place for the next step
-		_water_active.erase(c)
+		queue.erase(c)
 		if _ocean_source(c):
 			for n in _NEIGH6:
 				var q: Vector3i = c + n
@@ -5034,6 +5075,7 @@ func _sim_water() -> Array:
 			_set_water(c, t, _water_dirty)
 			changed.append([c, t])
 			_wake(c)
+	_waking_bg = false
 	_flush_water_meshes()
 	return changed
 
