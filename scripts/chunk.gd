@@ -654,13 +654,24 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 	snap[SKY_KEY] = _compute_skylight(planet, snap, base)
 	var ids := PackedInt32Array()
 	ids.resize(CS * CS * CS)
+	# 1-based region per cell, 0 for "not tinted". A byte each: this is a
+	# throwaway 32k that lives as long as one chunk build.
+	var bslot := PackedByteArray()
+	bslot.resize(CS * CS * CS)
 	var any_solid := false
 	var i := 0
 	for z in CS:
 		for y in CS:
 			for x in CS:
-				var id := _id_at(planet, snap, Vector3i(base.x + x, base.y + y, base.z + z))
+				var gvi := Vector3i(base.x + x, base.y + y, base.z + z)
+				var id := _id_at(planet, snap, gvi)
 				ids[i] = id
+				# Which region colours this cell, if any. Asked only for the two
+				# materials a region actually tints -- its topsoil and its
+				# subsoil -- because it is a noise lookup and most of a chunk is
+				# rock that would never use the answer.
+				if planet.biome_tints(id):
+					bslot[i] = planet.biome_slot_at(gvi)
 				if id != Blocks.AIR and id != Blocks.DOOR_OPEN:
 					any_solid = true
 				i += 1
@@ -704,7 +715,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 		var u := (d + 1) % 3
 		var v := (d + 2) % 3
 		for dir in [1, -1]:
-			_greedy_pass(planet, snap, d, u, v, dir, base, ids, strides,
+			_greedy_pass(planet, snap, d, u, v, dir, base, ids, bslot, strides,
 				verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, uv2s, wuv2s,
 				cverts)
 
@@ -1407,7 +1418,7 @@ static func _box_face(lo: Vector3, hi: Vector3, fi: int) -> Array:
 
 static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: int,
 		dir: int,
-		base: Vector3i, ids: PackedInt32Array, strides: Array,
+		base: Vector3i, ids: PackedInt32Array, bslot: PackedByteArray, strides: Array,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray,
 		uvs: PackedVector2Array, wuvs: PackedVector2Array, uv2s: PackedVector2Array,
@@ -1433,6 +1444,13 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 	# brightness for the whole thing.
 	var smask := PackedInt32Array()
 	smask.resize(CS * CS)
+	# The region each face belongs to. In the merge key for the same reason
+	# daylight is: one quad can otherwise run out of a meadow and across a moor
+	# and take a single colour for the whole thing, which puts the border
+	# between two regions wherever the merge happened to stop rather than where
+	# the ground actually changes.
+	var bmask := PackedInt32Array()
+	bmask.resize(CS * CS)
 	# Hoisted: with no light sources in range _face_light returns 0 immediately,
 	# but paying a function call per face to learn that is not free.
 	var _lm = snap.get(LM_KEY)
@@ -1467,6 +1485,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 							and dir < 0):
 						val = oid
 				mask[k + j * CS] = val
+				bmask[k + j * CS] = bslot[lin] if val != 0 else 0
 				smask[k + j * CS] = 15
 				if val != 0:
 					# Sampled at the cell the face LOOKS INTO, not at the block
@@ -1484,7 +1503,7 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 						Vector3i(int(narr[0]), int(narr[1]), int(narr[2]))) * 15.0))
 
 		var w_coord := a + (1 if dir > 0 else 0)
-		_emit_mask(planet, snap, mask, lmask, smask, d, u, v, dir, w_coord, normal,
+		_emit_mask(planet, snap, mask, lmask, smask, bmask, d, u, v, dir, w_coord, normal,
 			verts, normals, colors, wverts, wnormals, wcolors, uvs, wuvs, uv2s, wuv2s,
 			cverts, base)
 
@@ -1503,19 +1522,22 @@ static func _sky_depth(snap: Dictionary, gv: Vector3i) -> float:
 	return float((sk as PackedByteArray)[_sky_index(l.x, l.y, l.z)]) / float(SKY_MAX)
 
 
-static func _block_color(planet: Planet, id: int) -> Color:
+static func _block_color(planet: Planet, id: int, slot: int = 0) -> Color:
 	# Ore blocks are meshed as STONE. The ore itself is drawn by the shader as
 	# chunks embedded in that stone (colour supplied per planet via uniforms),
 	# rather than the whole block being one flat ore colour.
 	if Blocks.is_ore(id):
 		return planet.color_of(planet.pal_rock)
 	# Per-planet, not per-registry: the block id stays global so recipes and
-	# inventories are unchanged, while what you see belongs to this world.
-	return planet.color_of(id)
+	# inventories are unchanged, while what you see belongs to this world. And
+	# per-REGION for the ground, so a meadow and a moor are different greens of
+	# the same soil rather than the same green twice.
+	return planet.ground_color(id, slot)
 
 
 static func _emit_mask(planet: Planet, snap: Dictionary, mask: PackedInt32Array,
-		lmask: PackedInt32Array, smask: PackedInt32Array, d: int, u: int, v: int, dir: int, w_coord: int,
+		lmask: PackedInt32Array, smask: PackedInt32Array, bmask: PackedInt32Array,
+		d: int, u: int, v: int, dir: int, w_coord: int,
 		normal: Vector3,
 		verts: PackedVector3Array, normals: PackedVector3Array, colors: PackedColorArray,
 		wverts: PackedVector3Array, wnormals: PackedVector3Array, wcolors: PackedColorArray,
@@ -1531,14 +1553,15 @@ static func _emit_mask(planet: Planet, snap: Dictionary, mask: PackedInt32Array,
 				continue
 			var lv := lmask[k + j * CS]
 			var sv := smask[k + j * CS]
+			var bv := bmask[k + j * CS]
 			var wdt := 1
-			while k + wdt < CS and mask[k + wdt + j * CS] == val 					and lmask[k + wdt + j * CS] == lv and smask[k + wdt + j * CS] == sv:
+			while k + wdt < CS and mask[k + wdt + j * CS] == val 					and lmask[k + wdt + j * CS] == lv and smask[k + wdt + j * CS] == sv 					and bmask[k + wdt + j * CS] == bv:
 				wdt += 1
 			var hgt := 1
 			var stop := false
 			while j + hgt < CS and not stop:
 				for x in wdt:
-					if mask[k + x + (j + hgt) * CS] != val 							or lmask[k + x + (j + hgt) * CS] != lv 							or smask[k + x + (j + hgt) * CS] != sv:
+					if mask[k + x + (j + hgt) * CS] != val 							or lmask[k + x + (j + hgt) * CS] != lv 							or smask[k + x + (j + hgt) * CS] != sv 							or bmask[k + x + (j + hgt) * CS] != bv:
 						stop = true
 						break
 				if not stop:
@@ -1550,7 +1573,7 @@ static func _emit_mask(planet: Planet, snap: Dictionary, mask: PackedInt32Array,
 			# Bake per-face directional shading into the vertex color so faces of
 			# different orientation read distinctly even under flat ambient light.
 			var s := _face_shade(d, dir)
-			var bcol := _block_color(planet, val)
+			var bcol := _block_color(planet, val, bv)
 			var col := Color(bcol.r * s, bcol.g * s, bcol.b * s, bcol.a)  # keep alpha (water)
 			if val != Blocks.WATER:
 				col.a = float(sv) / 15.0   # opaque terrain: alpha carries daylight

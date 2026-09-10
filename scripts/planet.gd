@@ -351,6 +351,14 @@ var _b_trees := PackedFloat32Array()
 var _b_grass := PackedFloat32Array()
 var _b_amp := PackedFloat32Array()
 var _b_lift := PackedFloat32Array()
+## How each region colours the ground it carpets. A hue turn, and a pull on how
+## saturated and how bright -- NOT a colour of its own, because the ground still
+## has to be this world's ground. A meadow and a moor are the same soil under a
+## different amount of life, and that is what a shift of hue reads as; a flat
+## palette swap reads as two planets stitched together.
+var _b_hue := PackedFloat32Array()
+var _b_sat := PackedFloat32Array()
+var _b_val := PackedFloat32Array()
 var biome_noise := FastNoiseLite.new()
 
 var tree_density := 0.0       # 0 = desert (no trees), up to ~0.6 = dense forest
@@ -2759,6 +2767,9 @@ func _derive_biomes() -> void:
 	_b_grass.clear()
 	_b_amp.clear()
 	_b_lift.clear()
+	_b_hue.clear()
+	_b_sat.clear()
+	_b_val.clear()
 	if radius < BIOME_MIN_RADIUS:
 		return
 	var r := RandomNumberGenerator.new()
@@ -2775,6 +2786,14 @@ func _derive_biomes() -> void:
 		_b_grass.append(float(b["grass"]) * r.randf_range(0.75, 1.3))
 		_b_amp.append(float(b["amp"]) * r.randf_range(0.85, 1.15))
 		_b_lift.append(float(b["lift"]) * r.randf_range(0.8, 1.2))
+		# Spread ACROSS the run rather than rolled independently, so neighbouring
+		# regions are neighbouring shades and the two ends of a world are the
+		# two ends of its palette. Rolling each one loose puts the greenest
+		# meadow next to the greyest moor as often as not.
+		var t := 0.0 if n <= 1 else float(i) / float(n - 1)
+		_b_hue.append(lerpf(-0.055, 0.055, t) * r.randf_range(0.7, 1.3))
+		_b_sat.append(lerpf(1.25, 0.62, t) * r.randf_range(0.92, 1.08))
+		_b_val.append(lerpf(0.92, 1.12, t) * r.randf_range(0.96, 1.04))
 	biome_noise.seed = _seed + 1718
 	biome_noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
 	biome_noise.frequency = BIOME_SCALE / maxf(radius, 1.0)
@@ -2820,6 +2839,61 @@ func _biome_relief(pos: float) -> Vector2:
 	var j := clampi(i + 1, 0, n - 1)
 	var f := clampf(at - float(i), 0.0, 1.0)
 	return Vector2(lerpf(_b_amp[i], _b_amp[j], f), lerpf(_b_lift[i], _b_lift[j], f))
+
+
+## How many steps the ground colour is allowed to take across a world.
+##
+## The colour GRADES between regions rather than snapping at the border the way
+## the material and the trees do -- soil does not change in a line, and a hard
+## edge across open ground reads as a seam in the world rather than as a change
+## of country. But a continuous colour cannot be merged into big quads, so it is
+## quantised: enough steps to read as a gradient, few enough that a step lasts
+## tens of blocks and the mesher still has runs to merge.
+const GROUND_STEPS := 24
+
+
+## Where a voxel sits on the ground-colour ramp, as a mesher-friendly 1-based
+## number. 0 means "this world has no regions", so a caller keeps one code path.
+func biome_slot_at(v: Vector3i) -> int:
+	if _b_amp.is_empty():
+		return 0
+	var p := Vector3(v) + Vector3(0.5, 0.5, 0.5)
+	var l := p.length()
+	if l < 0.0001:
+		return 0
+	return 1 + clampi(int(_biome_pos(p / l) * float(GROUND_STEPS - 1) + 0.5),
+		0, GROUND_STEPS - 1)
+
+
+## Is this a block the regions colour? The ground they carpet, and only that --
+## rock is rock everywhere, and a wall somebody built out of it should not change
+## shade because of where they built it.
+func biome_tints(id: int) -> bool:
+	return not _b_amp.is_empty() and (id == pal_top or id == pal_sub)
+
+
+## This world's colour for a block, at that point on the ground ramp. `slot` is
+## 1-based, the way biome_slot_at hands it out; 0 leaves the colour alone.
+##
+## Blended between neighbouring regions in exactly the way the relief is, and
+## between their CENTRES, so a colour is at its purest in the middle of a region
+## and half-and-half where the ground material changes.
+func ground_color(id: int, slot: int) -> Color:
+	var c := color_of(id)
+	if slot <= 0 or _b_hue.is_empty() or not biome_tints(id):
+		return c
+	var t := float(slot - 1) / float(GROUND_STEPS - 1)
+	var n := _b_hue.size()
+	var at := t * float(n) - 0.5
+	var i := clampi(int(floorf(at)), 0, n - 1)
+	var j := clampi(i + 1, 0, n - 1)
+	var f := clampf(at - float(i), 0.0, 1.0)
+	var dh := lerpf(_b_hue[i], _b_hue[j], f)
+	var ds := lerpf(_b_sat[i], _b_sat[j], f)
+	var dv := lerpf(_b_val[i], _b_val[j], f)
+	return Color.from_hsv(fposmod(c.h + dh, 1.0),
+		clampf(c.s * ds, 0.0, 1.0),
+		clampf(c.v * dv, 0.0, 1.0), c.a)
 
 
 ## What this world calls the place you are standing.
