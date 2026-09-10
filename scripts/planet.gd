@@ -4813,6 +4813,17 @@ const FLOW_BUDGET := 4096      # hard ceiling on cells per tick
 ## thing that was actually meant: the sea takes longer to arrive where there is
 ## more of it to work out, and the frame never notices either way.
 const FLOW_SLICE_USEC := 2500
+## What an EDIT may spend settling its own water, then and there.
+##
+## Water set off by a block you broke is worked out before that block is handed
+## to the mesher, so it arrives in the SAME redraw as the hole rather than in
+## another one a step later. A chunk redraw is most of a second on this project;
+## needing two of them is the difference between water that answers you and
+## water you never catch moving.
+##
+## Small, and only ever spent near water: an edit nowhere near any wakes seven
+## cells that all decide there is nothing to do, in microseconds.
+const EDIT_SLICE_USEC := 1500
 ## Safety cap on how much water the simulation may be holding at once. Generous
 ## because a real coast pours into every cave mouth along it -- eight thousand
 ## cells for a hundred and twenty-five chunks of seabed -- and this is a guard
@@ -4847,6 +4858,8 @@ var _water_bg := {}            # ...and the sea's own business
 ## than passed down, because waking happens six calls deep and the answer is a
 ## property of the whole pass, not of any one cell.
 var _waking_bg := false
+## Inside a step already; see flow_water.
+var _settling := false
 var _water_stalled := {}       # chunk -> {cell: true}, woken when that chunk loads
 var _water_dirty := {}         # chunks whose water moved, waiting on a re-mesh
 var _water_remesh_at := {}     # chunk -> earliest next re-mesh, in msec
@@ -4869,6 +4882,14 @@ func flow_water(v: Vector3i) -> void:
 	if water_style != WATER_LIQUID or not water_simulated:
 		return
 	_wake(v)
+	# ...and settle it now rather than on the next step. See EDIT_SLICE_USEC.
+	# Guarded because this runs from inside set_block, and a step that somehow
+	# reached set_block again would be re-entering its own queue.
+	if _settling:
+		return
+	_settling = true
+	_sim_water(_water_active, false, Time.get_ticks_usec() + EDIT_SLICE_USEC)
+	_settling = false
 
 
 func _wake(c: Vector3i) -> void:

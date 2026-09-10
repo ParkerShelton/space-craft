@@ -585,6 +585,7 @@ func add_planet(cfg: Dictionary) -> Planet:
 	p.position = cfg.get("position", Vector3.ZERO)
 	add_child(p)
 	p._world_ref = self   # so built machines can create their headless stations
+	_live = self          # so the static perf report has something to ask
 	p.configure(cfg)
 	planets.append(p)
 	return p
@@ -639,6 +640,29 @@ static func perf_mark(system: String, started: int) -> void:
 		perf_worst[system] = us
 
 
+## The last world built, so the static perf report can ask it about its water.
+## A static report needs SOMETHING to ask, and there is only ever one world.
+static var _live: WorldManager
+
+
+## What the water is doing, in numbers, so "it is slow" can be a measurement
+## rather than a guess. Cells waiting in each lane, chunks waiting to be redrawn,
+## and cells parked against terrain that has not loaded.
+static func _water_report() -> Array:
+	if _live == null or not is_instance_valid(_live):
+		return []
+	var out: Array = []
+	for p in _live.planets:
+		if p.water_style != Planet.WATER_LIQUID:
+			continue
+		if p._water_active.is_empty() and p._water_bg.is_empty() 				and p._water_dirty.is_empty() and p._wlev.is_empty():
+			continue
+		out.append("water %-9s yours %d, sea %d, redraws %d, stalled %d, wet %d" % [
+			p.planet_name, p._water_active.size(), p._water_bg.size(),
+			p._water_dirty.size(), p._water_stalled.size(), p._wlev.size()])
+	return out
+
+
 ## Worst offenders since the last call, as lines of text, then resets.
 static func perf_report() -> Array:
 	var span := maxf(float(Time.get_ticks_usec() - perf_since) / 1000000.0, 0.001)
@@ -657,6 +681,8 @@ static func perf_report() -> Array:
 	if out.size() == 1:
 		out.append("nothing measurable")
 	perf_total.clear()
+	for line in _water_report():
+		out.append(line)
 	perf_worst.clear()
 	perf_calls.clear()
 	perf_since = Time.get_ticks_usec()
