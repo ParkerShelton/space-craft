@@ -1763,7 +1763,9 @@ func assemble_parts(v: Vector3i, require: int = -1, dry: bool = false) -> Dictio
 	var cache := {}
 	# PASS 1 -- is it finished? Bail on the first cell that does not fit, which
 	# kills almost every candidate placement immediately.
-	for di in Blocks.PART_STRUCTURES.size():
+	# Biggest first, so a structure that CONTAINS a smaller one wins -- see
+	# Blocks.part_order.
+	for di in Blocks.part_order():
 		var size: Vector3i = (Blocks.PART_STRUCTURES[di] as Dictionary)["size"]
 		for rot in 4:
 			var cells: Array = Blocks.part_cells(di, rot)

@@ -934,6 +934,35 @@ static func part_cells(di: int, rot: int) -> Array:
 	return out
 
 
+static var _PART_ORDER: Array = []
+
+## Which patterns to try first: the BIGGEST first.
+##
+## Structures contain one another. A Campfire is a two-by-two of wood eighths,
+## and every wooden bench top in the game has one of those inside it -- so a
+## search that takes the first pattern that fits reports whichever happens to be
+## listed earliest, and the answer depends on the order of a table rather than
+## on what somebody built. The Carpenter's Bench only ever worked because it was
+## written above the Campfire.
+##
+## Trying the largest first makes the containing structure win, which is what
+## anybody looking at the thing would say it is.
+static func part_order() -> Array:
+	if not _PART_ORDER.is_empty():
+		return _PART_ORDER
+	var rows: Array = []
+	for di in PART_STRUCTURES.size():
+		var filled := 0
+		for c in part_cells(di, 0):
+			if c[1] != ".":
+				filled += 1
+		rows.append({"di": di, "n": filled})
+	rows.sort_custom(func(a, b): return int(a["n"]) > int(b["n"]))
+	for r in rows:
+		_PART_ORDER.append(int(r["di"]))
+	return _PART_ORDER
+
+
 static var _PART_PROBES: Dictionary = {}
 
 ## Three filled cells spread across a pattern, used to reject a candidate
