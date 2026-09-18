@@ -63,8 +63,8 @@ const _ARCHETYPES := [
 		"tmin": 0.35, "tmax": 0.6, "moon": false, "hazard": "none", "hdps": 0.0},
 ]
 const _NAME_PRE := ["Ver", "Kro", "Zel", "Nyx", "Tor", "Aur", "Hel", "Ori", "Vex",
-	"Mar", "Cae", "Lun", "Sol", "Ith", "Ryl", "Dun", "Pyr", "Oss", "Tal", "Ael"]
-const _NAME_SUF := ["dis", "nis", "ara", "ex", "os", "une", "ia", "or", "eth", "yn", "us", "a"]
+	"Mar", "Cae", "Lun", "Sol", "Ith", "Ryl", "Dun", "Pyr", "Oss", "Tal", "Ael", "Par"]
+const _NAME_SUF := ["dis", "nis", "ara", "ex", "os", "une", "ia", "or", "eth", "yn", "us", "a", "una", "ker"]
 
 var _world: WorldManager
 var _env: Environment
@@ -839,7 +839,7 @@ func _run_command(line: String) -> void:
 	# Unknown first: a word that is not a command is not a command whether or
 	# not there is a world, and hearing "not in a world yet" for a typo sends
 	# you looking in the wrong place.
-	if not cmd in ["give", "bed", "time", "perf", "help"]:
+	if not cmd in ["give", "bed", "time", "perf", "water", "help"]:
 		_on_chat_line("unknown command: /" + cmd + "  (try /help)")
 		return
 	# The rest need somewhere to put things. Saying so beats returning quietly,
@@ -892,8 +892,22 @@ func _run_command(line: String) -> void:
 		"perf":
 			for l in WorldManager.perf_report():
 				_on_chat_line(l)
+		"water":
+			# What the simulation thinks of the cell you are looking at. Aimed at
+			# the one question that keeps coming up -- "why is this water not
+			# moving" -- which no amount of reading the code answers, because the
+			# answer is always about one particular cell.
+			var tgt: Dictionary = pl.call("_raycast_voxel")
+			if tgt.get("kind", "") != "planet":
+				_on_chat_line("look at a block on a planet first")
+				return
+			var wp := tgt["obj"] as Planet
+			# The cell you are aiming AT is usually solid; the one in front of it
+			# is where water would go, so both are worth reporting.
+			for l in wp.water_debug(tgt["place"] as Vector3i):
+				_on_chat_line(l)
 		"help":
-			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [day|night]  ·  /perf")
+			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [day|night]  ·  /perf  ·  /water")
 		_:
 			pass   # unreachable: the list above is the same list
 

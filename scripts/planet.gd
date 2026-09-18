@@ -2908,6 +2908,32 @@ func ground_color(id: int, slot: int) -> Color:
 		clampf(c.v * dv, 0.0, 1.0), c.a)
 
 
+## Everything the simulation thinks about one cell, in words. For the /water
+## command: when water is not doing what somebody expects, the useful thing is
+## not another guess about the code, it is what this particular cell actually
+## is.
+func water_debug(v: Vector3i) -> Array:
+	var out: Array = []
+	out.append("cell %s  id %s  style %d  simulated %s" % [
+		str(v), Blocks.name_of(get_id(v)), water_style, str(water_simulated)])
+	out.append("  level %d  source %s  native %s  fill %.2f" % [
+		int(_wlev.get(v, 0)), str(_ocean_source(v)), str(water_is_native(v)),
+		water_fill(v)])
+	var down := _wdown(v)
+	out.append("  down %s  target if evaluated: %d" % [str(down), _water_target(v)])
+	for n in _NEIGH6:
+		var q: Vector3i = v + (n as Vector3i)
+		out.append("  %-14s %-12s lvl %d  source %s  solid %s" % [
+			str(n), Blocks.name_of(get_id(q)), _wlevel(q),
+			str(_ocean_source(q)), str(_is_solid_block(q))])
+	out.append("  queues: yours %d, sea %d, redraws %d, stalled %d, wet %d" % [
+		_water_active.size(), _water_bg.size(), _water_dirty.size(),
+		_water_stalled.size(), _wlev.size()])
+	out.append("  chunk loaded %s  accum %.3f" % [
+		str(loaded_chunks.has(chunk_of(v))), _flow_accum])
+	return out
+
+
 ## What this world calls the place you are standing.
 func biome_at(world_pos: Vector3) -> String:
 	if not has_biomes():
@@ -4969,35 +4995,35 @@ func _ocean_source(c: Vector3i) -> bool:
 		return false
 	if water_style != WATER_LIQUID:
 		return false
-	# Asked the CHEAP way rather than through generation_sample.
-	#
-	# The generator's rule for open sea is "above the ground and below the
-	# waterline" -- so that is what is tested, in two noise fields instead of
-	# the whole terrain function with its caves, ore veins and tree cells. It
-	# matters because this is the simulation's hottest line: every cell it looks
-	# at asks about six neighbours, and the full function put a tick of water at
-	# fifteen milliseconds, which is a stutter ten times a second rather than a
-	# stream running.
 	var was = _src_memo.get(c)
 	if was != null:
 		return bool(was)
-	# A cheap REJECT before the real answer, not instead of it. The generator's
-	# rule for open sea is "above the ground and below the waterline", so
-	# anything failing that cannot be sea and is dismissed in two noise fields
-	# rather than in the whole terrain function with its caves, ore veins and
-	# tree cells. Inside a cave -- which is where this runs most -- every
-	# neighbour fails on the first test.
+	# A cheap REJECT before the real answer, never instead of it.
 	#
-	# It matters because this is the simulation's hottest line: every cell it
-	# looks at asks about six neighbours, and going the long way round put a
-	# tick of water at fifteen milliseconds, which is a stutter ten times a
-	# second rather than a stream running.
-	var p := Vector3(c) + Vector3(0.5, 0.5, 0.5)
-	var dist := _norm(p)
+	# The generator's rule for open sea is "above the ground and below the
+	# waterline", so anything failing that cannot be sea and is dismissed in two
+	# noise fields rather than in the whole terrain function with its caves, ore
+	# veins and tree cells. Inside a cave -- where this runs most -- every
+	# neighbour fails on the first test. It matters because this is the
+	# simulation's hottest line: every cell it looks at asks about six
+	# neighbours, and going the long way round put a step of water at fifteen
+	# milliseconds, a stutter ten times a second rather than a stream running.
+	#
+	# The MARGIN is the whole thing. This has to use the same corner of the cell
+	# generation_sample does and, where it cannot be sure, say "ask properly"
+	# rather than "no". Testing the cell's CENTRE instead put it half a block out
+	# -- which is nothing except exactly at the waterline, where it rejected the
+	# top layer of the sea. That is the only layer with air against it, so it is
+	# the only layer that ever flows: the whole ocean quietly stopped being a
+	# source and no water moved anywhere, while the simulation ran on happily
+	# finding nothing to do.
+	var pf := Vector3(c)
+	var margin := 1.0
+	var dist := _norm(pf)
 	var ans := false
-	if dist <= water_level:
-		var l2 := p.length()
-		if dist > _surf(p / maxf(l2, 0.0001)):
+	if dist <= water_level + margin:
+		var l2 := pf.length()
+		if l2 > 0.0001 and dist > _surf(pf / l2) - margin:
 			ans = generation_sample(c.x, c.y, c.z) == Blocks.WATER
 	_src_memo[c] = ans
 	return ans
