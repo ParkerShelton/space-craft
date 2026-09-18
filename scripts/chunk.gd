@@ -283,7 +283,7 @@ static func _static_init() -> void:
 	_LEAF.resize(256)
 	for id in 256:
 		var full: bool = not (id == Blocks.AIR or id == Blocks.WATER
-			or id == Blocks.DOOR_OPEN or id == Blocks.ROOF_SLAB
+			or id == Blocks.DOOR or id == Blocks.DOOR_OPEN or id == Blocks.ROOF_SLAB
 			or Blocks.is_slab(id) or Blocks.is_stair(id) or Blocks.is_light(id)
 			or Blocks.is_wire(id) or id == Blocks.PARTS
 			or id == Blocks.YOUNG_TREE
@@ -745,8 +745,8 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 				# All share one path -- a real partial-height box, so they render
 				# AND collide at half height rather than just looking short.
 				var hid := ids[idx]
-				if Blocks.is_stair(Blocks.bottom_of(hid)):
-					_emit_stair(Vector3(x, y, z),
+				if Blocks.is_stair(Blocks.bottom_of(hid)) or Blocks.is_door(hid):
+					_emit_shaped(Vector3(x, y, z),
 						Vector3i(base.x + x, base.y + y, base.z + z), hid,
 						planet, snap, verts, normals, colors, uvs, uv2s, cverts)
 				elif hid == Blocks.ROOF_SLAB or Blocks.is_slab(hid) or Blocks.is_stacked_slab(hid):
@@ -1118,7 +1118,10 @@ static func _emit_ore_chunks(lo: Vector3, gv: Vector3i, id: int, planet: Planet,
 ## staircase around. Both pieces go through _emit_solid_box_cell, so they
 ## collide as well as render -- combined with the player's step-up, that is what
 ## makes a staircase walkable.
-static func _emit_stair(lo0: Vector3, gv: Vector3i, raw: int, planet: Planet,
+## Every box a block occupies, drawn. Stairs and doors both: neither is a cube,
+## and both are described once in shape_boxes so the mesh, the collision and the
+## placement preview cannot disagree about where they are.
+static func _emit_shaped(lo0: Vector3, gv: Vector3i, raw: int, planet: Planet,
 		snap: Dictionary, verts: PackedVector3Array, normals: PackedVector3Array,
 		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array,
 		cverts: PackedVector3Array) -> void:
@@ -1157,6 +1160,28 @@ static func shape_boxes(raw: int, up: Vector3, conn: int = 0x3F) -> Array:
 		if Blocks.stair_variant_of(raw) == Blocks.STAIR_CORNER:
 			step = _half_toward(step[0], step[1], side)
 		return [_half_toward(lo, hi, -up), step]
+	if base == Blocks.DOOR or base == Blocks.DOOR_OPEN:
+		# A door is a PANEL on one edge of its cell, not a cube filling it.
+		#
+		# Closed, it lies across the doorway with its face toward whoever put it
+		# there. Open, the same panel has swung a quarter turn onto the edge it
+		# is hinged to -- which is the whole of what makes a door read as a door
+		# rather than as a block that stopped being solid.
+		const DOOR_THICK := 3.0 / 16.0
+		var dax := Vector3(1, 0, 0)
+		var dbx := Vector3(0, 0, 1)
+		if absf(up.x) > 0.5:
+			dax = Vector3(0, 1, 0)
+		elif absf(up.z) > 0.5:
+			dbx = Vector3(0, 1, 0)
+		var dirs := [dax, dbx, -dax, -dbx]
+		var df: Vector3 = dirs[Blocks.door_facing_of(raw)]
+		# The hinge edge: one quarter turn from the face, either way round.
+		var dh: Vector3 = dirs[(Blocks.door_facing_of(raw) + 1) % 4]
+		if Blocks.door_hinge_of(raw) == 1:
+			dh = -dh
+		var swing: Vector3 = df if base == Blocks.DOOR else dh
+		return [_slab_toward(lo, hi, swing, DOOR_THICK)]
 	if base == Blocks.WIRE:
 		var faces := Blocks.wire_faces_of(raw)
 		if faces == 0:
@@ -1238,6 +1263,21 @@ static func torch_box(up: Vector3) -> Array:
 	elif absf(up.y) > 0.5: thin.y = (a1.y - a0.y) * 0.5
 	else: thin.z = (a1.z - a0.z) * 0.5
 	return [mid - thin, mid + thin]
+
+
+## A thin slice of a cell against one of its faces. _half_toward with the
+## fraction spelled out, for the one shape that is not a half of anything.
+static func _slab_toward(lo: Vector3, hi: Vector3, dir: Vector3, t: float) -> Array:
+	var l := lo
+	var h := hi
+	var d := (hi - lo) * t
+	if dir.x > 0.5: l.x = h.x - d.x
+	elif dir.x < -0.5: h.x = l.x + d.x
+	elif dir.y > 0.5: l.y = h.y - d.y
+	elif dir.y < -0.5: h.y = l.y + d.y
+	elif dir.z > 0.5: l.z = h.z - d.z
+	elif dir.z < -0.5: h.z = l.z + d.z
+	return [l, h]
 
 
 static func _half_toward(lo: Vector3, hi: Vector3, dir: Vector3) -> Array:

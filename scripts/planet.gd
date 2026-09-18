@@ -4780,12 +4780,15 @@ func toggle_door(v: Vector3i) -> bool:
 	var id := get_id(v)
 	if not Blocks.is_door(id):
 		return false
-	var new_id := Blocks.door_toggle_of(id)
-	set_block(v, new_id)
+	set_block(v, Blocks.door_toggle_of(id))
 	for n: Vector3i in _DOOR_NEIGH6:
 		var nb: Vector3i = v + n
-		if Blocks.is_door(get_id(nb)):
-			set_block(nb, new_id)
+		var nid := get_id(nb)
+		# Each half swung by ITS OWN state, not handed the other half's. They
+		# differ in which one is the top, and copying one onto the other put two
+		# bottom halves in a doorway -- or two tops.
+		if Blocks.is_door(nid):
+			set_block(nb, Blocks.door_toggle_of(nid))
 	return true
 
 

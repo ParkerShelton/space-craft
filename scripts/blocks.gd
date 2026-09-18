@@ -1806,11 +1806,40 @@ static func item_cells_tall(id: int) -> int:
 static func is_gear(id: int) -> bool:
 	return id in TOOL_IDS
 
-static func is_door(id: int) -> bool:
-	return id == DOOR or id == DOOR_OPEN
+## Which way a door looks, which edge it swings on, and whether this cell is its
+## upper half. Packed into the same spare bits stairs use for their facing: a
+## block is only ever one kind of thing, so they are free.
+const DOOR_HINGE_SHIFT := 18
+const DOOR_TOP_SHIFT := 19
 
+
+static func is_door(id: int) -> bool:
+	var b := bottom_of(id)
+	return b == DOOR or b == DOOR_OPEN
+
+
+static func door_with(open: bool, facing: int, hinge: int, top: bool) -> int:
+	return ((DOOR_OPEN if open else DOOR) & ID_MASK) 		| ((facing & FACING_MASK) << FACING_SHIFT) 		| ((hinge & 1) << DOOR_HINGE_SHIFT) 		| ((1 if top else 0) << DOOR_TOP_SHIFT)
+
+
+static func door_facing_of(v: int) -> int:
+	return (v >> FACING_SHIFT) & FACING_MASK
+
+
+static func door_hinge_of(v: int) -> int:
+	return (v >> DOOR_HINGE_SHIFT) & 1
+
+
+static func door_is_top(v: int) -> bool:
+	return ((v >> DOOR_TOP_SHIFT) & 1) == 1
+
+
+## Swing it, keeping everything else about it. Rebuilding the bare id here threw
+## away which way the door faced and which edge it was hinged on, so a door that
+## had been opened once came back square to the world.
 static func door_toggle_of(id: int) -> int:
-	return DOOR_OPEN if id == DOOR else DOOR
+	var flip := DOOR_OPEN if bottom_of(id) == DOOR else DOOR
+	return (id & ~ID_MASK) | flip
 
 # A drill's mining power from the material it's built from: harder + more energetic
 # materials drill faster and reach higher ore tiers. Bare hands are 1.0.

@@ -2148,6 +2148,34 @@ static func _face_axis(rel: Vector3, radius: float, current: Vector3) -> Vector3
 	return Vector3(0, 0, signf(rel.z))
 
 
+## Which of the four quarters a door placed here should look out of, in the
+## order shape_boxes reads them.
+func _door_facing(planet: Planet, v: Vector3i) -> int:
+	var up := planet._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+	var ax := Vector3(1, 0, 0)
+	var bx := Vector3(0, 0, 1)
+	if absf(up.x) > 0.5:
+		ax = Vector3(0, 1, 0)
+	elif absf(up.z) > 0.5:
+		bx = Vector3(0, 1, 0)
+	var look := -_camera.global_transform.basis.z if _camera != null else Vector3.FORWARD
+	look = look - up * look.dot(up)
+	if look.length_squared() < 0.0001:
+		look = ax
+	look = look.normalized()
+	# The panel hangs on the side you are standing on, so its face is toward
+	# you: the quarter that best matches the way BACK to you.
+	var dirs := [ax, bx, -ax, -bx]
+	var best := 0
+	var bd := -2.0
+	for i in 4:
+		var d: float = (dirs[i] as Vector3).dot(-look)
+		if d > bd:
+			bd = d
+			best = i
+	return best
+
+
 func _snap_to_axis(v: Vector3) -> Vector3:
 	var ax := absf(v.x)
 	var ay := absf(v.y)
@@ -2647,8 +2675,14 @@ func _edit_block(_break_it: bool) -> void:
 				var axis: Vector3i = Vector3i((obj as Planet)._axis_of(Vector3(pv) + Vector3(0.5, 0.5, 0.5)))
 				if axis == Vector3i.ZERO:
 					axis = Vector3i(0, 1, 0)
-				world.edit_block(obj as Planet, pv, place_id)
-				world.edit_block(obj as Planet, pv + axis, place_id)
+				# Hung to face WHOEVER PUT IT THERE, rather than square to the
+				# world -- a door is the one block whose orientation you never
+				# want to have to think about.
+				var face := _door_facing(obj as Planet, pv)
+				world.edit_block(obj as Planet, pv,
+					Blocks.door_with(false, face, 0, false))
+				world.edit_block(obj as Planet, pv + axis,
+					Blocks.door_with(false, face, 0, true))
 			else:
 				world.edit_block(obj as Planet, pv, placed_value)
 			_consume_active()
@@ -3439,6 +3473,14 @@ func _process_mining(delta: float) -> void:
 			return
 		if planet != null:
 			world.edit_block(planet, v, Blocks.AIR)
+			# A doorway is two cells. Taking one and leaving the other floating
+			# is not a thing a door does.
+			if Blocks.is_door(id):
+				for dn in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+						Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+					if Blocks.is_door(planet.get_id(v + (dn as Vector3i))):
+						world.edit_block(planet, v + (dn as Vector3i), Blocks.AIR)
+						break
 			if is_ore:
 				_add_item(id, 1, od["props"], planet.planet_name,
 					{"name": od["name"], "color": od["color"], "tier": od["tier"]})
