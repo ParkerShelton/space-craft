@@ -827,6 +827,7 @@ const GIVEABLE := {
 	# Both ends of the bucket, because "give me a full one" is the whole reason
 	# to reach for this while testing a field.
 	"bucket": Blocks.BUCKET, "waterbucket": Blocks.WATER_BUCKET,
+	"pick": Blocks.PICK, "axe": Blocks.AXE, "spade": Blocks.SPADE,
 }
 
 

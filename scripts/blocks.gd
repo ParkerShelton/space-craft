@@ -251,7 +251,7 @@ const DRILL := 51            # mining tool; its power (from its material) sets m
 const O2_TANK := 55
 const SUIT := 56             # worn gear: reduces hazard damage (insulation from Density)
 const WEAPON := 59           # melee weapon: its damage (from its material) beats bare hands
-const TOOL_IDS := [DRILL, SUIT, WEAPON, PULSE_PISTOL, WRENCH]
+const TOOL_IDS := [DRILL, SUIT, WEAPON, PULSE_PISTOL, WRENCH, PICK, AXE, SPADE]
 
 const LIFE_SUPPORT := 53     # ship block: with a sealed interior it makes the ship habitable
 const GLASS := 54            # transparent, solid hull -- windows that still seal a cabin
@@ -653,6 +653,55 @@ const BED := 124
 ## Player.TILL_RANGE), which without this means every field is on a shoreline.
 const BUCKET := 125
 const WATER_BUCKET := 126
+## The first three tools, and the only ones that exist before you have smelted
+## anything. Each is better than a hand at ONE kind of material and no better
+## anywhere else, so carrying all three is a real early-game decision about what
+## you are going out to do. The Drill supersedes the lot: it is every class at
+## once, which is what makes it the last tool you need rather than a fourth one.
+const PICK := 127
+const AXE := 128
+const SPADE := 129
+
+## What each tool is for, and how much better than bare hands it is at it.
+## `reach` is added to how far you can touch the world -- a tool is a thing on
+## the end of your arm, and it is the cheapest way to make one feel like one.
+const TOOLS := {
+	PICK:  {"class": "rock", "power": 2.4, "reach": 0.8, "label": "Pick"},
+	AXE:   {"class": "wood", "power": 2.4, "reach": 0.8, "label": "Axe"},
+	SPADE: {"class": "soil", "power": 2.4, "reach": 0.6, "label": "Spade"},
+}
+## How far a Drill reaches, on top of the base. It is the end of the tool line,
+## so it is also the longest arm.
+const DRILL_REACH := 1.6
+
+
+## Which kind of material a block is, for deciding whether a tool helps with it.
+## Empty means "nothing helps": glass, metal, crafted things -- a hand is as good
+## as anything else on those, and gating them would only be busywork.
+static func material_class(id: int) -> String:
+	var b := bottom_of(id)
+	if b in STONE_IDS or is_ore(b) or b == CRYSTAL:
+		return "rock"
+	if is_wood(b) or b in PLANK_IDS or is_leaf(b):
+		return "wood"
+	if b == DIRT or b == GRASS or b == REGOLITH or b == SNOW or b == ICE or b == TILLED:
+		return "soil"
+	return ""
+
+
+## Is this something bare hands simply cannot break?
+##
+## ORE, and only ore. Rock itself stays hand-workable, slowly, and that is not a
+## softening -- it is the only way the line closes. A Pick costs wood and rock;
+## if rock needed a Pick you would need a Pick to make a Pick, and a new world
+## would be unplayable from the first swing. So hands get you wood, soil and
+## rock; rock and wood get you the tools; the tools get you ore; ore gets you
+## the Drill, which gets you everything.
+##
+## Bare hands are still slow at rock -- two and a quarter seconds against a
+## Pick's under one -- so the tool is worth making long before it is required.
+static func needs_tool(id: int) -> bool:
+	return is_ore(bottom_of(id))
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
@@ -838,8 +887,8 @@ const PART_STRUCTURES := [
 		"result": SHAPER,
 		"size": Vector3i(4, 2, 2),
 		"layers": [
-			["S..S", "S..S"],
-			["MMMM", "MMMM"],
+			["WWW.", "WWW."],            # a wooden bench
+			[".S..", ".S.."],            # with a stone edge set into it
 		],
 	},
 ]
@@ -1245,6 +1294,19 @@ const STATION_CRAFTS := {
 		# putting it behind rare drops would just make the early game dark.
 		{"label": "Hoe", "out": HOE, "n": 1,
 			"reqs": [{"any": WOOD_IDS, "n": 3, "label": "Wood"}]},
+		# The three that come before anything is smelted. The Pick is the one
+		# that opens the game -- nothing else gets you rock -- so it is made of
+		# the two things you can gather with your hands, and the other two cost
+		# the same so no order of making them is wrong.
+		{"label": "Pick", "out": PICK, "n": 1,
+			"reqs": [{"any": WOOD_IDS, "n": 2, "label": "Wood"},
+				{"any": STONE_IDS, "n": 3, "label": "Rock"}]},
+		{"label": "Axe", "out": AXE, "n": 1,
+			"reqs": [{"any": WOOD_IDS, "n": 2, "label": "Wood"},
+				{"any": STONE_IDS, "n": 3, "label": "Rock"}]},
+		{"label": "Spade", "out": SPADE, "n": 1,
+			"reqs": [{"any": WOOD_IDS, "n": 2, "label": "Wood"},
+				{"any": STONE_IDS, "n": 2, "label": "Rock"}]},
 		# Metal, at the bench you can reach with nothing -- so it costs a trip
 		# to a smelter and no more than that. A field has to be near water, and
 		# a bucket is what stops that meaning "on a beach".
@@ -1314,6 +1376,9 @@ const NAMES := {
 	HOE: "Hoe",
 	BUCKET: "Bucket",
 	WATER_BUCKET: "Water Bucket",
+	PICK: "Pick",
+	AXE: "Axe",
+	SPADE: "Spade",
 	COOKED_CROP: "Cooked Vegetables",
 	BONEMEAL: "Bone Meal",
 	FIBRE: "Plant Fibre",
@@ -1464,6 +1529,9 @@ const COLORS := {
 	HOE: Color(0.72, 0.58, 0.34),
 	BUCKET: Color(0.68, 0.70, 0.74),
 	WATER_BUCKET: Color(0.34, 0.52, 0.78),
+	PICK: Color(0.62, 0.62, 0.66),
+	AXE: Color(0.70, 0.55, 0.36),
+	SPADE: Color(0.56, 0.50, 0.42),
 	COOKED_CROP: Color(0.78, 0.55, 0.24),
 	RAW_MEAT: Color(0.72, 0.26, 0.28),
 	COOKED_MEAT: Color(0.55, 0.34, 0.18),

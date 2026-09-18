@@ -139,9 +139,30 @@ const GHOST_FADE_FAR := 3.4
 const GHOST_ALPHA_NEAR := 0.22
 const ALIGN_SPEED := 2.5          # how fast we stand upright when captured (lower = smoother)
 const FLIGHT_THRESHOLD := 3.0     # gravity (m/s^2) below which we float
-const REACH := 6.0                # block interaction distance
+## How far you can touch the world with nothing in your hands.
+##
+## Deliberately short. Reach used to be six blocks flat, which is two floors of
+## a building from where you stand -- so no tool could ever make you feel like
+## you had got further, because you were already everywhere. A tool adds to
+## this, and the Drill adds most.
+const REACH_BARE := 3.6
+## The longest reach any tool can give, so the physics ray is sized once for the
+## worst case rather than rebuilt whenever your bag changes.
+const REACH_MAX := 6.0
+var reach := REACH_BARE          # block interaction distance, with what you carry
 const BARE_MINE_MULT := 2.5       # bare-hand mining is slow; a drill divides this
 var mine_power := 1.0             # >1 once you craft a drill (Phase 2)
+## How hard you hit each kind of material, from the best tool you carry for it.
+## Bare hands are 1.0 at everything.
+var _class_power := {"rock": 1.0, "wood": 1.0, "soil": 1.0}
+
+
+## What you are effectively swinging at this block.
+func _power_for(id: int) -> float:
+	var c := Blocks.material_class(id)
+	if c == "":
+		return mine_power     # nothing is specialised for it; only a Drill helps
+	return maxf(float(_class_power.get(c, 1.0)), 1.0)
 
 # --- survival ---
 const MAX_HEALTH := 100.0
@@ -388,7 +409,7 @@ func _ready() -> void:
 	add_child(_camera)
 
 	_ray = RayCast3D.new()
-	_ray.target_position = Vector3(0, 0, -REACH)
+	_ray.target_position = Vector3(0, 0, -REACH_MAX)
 	_ray.collide_with_bodies = true
 	_camera.add_child(_ray)
 
@@ -2225,6 +2246,11 @@ func _raycast_voxel() -> Dictionary:
 	var collider := _ray.get_collider()
 	var hit := _ray.get_collision_point()
 	var origin := _camera.global_position
+	# The ray is built once at the longest reach any tool could give, so that it
+	# never has to be rebuilt; what it comes back with is then held to the reach
+	# you actually have right now.
+	if origin.distance_to(hit) > reach:
+		return _dda_no_collider()
 	var dir := hit - origin
 	if dir.length() < 0.0001:
 		dir = -_camera.global_transform.basis.z
@@ -2248,11 +2274,11 @@ func _dda_no_collider() -> Dictionary:
 	var origin := _camera.global_position
 	var dir := -_camera.global_transform.basis.z
 	if aboard != null:
-		return _dda(aboard, origin, dir, origin + dir, "ship", REACH)
+		return _dda(aboard, origin, dir, origin + dir, "ship", reach)
 	var planet := world.nearest_planet(origin)
 	if planet == null:
 		return {}
-	return _dda(planet, origin, dir, origin + dir, "planet", REACH)
+	return _dda(planet, origin, dir, origin + dir, "planet", reach)
 
 
 func _dda(obj: Object, origin_w: Vector3, dir_w: Vector3, hit_w: Vector3, kind: String,
@@ -2841,7 +2867,7 @@ func _water_under_crosshair() -> Dictionary:
 	var tdelta := Vector3(_tdelta(d.x), _tdelta(d.y), _tdelta(d.z))
 	var travelled := 0.0
 	for i in 24:
-		if travelled > REACH:
+		if travelled > reach:
 			break
 		var id := planet.get_id(v)
 		if id == Blocks.WATER:
@@ -3410,6 +3436,14 @@ func _process_mining(delta: float) -> void:
 
 	# High-tier ore is too hard for weak tools -- that gate is itself the tier hint.
 	var hardness := Blocks.hardness(id)
+	var power := _power_for(id)
+	# Ore cannot be worked with hands at all -- see Blocks.needs_tool for why it
+	# is ore and not rock.
+	if Blocks.needs_tool(id) and power <= 1.0:
+		_look_name = "%s  — bare hands cannot get ore out, make a Pick" % _look_name
+		_mine_key = ""
+		_mine_time = 0.0
+		return
 	if is_ore:
 		hardness = planet.ore_hardness(id)
 		if mine_power < planet.ore_min_power(id):
@@ -3432,7 +3466,7 @@ func _process_mining(delta: float) -> void:
 		# you want a drill for stone, and applying it to leaves just makes
 		# clearing a canopy a chore.
 		var bare := 1.0 if Blocks.is_leaf(Blocks.bottom_of(id)) else BARE_MINE_MULT
-		_mine_total = hardness * bare / mine_power
+		_mine_total = hardness * bare / power
 	_mine_time += delta
 	# Asked for every frame while the button is held; Audio decides how often it
 	# actually sounds, and it stops on its own when the asking stops.
@@ -4364,14 +4398,29 @@ func _refresh_slots() -> void:
 # only protects you while actually worn in `suit_slot` (see that var's comment).
 func _update_mine_power() -> void:
 	var best := 1.0
+	var by_class := {"rock": 1.0, "wood": 1.0, "soil": 1.0}
+	var bonus := 0.0
 	for s in inv:
 		if s["count"] <= 0:
 			continue
 		var mat: Dictionary = s.get("mat", {})
-		match s["id"]:
-			Blocks.DRILL:
-				best = maxf(best, float(mat.get("power", 1.0)))
+		var id: int = s["id"]
+		if id == Blocks.DRILL:
+			var p := float(mat.get("power", 1.0))
+			best = maxf(best, p)
+			# A Drill is every class at once. That is the whole point of it:
+			# once you have one the three basic tools have nothing left to do.
+			for k in by_class:
+				by_class[k] = maxf(float(by_class[k]), p)
+			bonus = maxf(bonus, Blocks.DRILL_REACH)
+		elif Blocks.TOOLS.has(id):
+			var t: Dictionary = Blocks.TOOLS[id]
+			var c := str(t["class"])
+			by_class[c] = maxf(float(by_class[c]), float(t["power"]))
+			bonus = maxf(bonus, float(t["reach"]))
 	mine_power = best
+	_class_power = by_class
+	reach = clampf(REACH_BARE + bonus, REACH_BARE, REACH_MAX)
 	var resist := 0.0
 	if suit_slot.get("id", Blocks.AIR) == Blocks.SUIT and int(suit_slot.get("count", 0)) > 0:
 		resist = float(suit_slot.get("mat", {}).get("resist", 0.0))
@@ -5371,7 +5420,18 @@ func _update_ui() -> void:
 		return
 
 	var held := _selected_id()
-	var tool_txt := "Drill (power %.1f, T%d)" % [mine_power, Blocks.max_tier_for_power(mine_power)] if mine_power > 1.0 else "bare hands"
+	var tool_txt := "bare hands"
+	if mine_power > 1.0:
+		tool_txt = "Drill (power %.1f, T%d)" % [mine_power,
+			Blocks.max_tier_for_power(mine_power)]
+	else:
+		# The basic tools, named so you can see at a glance what you are missing.
+		var carried: Array = []
+		for tid in [Blocks.PICK, Blocks.AXE, Blocks.SPADE]:
+			if float(_class_power.get(str(Blocks.TOOLS[tid]["class"]), 1.0)) > 1.0:
+				carried.append(str(Blocks.TOOLS[tid]["label"]))
+		if not carried.is_empty():
+			tool_txt = " + ".join(carried)
 	# Fine placing changes what EVERY click does, so it cannot live in a toast
 	# you saw once. Left on by accident it silently builds eighth-blocks where
 	# you meant whole ones -- a structure that looks right and matches nothing.
