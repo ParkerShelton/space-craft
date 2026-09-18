@@ -1180,8 +1180,17 @@ static func shape_boxes(raw: int, up: Vector3, conn: int = 0x3F) -> Array:
 		var dh: Vector3 = dirs[(Blocks.door_facing_of(raw) + 1) % 4]
 		if Blocks.door_hinge_of(raw) == 1:
 			dh = -dh
-		var swing: Vector3 = df if base == Blocks.DOOR else dh
-		return [_slab_toward(lo, hi, swing, DOOR_THICK)]
+		# SHUT, it sits down the middle of its cell rather than flush against one
+		# face -- a door hugging one side of its own doorway leaves a gap down
+		# the other, and a wall with a door in it should read straight.
+		#
+		# OPEN, it is against the edge it hinges on, which is where a door that
+		# has swung out of the way actually is. That is also the only thing the
+		# hinge bit is visible in: a panel centred in its cell looks the same
+		# whichever edge you claim it turns on.
+		if base == Blocks.DOOR:
+			return [_mid_slab(lo, hi, df, DOOR_THICK)]
+		return [_slab_toward(lo, hi, dh, DOOR_THICK)]
 	if base == Blocks.WIRE:
 		var faces := Blocks.wire_faces_of(raw)
 		if faces == 0:
@@ -1263,6 +1272,24 @@ static func torch_box(up: Vector3) -> Array:
 	elif absf(up.y) > 0.5: thin.y = (a1.y - a0.y) * 0.5
 	else: thin.z = (a1.z - a0.z) * 0.5
 	return [mid - thin, mid + thin]
+
+
+## A thin slice down the MIDDLE of a cell, across the given axis.
+static func _mid_slab(lo: Vector3, hi: Vector3, dir: Vector3, t: float) -> Array:
+	var l := lo
+	var h := hi
+	var d := (hi - lo) * t * 0.5
+	var c := (lo + hi) * 0.5
+	if absf(dir.x) > 0.5:
+		l.x = c.x - d.x
+		h.x = c.x + d.x
+	elif absf(dir.y) > 0.5:
+		l.y = c.y - d.y
+		h.y = c.y + d.y
+	else:
+		l.z = c.z - d.z
+		h.z = c.z + d.z
+	return [l, h]
 
 
 ## A thin slice of a cell against one of its faces. _half_toward with the

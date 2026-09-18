@@ -4553,6 +4553,13 @@ func _edit_remesh(cc: Vector3i) -> void:
 	if not loaded_chunks.has(cc):
 		return
 	_edit_priority[cc] = true
+	# Inside a batch, remember it and rebuild once at the end. Some edits are
+	# one THING made of several blocks -- both halves of a door -- and meshing
+	# after the first of them shows the world a half-finished object. See
+	# begin_batch.
+	if _batching:
+		_batch_remesh[cc] = true
+		return
 	if _inflight.has(cc):
 		# Already meshing against older data -- can't start a second task for the
 		# same chunk (they'd race to write _ready_data), so fall back to dirty.
@@ -4782,6 +4789,8 @@ func toggle_door(v: Vector3i) -> bool:
 	var id := get_id(v)
 	if not Blocks.is_door(id):
 		return false
+	# One object, one redraw: see begin_batch.
+	begin_batch()
 	set_block(v, Blocks.door_toggle_of(id))
 	for n: Vector3i in _DOOR_NEIGH6:
 		var nb: Vector3i = v + n
@@ -4791,6 +4800,7 @@ func toggle_door(v: Vector3i) -> bool:
 		# bottom halves in a doorway -- or two tops.
 		if Blocks.is_door(nid):
 			set_block(nb, Blocks.door_toggle_of(nid))
+	end_batch()
 	return true
 
 
@@ -4891,6 +4901,8 @@ var _water_bg := {}            # ...and the sea's own business
 var _waking_bg := false
 ## Inside a step already; see flow_water.
 var _settling := false
+var _batching := false         # see begin_batch
+var _batch_remesh := {}        # chunks a batch has dirtied
 var _water_stalled := {}       # chunk -> {cell: true}, woken when that chunk loads
 var _water_dirty := {}         # chunks whose water moved, waiting on a re-mesh
 var _water_remesh_at := {}     # chunk -> earliest next re-mesh, in msec
@@ -4961,6 +4973,26 @@ func _wake_one(c: Vector3i) -> void:
 	if not _water_stalled.has(cc):
 		_water_stalled[cc] = {}
 	_water_stalled[cc][c] = true
+
+
+## Treat the next few edits as ONE change.
+##
+## A door is two blocks. Editing them one at a time dispatches a mesh for the
+## first before the second has happened, so the chunk is drawn with the top half
+## swung and the bottom half still shut -- which is exactly what it looked like:
+## a door whose halves open at different moments instead of one object moving.
+func begin_batch() -> void:
+	_batching = true
+
+
+func end_batch() -> void:
+	if not _batching:
+		return
+	_batching = false
+	var ccs: Array = _batch_remesh.keys()
+	_batch_remesh.clear()
+	for cc in ccs:
+		_edit_remesh(cc)
 
 
 ## A chunk just came in; anything that was waiting on it can carry on.
