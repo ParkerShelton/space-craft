@@ -1373,14 +1373,17 @@ const STATION_CRAFTS := {
 		# farmer and a hunter can both make one.
 		{"label": "Insulated Suit", "out": SUIT, "n": 1, "cost": 2,
 			"extra": {"any": [CLOTH, LEATHER], "n": 3, "label": "Cloth or Leather"}},
-		# Logs OR planks. A door is a wooden panel; which shape of wood you
-		# happen to be carrying is not a thing to be strict about, and a player
-		# who has already sawn their logs should not have to go and fell another
-		# tree. The label matters as much as the ids: without one this read as
+		# Wood, and only wood. It used to want two Hull Plate as well, which put
+		# the one early building block you actually want -- something to close
+		# your first shelter with -- behind a smelter, on the far side of the
+		# whole tool line. Logs OR planks: which shape of wood you happen to be
+		# carrying is not a thing to be strict about, and somebody who has
+		# already sawn their timber should not have to fell another tree.
+		#
+		# The label matters as much as the ids. Without one this read as
 		# "6 items", which tells you nothing about what to go and get.
 		{"label": "Door", "out": DOOR, "n": 1,
-			"reqs": [{"any": WOOD_IDS + PLANK_IDS, "n": 6, "label": "Wood or Planks"},
-				{"id": METAL, "n": 2}]},
+			"reqs": [{"any": WOOD_IDS + PLANK_IDS, "n": 6, "label": "Wood or Planks"}]},
 		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": METAL, "n": 1}]},
 		{"label": "Climate Unit", "out": CLIMATE_UNIT, "n": 1,
 			"reqs": [{"any": WOOD_IDS, "n": 10, "label": "Wood"}, {"id": METAL, "n": 6}]},
