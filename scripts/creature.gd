@@ -625,7 +625,13 @@ func _build_grazer(s: float, color: Color, accent: Color) -> void:
 	var neck_base := Vector3(0, torso_y + torso.y * 0.35, -torso.z * 0.5 + 0.1 * s)
 	_neck_pivot = _mk_pivot(_model, neck_base)
 	_neck_pivot.rotation.x = -0.45
-	_mk_box(_neck_pivot, Vector3(0.28, neck_len, 0.28) * s, Vector3(0, neck_len * 0.5, 0), color)
+	# Width scaled, LENGTH not: neck_len already carries the scale. Multiplying
+	# the whole vector by it again made the neck as long as the scale squared
+	# while everything hung off it -- the head, the pivot, the torso -- stayed
+	# linear. On anything bigger than average that is a neck running back down
+	# through the body and out the top of its own head.
+	_mk_box(_neck_pivot, Vector3(0.28 * s, neck_len, 0.28 * s),
+		Vector3(0, neck_len * 0.5, 0), color)
 	var ghead := Vector3(0.36, 0.34, 0.6) * s
 	var ghead_at := Vector3(0, neck_len + 0.1 * s, -0.16 * s)
 	_mk_box(_neck_pivot, ghead, ghead_at, accent)
@@ -660,9 +666,12 @@ func _build_biped(s: float, color: Color, accent: Color) -> void:
 	var shin_len := leg_len * 0.5
 	for sx in [-1, 1]:
 		var hip := _mk_pivot(_model, Vector3(sx * 0.18 * s, leg_len, 0))
-		_mk_box(hip, Vector3(0.2, thigh_len, 0.22) * s, Vector3(0, -thigh_len * 0.5, 0), accent)
+		# Scaled per component: thigh_len already carries it. See the grazer's neck.
+		_mk_box(hip, Vector3(0.2 * s, thigh_len, 0.22 * s),
+			Vector3(0, -thigh_len * 0.5, 0), accent)
 		var knee := _mk_pivot(hip, Vector3(0, -thigh_len, 0))
-		_mk_box(knee, Vector3(0.17, shin_len, 0.19) * s, Vector3(0, -shin_len * 0.5, 0), accent)
+		_mk_box(knee, Vector3(0.17 * s, shin_len, 0.19 * s),
+			Vector3(0, -shin_len * 0.5, 0), accent)
 		_legs.append(hip)
 		_knees.append(knee)
 	# Arms -- same two-segment idea (upper arm + forearm via an elbow pivot).
@@ -686,9 +695,11 @@ func _build_biped(s: float, color: Color, accent: Color) -> void:
 			# pulled the arm INWARD into the torso, making the clipping/
 			# occlusion problem worse instead of better.
 			shoulder.rotation.z = sx * 0.4
-		_mk_box(shoulder, Vector3(0.16, upper_len, 0.16) * s, Vector3(0, -upper_len * 0.5, 0), color)
+		_mk_box(shoulder, Vector3(0.16 * s, upper_len, 0.16 * s),
+			Vector3(0, -upper_len * 0.5, 0), color)
 		var elbow := _mk_pivot(shoulder, Vector3(0, -upper_len, 0))
-		_mk_box(elbow, Vector3(0.14, fore_len, 0.14) * s, Vector3(0, -fore_len * 0.5, 0), color)
+		_mk_box(elbow, Vector3(0.14 * s, fore_len, 0.14 * s),
+			Vector3(0, -fore_len * 0.5, 0), color)
 		_arms.append(shoulder)
 		_elbows.append(elbow)
 	# A "lunger" gets a visible sword (right hand) + shield (left hand) -- the
