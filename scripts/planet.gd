@@ -177,8 +177,13 @@ func flora_here() -> Array:
 		return _flora_here
 	var fr := RandomNumberGenerator.new()
 	fr.seed = _seed + 8123
-	# A world with no life at all is a real outcome, not an accident.
-	if fr.randf() < 0.18:
+	# A world with no life at all is a real outcome -- but it is the TERRAIN that
+	# says so, by growing nothing, not a separate roll here. This used to be its
+	# own 18% chance, which could land on a world covered in forest and meadow
+	# and leave it with no species at all: every leaf you broke and every tuft
+	# you cleared then gave you nothing, for ever, with no way to tell that from
+	# bad luck.
+	if tree_density <= 0.0 and grass_density <= 0.0:
 		return _flora_here
 	# SHUFFLED before rolling. Walking the pool in table order and keeping each
 	# with 70% chance is not a random subset: whatever is listed first survives
@@ -193,6 +198,13 @@ func flora_here() -> Array:
 	for f in order:
 		if fr.randf() < 0.7:
 			_flora_here.append(f)
+	# Whatever the terrain actually GROWS has to have a species behind it.
+	# Generation reads tree_density and grass_density and knows nothing about
+	# this list, so the two could disagree: a forested world whose roll happened
+	# to keep only bushes had trees you could chop and never a sapling to show
+	# for it. Anything you can stand in front of is a thing that grows here.
+	_ensure_kind(order, "tree", tree_density > 0.0)
+	_ensure_kind(order, "grass", grass_density > 0.0)
 	# ...but if the dice took everything, keep one: an empty world should be the
 	# roll above saying so, not the leftovers of this one.
 	if _flora_here.is_empty():
@@ -221,6 +233,21 @@ func flora_here() -> Array:
 		named.append(e)
 	_flora_here = named
 	return _flora_here
+
+
+## Keep at least one species of `kind`, when the terrain grows that kind and
+## this world's class has one to give. `pool` is already shuffled, so the one
+## taken is a random one rather than whichever the table lists first.
+func _ensure_kind(pool: Array, kind: String, grows: bool) -> void:
+	if not grows:
+		return
+	for f in _flora_here:
+		if str((f as Dictionary)["kind"]) == kind:
+			return
+	for f in pool:
+		if str((f as Dictionary)["kind"]) == kind:
+			_flora_here.append(f)
+			return
 
 
 ## One of this world's plants, chosen at random. Empty on a dead world.
