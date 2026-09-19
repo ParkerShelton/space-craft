@@ -66,8 +66,6 @@ const _NAME_PRE := ["Ver", "Kro", "Zel", "Nyx", "Tor", "Aur", "Hel", "Ori", "Vex
 	"Mar", "Cae", "Lun", "Sol", "Ith", "Ryl", "Dun", "Pyr", "Oss", "Tal", "Ael", "Par"]
 const _NAME_SUF := ["dis", "nis", "ara", "ex", "os", "une", "ia", "or", "eth", "yn", "us", "a", "una", "ker"]
 
-## How much of the sky's colour the ambient light carries. The rest is white.
-const ATMO_TINT := 0.30
 var _world: WorldManager
 var _env: Environment
 var _sky_mat: ShaderMaterial
@@ -1975,18 +1973,25 @@ func _process(delta: float) -> void:
 	# Only follow the sky's colour while it IS coloured. At night the sky is
 	# almost black and strongly blue-weighted, and tinting ambient toward it
 	# washed the whole world blue-purple.
-	# Mostly WHITE, with the sky's colour as a wash over it rather than as the
-	# whole of it.
+	# GREY, at whatever brightness the sky would have had. Light decides how much
+	# of a block you can see, never which colour it is.
 	#
 	# Ambient here is not a subtle fill: it is most of the light a surface gets,
 	# and the shader applies it as base * ambient_color, i.e. as a FILTER over
-	# the block's own colour. Handing it the sky's colour undiluted meant a world
-	# under a cyan sky had cyan rock, cyan dirt and cyan wood -- every material
-	# pulled to one hue and, because a saturated filter throws away two channels,
-	# all of them flatter and greyer than the palette they were drawn from. The
-	# atmosphere should tint the world, not repaint it.
-	_env.ambient_light_color = Color(1, 1, 1).lerp(
-		SPACE_AMBIENT.lerp(acol, _atmo * 0.8 * _day), ATMO_TINT)
+	# the block's own colour. Any colour in it is therefore a colour the block
+	# appears to be. At full strength that gave a cyan-sky world cyan rock, cyan
+	# dirt and cyan wood. At a third strength it stopped repainting the world and
+	# started doing something subtler and worse: daylight was faintly blue and
+	# the little light underground was not, so the same rock was cool at a cave
+	# mouth and warm ten blocks in -- it did not look like one wall getting
+	# darker, it looked like two different stones. Going dark has to be the only
+	# thing that changes.
+	#
+	# The atmosphere still colours everything it can reach without touching a
+	# surface: the sky, the horizon, the fog, and the sun as it reddens at dusk.
+	var sky_amb := SPACE_AMBIENT.lerp(acol, _atmo * 0.8 * _day)
+	var amb_lum := sky_amb.r * 0.299 + sky_amb.g * 0.587 + sky_amb.b * 0.114
+	_env.ambient_light_color = Color(amb_lum, amb_lum, amb_lum)
 	# The terrain shader applies ambient itself (see voxel_block.gdshader), so it
 	# needs the same values the environment is using.
 	var amb: Color = _env.ambient_light_color
