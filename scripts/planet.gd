@@ -2760,7 +2760,17 @@ func name_of(id: int) -> String:
 ## This world's colour for a block, falling back to the global registry.
 func color_of(id: int) -> Color:
 	var c = tint.get(id)
-	return c if c != null else Blocks.color_of(id)
+	if c != null:
+		return c
+	# Through the shape: this world's timber is its own colour, and a slab cut
+	# from it is the same timber. Only the plain materials are tinted, so a
+	# shaped block has to ask on behalf of what it was cut from.
+	var mat := Blocks.base_material_of(Blocks.bottom_of(id))
+	if mat != id:
+		c = tint.get(mat)
+		if c != null:
+			return c
+	return Blocks.color_of(id)
 
 
 ## Which regions this world is made of, and how big they are.
