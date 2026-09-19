@@ -28,6 +28,12 @@ render_mode cull_disabled, diffuse_burley, ambient_light_disabled;
 // The environment's ambient, handed over so this shader can apply it itself.
 uniform vec3 ambient_color : source_color = vec3(0.4, 0.5, 0.7);
 uniform float ambient_energy = 0.3;
+// How much of a block's own colour still shows where no daylight reaches and
+// nothing is burning. Tuned by eye against a sealed room: at this value you can
+// just make out where the floor meets the wall and nothing else, which is
+// enough to turn around in and not enough to do anything by. Raise it if caves
+// turn out to be unnavigable rather than dark.
+uniform float dark_floor = 0.07;
 
 uniform float world_seed = 0.0;
 uniform vec3 planet_center = vec3(0.0);
@@ -348,10 +354,17 @@ void fragment() {
 	// that distance is bright enough to see by, which is the part that reads as
 	// "how far the torch throws".
 	EMISSION = base * emit * 2.6 + base * lamp * bl * (0.45 + 0.55 * bl) * 1.9
-		// A CONSTANT floor underground, owing nothing to the sun. This is what
-		// makes a cave the same darkness at noon and at midnight: not sunlight
-		// reduced, but the small amount of light there always is down there.
-		+ base * 0.145 * (1.0 - sky)
+		// A CONSTANT floor wherever daylight cannot reach, owing nothing to the
+		// sun. This is what makes a cave the same darkness at noon and at
+		// midnight: not sunlight reduced, but the small amount of light there
+		// always is down there.
+		//
+		// It was 0.145, which is enough to READ a room by. That made a sealed
+		// building lit from nowhere -- you could walk into a windowless house
+		// and see the far wall, and a cave never needed a torch to be legible,
+		// only to be pleasant. Halved, "unlit" still is not a black screen you
+		// cannot orient in, but it no longer substitutes for carrying a light.
+		+ base * dark_floor * (1.0 - sky)
 		// Starlight on anything open to the sky. Invisible against daylight;
 		// at night it is the difference between dark and unreadable.
 		+ base * 0.13 * sky

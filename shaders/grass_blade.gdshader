@@ -65,7 +65,10 @@ void fragment() {
 	float sky = clamp(v_sky, 0.0, 1.0);
 	ALBEDO = base;
 	// The same three terms the terrain shader uses, with the same constants.
-	EMISSION = base * 0.085 * (1.0 - sky)
+	// Matched to the terrain's dark_floor, and lowered with it: a tuft lit to a
+	// different floor than the soil under it is the two-worlds problem this
+	// shader exists to avoid.
+	EMISSION = base * 0.04 * (1.0 - sky)
 		+ base * 0.075 * sky
 		+ base * ambient_color * ambient_energy * sky;
 	AO = sky;
