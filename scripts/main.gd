@@ -66,6 +66,8 @@ const _NAME_PRE := ["Ver", "Kro", "Zel", "Nyx", "Tor", "Aur", "Hel", "Ori", "Vex
 	"Mar", "Cae", "Lun", "Sol", "Ith", "Ryl", "Dun", "Pyr", "Oss", "Tal", "Ael", "Par"]
 const _NAME_SUF := ["dis", "nis", "ara", "ex", "os", "une", "ia", "or", "eth", "yn", "us", "a", "una", "ker"]
 
+## How much of the sky's colour the ambient light carries. The rest is white.
+const ATMO_TINT := 0.30
 var _world: WorldManager
 var _env: Environment
 var _sky_mat: ShaderMaterial
@@ -1769,7 +1771,13 @@ func _setup_environment() -> void:
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = SPACE_AMBIENT
 	env.ambient_light_energy = 0.27
-	env.tonemap_mode = Environment.TONE_MAPPER_FILMIC
+	# LINEAR, not FILMIC. A filmic curve exists to make a photograph out of a
+	# scene with a far wider range than a screen can show: it lifts the shadows
+	# and rolls off the highlights, and on flat-coloured voxel art -- which has
+	# no such range to begin with -- all that does is drain the contrast and the
+	# saturation out of every block. Nothing here is brighter than a lit surface
+	# except a flame, and a flame clipping to white is what a flame does.
+	env.tonemap_mode = Environment.TONE_MAPPER_LINEAR
 
 	we.environment = env
 	add_child(we)
@@ -1967,7 +1975,18 @@ func _process(delta: float) -> void:
 	# Only follow the sky's colour while it IS coloured. At night the sky is
 	# almost black and strongly blue-weighted, and tinting ambient toward it
 	# washed the whole world blue-purple.
-	_env.ambient_light_color = SPACE_AMBIENT.lerp(acol, _atmo * 0.8 * _day)
+	# Mostly WHITE, with the sky's colour as a wash over it rather than as the
+	# whole of it.
+	#
+	# Ambient here is not a subtle fill: it is most of the light a surface gets,
+	# and the shader applies it as base * ambient_color, i.e. as a FILTER over
+	# the block's own colour. Handing it the sky's colour undiluted meant a world
+	# under a cyan sky had cyan rock, cyan dirt and cyan wood -- every material
+	# pulled to one hue and, because a saturated filter throws away two channels,
+	# all of them flatter and greyer than the palette they were drawn from. The
+	# atmosphere should tint the world, not repaint it.
+	_env.ambient_light_color = Color(1, 1, 1).lerp(
+		SPACE_AMBIENT.lerp(acol, _atmo * 0.8 * _day), ATMO_TINT)
 	# The terrain shader applies ambient itself (see voxel_block.gdshader), so it
 	# needs the same values the environment is using.
 	var amb: Color = _env.ambient_light_color

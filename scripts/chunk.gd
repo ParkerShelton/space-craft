@@ -1764,12 +1764,18 @@ static func _quad(a: Vector3, b: Vector3, c: Vector3, e: Vector3, normal: Vector
 ## The sun's own directional light is on top of this, but it cannot do the job
 ## alone -- it moves, and half the time it is somewhere that leaves the faces you
 ## are looking at equally lit.
+##
+## The spread is Minecraft's, which is wider again than what was here before:
+## a side wall at 0.6 against a floor at 1.0 is most of what makes a blocky
+## world read as solid objects rather than as a coloured surface. The small
+## difference WITHIN each horizontal axis is this game's own, and is the cue
+## that says which way a corner turns.
 static func _face_shade(d: int, dir: int) -> float:
 	if d == 1:  # Y axis: sky above, ground below
-		return 1.0 if dir > 0 else 0.55
+		return 1.0 if dir > 0 else 0.50
 	if d == 0:  # X axis
-		return 0.74 if dir > 0 else 0.70
-	return 0.88 if dir > 0 else 0.82  # Z axis
+		return 0.62 if dir > 0 else 0.58
+	return 0.82 if dir > 0 else 0.78  # Z axis
 
 
 static func _corner(d: int, u: int, v: int, wc: int, uu: int, vv: int) -> Vector3:
