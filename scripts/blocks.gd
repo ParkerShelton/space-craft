@@ -352,12 +352,23 @@ const CRYSTAL_SLAB := 77
 const METAL_SLAB := 78
 const WOOD_SLAB := 79
 const GLASS_SLAB := 80
+# Sawn boards get their own slabs and stairs, one per timber rather than one
+# shared "plank" shape. A log already keeps its species through the saw (see
+# PLANK_OF); losing it again at the next cut would mean a pale house could not
+# have a pale staircase.
+const PLANK_SLAB := 130
+const PLANK_PALE_SLAB := 131
+const PLANK_DARK_SLAB := 132
+const PLANK_STAIR := 133
+const PLANK_PALE_STAIR := 134
+const PLANK_DARK_STAIR := 135
 
 ## material -> its slab. Drives both the Shaper's offered shapes and meshing.
 const SLAB_OF := {
 	ROCK: ROCK_SLAB, DIRT: DIRT_SLAB, GRASS: GRASS_SLAB, REGOLITH: REGOLITH_SLAB,
 	ICE: ICE_SLAB, SNOW: SNOW_SLAB, CRYSTAL: CRYSTAL_SLAB, METAL: METAL_SLAB,
 	WOOD: WOOD_SLAB, WOOD_PALE: WOOD_SLAB, WOOD_DARK: WOOD_SLAB, GLASS: GLASS_SLAB,
+	PLANK: PLANK_SLAB, PLANK_PALE: PLANK_PALE_SLAB, PLANK_DARK: PLANK_DARK_SLAB,
 }
 ## slab -> the material it is made of. Colour, name and surface texturing all
 ## come from the material, so a slab never needs its own palette entry.
@@ -379,17 +390,20 @@ const STAIR_OF := {
 	ROCK: ROCK_STAIR, DIRT: DIRT_STAIR, GRASS: GRASS_STAIR, REGOLITH: REGOLITH_STAIR,
 	ICE: ICE_STAIR, SNOW: SNOW_STAIR, CRYSTAL: CRYSTAL_STAIR, METAL: METAL_STAIR,
 	WOOD: WOOD_STAIR, WOOD_PALE: WOOD_STAIR, WOOD_DARK: WOOD_STAIR, GLASS: GLASS_STAIR,
+	PLANK: PLANK_STAIR, PLANK_PALE: PLANK_PALE_STAIR, PLANK_DARK: PLANK_DARK_STAIR,
 }
 const STAIR_MATERIAL := {
 	ROCK_STAIR: ROCK, DIRT_STAIR: DIRT, GRASS_STAIR: GRASS, REGOLITH_STAIR: REGOLITH,
 	ICE_STAIR: ICE, SNOW_STAIR: SNOW, CRYSTAL_STAIR: CRYSTAL, METAL_STAIR: METAL,
 	WOOD_STAIR: WOOD, GLASS_STAIR: GLASS,
+	PLANK_STAIR: PLANK, PLANK_PALE_STAIR: PLANK_PALE, PLANK_DARK_STAIR: PLANK_DARK,
 }
 
 const SLAB_MATERIAL := {
 	ROCK_SLAB: ROCK, DIRT_SLAB: DIRT, GRASS_SLAB: GRASS, REGOLITH_SLAB: REGOLITH,
 	ICE_SLAB: ICE, SNOW_SLAB: SNOW, CRYSTAL_SLAB: CRYSTAL, METAL_SLAB: METAL,
 	WOOD_SLAB: WOOD, GLASS_SLAB: GLASS,
+	PLANK_SLAB: PLANK, PLANK_PALE_SLAB: PLANK_PALE, PLANK_DARK_SLAB: PLANK_DARK,
 }
 
 
@@ -679,7 +693,9 @@ const DRILL_REACH := 1.6
 ## Empty means "nothing helps": glass, metal, crafted things -- a hand is as good
 ## as anything else on those, and gating them would only be busywork.
 static func material_class(id: int) -> String:
-	var b := bottom_of(id)
+	# Through the shape as well as through the stacking: a plank stair is wood,
+	# and an axe should know that.
+	var b := base_material_of(bottom_of(id))
 	if b in STONE_IDS or is_ore(b) or b == CRYSTAL:
 		return "rock"
 	if is_wood(b) or b in PLANK_IDS or is_leaf(b):
@@ -1402,6 +1418,8 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	CRYSTAL_STAIR, METAL_STAIR, WOOD_STAIR, GLASS_STAIR,
 	TORCH, GLOW_LAMP, EMBER_TORCH, MACHINE_CORE, WIRE,
 	PLANK, PLANK_PALE, PLANK_DARK,
+	PLANK_SLAB, PLANK_PALE_SLAB, PLANK_DARK_SLAB,
+	PLANK_STAIR, PLANK_PALE_STAIR, PLANK_DARK_STAIR,
 	# is_partable gates eighth-placement on this list, and a bed is soft on top.
 	CLOTH, LEATHER]
 
@@ -2037,14 +2055,25 @@ static func color_of(raw: int) -> Color:
 		return COLORS.get(STAIR_MATERIAL[id], Color.MAGENTA)
 	return COLORS.get(id, Color.MAGENTA)
 
+## A material's name used as an ADJECTIVE, in front of a shape. Almost always
+## just the material's own name -- but "Planks Slab" reads as a mistake where
+## "Plank Slab" reads as a thing, and the material's own name has to stay plural
+## because a plank is what four of them come off a log as.
+const SHAPE_PREFIX := {PLANK: "Plank", PLANK_PALE: "Pale Plank", PLANK_DARK: "Dark Plank"}
+
+
+static func shape_prefix(mat: int) -> String:
+	return str(SHAPE_PREFIX.get(mat, NAMES.get(mat, "Unknown")))
+
+
 static func name_of(raw: int) -> String:
 	if is_stacked_slab(raw):
 		return "%s + %s" % [name_of(bottom_of(raw)), name_of(top_slab_of(raw))]
 	var id := bottom_of(raw)
 	if SLAB_MATERIAL.has(id):
-		return "%s Slab" % NAMES.get(SLAB_MATERIAL[id], "Unknown")
+		return "%s Slab" % shape_prefix(int(SLAB_MATERIAL[id]))
 	if STAIR_MATERIAL.has(id):
 		var v := stair_variant_of(raw)
 		var t := " Stairs" if v == STAIR_STRAIGHT else " %s Stairs" % stair_variant_name(v)
-		return NAMES.get(STAIR_MATERIAL[id], "Unknown") + t
+		return shape_prefix(int(STAIR_MATERIAL[id])) + t
 	return NAMES.get(id, "Unknown")
