@@ -1129,7 +1129,7 @@ static func _emit_shaped(lo0: Vector3, gv: Vector3i, raw: int, planet: Planet,
 	var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
 	for b in shape_boxes(raw, up):
 		_emit_solid_box_cell(lo0 + b[0], lo0 + b[1], gv, mat,
-			planet, snap, verts, normals, colors, uvs, uv2s, cverts)
+			planet, snap, verts, normals, colors, uvs, uv2s, cverts, lo0)
 
 
 ## Every solid box a block occupies inside its own cell, as [[lo, hi], ...] in
@@ -1400,24 +1400,61 @@ static func _emit_water_cell(clo: Vector3, gv: Vector3i, up: Vector3, h: float,
 		_quad(q[0], q[1], q[2], q[3], nrm, col, wverts, wnormals, wcolors, wuvs, wuv2s, Blocks.WATER, s)
 
 
+## `cell_lo` is the corner of the CELL this box lives in, when the box does not
+## fill it. A neighbour can only hide a face that actually lies on the boundary
+## between the two cells; a face set back inside its own cell has open space in
+## front of it whatever the neighbour is. Leaving it out says "this box fills
+## its cell", which is true of every caller but the shaped ones.
 static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int, planet: Planet,
 		snap: Dictionary, verts: PackedVector3Array, normals: PackedVector3Array,
 		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array,
-		cverts: PackedVector3Array) -> void:
+		cverts: PackedVector3Array, cell_lo := Vector3(INF, INF, INF)) -> void:
 	var base := _block_color(planet, id)
+	var inset := cell_lo.x < INF
 	for fi in 6:
 		var n: Vector3i = _WFACE[fi]
+		var ax := fi / 2
+		# An open door is a panel against one jamb of a one-wide doorway, so the
+		# cell on BOTH sides of it is wall. Culling its inner face against that
+		# wall left the door see-through: you were looking at the back of its far
+		# face through a face that had never been drawn.
+		if inset:
+			var plane: float = hi[ax] if (fi % 2) == 0 else lo[ax]
+			var edge: float = cell_lo[ax] + (1.0 if (fi % 2) == 0 else 0.0)
+			if not is_equal_approx(plane, edge):
+				_emit_cell_face(lo, hi, gv, n, fi, id, base, snap, verts, normals,
+					colors, uvs, uv2s, cverts, true)
+				continue
 		var nid := _id_at(planet, snap, gv + n)
 		# A half-height neighbour cannot cover a full face, so it does not hide
 		# one -- otherwise a slab beside a block punches a hole in the wall.
 		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN and not Blocks.is_slab(nid) 				and not Blocks.is_stacked_slab(nid) and nid != Blocks.ROOF_SLAB 				and not Blocks.is_stair(Blocks.bottom_of(nid)) 				and not Blocks.is_leaf(Blocks.bottom_of(nid)):
 			continue  # only the faces exposed to open space are drawn
-		var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
-		var col := Color(base.r * s, base.g * s, base.b * s, base.a)
-		var nrm := Vector3(n)
-		var q := _box_face(lo, hi, fi)
-		_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors, uvs, uv2s, id, s,
-			_face_light(snap, gv, n), cverts)
+		_emit_cell_face(lo, hi, gv, n, fi, id, base, snap, verts, normals,
+			colors, uvs, uv2s, cverts)
+
+
+## One face of a box, shaded and lit. Split out of _emit_solid_box_cell so the
+## two ways a face can be decided to be visible share one way of drawing it.
+##
+## `inset` says the face is set back inside its own cell rather than sitting on
+## the boundary. Light for an ordinary face comes from the cell it faces INTO --
+## but an inset face may well be facing into a wall, so it takes whichever of the
+## two cells is brighter. Without that, a door panel drawn against a jamb would
+## be lit by the inside of the jamb, which is to say not at all.
+static func _emit_cell_face(lo: Vector3, hi: Vector3, gv: Vector3i, n: Vector3i, fi: int,
+		id: int, base: Color, snap: Dictionary, verts: PackedVector3Array,
+		normals: PackedVector3Array, colors: PackedColorArray, uvs: PackedVector2Array,
+		uv2s: PackedVector2Array, cverts: PackedVector3Array, inset := false) -> void:
+	var s := _face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
+	var col := Color(base.r * s, base.g * s, base.b * s, base.a)
+	var nrm := Vector3(n)
+	var q := _box_face(lo, hi, fi)
+	var light := _face_light(snap, gv, n)
+	if inset:
+		light = maxf(light, _face_light(snap, gv, Vector3i.ZERO))
+	_quad(q[0], q[1], q[2], q[3], nrm, col, verts, normals, colors, uvs, uv2s, id, s,
+		light, cverts)
 
 
 ## The mesh for an item's picture: this block on its own, every face showing.
