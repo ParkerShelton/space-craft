@@ -2065,14 +2065,18 @@ func _process(delta: float) -> void:
 	_underwater = move_toward(_underwater, uw_want, delta * 5.0)
 	if _underwater > 0.0:
 		var wpl: Planet = _world.nearest_planet(ppos)
-		var wcol: Color = wpl.color_of(Blocks.WATER) if wpl != null else Color(0.12, 0.38, 0.52)
-		wcol = wcol.darkened(0.45)
+		# The same softened hue the overlay uses, at a brightness that follows
+		# the day -- a fixed dark fog made a sunlit shallow pool as murky as a
+		# lake at midnight.
+		var wash: Color = Player.water_wash(wpl) if wpl != null else Color(0.8, 0.92, 1.0)
+		var wcol := Color.from_hsv(wash.h, wash.s, lerpf(0.10, 0.55, _day) * (1.0 - _underground))
 		_env.fog_enabled = true
 		_env.fog_light_color = _env.fog_light_color.lerp(wcol, _underwater)
-		_env.fog_depth_begin = lerpf(_env.fog_depth_begin, 0.5, _underwater)
-		_env.fog_depth_end = lerpf(_env.fog_depth_end, 26.0, _underwater)
-		_env.fog_density = lerpf(_env.fog_density, 1.0, _underwater)
-		_env.fog_sky_affect = _underwater
+		# Far enough to see a lake bed and the other bank of a pond by.
+		_env.fog_depth_begin = lerpf(_env.fog_depth_begin, 4.0, _underwater)
+		_env.fog_depth_end = lerpf(_env.fog_depth_end, 56.0, _underwater)
+		_env.fog_density = lerpf(_env.fog_density, 0.85, _underwater)
+		_env.fog_sky_affect = _underwater * 0.8
 
 	# Hide each planet's low-res LOD sphere when you're close to it (on/near the
 	# surface) so you never see it through gaps or at the horizon; show it far away.

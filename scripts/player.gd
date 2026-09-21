@@ -2152,8 +2152,18 @@ func _water_fx(delta: float, up: Vector3, in_water: bool) -> void:
 	_uw_mat.set_shader_parameter("strength", _uw_strength)
 	var p := world.nearest_planet(global_position) if world != null else null
 	if p != null:
-		var wc: Color = p.color_of(Blocks.WATER)
-		_uw_mat.set_shader_parameter("water_color", Vector3(wc.r, wc.g, wc.b))
+		var t := Player.water_wash(p)
+		_uw_mat.set_shader_parameter("water_color", Vector3(t.r, t.g, t.b))
+
+
+## The water's hue as something safe to tint a whole view with: full
+## brightness, saturation capped. A world's water colour is rolled freely and
+## drawn at half opacity over a lit sea bed, so what it LOOKS like from the bank
+## is far paler than its raw value -- used straight, a water that read as grey-
+## blue from above turned the view under it red.
+static func water_wash(p: Planet) -> Color:
+	var wc: Color = p.color_of(Blocks.WATER)
+	return Color.from_hsv(wc.h, minf(wc.s, 0.35), 1.0)
 
 
 ## Throw up a burst of droplets where the body met the water. Little cubes
