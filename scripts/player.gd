@@ -2895,15 +2895,37 @@ func _edit_block(_break_it: bool) -> void:
 ## that carries it. Everything green is a slow lottery ticket for everything
 ## else green nearby.
 func _drop_flora_seed(planet: Planet, kind: String, item: int) -> void:
+	var sp := _pick_flora(planet, kind)
+	if sp.is_empty():
+		return          # nothing grows here to have seeded it
+	_give_seeds(planet, sp, 1)
+	_toast("Found " + _seed_label(sp, planet))
+
+
+## Which plant a seed from `kind` turns out to be: mostly that one, now and then
+## another that grows here too.
+func _pick_flora(planet: Planet, kind: String) -> Dictionary:
 	var sp: Dictionary = planet.flora_of_kind(kind)
 	if randf() < Blocks.CROSS_SEED_CHANCE:
 		var other: Dictionary = planet.random_flora(randf())
 		if not other.is_empty():
 			sp = other
+	return sp
+
+
+## The seed a plant of `kind` would give, as an item not yet in anyone's hands:
+## {id, props, src, mat, label}, or empty. For something that DROPS its seed on
+## the ground -- a felled tree's leaves -- rather than handing it straight over.
+func _roll_flora_seed(planet: Planet, kind: String) -> Dictionary:
+	var sp := _pick_flora(planet, kind)
 	if sp.is_empty():
-		return          # nothing grows here to have seeded it
-	_give_seeds(planet, sp, 1)
-	_toast("Found " + _seed_label(sp, planet))
+		return {}
+	var give: int = Blocks.SAPLING if str(sp["kind"]) == "tree" else Blocks.SEEDS
+	return {"id": give,
+		"props": {"species": str(sp["key"]), "class": planet.planet_class()},
+		"src": planet.planet_name,
+		"mat": {"name": _seed_label(sp, planet), "color": Blocks.color_of(give)},
+		"label": _seed_label(sp, planet)}
 
 
 ## The seed item for a species, in the player's hands.
@@ -3715,6 +3737,9 @@ func _process_mining(delta: float) -> void:
 				# rotated stair or an axis-aligned log would otherwise come back
 				# as a packed value that can't be placed again.
 				_add_item(Blocks.bottom_of(id), 1)
+				# Cut through a trunk and what is above it comes down.
+				if Blocks.is_wood(Blocks.bottom_of(id)):
+					TreeFall.try_fell(planet, world, self, v)
 		elif ship != null:
 			ship.set_block(v, Blocks.AIR)
 			_add_item(Blocks.bottom_of(id), 1)
