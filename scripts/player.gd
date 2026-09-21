@@ -1773,6 +1773,13 @@ func _auto_step_up(up: Vector3, horiz: Vector3, delta: float) -> void:
 	# Nothing in the way? Then there is nothing to step onto.
 	if not test_move(xf, dir):
 		return
+	# Room to rise at all? The test below starts from the raised position, and
+	# under a ceiling that position is already inside it -- where a move is
+	# reported as unblocked, because nothing is in the way of a body that is
+	# already overlapping. That read as a ledge, and lifted you into whatever
+	# was over your head every frame you walked into a wall beneath it.
+	if test_move(xf, up * STEP_HEIGHT):
+		return
 	# Blocked down here but clear a step up means a ledge, not a wall.
 	var raised := xf
 	raised.origin += up * STEP_HEIGHT
