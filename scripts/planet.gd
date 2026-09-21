@@ -4233,6 +4233,9 @@ func chunk_of(v: Vector3i) -> Vector3i:
 ## which chunks exist is thousands of cells of geometry, and re-checking whether
 ## the ones we already chose have arrived is a dictionary lookup each.
 var _wanted := {}
+var _gen_cache := {}      # chunk -> its generated terrain; see Chunk.GEN_KEY
+var _bslot_cache := {}    # chunk -> its region slots
+var _depth_cache := {}    # chunk -> its skylight columns' depths; see Chunk.DEPTH_KEY
 var _unload_later := {}   # left range while still building; see _unload_stragglers
 var _stream_last_cc0 := Vector3i(0x7fffffff, 0, 0)  # sentinel: never a real chunk coord
 var _stream_last_rd := -1
@@ -4304,6 +4307,9 @@ func _stream_full(cc0: Vector3i, rd: int) -> void:
 			node.queue_free()
 			# Nothing needs stand-in collision in a chunk that is gone.
 			_clear_temp_colliders(cc, true)
+			_gen_cache.erase(cc)
+			_bslot_cache.erase(cc)
+			_depth_cache.erase(cc)
 	_wanted = wanted
 	_drop_unwanted_queued()
 	_sort_load_queue(cc0)
@@ -4371,6 +4377,9 @@ func _unload_stragglers() -> void:
 			loaded_chunks.erase(cc)
 			(node as Node).queue_free()
 			_clear_temp_colliders(cc, true)
+			_gen_cache.erase(cc)
+			_bslot_cache.erase(cc)
+			_depth_cache.erase(cc)
 
 
 func _drop_unwanted_queued() -> void:
@@ -4475,6 +4484,7 @@ func process_load_queue(_budget: int) -> int:
 		if _inflight.has(cc):
 			WorkerThreadPool.wait_for_task_completion(_inflight[cc])
 			_inflight.erase(cc)
+		_keep_generated(cc, data)
 		var node = loaded_chunks.get(cc)
 		if node != null and is_instance_valid(node):
 			node.apply_mesh_data(data)
@@ -4543,8 +4553,31 @@ func _exit_tree() -> void:
 
 
 # Runs on a worker thread: pure computation, results deposited under a mutex.
+## Keep what a build learned about a chunk's terrain, for as long as the chunk
+## is loaded. Only while it is loaded: a chunk that is kept rebuilding is one
+## near the player, and holding the whole streamed world's terrain would cost
+## memory for chunks nobody will touch.
+func _keep_generated(cc: Vector3i, data: Dictionary) -> void:
+	if not loaded_chunks.has(cc):
+		return
+	if data.has(Chunk.GEN_OUT):
+		_gen_cache[cc] = data[Chunk.GEN_OUT]
+	if data.has(Chunk.BSL_OUT):
+		_bslot_cache[cc] = data[Chunk.BSL_OUT]
+	if data.has(Chunk.DEPTH_OUT):
+		_depth_cache[cc] = data[Chunk.DEPTH_OUT]
+
+
 func _build_task(cc: Vector3i, snap: Dictionary, wsnap: Dictionary) -> void:
 	var data := Chunk.build_mesh_data(self, cc, snap, wsnap)
+	# Carried back to the main thread with the mesh, and stored there -- the
+	# caches are read while taking snapshots, which happens on the main thread.
+	if snap.has(Chunk.GEN_OUT):
+		data[Chunk.GEN_OUT] = snap[Chunk.GEN_OUT]
+	if snap.has(Chunk.BSL_OUT):
+		data[Chunk.BSL_OUT] = snap[Chunk.BSL_OUT]
+	if snap.has(Chunk.DEPTH_OUT):
+		data[Chunk.DEPTH_OUT] = snap[Chunk.DEPTH_OUT]
 	_ready_mutex.lock()
 	_ready_data[cc] = data
 	_ready_mutex.unlock()
@@ -4568,6 +4601,22 @@ func _edits_snapshot(cc: Vector3i) -> Dictionary:
 		Vector3i(1, 0, -1), Vector3i(1, 0, 0), Vector3i(1, 0, 1),
 		Vector3i(1, 1, -1), Vector3i(1, 1, 0), Vector3i(1, 1, 1)]
 	var parts := {}
+	# The generated terrain of every neighbour that has been built, so neither
+	# this chunk nor the lighting and culling that look past its edges have to
+	# ask the generator again. Packed arrays are copy-on-write: handing them to
+	# a worker shares them without copying and without a race.
+	var gen := {}
+	for off in OFFS:
+		var g = _gen_cache.get(cc + off)
+		if g != null:
+			gen[cc + off] = g
+	snap[Chunk.GEN_KEY] = gen
+	var bs = _bslot_cache.get(cc)
+	if bs != null:
+		snap[Chunk.BSL_KEY] = bs
+	var dp = _depth_cache.get(cc)
+	if dp != null:
+		snap[Chunk.DEPTH_KEY] = dp
 	for off in OFFS:
 		var d = _edits_by_chunk.get(cc + off)
 		if d != null:
@@ -4735,6 +4784,7 @@ func _apply_ready_edits() -> void:
 		if _inflight.has(cc):
 			WorkerThreadPool.wait_for_task_completion(_inflight[cc])
 			_inflight.erase(cc)
+		_keep_generated(cc, data)
 		var node = loaded_chunks.get(cc)
 		if node != null and is_instance_valid(node):
 			node.apply_mesh_data(data)

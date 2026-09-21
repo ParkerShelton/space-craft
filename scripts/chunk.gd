@@ -266,6 +266,7 @@ func apply_mesh_data(data: Dictionary) -> void:
 const PARTS_KEY := "__parts"
 
 static var _FULL: PackedByteArray
+static var _SPECIAL: PackedByteArray  # drawn by a pass other than the greedy one
 static var _SEETHRU: PackedByteArray
 # Leaves are see-through, so without this two adjacent leaves would EACH draw a
 # face toward the other. Those quads are coplanar and, under cull_disabled, both
@@ -281,6 +282,8 @@ static func _static_init() -> void:
 	_SEETHRU.resize(256)
 	_LEAF = PackedByteArray()
 	_LEAF.resize(256)
+	_SPECIAL = PackedByteArray()
+	_SPECIAL.resize(256)
 	for id in 256:
 		var full: bool = not (id == Blocks.AIR or id == Blocks.WATER
 			or id == Blocks.DOOR or id == Blocks.DOOR_OPEN or id == Blocks.ROOF_SLAB
@@ -293,11 +296,29 @@ static func _static_init() -> void:
 		# they must not hide the block behind them.
 		_SEETHRU[id] = 1 if (not full or Blocks.is_leaf(id)) else 0
 		_LEAF[id] = 1 if Blocks.is_leaf(id) else 0
+		# Keyed on the low byte, which for every packed id is the block itself
+		# (a stacked slab's is its lower slab), so this is a superset of what
+		# each pass then checks for in full.
+		_SPECIAL[id] = 1 if (id == Blocks.WATER or Blocks.is_stair(id)
+			or id == Blocks.DOOR or id == Blocks.DOOR_OPEN
+			or id == Blocks.ROOF_SLAB or Blocks.is_slab(id)
+			or Blocks.is_light(id) or id == Blocks.WIRE
+			or id == Blocks.TALL_GRASS or Blocks.is_ore(id)) else 0
 
 
 static func _id_at(planet: Planet, snap: Dictionary, v: Vector3i) -> int:
 	if snap.has(v):
 		return snap[v]
+	# What the terrain generator already said about this chunk, if it has been
+	# built before. See GEN_KEY.
+	var gen = snap.get(GEN_KEY)
+	if gen != null:
+		var arr = (gen as Dictionary).get(Vector3i(v.x >> CS_SHIFT, v.y >> CS_SHIFT, v.z >> CS_SHIFT))
+		if arr != null:
+			var a: PackedInt32Array = arr
+			if a.size() == 1:
+				return a[0]
+			return a[(v.x & CS_MASK) + ((v.y & CS_MASK) << CS_SHIFT) + ((v.z & CS_MASK) << (CS_SHIFT * 2))]
 	return planet.generation_sample(v.x, v.y, v.z, snap.get(TCACHE_KEY))
 
 
@@ -326,6 +347,28 @@ const CROP_KEY := "crops"
 ## Lives in the snapshot because the snapshot is already private to one worker
 ## task, which is exactly the lifetime and the isolation this needs.
 const TCACHE_KEY := "tcache"
+## The terrain as GENERATED -- no edits -- for this chunk and its neighbours, as
+## chunk -> PackedInt32Array in the same x-fastest order as a build walks it.
+## One element instead of CS^3 when the whole chunk is one block.
+##
+## Terrain is a pure function of the world seed, so this never goes stale. It
+## is kept because a chunk is rebuilt every time a block in it changes, and
+## asking the generator about all four thousand of its cells again -- plus the
+## cells around it the lighting and the face culling look at -- was most of the
+## quarter of a second between breaking a block and seeing it go.
+const GEN_KEY := "gen"
+## This chunk's region slots, from the last build. 0 means not asked yet.
+const BSL_KEY := "bslot"
+## Filled in by a build that had no cached terrain, for the planet to keep.
+const GEN_OUT := "gen_out"
+const BSL_OUT := "bslot_out"
+## How far below the terrain surface the top of each skylight column starts,
+## SKY_DIM * SKY_DIM of them. Asked of the height noise once per column per
+## build -- two thousand times -- and like the terrain it never changes.
+const DEPTH_KEY := "depths"
+const DEPTH_OUT := "depths_out"
+const CS_SHIFT := 4          # log2(CS): cell -> chunk by shifting, not dividing
+const CS_MASK := CS - 1
 ## How far a campfire throws light. A shade under a torch: it is a hearth, not
 ## a lamp on a pole.
 const FIRE_LIGHT := 10
@@ -515,8 +558,32 @@ static func _compute_skylight(planet: Planet, snap: Dictionary, base: Vector3i) 
 	lip.resize(SKY_DIM * SKY_DIM)
 	for i in lip.size():
 		lip[i] = -1
+	# Which COLUMNS somebody has built or dug in. The fast path below -- write
+	# the whole run of open sky above the terrain in one go -- is only wrong in
+	# a column that has an edit in it, and it used to be switched off for every
+	# column the moment there was an edit anywhere in the neighbourhood. Which
+	# is to say: always, near anything the player had ever touched, and so on
+	# every rebuild that breaking or placing a block causes -- two thousand
+	# columns walked a block at a time to find the one that had changed.
+	var ecol := PackedByteArray()
+	ecol.resize(SKY_DIM * SKY_DIM)
+	if edited:
+		for k in snap:
+			if not (k is Vector3i):
+				continue
+			var l: Vector3i = (k as Vector3i) - origin
+			var ea: int = l[la]
+			var eb: int = l[lb]
+			if ea >= 0 and eb >= 0 and ea < SKY_DIM and eb < SKY_DIM:
+				ecol[ea + eb * SKY_DIM] = 1
+	var depths: PackedFloat64Array = snap.get(DEPTH_KEY, PackedFloat64Array())
+	var have_depths := depths.size() == SKY_DIM * SKY_DIM
+	var fresh_depths := PackedFloat64Array()
+	if not have_depths:
+		fresh_depths.resize(SKY_DIM * SKY_DIM)
 	for a in SKY_DIM:
 		for b in SKY_DIM:
+			var col_ed: bool = ecol[a + b * SKY_DIM] == 1
 			var gv := origin
 			gv[ax] += t_top
 			gv[la] += a
@@ -524,7 +591,12 @@ static func _compute_skylight(planet: Planet, snap: Dictionary, base: Vector3i) 
 			# Start at the surface, which for a buried region is above the top of
 			# it. Depth falls by one per block climbed, so where it reaches zero is
 			# one subtraction rather than a walk.
-			var depth := _depth_of(planet, gv)
+			var depth: float
+			if have_depths:
+				depth = depths[a + b * SKY_DIM]
+			else:
+				depth = _depth_of(planet, gv)
+				fresh_depths[a + b * SKY_DIM] = depth
 			var d := 0
 			if depth > 0.0:
 				var climb := int(ceil(depth))
@@ -542,7 +614,7 @@ static func _compute_skylight(planet: Planet, snap: Dictionary, base: Vector3i) 
 			# rather than walked a block at a time. At the surface that is a dozen
 			# cells per column and the walk around them was the single most
 			# expensive thing in the build.
-			if dep < -1.0 and not edited:
+			if dep < -1.0 and not col_ed:
 				var air := mini(int(floor(-dep)), SKY_DIM - maxi(d, 0))
 				if air > 0:
 					var dd := maxi(d, 0)
@@ -561,7 +633,7 @@ static func _compute_skylight(planet: Planet, snap: Dictionary, base: Vector3i) 
 				# those are. Skipping the sample here is most of what this costs at
 				# the surface, where a column crosses twelve blocks of open sky
 				# before it reaches the ground.
-				if dep > -0.5 or (edited and snap.has(gv)):
+				if dep > -0.5 or (col_ed and snap.has(gv)):
 					if not _sky_open(planet, snap, gv):
 						break
 				if d >= 0:
@@ -574,6 +646,8 @@ static func _compute_skylight(planet: Planet, snap: Dictionary, base: Vector3i) 
 				d += 1
 				steps += 1
 			lip[a + b * SKY_DIM] = deepest
+	if not have_depths:
+		snap[DEPTH_OUT] = fresh_depths
 
 	# --- pass two: spread it sideways ---------------------------------------
 	# Started at the DARK cells beside an open column rather than at the open
@@ -659,22 +733,65 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 	var bslot := PackedByteArray()
 	bslot.resize(CS * CS * CS)
 	var any_solid := false
+	# The generated terrain, from the last time this chunk was built if there
+	# was one -- see GEN_KEY. Only a chunk's first build pays for the noise.
+	var own_gen: PackedInt32Array
+	var have_gen := false
+	var gd = snap.get(GEN_KEY)
+	if gd != null and (gd as Dictionary).has(cc):
+		own_gen = (gd as Dictionary)[cc]
+		have_gen = true
+	var own_bsl: PackedByteArray = snap.get(BSL_KEY, PackedByteArray())
+	var have_bsl := own_bsl.size() == CS * CS * CS
+	var fresh_gen := PackedInt32Array()
+	if not have_gen:
+		fresh_gen.resize(CS * CS * CS)
+	var uniform := true
+	var tc = snap.get(TCACHE_KEY)
+	# Every cell that one of the passes after the greedy mesher might draw:
+	# water, stairs and doors, slabs, lights, conduit, ground cover, ore. Those
+	# passes each used to walk all four thousand cells to find the handful that
+	# concerned them -- six sweeps of the whole chunk, most of a rebuild's time
+	# after the lighting, spent looking at plain rock. Collected here, in the
+	# same order the sweeps went in, so what gets drawn and in what order is
+	# unchanged.
+	var special := PackedInt32Array()
 	var i := 0
 	for z in CS:
 		for y in CS:
 			for x in CS:
 				var gvi := Vector3i(base.x + x, base.y + y, base.z + z)
-				var id := _id_at(planet, snap, gvi)
+				var gid: int
+				if have_gen:
+					gid = own_gen[0] if own_gen.size() == 1 else own_gen[i]
+				else:
+					gid = planet.generation_sample(gvi.x, gvi.y, gvi.z, tc)
+					fresh_gen[i] = gid
+					if gid != fresh_gen[0]:
+						uniform = false
+				var id: int = snap[gvi] if snap.has(gvi) else gid
 				ids[i] = id
 				# Which region colours this cell, if any. Asked only for the two
 				# materials a region actually tints -- its topsoil and its
 				# subsoil -- because it is a noise lookup and most of a chunk is
 				# rock that would never use the answer.
 				if planet.biome_tints(id):
-					bslot[i] = planet.biome_slot_at(gvi)
+					var sl := own_bsl[i] if have_bsl else 0
+					if sl == 0:
+						sl = planet.biome_slot_at(gvi)
+					bslot[i] = sl
 				if id != Blocks.AIR and id != Blocks.DOOR_OPEN:
 					any_solid = true
+				if _SPECIAL[id & Blocks.ID_MASK] == 1:
+					special.append(i)
 				i += 1
+	# Handed back for the planet to keep. A chunk of nothing but air, or nothing
+	# but rock, keeps one number rather than four thousand copies of it.
+	if not have_gen:
+		if uniform:
+			fresh_gen.resize(1)
+		snap[GEN_OUT] = fresh_gen
+	snap[BSL_OUT] = bslot
 
 	# opaque geometry (surface 0, collidable) and water geometry (surface 1, see-through)
 	var verts := PackedVector3Array()
@@ -721,145 +838,140 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 
 	# water: one box per cell, its height set by the water level (shallow water
 	# renders lower). Fill is along the cell's outward axis (radial-snapped).
-	var idx := 0
-	for z in CS:
-		for y in CS:
-			for x in CS:
-				if ids[idx] == Blocks.WATER:
-					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
-					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
-					_emit_water_cell(Vector3(x, y, z), gv, up, _water_h(wsnap, gv),
-						planet, snap, wsnap, wverts, wnormals, wcolors, wuvs, wuv2s,
-						wetfall)
-				idx += 1
+	for idx in special:
+		var x: int = idx & CS_MASK
+		var y: int = (idx >> CS_SHIFT) & CS_MASK
+		var z: int = idx >> (CS_SHIFT * 2)
+		if ids[idx] == Blocks.WATER:
+			var gv := Vector3i(base.x + x, base.y + y, base.z + z)
+			var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
+			_emit_water_cell(Vector3(x, y, z), gv, up, _water_h(wsnap, gv),
+				planet, snap, wsnap, wverts, wnormals, wcolors, wuvs, wuv2s,
+				wetfall)
 
 	# roof slabs: a half-height OPAQUE box per cell (real geometry, not just a
 	# smaller-looking color) -- same partial-height technique as water above, but
 	# written into the opaque arrays so it collides and renders solid, giving
 	# roofs a thinner, shingle-like edge instead of a full-cube block silhouette.
-	idx = 0
-	for z in CS:
-		for y in CS:
-			for x in CS:
-				# Half-height blocks: roof slabs and every crafted material slab.
-				# All share one path -- a real partial-height box, so they render
-				# AND collide at half height rather than just looking short.
-				var hid := ids[idx]
-				if Blocks.is_stair(Blocks.bottom_of(hid)) or Blocks.is_door(hid):
-					_emit_shaped(Vector3(x, y, z),
-						Vector3i(base.x + x, base.y + y, base.z + z), hid,
-						planet, snap, verts, normals, colors, uvs, uv2s, cverts)
-				elif hid == Blocks.ROOF_SLAB or Blocks.is_slab(hid) or Blocks.is_stacked_slab(hid):
-					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
-					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
-					var lo := Vector3(x, y, z)
-					var hi := Vector3(x + 1, y + 1, z + 1)
-					var h := 0.5
-					# The flat half sits on the LOCAL down side, which on a cube
-					# or sphere planet is whichever axis is "up" here.
-					if up.x > 0.5: hi.x = lo.x + h
-					elif up.x < -0.5: lo.x = hi.x - h
-					elif up.y > 0.5: hi.y = lo.y + h
-					elif up.y < -0.5: lo.y = hi.y - h
-					elif up.z > 0.5: hi.z = lo.z + h
-					elif up.z < -0.5: lo.z = hi.z - h
-					# Meshed under its MATERIAL id, so a rock slab is coloured and
-					# textured exactly like rock without needing its own entries.
-					if Blocks.is_stacked_slab(hid):
-						# Two different slabs sharing this voxel: draw each half
-						# in its own material. Same-material pairs never reach
-						# here -- they merge into the plain full block instead.
-						var t_lo := lo
-						var t_hi := hi
-						if up.x > 0.5: t_lo.x = hi.x; t_hi.x = lo.x + 1.0
-						elif up.x < -0.5: t_hi.x = lo.x; t_lo.x = hi.x - 1.0
-						elif up.y > 0.5: t_lo.y = hi.y; t_hi.y = lo.y + 1.0
-						elif up.y < -0.5: t_hi.y = lo.y; t_lo.y = hi.y - 1.0
-						elif up.z > 0.5: t_lo.z = hi.z; t_hi.z = lo.z + 1.0
-						elif up.z < -0.5: t_hi.z = lo.z; t_lo.z = hi.z - 1.0
-						_emit_solid_box_cell(lo, hi, gv,
-							Blocks.base_material_of(Blocks.bottom_of(hid)),
-							planet, snap, verts, normals, colors, uvs, uv2s, cverts)
-						_emit_solid_box_cell(t_lo, t_hi, gv,
-							Blocks.base_material_of(Blocks.top_slab_of(hid)),
-							planet, snap, verts, normals, colors, uvs, uv2s, cverts)
-					else:
-						_emit_solid_box_cell(lo, hi, gv, Blocks.base_material_of(hid),
-							planet, snap, verts, normals, colors, uvs, uv2s, cverts)
-				idx += 1
+	for idx in special:
+		var x: int = idx & CS_MASK
+		var y: int = (idx >> CS_SHIFT) & CS_MASK
+		var z: int = idx >> (CS_SHIFT * 2)
+		# Half-height blocks: roof slabs and every crafted material slab.
+		# All share one path -- a real partial-height box, so they render
+		# AND collide at half height rather than just looking short.
+		var hid := ids[idx]
+		if Blocks.is_stair(Blocks.bottom_of(hid)) or Blocks.is_door(hid):
+			_emit_shaped(Vector3(x, y, z),
+				Vector3i(base.x + x, base.y + y, base.z + z), hid,
+				planet, snap, verts, normals, colors, uvs, uv2s, cverts)
+		elif hid == Blocks.ROOF_SLAB or Blocks.is_slab(hid) or Blocks.is_stacked_slab(hid):
+			var gv := Vector3i(base.x + x, base.y + y, base.z + z)
+			var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
+			var lo := Vector3(x, y, z)
+			var hi := Vector3(x + 1, y + 1, z + 1)
+			var h := 0.5
+			# The flat half sits on the LOCAL down side, which on a cube
+			# or sphere planet is whichever axis is "up" here.
+			if up.x > 0.5: hi.x = lo.x + h
+			elif up.x < -0.5: lo.x = hi.x - h
+			elif up.y > 0.5: hi.y = lo.y + h
+			elif up.y < -0.5: lo.y = hi.y - h
+			elif up.z > 0.5: hi.z = lo.z + h
+			elif up.z < -0.5: lo.z = hi.z - h
+			# Meshed under its MATERIAL id, so a rock slab is coloured and
+			# textured exactly like rock without needing its own entries.
+			if Blocks.is_stacked_slab(hid):
+				# Two different slabs sharing this voxel: draw each half
+				# in its own material. Same-material pairs never reach
+				# here -- they merge into the plain full block instead.
+				var t_lo := lo
+				var t_hi := hi
+				if up.x > 0.5: t_lo.x = hi.x; t_hi.x = lo.x + 1.0
+				elif up.x < -0.5: t_hi.x = lo.x; t_lo.x = hi.x - 1.0
+				elif up.y > 0.5: t_lo.y = hi.y; t_hi.y = lo.y + 1.0
+				elif up.y < -0.5: t_hi.y = lo.y; t_lo.y = hi.y - 1.0
+				elif up.z > 0.5: t_lo.z = hi.z; t_hi.z = lo.z + 1.0
+				elif up.z < -0.5: t_hi.z = lo.z; t_lo.z = hi.z - 1.0
+				_emit_solid_box_cell(lo, hi, gv,
+					Blocks.base_material_of(Blocks.bottom_of(hid)),
+					planet, snap, verts, normals, colors, uvs, uv2s, cverts)
+				_emit_solid_box_cell(t_lo, t_hi, gv,
+					Blocks.base_material_of(Blocks.top_slab_of(hid)),
+					planet, snap, verts, normals, colors, uvs, uv2s, cverts)
+			else:
+				_emit_solid_box_cell(lo, hi, gv, Blocks.base_material_of(hid),
+					planet, snap, verts, normals, colors, uvs, uv2s, cverts)
 
 	# light blocks: a torch is a small standing post rather than a full cube, and
 	# both are recorded so the chunk can hang real lights on them below.
 	var lights := PackedVector3Array()
-	idx = 0
-	for z in CS:
-		for y in CS:
-			for x in CS:
-				var lid := ids[idx]
-				if Blocks.is_light(Blocks.bottom_of(lid)):
-					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
-					var lo := Vector3(x, y, z)
-					if Blocks.bottom_of(lid) != Blocks.GLOW_LAMP:
-						var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
-						var tb := torch_box(up)
-						var mid: Vector3 = lo + (tb[0] as Vector3)
-						var thin: Vector3 = lo + (tb[1] as Vector3)
-						_emit_free_box(mid, thin, planet.color_of(lid),
-							lid, verts, normals, colors, uvs, uv2s, 1.0)
-					else:
-						_emit_solid_box_cell(lo, lo + Vector3.ONE, gv, lid,
-							planet, snap, verts, normals, colors, uvs, uv2s, cverts)
-					lights.append(Vector3(x, y, z) + Vector3(0.5, 0.5, 0.5))
-				idx += 1
+	for idx in special:
+		var x: int = idx & CS_MASK
+		var y: int = (idx >> CS_SHIFT) & CS_MASK
+		var z: int = idx >> (CS_SHIFT * 2)
+		var lid := ids[idx]
+		if Blocks.is_light(Blocks.bottom_of(lid)):
+			var gv := Vector3i(base.x + x, base.y + y, base.z + z)
+			var lo := Vector3(x, y, z)
+			if Blocks.bottom_of(lid) != Blocks.GLOW_LAMP:
+				var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
+				var tb := torch_box(up)
+				var mid: Vector3 = lo + (tb[0] as Vector3)
+				var thin: Vector3 = lo + (tb[1] as Vector3)
+				_emit_free_box(mid, thin, planet.color_of(lid),
+					lid, verts, normals, colors, uvs, uv2s, 1.0)
+			else:
+				_emit_solid_box_cell(lo, lo + Vector3.ONE, gv, lid,
+					planet, snap, verts, normals, colors, uvs, uv2s, cverts)
+			lights.append(Vector3(x, y, z) + Vector3(0.5, 0.5, 0.5))
 
 	# conduit: thin surface-mounted runs. Free boxes, so they are not culled
 	# against the wall they hug and carry no collision -- you walk through wiring.
-	idx = 0
-	for z in CS:
-		for y in CS:
-			for x in CS:
-				var wid := ids[idx]
-				if Blocks.bottom_of(wid) == Blocks.WIRE:
-					var gv := Vector3i(base.x + x, base.y + y, base.z + z)
-					var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
-					var col := planet.color_of(Blocks.WIRE)
-					# Reach toward neighbouring conduit only, so arms never
-					# poke into the wall the run is stapled to.
-					var conn := 0
-					for fi2 in 6:
-						var nraw := _id_at(planet, snap, gv + _WFACE[fi2])
-						if Blocks.bottom_of(nraw) != Blocks.WIRE:
-							continue
-						conn |= 1 << fi2
-						# Turning a corner (floor run meeting a wall run) the two
-						# cables lie on different planes. Reach toward the
-						# neighbour's mounting face as well, which is the elbow
-						# that brings them together instead of leaving a gap.
-						conn |= Blocks.wire_faces_of(nraw)
-					for bx in shape_boxes(wid, up, conn):
-						_emit_free_box(Vector3(x, y, z) + (bx[0] as Vector3),
-							Vector3(x, y, z) + (bx[1] as Vector3),
-							col, Blocks.WIRE, verts, normals, colors, uvs, uv2s,
-							_face_light(snap, gv, Vector3i.ZERO))
-				idx += 1
+	for idx in special:
+		var x: int = idx & CS_MASK
+		var y: int = (idx >> CS_SHIFT) & CS_MASK
+		var z: int = idx >> (CS_SHIFT * 2)
+		var wid := ids[idx]
+		if Blocks.bottom_of(wid) == Blocks.WIRE:
+			var gv := Vector3i(base.x + x, base.y + y, base.z + z)
+			var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
+			var col := planet.color_of(Blocks.WIRE)
+			# Reach toward neighbouring conduit only, so arms never
+			# poke into the wall the run is stapled to.
+			var conn := 0
+			for fi2 in 6:
+				var nraw := _id_at(planet, snap, gv + _WFACE[fi2])
+				if Blocks.bottom_of(nraw) != Blocks.WIRE:
+					continue
+				conn |= 1 << fi2
+				# Turning a corner (floor run meeting a wall run) the two
+				# cables lie on different planes. Reach toward the
+				# neighbour's mounting face as well, which is the elbow
+				# that brings them together instead of leaving a gap.
+				conn |= Blocks.wire_faces_of(nraw)
+			for bx in shape_boxes(wid, up, conn):
+				_emit_free_box(Vector3(x, y, z) + (bx[0] as Vector3),
+					Vector3(x, y, z) + (bx[1] as Vector3),
+					col, Blocks.WIRE, verts, normals, colors, uvs, uv2s,
+					_face_light(snap, gv, Vector3i.ZERO))
 
 	# tall grass: two quads crossed in an X per cell, the way every block game
 	# draws ground cover. Its own arrays, its own surface, no collision.
-	idx = 0
-	for z in CS:
-		for y in CS:
-			for x in CS:
-				if Blocks.bottom_of(ids[idx]) == Blocks.TALL_GRASS:
-					var ggv := Vector3i(base.x + x, base.y + y, base.z + z)
-					_emit_grass(Vector3(x, y, z),
-						planet._axis_of(Vector3(ggv) + Vector3(0.5, 0.5, 0.5)),
-						# The colour of the ground it stands on, not a fixed green: every
-						# planet tints its own soil, and grass that ignored that sat on
-						# the surface looking like it belonged to a different world.
-						planet.color_of(planet.pal_top), ggv,
-						_sky_depth(snap, ggv), 1.0,
-						gverts, gnormals, gcolors, guvs)
-				idx += 1
+	for idx in special:
+		var x: int = idx & CS_MASK
+		var y: int = (idx >> CS_SHIFT) & CS_MASK
+		var z: int = idx >> (CS_SHIFT * 2)
+		if Blocks.bottom_of(ids[idx]) == Blocks.TALL_GRASS:
+			var ggv := Vector3i(base.x + x, base.y + y, base.z + z)
+			_emit_grass(Vector3(x, y, z),
+				planet._axis_of(Vector3(ggv) + Vector3(0.5, 0.5, 0.5)),
+				# The colour of the ground it stands on, not a fixed green: every
+				# planet tints its own soil, and grass that ignored that sat on
+				# the surface looking like it belonged to a different world.
+				planet.color_of(planet.pal_top), ggv,
+				_sky_depth(snap, ggv), 1.0,
+				gverts, gnormals, gcolors, guvs)
 
 	# planted cells: a crop is grass whose height is how far along it is, and a
 	# young tree is a skinny post -- thinner than a log on purpose, so a sapling
@@ -955,15 +1067,14 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 					verts, normals, colors, uvs, uv2s, lit, cverts, skip)
 
 	# ore lumps: decorative geometry on exposed ore faces (see _emit_ore_chunks)
-	idx = 0
-	for z in CS:
-		for y in CS:
-			for x in CS:
-				if Blocks.is_ore(ids[idx]):
-					_emit_ore_chunks(Vector3(x, y, z),
-						Vector3i(base.x + x, base.y + y, base.z + z),
-						ids[idx], planet, snap, verts, normals, colors, uvs, uv2s)
-				idx += 1
+	for idx in special:
+		var x: int = idx & CS_MASK
+		var y: int = (idx >> CS_SHIFT) & CS_MASK
+		var z: int = idx >> (CS_SHIFT * 2)
+		if Blocks.is_ore(ids[idx]):
+			_emit_ore_chunks(Vector3(x, y, z),
+				Vector3i(base.x + x, base.y + y, base.z + z),
+				ids[idx], planet, snap, verts, normals, colors, uvs, uv2s)
 
 	return {"verts": verts, "normals": normals, "colors": colors, "uvs": uvs, "uv2s": uv2s, "lights": lights,
 		"cverts": cverts, "wverts": wverts, "wnormals": wnormals, "wcolors": wcolors,
