@@ -69,6 +69,9 @@ const _NAME_SUF := ["dis", "nis", "ara", "ex", "os", "une", "ia", "or", "eth", "
 var _world: WorldManager
 var _env: Environment
 var _sky_mat: ShaderMaterial
+var _weather: Weather
+## How grey the sky is from weather, 0..1, this frame. Rain and fog both.
+var _overcast := 0.0
 var _sun: DirectionalLight3D
 var _atmo := 0.0
 var _day := 1.0                    # 0 = night, 1 = full day (eased, see _process)
@@ -194,6 +197,10 @@ func _ready() -> void:
 	add_child(world)
 	_world = world
 	world.planet_generator = Callable(self, "_generate_planets")
+	_weather = Weather.new()
+	_weather.name = "Weather"
+	_weather.world = world
+	add_child(_weather)
 	# Fixed name: an RPC is addressed by NODE PATH, so both machines have to agree
 	# on where this node lives before a single message can be sent.
 	_net = Net.new()
@@ -1950,15 +1957,31 @@ func _process(delta: float) -> void:
 	# blue behind kept the sky milky and drowned the stars.
 	acol = acol.lerp(Color(0.008, 0.011, 0.028), (1.0 - _day) * 0.97)
 
+	# Cloud: rain or fog greys the sky over -- dark grey at night, never black
+	# enough to lose the difference between a clear night and a wet one.
+	_overcast = 0.0
+	if _weather != null:
+		_overcast = maxf(_weather.precip, _weather.fog * 0.75) * _atmo
+	if _overcast > 0.0:
+		var grey := Color(0.46, 0.49, 0.54) * lerpf(0.05, 1.0, _day)
+		acol = acol.lerp(grey, _overcast * 0.85)
 	# The horizon only pales toward white while the sun is actually up --
 	# otherwise it stayed bright at midnight and lit the skyline from nowhere.
-	var hor := acol.lerp(Color(1, 1, 1), 0.55 * _day)
+	var hor := acol.lerp(Color(1, 1, 1), 0.55 * _day * (1.0 - _overcast * 0.6))
 	_sky_mat.set_shader_parameter("atmo", _atmo)
 	_sky_mat.set_shader_parameter("atmo_up", up)
 	_sky_mat.set_shader_parameter("sky_color", Vector3(acol.r, acol.g, acol.b))
 	_sky_mat.set_shader_parameter("horizon_color", Vector3(hor.r, hor.g, hor.b))
 	_sky_mat.set_shader_parameter("sun_dir", -sun_dir)
 	_sky_mat.set_shader_parameter("day", _day)
+	# Auroras: night only, only on worlds that have them, and not through cloud.
+	if _weather != null:
+		var au := _weather.aurora * (1.0 - _day) * _atmo * (1.0 - _overcast)
+		_sky_mat.set_shader_parameter("aurora", au)
+		var ca := _weather.aurora_color
+		var cb := _weather.aurora_color2
+		_sky_mat.set_shader_parameter("aurora_color", Vector3(ca.r, ca.g, ca.b))
+		_sky_mat.set_shader_parameter("aurora_color2", Vector3(cb.r, cb.g, cb.b))
 	# Below the terrain the sky is blacked out. A giant cavern can be wider than
 	# the streamed chunk radius, and an unloaded chunk shows whatever is behind
 	# it -- which was stars and neighbouring planets, seen straight through the
@@ -1975,7 +1998,8 @@ func _process(delta: float) -> void:
 	# Never let night reach true black: this game drains O2 and applies hazard
 	# damage, and being unable to see on top of that is punishing before you
 	# have any light source.
-	_env.ambient_light_energy = lerpf(0.27, 0.6, _atmo) * lerpf(0.20, 1.0, _day)
+	_env.ambient_light_energy = lerpf(0.27, 0.6, _atmo) * lerpf(0.20, 1.0, _day) \
+		* (1.0 - 0.3 * _overcast)
 	# Only follow the sky's colour while it IS coloured. At night the sky is
 	# almost black and strongly blue-weighted, and tinting ambient toward it
 	# washed the whole world blue-purple.
@@ -2021,7 +2045,7 @@ func _process(delta: float) -> void:
 		ref_up = Vector3.RIGHT
 	_sun.global_transform = Transform3D(Basis.looking_at(sun_dir, ref_up),
 		_sun.global_position)
-	_sun.light_energy = lerpf(1.2, 1.5, _atmo) * _day
+	_sun.light_energy = lerpf(1.2, 1.5, _atmo) * _day * (1.0 - 0.6 * _overcast)
 	# Warm the sunlight as it sits low, the way real low sun reddens.
 	_sun.light_color = Color(1, 1, 1).lerp(Color(1.0, 0.62, 0.35), dusk * 0.7 * _atmo)
 	# Shadow acne, and the banded lines that come with it, is a GRAZING-ANGLE
@@ -2057,6 +2081,18 @@ func _process(delta: float) -> void:
 	_env.fog_depth_end = lerpf(reach * 1.02, 32.0, _underground)
 	_env.fog_depth_curve = 1.0
 	_env.fog_density = lerpf(_atmo, 1.0, _underground)
+	# Weather closes the distance in: a fog bank to under forty blocks, rain
+	# about half that far. Its colour is the overcast sky's, not the clear one.
+	if _weather != null:
+		var murk := maxf(_weather.fog, _weather.precip * 0.55) * _atmo * (1.0 - _underground)
+		if murk > 0.0:
+			var fc := Color(0.6, 0.63, 0.68) * lerpf(0.06, 1.0, _day)
+			_env.fog_enabled = true
+			_env.fog_light_color = _env.fog_light_color.lerp(fc, murk)
+			_env.fog_depth_begin = lerpf(_env.fog_depth_begin, 2.0, murk)
+			_env.fog_depth_end = lerpf(_env.fog_depth_end, 38.0, murk)
+			_env.fog_density = lerpf(_env.fog_density, 0.95, murk)
+			_env.fog_sky_affect = murk * 0.6
 	# Under water the fog BECOMES the water: its colour, closing in to a couple
 	# of dozen blocks, and over the sky too -- looking up from a lake bed at a
 	# crisp blue sky through twenty blocks of water is what gave it away as a

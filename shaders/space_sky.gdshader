@@ -15,6 +15,10 @@ uniform vec3 horizon_color : source_color = vec3(0.75, 0.85, 1.0);
 // be drawn and the sky brightened around it; `day` is 0 at night, 1 at noon.
 uniform vec3 sun_dir = vec3(0.0, 1.0, 0.0);
 uniform float day : hint_range(0.0, 1.0) = 1.0;
+// Night-sky curtains of light, on worlds that have them (see Weather). 0 = none.
+uniform float aurora : hint_range(0.0, 1.0) = 0.0;
+uniform vec3 aurora_color : source_color = vec3(0.2, 1.0, 0.55);
+uniform vec3 aurora_color2 : source_color = vec3(0.55, 0.35, 1.0);
 // How far the viewer is INSIDE the planet. Caves can be wider than the streamed
 // chunk radius, and there is nothing behind an unloaded chunk but the skybox --
 // so from a big cavern you could see stars and other planets through the rock.
@@ -54,4 +58,24 @@ void sky() {
 	COLOR = (sky_lit * atmo + stars * star_vis) * (1.0 - underground);
 	// The disc stays visible in space too, where there is no atmosphere.
 	COLOR += sun_col * disc;
+
+	// Aurora: a band of light partway up the sky that wanders round the horizon
+	// and slowly sways, made of fine vertical rays, its colour shifting toward
+	// the second one higher up. Measured around the planet's own up, so it hangs
+	// over the right part of the sky anywhere on a sphere.
+	if (aurora > 0.001) {
+		vec3 up = normalize(atmo_up);
+		float el = dot(d, up);
+		vec3 t1 = normalize(cross(up, abs(up.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+		vec3 t2 = cross(up, t1);
+		float az = atan(dot(d, t2), dot(d, t1));
+		float t = TIME;
+		float wave = sin(az * 3.0 + t * 0.05 + sin(az * 7.0 - t * 0.11) * 0.8);
+		float centre = 0.42 + 0.12 * wave;
+		float band = exp(-pow((el - centre) / 0.11, 2.0));
+		float rays = 0.55 + 0.45 * sin(az * 55.0 + t * 0.35 + sin(az * 11.0 + t * 0.2) * 3.0);
+		float shimmer = 0.75 + 0.25 * sin(t * 0.7 + az * 5.0);
+		vec3 col = mix(aurora_color, aurora_color2, smoothstep(centre - 0.02, centre + 0.2, el));
+		COLOR += col * band * rays * shimmer * aurora * 0.85 * step(0.0, el) * (1.0 - underground);
+	}
 }
