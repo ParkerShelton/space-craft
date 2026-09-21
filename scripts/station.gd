@@ -210,7 +210,8 @@ func _consume_reqs(reqs: Array) -> void:
 			var take: int = mini(need, s["count"])
 			s["count"] -= take
 			need -= take
-			if s["count"] <= 0:
+			# Not while eighths are left: the id is what those are OF.
+			if s["count"] <= 0 and int(s.get("eighths", 0)) <= 0:
 				s["id"] = Blocks.AIR
 				s["props"] = {}
 				s["src"] = ""
@@ -453,7 +454,7 @@ func _do_craft(craft: Dictionary) -> bool:
 	var mcolor: Color = m["mat"].get("color", Color(0.8, 0.8, 0.8))
 	var mtier: int = m["mat"].get("tier", 0)
 	m["count"] -= cost
-	if m["count"] <= 0:
+	if m["count"] <= 0 and int(m.get("eighths", 0)) <= 0:
 		m["id"] = Blocks.AIR
 		m["props"] = {}
 		m["src"] = ""

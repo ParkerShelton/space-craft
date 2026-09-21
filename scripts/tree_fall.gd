@@ -21,6 +21,8 @@ const LEAF_REACH := 4
 ## particle systems in one frame; a handful spread through the crown reads the
 ## same.
 const MAX_BURSTS := 24
+## How finely the resting angle is searched: three degrees a step.
+const STOP_STEPS := 30
 
 var planet: Planet
 var world: WorldManager
@@ -30,6 +32,9 @@ var leaves := {}
 var pivot := Vector3.ZERO   # planet space: the top of the cut, on the fall side
 var up := Vector3i.ZERO
 var fall := Vector3i.ZERO   # which way it goes over
+var cutter := false         # this machine's player cut it: they get the drops
+## Where it comes to rest, worked out before it moves. See _begin.
+var _stop := PI * 0.5
 
 var _t := 0.0
 var _angle := 0.0
@@ -41,11 +46,37 @@ var _done := false
 ## Is this log part of a tree that no longer reaches the ground? If so, cut it
 ## loose and start it falling. `cut` is the cell just emptied.
 static func try_fell(p: Planet, wm: WorldManager, pl: Node3D, cut: Vector3i) -> bool:
-	var upf := -p.gravity_at(p.to_global(Vector3(cut) + Vector3(0.5, 0.5, 0.5)))
-	upf = (p.global_transform.basis.inverse() * upf).normalized()
-	var upi := _snap_axis(upf)
+	var upi := _up_at(p, cut)
 	if upi == Vector3i.ZERO:
 		return false
+	# Away from whoever cut it, along a grid axis so it lands on the grid.
+	var away := p.to_local(pl.global_position)
+	away = (Vector3(cut) + Vector3(0.5, 0.5, 0.5)) - away
+	away -= Vector3(upi) * away.dot(Vector3(upi))
+	var fall := _snap_axis(away)
+	if not start(p, wm, pl, cut, fall, true):
+		return false
+	# Everyone else plays the same fall from the same two facts, rather than
+	# being sent a thousand block edits and no animation. See Net.felled.
+	if wm.net != null and wm.net.active:
+		wm.net.felled(p.planet_name, cut, fall)
+	return true
+
+
+## Start the tree above `cut` falling toward `fall`, if there is one.
+##
+## Everything from here on is decided by the world and these two arguments
+## alone -- which logs and leaves, where it stops, where each log lands -- so
+## every machine in a co-op game that runs it arrives at the same result
+## without being told any of it. `cutter` is whether this is the machine of the
+## player who cut it: only they get what falls out of it, as in single player.
+static func start(p: Planet, wm: WorldManager, pl: Node, cut: Vector3i, fall: Vector3i,
+		cutter: bool) -> bool:
+	var upi := _up_at(p, cut)
+	if upi == Vector3i.ZERO:
+		return false
+	if fall == Vector3i.ZERO or fall == upi or fall == -upi:
+		fall = _perp(upi)
 	# Every piece of trunk touching the cut is a candidate: the stump below will
 	# turn out to be grounded and stay, the part above will not.
 	for n in _N26:
@@ -59,22 +90,23 @@ static func try_fell(p: Planet, wm: WorldManager, pl: Node3D, cut: Vector3i) -> 
 		tf.planet = p
 		tf.world = wm
 		tf.player = pl
+		tf.cutter = cutter
 		tf.logs = found
 		tf.leaves = _gather_leaves(p, found)
 		tf.up = upi
-		# Away from whoever cut it, along a grid axis so it lands on the grid.
-		var away := p.to_local(pl.global_position)
-		away = (Vector3(cut) + Vector3(0.5, 0.5, 0.5)) - away
-		away -= Vector3(upi) * away.dot(Vector3(upi))
-		tf.fall = _snap_axis(away)
-		if tf.fall == Vector3i.ZERO or tf.fall == upi or tf.fall == -upi:
-			tf.fall = _perp(upi)
+		tf.fall = fall
 		# Hinge at the top of the cut, on the edge it tips toward.
 		tf.pivot = Vector3(cut) + Vector3(0.5, 0.5, 0.5) + Vector3(upi) * 0.5 \
-			+ Vector3(tf.fall) * 0.5
+			+ Vector3(fall) * 0.5
 		tf._begin()
 		return true
 	return false
+
+
+static func _up_at(p: Planet, cut: Vector3i) -> Vector3i:
+	var upf := -p.gravity_at(p.to_global(Vector3(cut) + Vector3(0.5, 0.5, 0.5)))
+	upf = (p.global_transform.basis.inverse() * upf).normalized()
+	return _snap_axis(upf)
 
 
 ## A log the world grew, as opposed to one somebody placed: a cabin wall with
@@ -154,21 +186,35 @@ static func _gather_leaves(p: Planet, logs_in: Dictionary) -> Dictionary:
 
 
 func _begin() -> void:
-	# Out of the world in one go: see Planet.set_blocks.
+	# Out of the world in one go: see Planet.set_blocks. Straight to the planet
+	# rather than through the network -- in co-op every machine is running this
+	# same fall and makes the same change itself.
 	var gone := {}
 	for c in logs:
 		gone[c] = Blocks.AIR
 	for c in leaves:
 		gone[c] = Blocks.AIR
-	world.edit_blocks(planet, gone)
+	planet.set_blocks(gone)
+	# Where it stops, decided NOW and in fixed steps. It used to be tested each
+	# frame as it swung, which put a hillside landing at whatever angle the
+	# frame happened to fall on -- a different angle on a different machine, and
+	# so different blocks in a co-op game.
+	for i in range(1, STOP_STEPS + 1):
+		var a := PI * 0.5 * float(i) / float(STOP_STEPS)
+		if _hits_ground(a):
+			_stop = PI * 0.5 * float(i - 1) / float(STOP_STEPS)
+			break
 	# Whatever crown this search did not take -- leaves further out than
-	# LEAF_REACH -- is now hanging off nothing, and withers away.
+	# LEAF_REACH -- is now hanging off nothing, and withers away. Run by the
+	# cutter's machine only: withering is random, so it is sent as ordinary
+	# edits rather than replayed everywhere.
 	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
 	var hi := -lo
 	for c in gone:
 		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z))
 		hi = Vector3i(maxi(hi.x, c.x), maxi(hi.y, c.y), maxi(hi.z, c.z))
-	LeafDecay.nudge_box(planet, world, player, lo - Vector3i(3, 3, 3), hi + Vector3i(3, 3, 3))
+	if cutter:
+		LeafDecay.nudge_box(planet, world, player, lo - Vector3i(3, 3, 3), hi + Vector3i(3, 3, 3))
 	_axis = Vector3(up).cross(Vector3(fall)).normalized()
 	planet.add_child(self)
 	position = pivot
@@ -214,14 +260,9 @@ func _physics_process(delta: float) -> void:
 	# Starts slow and speeds up, the way a real one goes: a tree barely moves at
 	# first and is flat on the ground a moment later.
 	var k := clampf(_t / FALL_TIME, 0.0, 1.0)
-	var want := PI * 0.5 * k * k
-	# Stop early on a hillside, rather than swinging through it.
-	if _hits_ground(want):
-		_land()
-		return
-	_angle = want
+	_angle = minf(PI * 0.5 * k * k, _stop)
 	basis = Basis(_axis, _angle)
-	if k >= 1.0:
+	if _angle >= _stop:
 		_land()
 
 
@@ -263,13 +304,14 @@ func _land() -> void:
 		var here := planet.get_id(cell)
 		if laid.has(cell) or not (here == Blocks.AIR or Blocks.is_washable(here)):
 			# Nowhere to put it: it lands as an item instead, where it came down.
-			var wid := Blocks.bottom_of(int(logs[c]))
-			ItemDrop.spawn(planet, p, wid, 1, {}, "", {}, Blocks.name_of(wid),
-				Vector3(up) * 2.0)
+			if cutter:
+				var wid := Blocks.bottom_of(int(logs[c]))
+				ItemDrop.spawn(planet, p, wid, 1, {}, "", {}, Blocks.name_of(wid),
+					Vector3(up) * 2.0)
 			continue
 		laid[cell] = true
 		placed[cell] = Blocks.make_log(Blocks.bottom_of(int(logs[c])), lying)
-	world.edit_blocks(planet, placed)
+	planet.set_blocks(placed)
 	_burst_leaves(b)
 	Audio.at("break_wood", planet.to_global(pivot))
 	queue_free()
@@ -286,8 +328,8 @@ func _burst_leaves(b: Basis) -> void:
 		var p: Vector3 = pivot + b * (Vector3(c) + Vector3(0.5, 0.5, 0.5) - pivot)
 		if i % step == 0:
 			_burst(p, planet.color_of(Blocks.bottom_of(int(leaves[c]))))
-		# The same chance a leaf broken by hand has.
-		if randf() < Blocks.SAPLING_DROP_CHANCE and is_instance_valid(player):
+		# The same chance a leaf broken by hand has -- for whoever cut it.
+		if cutter and randf() < Blocks.SAPLING_DROP_CHANCE and is_instance_valid(player):
 			var item: Dictionary = player.call("_roll_flora_seed", planet, "tree")
 			if item.is_empty():
 				continue

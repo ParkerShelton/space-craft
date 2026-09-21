@@ -668,7 +668,10 @@ func _remove_item(id: int, n: int) -> int:
 			var take: int = mini(n, s["count"])
 			s["count"] -= take
 			n -= take
-			if s["count"] == 0:
+			# Only once the eighths are gone too: a slot at no whole blocks can
+			# still hold a quarter of one, and wiping its id left that quarter
+			# with no item behind it -- drawn in the colour for nothing, pink.
+			if s["count"] == 0 and int(s.get("eighths", 0)) <= 0:
 				s["id"] = Blocks.AIR
 			if n <= 0:
 				break
@@ -774,7 +777,7 @@ func _consume_active() -> void:
 	var s = inv[active_slot]
 	if s["count"] > 0:
 		s["count"] -= 1
-		if s["count"] == 0:
+		if s["count"] == 0 and int(s.get("eighths", 0)) <= 0:
 			s["id"] = Blocks.AIR
 	_refresh_slots()
 
@@ -4734,6 +4737,12 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 	var count: Label = cell["count"]
 	var icon := _cell_icon(cell)
 	var eighths := int(slot.get("eighths", 0)) if not slot.is_empty() else 0
+	# Eighths of nothing: a slot that lost its item before the fix that keeps
+	# it. There is no telling what they were eighths of, so they are let go
+	# rather than left as a pink square that cannot be placed or used.
+	if eighths > 0 and int(slot["id"]) == Blocks.AIR:
+		slot["eighths"] = 0
+		eighths = 0
 	if not slot.is_empty() and (slot["count"] > 0 or eighths > 0):
 		var mat: Dictionary = slot.get("mat", {})
 		var col: Color = mat["color"] if mat.has("color") else Blocks.color_of(slot["id"])
@@ -4745,6 +4754,11 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 			world.nearest_planet(global_position) if world != null else null)
 		icon.texture = tex
 		icon.visible = tex != null
+		# Less than a whole block is drawn smaller, by how much of one there
+		# is: a quarter at a bit over half size, seven eighths nearly full.
+		var part: float = 1.0 if int(slot["count"]) > 0 else 0.45 + 0.45 * float(eighths) / 8.0
+		icon.pivot_offset = icon.size * 0.5
+		icon.scale = Vector2.ONE * part
 		swatch.color = Color(col.r, col.g, col.b, 0.22) if tex != null else col
 		# Change shown as a real fraction rather than a second number: eighths
 		# land exactly on the glyphs a font already has.
@@ -4841,7 +4855,7 @@ func _remove_refined(n: int) -> int:
 			var take: int = mini(n, s["count"])
 			s["count"] -= take
 			n -= take
-			if s["count"] == 0:
+			if s["count"] == 0 and int(s.get("eighths", 0)) <= 0:
 				s["id"] = Blocks.AIR
 			if n <= 0:
 				break
@@ -4862,7 +4876,7 @@ func _remove_any(ids: Array, n: int) -> void:
 			var take: int = mini(n, s["count"])
 			s["count"] -= take
 			n -= take
-			if s["count"] == 0:
+			if s["count"] == 0 and int(s.get("eighths", 0)) <= 0:
 				s["id"] = Blocks.AIR
 			if n <= 0:
 				break

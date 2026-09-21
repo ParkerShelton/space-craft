@@ -749,6 +749,48 @@ func apply_edit(planet_name: String, v: Vector3i, id: int) -> void:
 		p.set_block(v, id)
 
 
+# --- felled trees ------------------------------------------------------------
+#
+# A falling tree is up to a thousand blocks changing. Sending each of them is a
+# long burst of messages -- and the other players would see blocks blink out and
+# back in with no tree ever falling. Instead the cut and the direction go out,
+# and every machine plays the fall itself: which logs, where it stops and where
+# each lands depend only on the world, which everyone already shares. See
+# TreeFall.start.
+
+func felled(planet_name: String, cut: Vector3i, fall: Vector3i) -> void:
+	if not active:
+		return
+	if is_host:
+		apply_fell.rpc(planet_name, cut, fall, my_id())
+	else:
+		request_fell.rpc_id(1, planet_name, cut, fall)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func request_fell(planet_name: String, cut: Vector3i, fall: Vector3i) -> void:
+	if not is_host:
+		return
+	var by := multiplayer.get_remote_sender_id()
+	_run_fell(planet_name, cut, fall)
+	apply_fell.rpc(planet_name, cut, fall, by)
+
+
+## Host -> everyone. `by` already has it falling: it started the moment they
+## cut it, which is what makes it feel immediate for the one holding the axe.
+@rpc("authority", "call_remote", "reliable")
+func apply_fell(planet_name: String, cut: Vector3i, fall: Vector3i, by: int) -> void:
+	if by == my_id() or not _world_built:
+		return
+	_run_fell(planet_name, cut, fall)
+
+
+func _run_fell(planet_name: String, cut: Vector3i, fall: Vector3i) -> void:
+	var p := _planet(planet_name)
+	if p != null and _world != null:
+		TreeFall.start(p, _world, _world.player, cut, fall, false)
+
+
 func _planet(planet_name: String) -> Planet:
 	if _world == null:
 		return null
