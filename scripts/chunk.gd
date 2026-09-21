@@ -294,7 +294,10 @@ static func _static_init() -> void:
 		_FULL[id] = 1 if full else 0
 		# Leaves are meshed AND see-through: they are drawn with cutout holes, so
 		# they must not hide the block behind them.
-		_SEETHRU[id] = 1 if (not full or Blocks.is_leaf(id)) else 0
+		# Glass as well: solid to walk into, and drawn by the greedy pass like any
+		# block, but the blocks behind it must still draw the faces that face it
+		# or a window is a hole into the void.
+		_SEETHRU[id] = 1 if (not full or Blocks.is_leaf(id) or id == Blocks.GLASS) else 0
 		_LEAF[id] = 1 if Blocks.is_leaf(id) else 0
 		# Keyed on the low byte, which for every packed id is the block itself
 		# (a stacked slab's is its lower slab), so this is a superset of what
@@ -493,7 +496,9 @@ static func _sky_index(x: int, y: int, z: int) -> int:
 ## foliage as opaque here used to seal off most of the ground on a wooded planet.
 static func _sky_open(planet: Planet, snap: Dictionary, v: Vector3i) -> bool:
 	var low := _id_at(planet, snap, v) & Blocks.ID_MASK
-	return _FULL[low] == 0 or _LEAF[low] == 1
+	# Daylight goes through anything you can see through -- leaves, and glass: a
+	# glass roof lights the room under it, as a window should.
+	return _SEETHRU[low] == 1
 
 
 ## Blocks below the terrain surface, at this exact cell.
@@ -1543,7 +1548,8 @@ static func _emit_solid_box_cell(lo: Vector3, hi: Vector3, gv: Vector3i, id: int
 		var nid := _id_at(planet, snap, gv + n)
 		# A half-height neighbour cannot cover a full face, so it does not hide
 		# one -- otherwise a slab beside a block punches a hole in the wall.
-		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN and not Blocks.is_slab(nid) 				and not Blocks.is_stacked_slab(nid) and nid != Blocks.ROOF_SLAB 				and not Blocks.is_stair(Blocks.bottom_of(nid)) 				and not Blocks.is_leaf(Blocks.bottom_of(nid)):
+		if nid != Blocks.AIR and nid != Blocks.DOOR_OPEN and not Blocks.is_slab(nid) 				and not Blocks.is_stacked_slab(nid) and nid != Blocks.ROOF_SLAB 				and not Blocks.is_stair(Blocks.bottom_of(nid)) 				and not Blocks.is_leaf(Blocks.bottom_of(nid)) \
+				and Blocks.bottom_of(nid) != Blocks.GLASS:
 			continue  # only the faces exposed to open space are drawn
 		_emit_cell_face(lo, hi, gv, n, fi, id, base, snap, verts, normals,
 			colors, uvs, uv2s, cverts)
@@ -1699,9 +1705,12 @@ static func _greedy_pass(planet: Planet, snap: Dictionary, d: int, u: int, v: in
 					# the lower cell of the pair (dir > 0) leaves exactly one quad
 					# per boundary: no z-fighting, and the leaves inside the canopy
 					# show through the holes in the ones outside it.
+					# Glass against glass draws nothing at all: a window two blocks
+					# wide is one pane, not two with a wall between them.
 					if _SEETHRU[nlow] == 1 and not (
 							_LEAF[nlow] == 1 and _LEAF[oid & Blocks.ID_MASK] == 1
-							and dir < 0):
+							and dir < 0) \
+							and not (nlow == Blocks.GLASS and (oid & Blocks.ID_MASK) == Blocks.GLASS):
 						val = oid
 				mask[k + j * CS] = val
 				bmask[k + j * CS] = bslot[lin] if val != 0 else 0
@@ -1794,7 +1803,13 @@ static func _emit_mask(planet: Planet, snap: Dictionary, mask: PackedInt32Array,
 			var s := _face_shade(d, dir)
 			var bcol := _block_color(planet, val, bv)
 			var col := Color(bcol.r * s, bcol.g * s, bcol.b * s, bcol.a)  # keep alpha (water)
-			if val != Blocks.WATER:
+			var glass := (val & Blocks.ID_MASK) == Blocks.GLASS
+			if glass:
+				# Keeps its own alpha, like water, and takes daylight through its
+				# colour instead -- see the water path in _emit_water_cell.
+				var lit := lerpf(0.4, 1.0, float(sv) / 15.0)
+				col = Color(col.r * lit, col.g * lit, col.b * lit, bcol.a)
+			elif val != Blocks.WATER:
 				col.a = float(sv) / 15.0   # opaque terrain: alpha carries daylight
 			var p00 := _corner(d, u, v, w_coord, k, j)
 			var p10 := _corner(d, u, v, w_coord, k + wdt, j)
@@ -1805,6 +1820,16 @@ static func _emit_mask(planet: Planet, snap: Dictionary, mask: PackedInt32Array,
 					_quad(p00, p10, p11, p01, normal, col, wverts, wnormals, wcolors, wuvs, wuv2s, val, s)
 				else:
 					_quad(p00, p01, p11, p10, normal, col, wverts, wnormals, wcolors, wuvs, wuv2s, val, s)
+			elif glass:
+				# Drawn with the see-through surface water uses -- the terrain
+				# shader is opaque, which is why glass came out as a tinted wall --
+				# but it still COLLIDES: a window is not a doorway.
+				if dir > 0:
+					_quad(p00, p10, p11, p01, normal, col, wverts, wnormals, wcolors, wuvs, wuv2s,
+						val, s, float(lv) / 15.0, cverts)
+				else:
+					_quad(p00, p01, p11, p10, normal, col, wverts, wnormals, wcolors, wuvs, wuv2s,
+						val, s, float(lv) / 15.0, cverts)
 			else:
 				if dir > 0:
 					_quad(p00, p10, p11, p01, normal, col, verts, normals, colors, uvs, uv2s, val, s,

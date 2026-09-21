@@ -998,9 +998,21 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 			temperament = "neutral"
 		else:
 			temperament = "passive"
-	var base_speed: float = {"quad": 5.0, "biped": 4.0, "serpent": 4.0, "fish": 3.0,
-		"flyer": 6.0, "crawler": 3.2, "hopper": 6.5, "grazer": 3.8}.get(body, 4.0)
-	var speed := (base_speed * 0.6 if kind == "npc" else base_speed) * rng.randf_range(0.8, 1.3) / maxf(scale * 0.6, 0.6)
+	# A species' RUNNING speed -- fleeing, chasing. It wanders at a fraction of
+	# this (Creature.WANDER_PACE). It used to be divided by size with a floor
+	# that made anything small up to two thirds faster again, then boosted
+	# another 30% to flee, and animals wandered at the full figure: a small
+	# hopper ran at eighteen metres a second against a player walking at 4.6,
+	# and nothing could be caught. Land animals now run a little UNDER walking
+	# pace, so a chase is one you can win if you commit to it; size makes a
+	# small animal only slightly quicker. Birds and fish are only toned down --
+	# nobody runs them down on foot.
+	var base_speed: float = {"quad": 3.4, "biped": 3.0, "serpent": 2.8, "fish": 2.2,
+		"flyer": 5.0, "crawler": 2.4, "hopper": 3.8, "grazer": 2.8}.get(body, 3.0)
+	var speed := (base_speed * 0.6 if kind == "npc" else base_speed) * rng.randf_range(0.85, 1.15) \
+		/ maxf(sqrt(scale), 0.85)
+	if body != "flyer" and body != "fish":
+		speed = minf(speed, 4.3)
 	var health := rng.randf_range(18.0, 45.0) * scale
 	var damage := rng.randf_range(4.0, 14.0) if temperament == "hostile" else 0.0
 	var aggro := rng.randf_range(9.0, 17.0) if temperament == "hostile" else 0.0

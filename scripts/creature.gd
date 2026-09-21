@@ -53,6 +53,8 @@ var _wander_timer := 0.0
 var _attack_cd := 0.0
 ## Herd: the animal this one keeps with. Null for a leader or a loner.
 var herd_leader: Creature = null
+## Wandering is a stroll: this fraction of the species' running speed.
+const WANDER_PACE := 0.42
 ## Soaring: circling a centre that drifts slowly across the sky.
 var _soaring := false
 var _soar_centre := Vector3.ZERO
@@ -1321,7 +1323,7 @@ func _land_physics(delta: float) -> void:
 		elif temperament == "passive" and dist < float(species.get("flee_range", 10.0)):
 			wish = global_position - ppos
 			wish = wish - up * wish.dot(up)
-			moving_speed = speed * 1.3
+			moving_speed = speed
 			handled = true
 
 	if not handled and herd_leader != null and is_instance_valid(herd_leader):
@@ -1331,15 +1333,17 @@ func _land_physics(delta: float) -> void:
 		var to_lead := herd_leader.global_position - global_position
 		to_lead -= up * to_lead.dot(up)
 		var gap := to_lead.length()
+		moving_speed = speed * WANDER_PACE
 		if gap > 6.0:
 			wish = to_lead
-			moving_speed = speed * 1.15
+			moving_speed = speed * 0.8
 		elif gap < 1.8:
 			wish = -to_lead
 		else:
 			wish = herd_leader._wander_dir
 		handled = true
 	if not handled:
+		moving_speed = speed * WANDER_PACE
 		_wander_timer -= delta
 		if _wander_timer <= 0.0 or _wander_dir == Vector3.ZERO:
 			_wander_timer = randf_range(WANDER_MIN, WANDER_MAX)
