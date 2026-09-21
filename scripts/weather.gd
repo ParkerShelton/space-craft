@@ -29,6 +29,13 @@ var aurora := 0.0
 var aurora_color := Color(0.2, 1.0, 0.55)
 var aurora_color2 := Color(0.55, 0.35, 1.0)
 var snowing := false
+## 0 by day, 1 at night. Set by main.gd, which owns the day cycle.
+var night := 0.0
+## 0..1: how far below the surface the camera is. Set by main.gd.
+var underground := 0.0
+var _flies: CPUParticles3D
+var _fly_mat: StandardMaterial3D
+const FIREFLIES := 70
 
 var _rain: CPUParticles3D
 var _snow: CPUParticles3D
@@ -60,6 +67,11 @@ func profile(p: Planet) -> Dictionary:
 	var au_choices := [0.5, 0.8, 1.0] if cls == "P" else [0.0, 0.0, 0.0, 0.6]
 	pr["aurora"] = au_choices[r.randi() % au_choices.size()] if air else 0.0
 	var hue := r.randf()
+	# Fireflies: on worlds with meadows to rise out of, sometimes, in a colour of
+	# the world's own.
+	var ff_choices := [0.0, 0.0, 0.6, 1.0]
+	pr["fireflies"] = ff_choices[r.randi() % ff_choices.size()] if (air and p.grass_density > 0.0) else 0.0
+	pr["firefly_color"] = Color.from_hsv(fposmod(0.16 + r.randf_range(-0.12, 0.35), 1.0), 0.65, 1.0)
 	pr["aurora_a"] = Color.from_hsv(hue, 0.75, 1.0)
 	pr["aurora_b"] = Color.from_hsv(fposmod(hue + r.randf_range(0.2, 0.45), 1.0), 0.7, 1.0)
 	_profiles[p.planet_name] = pr
@@ -110,6 +122,29 @@ func _ready() -> void:
 	_snow.angular_velocity_min = -90.0
 	_snow.angular_velocity_max = 90.0
 
+	# Fireflies: a few dozen specks drifting slowly around the player at night,
+	# each fading in and out over its life. Unshaded, so they read as their own
+	# light against the dark.
+	_fly_mat = StandardMaterial3D.new()
+	_fly_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_fly_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_fly_mat.vertex_color_use_as_albedo = true
+	var speck := BoxMesh.new()
+	speck.size = Vector3.ONE * 0.07
+	speck.material = _fly_mat
+	_flies = _make_emitter(speck, FIREFLIES, 7.0)
+	_flies.emission_box_extents = Vector3(16.0, 2.5, 16.0)
+	_flies.direction = Vector3.UP
+	_flies.spread = 180.0
+	_flies.initial_velocity_min = 0.1
+	_flies.initial_velocity_max = 0.45
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(1, 1, 1, 0))
+	ramp.set_color(1, Color(1, 1, 1, 0))
+	ramp.add_point(0.25, Color(1, 1, 1, 1))
+	ramp.add_point(0.75, Color(1, 1, 1, 1))
+	_flies.color_ramp = ramp
+
 
 func _make_emitter(mesh: Mesh, n: int, life: float) -> CPUParticles3D:
 	var ps := CPUParticles3D.new()
@@ -148,6 +183,7 @@ func _process(delta: float) -> void:
 		aurora_color = pr["aurora_a"]
 		aurora_color2 = pr["aurora_b"]
 	_place_emitters(pl, p, delta)
+	_place_flies(pl, p, pr, outside)
 
 
 ## Keep the rain over the player and falling along the planet's down -- and dry
@@ -174,6 +210,26 @@ func _place_emitters(pl: Node3D, p: Planet, delta: float) -> void:
 		(0.42 * a) if _rain.emitting else 0.0, delta * 0.8)
 	_snow_mat.albedo_color.a = move_toward(_snow_mat.albedo_color.a,
 		(0.9 * a) if _snow.emitting else 0.0, delta * 0.8)
+
+
+## Out on a clear night, on a world that has them, above ground and dry.
+func _place_flies(pl: Node3D, p: Planet, pr: Dictionary, outside: bool) -> void:
+	var dens: float = float(pr.get("fireflies", 0.0)) if outside else 0.0
+	var on: bool = dens > 0.0 and night > 0.6 and underground < 0.2 and precip < 0.1 \
+		and not (pl.get("underwater") == true)
+	_flies.emitting = on
+	if not on:
+		return
+	var up := Vector3.UP
+	if p != null:
+		var g := p.gravity_at(pl.global_position)
+		if g.length() > 0.01:
+			up = -g.normalized()
+	var x := up.cross(Vector3(0.31, 0.12, 0.94)).normalized()
+	_flies.global_transform = Transform3D(Basis(x, up, x.cross(up)), pl.global_position + up * 1.2)
+	_flies.gravity = Vector3.ZERO
+	var c: Color = pr["firefly_color"]
+	_flies.color = Color(c.r, c.g, c.b, dens)
 
 
 func _roof_over(pl: Node3D, up: Vector3) -> bool:

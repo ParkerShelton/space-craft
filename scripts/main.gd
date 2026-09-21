@@ -1976,6 +1976,8 @@ func _process(delta: float) -> void:
 	_sky_mat.set_shader_parameter("day", _day)
 	# Auroras: night only, only on worlds that have them, and not through cloud.
 	if _weather != null:
+		_weather.night = 1.0 - _day
+		_weather.underground = _underground
 		var au := _weather.aurora * (1.0 - _day) * _atmo * (1.0 - _overcast)
 		_sky_mat.set_shader_parameter("aurora", au)
 		var ca := _weather.aurora_color

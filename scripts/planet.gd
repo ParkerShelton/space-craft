@@ -465,6 +465,8 @@ var fauna_cave: Array = []     # underground species defs; found only inside car
 var fauna_air: Array = []      # flying species defs; wander an altitude band above the surface
 var _creatures: Array = []     # live Creature nodes currently spawned here
 const MAX_CREATURES := 10
+## How teeming this world is, scaling how many creatures are about at once.
+var life_density := 1.0
 ## Extra creatures allowed once it is fully dark, on top of MAX_CREATURES.
 const NIGHT_EXTRA_CREATURES := 8
 const CREATURE_SPAWN_RADIUS := 70.0   # spawn attempts land within this of the player
@@ -762,7 +764,19 @@ func _without_hostiles(list: Array) -> Array:
 func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _seed + 6060
-	var n_land := rng.randi_range(2, 4)
+	# How MUCH life, and of what, is part of what a world is: one teems, the
+	# next is nearly empty, and a few have no animals at all. Separate rolls
+	# for land, water and air, and a density that scales how many are about.
+	var lr := RandomNumberGenerator.new()
+	lr.seed = _seed + 6161
+	life_density = ([0.45, 0.75, 1.0, 1.0, 1.5] as Array)[lr.randi() % 5]
+	var n_land: int = ([0, 1, 2, 3, 3, 4] as Array)[lr.randi() % 6]
+	# Except where you start. The home world is where the first meals come
+	# from, and a start with nothing to hunt is not a harder game, it is a
+	# broken one. (force_hostile_enemy is the flag the home world is built with.)
+	if force_hostile_enemy:
+		n_land = maxi(n_land, 2)
+		life_density = maxf(life_density, 0.75)
 	for i in n_land:
 		fauna_land.append(_make_species(rng, "land"))
 	if force_hostile_enemy and not HOSTILES_DISABLED:
@@ -775,7 +789,7 @@ func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	if water_style == WATER_LIQUID:
 		var rng2 := RandomNumberGenerator.new()
 		rng2.seed = _seed + 7070
-		var n_fish := rng2.randi_range(1, 3)
+		var n_fish: int = ([0, 1, 2, 3] as Array)[lr.randi() % 4]
 		for i in n_fish:
 			fauna_fish.append(_make_species(rng2, "fish"))
 	if cave_enabled:
@@ -786,7 +800,7 @@ func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 			fauna_cave.append(_make_species(rng3, "cave"))
 	var rng4 := RandomNumberGenerator.new()
 	rng4.seed = _seed + 9292
-	var n_air := rng4.randi_range(1, 3)
+	var n_air: int = ([0, 1, 2, 3] as Array)[lr.randi() % 4]
 	for i in n_air:
 		fauna_air.append(_make_species(rng4, "air"))
 	if HOSTILES_DISABLED:
@@ -1011,6 +1025,10 @@ func _make_species(rng: RandomNumberGenerator, kind: String) -> Dictionary:
 		# animals wandering past. Grazers and quads travel together; serpents and
 		# crawlers are loners.
 		"herd": (rng.randi_range(2, 5) if body in ["grazer", "quad"] and kind == "land" 			else (2 if body == "hopper" and rng.randf() < 0.5 else 1)),
+		# Birds that soar in circles, and how many fly together. The rest keep
+		# their old habits: wander the sky, land, take off again.
+		"soar": body == "flyer" and rng.randf() < 0.65,
+		"flock": rng.randi_range(2, 6) if body == "flyer" else 1,
 		"graze": body in ["grazer", "quad", "hopper"] and kind != "enemy",
 	}
 	if kind == "enemy":
@@ -1050,7 +1068,7 @@ func _point_at_height(dir: Vector3, d_target: float) -> Vector3:
 ## The most creatures allowed alive at once right now -- night lifts it, since
 ## that is when more of them come out.
 func creature_cap() -> int:
-	return MAX_CREATURES + int(round(night_factor() * NIGHT_EXTRA_CREATURES))
+	return int(round((MAX_CREATURES + night_factor() * NIGHT_EXTRA_CREATURES) * life_density))
 
 
 func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> void:
@@ -1189,7 +1207,20 @@ func _try_spawn_creature(player_pos: Vector3, world: WorldManager) -> void:
 				var v := world_to_voxel(to_global(local_pos))
 				if get_id(v) != Blocks.AIR:
 					continue
-				_spawn_at(to_global(local_pos), fauna_air[randi() % fauna_air.size()], world)
+				# A flock: the same species, circling one centre together, each
+				# at its own point round the circle.
+				var sp_air: Dictionary = fauna_air[randi() % fauna_air.size()]
+				var n := maxi(1, int(sp_air.get("flock", 1)))
+				var centre := to_global(local_pos)
+				var radius := randf_range(7.0, 16.0)
+				var turn := randf_range(0.25, 0.5) * (1.0 if randf() < 0.5 else -1.0)
+				for k in n:
+					if _creatures.size() >= creature_cap():
+						break
+					var bird := _spawn_at(centre + Vector3(randf() - 0.5, randf() - 0.5, randf() - 0.5) * 3.0,
+						sp_air, world)
+					if bird != null and bool(sp_air.get("soar", false)):
+						bird.soar_around(centre, radius, turn, TAU * float(k) / float(n))
 				return
 			"cave":
 				var found := _find_cave_spawn(dir)
@@ -1213,6 +1244,7 @@ func _try_spawn_creature(player_pos: Vector3, world: WorldManager) -> void:
 				# empty even when the spawn rate was fine.
 				var sp_land: Dictionary = _pick_land_species()
 				var herd := maxi(1, int(sp_land.get("herd", 1)))
+				var leader: Creature = null
 				for h in herd:
 					var jitter := Vector3.ZERO
 					if h > 0:
@@ -1222,7 +1254,15 @@ func _try_spawn_creature(player_pos: Vector3, world: WorldManager) -> void:
 					var hp := surface_pt + jitter + up * 0.05
 					if _creatures.size() >= creature_cap():
 						break
-					_spawn_at(to_global(hp), sp_land, world)
+					var member := _spawn_at(to_global(hp), sp_land, world)
+					# The first to arrive leads; the rest keep with it, which is
+					# what makes a herd a herd rather than animals that happened
+					# to arrive at the same time and then drifted apart.
+					if member != null:
+						if leader == null:
+							leader = member
+						else:
+							member.herd_leader = leader
 				return
 
 
@@ -1275,14 +1315,15 @@ func _pick_land_species() -> Dictionary:
 	return fauna_land[randi() % fauna_land.size()]
 
 
-func _spawn_at(world_pos: Vector3, sp: Dictionary, world: WorldManager) -> void:
+func _spawn_at(world_pos: Vector3, sp: Dictionary, world: WorldManager) -> Creature:
 	if not _chunk_ready_at(world_pos):
-		return
+		return null
 	var c := Creature.new()
 	add_child(c)
 	c.global_position = world_pos
 	c.configure(sp, self, world)
 	_creatures.append(c)
+	return c
 
 
 # How far from center anything (terrain, trees, buildings, or water) can possibly exist.

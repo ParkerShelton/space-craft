@@ -51,6 +51,15 @@ const ACCEL_RATE := 7.0  # how fast horizontal velocity eases toward its target 
 var _wander_dir := Vector3.ZERO
 var _wander_timer := 0.0
 var _attack_cd := 0.0
+## Herd: the animal this one keeps with. Null for a leader or a loner.
+var herd_leader: Creature = null
+## Soaring: circling a centre that drifts slowly across the sky.
+var _soaring := false
+var _soar_centre := Vector3.ZERO
+var _soar_r := 10.0
+var _soar_w := 0.35
+var _soar_a := 0.0
+var _soar_drift := Vector3.ZERO
 var _landing := false     # flyer: currently descending to perch on the ground
 var _perched := false     # flyer: sitting on the ground, wings folded, will take off again
 var _phase := 0.0
@@ -1315,6 +1324,21 @@ func _land_physics(delta: float) -> void:
 			moving_speed = speed * 1.3
 			handled = true
 
+	if not handled and herd_leader != null and is_instance_valid(herd_leader):
+		# Keeping with the herd: close in if left behind, give room if too
+		# close, and otherwise go where the leader goes -- including stopping
+		# when it stops, so a herd grazes together as well as moves together.
+		var to_lead := herd_leader.global_position - global_position
+		to_lead -= up * to_lead.dot(up)
+		var gap := to_lead.length()
+		if gap > 6.0:
+			wish = to_lead
+			moving_speed = speed * 1.15
+		elif gap < 1.8:
+			wish = -to_lead
+		else:
+			wish = herd_leader._wander_dir
+		handled = true
 	if not handled:
 		_wander_timer -= delta
 		if _wander_timer <= 0.0 or _wander_dir == Vector3.ZERO:
@@ -1764,6 +1788,20 @@ func _fly_physics(delta: float) -> void:
 			_landing = false
 			_perched = false  # startled off the ground
 
+	if not handled and _soaring and planet != null:
+		# Round and round a point in the sky, which itself drifts slowly, so a
+		# flock wheels across the landscape instead of hanging over one spot.
+		_soar_a += _soar_w * delta
+		_soar_centre += _soar_drift * delta
+		var upv := -_inward_dir(_soar_centre)
+		if upv == Vector3.ZERO:
+			upv = Vector3.UP
+		var t1 := upv.cross(Vector3(0.31, 0.12, 0.94)).normalized()
+		var t2 := upv.cross(t1)
+		var target := _soar_centre + (t1 * cos(_soar_a) + t2 * sin(_soar_a)) * _soar_r \
+			+ upv * sin(_soar_a * 0.5) * 1.5
+		wish = target - global_position
+		handled = true
 	if not handled:
 		if _perched:
 			# sitting on the ground; wait out the perch, then take back off
@@ -1819,6 +1857,18 @@ func _fly_physics(delta: float) -> void:
 			up_dir = Vector3.RIGHT if absf(fwd.dot(Vector3.RIGHT)) < 0.9 else Vector3.FORWARD
 		look_at(global_position + fwd, up_dir)
 	move_and_slide()
+
+
+## Start circling `centre` at `radius`, `turn` radians a second, starting
+## `phase` of the way round -- which is how several birds share one circle.
+func soar_around(centre: Vector3, radius: float, turn: float, phase: float) -> void:
+	_soaring = true
+	_soar_centre = centre
+	_soar_r = radius
+	_soar_w = turn
+	_soar_a = phase
+	var d := Vector3(randf() - 0.5, 0.0, randf() - 0.5)
+	_soar_drift = d.normalized() * randf_range(0.4, 1.2) if d.length() > 0.01 else Vector3.ZERO
 
 
 func _animate(delta: float) -> void:
