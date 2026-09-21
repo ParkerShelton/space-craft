@@ -16,7 +16,14 @@ signal menu_requested
 ## The switch is purely a function of local gravity magnitude, so weak planets let
 ## you float even near the surface and strong ones "capture" you into walking.
 
-const WALK_SPEED := 7.0
+## Minecraft walks at 4.3. At 7 the world felt small -- a house was two
+## strides across -- and every jump carried nearly five blocks.
+const WALK_SPEED := 4.6
+## How quickly you can change direction with your feet off the ground, per
+## second. Low on purpose: a jump keeps the speed you left the ground with and
+## can be nudged, not re-aimed. Steering at full walking speed in mid-air is
+## what let a standing jump go as far as a running one.
+const AIR_CONTROL := 2.5
 const JUMP_SPEED := 8.0
 const FLY_SPEED := 16.0
 const FLY_ACCEL := 6.0
@@ -1739,6 +1746,9 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	if crouching:
 		horiz = _hold_the_ledge(horiz, up, delta) * CROUCH_SPEED_MULT
 
+	if not is_on_floor():
+		var flat_now := velocity - up * velocity.dot(up)
+		horiz = flat_now.lerp(horiz, clampf(delta * AIR_CONTROL, 0.0, 1.0))
 	velocity = horiz + up * v_up
 	up_direction = up
 	move_and_slide()

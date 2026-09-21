@@ -19,10 +19,12 @@ uniform vec3 water_color : source_color = vec3(0.8, 0.92, 1.0);
 // 0..1, eased in and out as the camera crosses the surface.
 uniform float strength = 1.0;
 // How far the warble moves the picture, as a fraction of the screen.
-uniform float warble = 0.0035;
+uniform float warble = 0.0045;
+// How fast it moves. Faster reads as water; slower read as the screen swaying.
+uniform float warble_speed = 1.9;
 
 void fragment() {
-	float t = TIME;
+	float t = TIME * warble_speed;
 	vec2 uv = SCREEN_UV;
 	// Zoomed in by more than the warble can move, so no lookup leaves the frame.
 	vec2 base = (uv - 0.5) * mix(1.0, 1.0 - warble * 3.0, strength) + 0.5;
