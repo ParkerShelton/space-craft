@@ -173,6 +173,17 @@ func edit_block(p: Planet, v: Vector3i, id: int) -> void:
 		p.set_block(v, id)
 
 
+## Many cells as one change. See Planet.set_blocks. In co-op each cell still
+## goes out on its own, because that is the message the other side
+## understands; alone, it is one bulk write.
+func edit_blocks(p: Planet, cells: Dictionary) -> void:
+	if net != null and net.active:
+		for v in cells:
+			net.edit_block(p.planet_name, v, int(cells[v]))
+	else:
+		p.set_blocks(cells)
+
+
 ## The eighth-block twin of edit_block, and the same reason for existing: one
 ## choke point that every part change goes through, so nothing can quietly build
 ## something only the builder can see. An AIR id removes that eighth.

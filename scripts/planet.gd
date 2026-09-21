@@ -4180,9 +4180,21 @@ func _building_block(p: Vector3, up: Vector3, u: Vector3, v: Vector3, base: Vect
 
 ## Block id at a voxel, with player edits taking precedence over terrain.
 func get_id(v: Vector3i) -> int:
-	var d = _edits_by_chunk.get(chunk_of(v))
+	var cc := chunk_of(v)
+	var d = _edits_by_chunk.get(cc)
 	if d != null and d.has(v):
 		return d[v]
+	# The chunk's generated terrain, if it has been built -- the same answer the
+	# generator would give, without the noise. Everything that asks the world
+	# about one cell at a time goes through here: mining, water, a falling tree
+	# looking for what it stands on.
+	var g = _gen_cache.get(cc)
+	if g != null:
+		var a: PackedInt32Array = g
+		if a.size() == 1:
+			return a[0]
+		var l := v - cc * CS
+		return a[l.x + l.y * CS + l.z * CS * CS]
 	return generation_sample(v.x, v.y, v.z)
 
 
@@ -4970,6 +4982,48 @@ func _edit_sound(v: Vector3i, was: int, id: int) -> void:
 ## `quiet` is for edits that are being replayed rather than happening: a client
 ## catching up on a hundred blocks it missed should arrive at the right world in
 ## silence, not to a hundred simultaneous bangs.
+## Many cells at once, as one change: a felled tree coming out of the world,
+## and going back into it where it lands.
+##
+## set_block does a great deal for ONE block -- a sound, the water around it
+## settled on the spot, stand-in collision, a remesh of its chunk and any
+## neighbour it borders -- and a tree is up to a thousand blocks. Through
+## set_block that was a visible freeze before the tree began to fall. Here the
+## cells are written, each chunk is remeshed once, and water is only woken
+## where some is actually next to a cell that changed.
+func set_blocks(cells: Dictionary) -> void:
+	begin_batch()
+	var near_water: Array[Vector3i] = []
+	for key in cells:
+		var v: Vector3i = key
+		var id: int = cells[key]
+		var cc := chunk_of(v)
+		if not _edits_by_chunk.has(cc):
+			_edits_by_chunk[cc] = {}
+		_edits_by_chunk[cc][v] = id
+		if _temp_solid.has(v):
+			var gone: Node = _temp_solid[v]
+			if gone != null and is_instance_valid(gone):
+				gone.queue_free()
+			_temp_solid.erase(v)
+		_edit_remesh(cc)
+		var local := v - cc * CS
+		if local.x == 0: _edit_remesh(cc + Vector3i(-1, 0, 0))
+		if local.x == CS - 1: _edit_remesh(cc + Vector3i(1, 0, 0))
+		if local.y == 0: _edit_remesh(cc + Vector3i(0, -1, 0))
+		if local.y == CS - 1: _edit_remesh(cc + Vector3i(0, 1, 0))
+		if local.z == 0: _edit_remesh(cc + Vector3i(0, 0, -1))
+		if local.z == CS - 1: _edit_remesh(cc + Vector3i(0, 0, 1))
+		if water_style == WATER_LIQUID and not _wlev.is_empty():
+			for n in _NEIGH6:
+				if _wlev.has(v + n):
+					near_water.append(v)
+					break
+	end_batch()
+	for v in near_water:
+		_wake(v)
+
+
 func set_block(v: Vector3i, id: int, quiet := false) -> void:
 	var was := get_id(v)
 	if not quiet:

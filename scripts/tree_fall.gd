@@ -154,13 +154,13 @@ static func _gather_leaves(p: Planet, logs_in: Dictionary) -> Dictionary:
 
 
 func _begin() -> void:
-	# Out of the world in one go: one remesh, not one per block.
-	planet.begin_batch()
+	# Out of the world in one go: see Planet.set_blocks.
+	var gone := {}
 	for c in logs:
-		world.edit_block(planet, c, Blocks.AIR)
+		gone[c] = Blocks.AIR
 	for c in leaves:
-		world.edit_block(planet, c, Blocks.AIR)
-	planet.end_batch()
+		gone[c] = Blocks.AIR
+	world.edit_blocks(planet, gone)
 	_axis = Vector3(up).cross(Vector3(fall)).normalized()
 	planet.add_child(self)
 	position = pivot
@@ -242,7 +242,7 @@ func _land() -> void:
 	var order: Array = logs.keys()
 	order.sort_custom(func(a, c):
 		return Vector3(a).dot(Vector3(up)) < Vector3(c).dot(Vector3(up)))
-	planet.begin_batch()
+	var placed := {}
 	for c in order:
 		var p: Vector3 = pivot + b * (Vector3(c) + Vector3(0.5, 0.5, 0.5) - pivot)
 		var cell := Vector3i(p.floor())
@@ -260,8 +260,8 @@ func _land() -> void:
 				Vector3(up) * 2.0)
 			continue
 		laid[cell] = true
-		world.edit_block(planet, cell, Blocks.make_log(Blocks.bottom_of(int(logs[c])), lying))
-	planet.end_batch()
+		placed[cell] = Blocks.make_log(Blocks.bottom_of(int(logs[c])), lying)
+	world.edit_blocks(planet, placed)
 	_burst_leaves(b)
 	Audio.at("break_wood", planet.to_global(pivot))
 	queue_free()

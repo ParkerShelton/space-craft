@@ -208,7 +208,13 @@ void fragment() {
 			}
 		} else {
 			// Bark: darker than the core, with the grain running lengthways.
-			float band = floor(dot(perp, vec3(0.7, 0.0, 0.7)) * bands * 2.0);
+			// Measured ACROSS this face -- the direction on it at right angles
+			// to the trunk. It used to be a fixed diagonal in the horizontal
+			// plane, which only varies across the sides of an upright trunk: a
+			// log lying along X or Z, or a trunk standing on four of a cube
+			// world's six faces, had two sides with nothing to stripe by and
+			// rendered them flat.
+			float band = floor(dot(v_world, cross(n, up)) * bands * 2.0);
 			shade = 0.82 + quantize(fract(band * 0.37), 3.0) * 0.24;
 			// Only a light darkening: the faces already carry baked
 			// directional shading, and doubling down on it crushed the
