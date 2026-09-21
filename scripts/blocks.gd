@@ -1160,11 +1160,11 @@ static func all_recipes() -> Array:
 	for d in PART_STRUCTURES:
 		out.append({"key": "part:%s" % str(d["name"]), "src": "Built from blocks",
 			"cat": "Machines", "out": int(d["result"]), "n": 1, "reqs": [],
-			"cost": 0, "extra": {}, "diagram": part_structure_diagram(d, false)})
+			"cost": 0, "extra": {}, "diagram": part_structure_diagram(d, false), "def": d})
 	for d in STRUCTURES:
 		out.append({"key": "struct:%s" % str(d["name"]), "src": "Built from blocks",
 			"cat": "Machines", "out": int(d["result"]), "n": 1, "reqs": [],
-			"cost": 0, "extra": {}, "diagram": structure_diagram(d, false)})
+			"cost": 0, "extra": {}, "diagram": structure_diagram(d, false), "def": d})
 	return out
 
 
@@ -1202,6 +1202,56 @@ static func recipe_needs(rec: Dictionary) -> String:
 ## just saying no.
 ## `with_name` is off in the Recipe Book, where the entry's own header already
 ## says which machine this is.
+## A build pattern's filled cells, as {Vector3i: block to show there}. Eighths
+## for a part pattern, whole blocks for one with a legend. What the Recipe Book
+## draws -- see PatternPicture.
+static func pattern_cells(def: Dictionary) -> Dictionary:
+	var out := {}
+	var layers: Array = def["layers"]
+	for y in layers.size():
+		var rows: Array = layers[y]
+		for z in rows.size():
+			var row: String = rows[z]
+			for x in row.length():
+				var id := pattern_letter_id(def, row[x])
+				if id != AIR:
+					out[Vector3i(x, y, z)] = id
+	return out
+
+
+## The block a pattern letter stands for, as something to draw. A letter that
+## accepts several (any wood) shows the first of them.
+static func pattern_letter_id(def: Dictionary, ch: String) -> int:
+	if ch == "." or ch == " ":
+		return AIR
+	if def.has("legend"):
+		return int((def["legend"] as Dictionary).get(ch, AIR))
+	var opts: Array = PART_CLASSES.get(ch, [])
+	return int(opts[0]) if not opts.is_empty() else AIR
+
+
+## What a pattern letter means, in words -- "Any wood", not "W".
+static func pattern_letter_label(def: Dictionary, ch: String) -> String:
+	if not def.has("legend"):
+		match ch:
+			"W": return "Any wood"
+			"S": return "Stone"
+			"T": return "Cloth or leather"
+	return name_of(pattern_letter_id(def, ch))
+
+
+## Every letter a pattern uses, in first-seen order, empty cells left out.
+static func pattern_letters(def: Dictionary) -> Array:
+	var out: Array = []
+	for rows in def["layers"]:
+		for row in rows:
+			for i in (row as String).length():
+				var ch: String = (row as String)[i]
+				if pattern_letter_id(def, ch) != AIR and not out.has(ch):
+					out.append(ch)
+	return out
+
+
 static func structure_diagram(def: Dictionary, with_name := true) -> String:
 	var layers: Array = def["layers"]
 	var legend: Dictionary = def["legend"]

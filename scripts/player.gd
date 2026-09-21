@@ -1060,16 +1060,19 @@ func _rebuild_book() -> void:
 		# A multiblock has no ingredient list -- it is the pattern -- so the
 		# materials line would just say so at length.
 		var mats := Label.new()
-		mats.visible = str(rec["diagram"]) == ""
+		mats.visible = str(rec["diagram"]) == "" and not rec.has("def")
 		mats.text = needs
 		mats.add_theme_font_size_override("font_size", 12)
 		mats.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		mats.custom_minimum_size = Vector2(548, 0)
 		mats.modulate = Color(1, 1, 1, 0.75)
 		vb.add_child(mats)
-		if str(rec["diagram"]) != "":
-			# Multiblocks are the reason this screen exists: the pattern is
-			# shown in full, monospaced, so it can actually be copied.
+		if rec.has("def"):
+			# Multiblocks are the reason this screen exists. Shown as a picture
+			# of the finished build, each layer drawn out with the materials'
+			# own icons, and a key in words -- not letters to decode.
+			vb.add_child(_pattern_view(rec["def"]))
+		elif str(rec["diagram"]) != "":
 			var dg := Label.new()
 			dg.text = str(rec["diagram"])
 			dg.add_theme_font_size_override("font_size", 12)
@@ -1078,6 +1081,112 @@ func _rebuild_book() -> void:
 		_book_vbox.add_child(row)
 	_book_empty.text = "" if shown > 0 else "Nothing matches that."
 	_book_empty.visible = shown == 0
+
+
+## A build pattern drawn out for the Recipe Book: the finished thing in 3D on
+## the left; on the right, each layer from the ground up as a grid of the
+## materials' icons, and a key saying what each one is.
+func _pattern_view(def: Dictionary) -> Control:
+	var hb := HBoxContainer.new()
+	hb.add_theme_constant_override("separation", 14)
+	var pic := TextureRect.new()
+	pic.texture = PatternPicture.of(def)
+	pic.custom_minimum_size = Vector2(PatternPicture.SIZE)
+	pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	hb.add_child(pic)
+
+	var right := VBoxContainer.new()
+	right.add_theme_constant_override("separation", 6)
+	hb.add_child(right)
+	var planet := world.nearest_planet(global_position) if world != null else null
+	# Blocky patterns are shown a block to a square; fine ones an eighth.
+	var step := 2 if (not def.has("legend") and Blocks.part_pattern_is_blocky(def)) else 1
+	var layers: Array = def["layers"]
+	var grids := HBoxContainer.new()
+	grids.add_theme_constant_override("separation", 16)
+	right.add_child(grids)
+	var count := int(ceil(layers.size() / float(step)))
+	var y := 0
+	while y < layers.size():
+		var li := y / step
+		var col := VBoxContainer.new()
+		col.add_theme_constant_override("separation", 3)
+		var cap := Label.new()
+		cap.text = "Layer %d" % (li + 1)
+		if count > 1 and li == 0:
+			cap.text += " (bottom)"
+		elif count > 1 and li == count - 1:
+			cap.text += " (top)"
+		cap.add_theme_font_size_override("font_size", 11)
+		cap.modulate = Color(0.62, 0.80, 0.95)
+		col.add_child(cap)
+		var grid := GridContainer.new()
+		var rows: Array = layers[y]
+		var width := int(ceil((rows[0] as String).length() / float(step)))
+		grid.columns = maxi(width, 1)
+		grid.add_theme_constant_override("h_separation", 2)
+		grid.add_theme_constant_override("v_separation", 2)
+		var z := 0
+		while z < rows.size():
+			var row: String = rows[z]
+			var x := 0
+			while x < row.length():
+				grid.add_child(_pattern_cell(def, row[x], planet))
+				x += step
+			z += step
+		col.add_child(grid)
+		grids.add_child(col)
+		y += step
+	var seen := Label.new()
+	seen.text = "Each layer seen from above."
+	seen.add_theme_font_size_override("font_size", 10)
+	seen.modulate = Color(1, 1, 1, 0.45)
+	right.add_child(seen)
+
+	# The key, in pictures and words.
+	var key := HFlowContainer.new()
+	key.add_theme_constant_override("h_separation", 12)
+	key.custom_minimum_size = Vector2(360, 0)
+	for ch in Blocks.pattern_letters(def):
+		var item := HBoxContainer.new()
+		item.add_theme_constant_override("separation", 4)
+		item.add_child(_pattern_cell(def, ch, planet))
+		var lab := Label.new()
+		lab.text = Blocks.pattern_letter_label(def, ch)
+		lab.add_theme_font_size_override("font_size", 12)
+		item.add_child(lab)
+		key.add_child(item)
+	right.add_child(key)
+	var how := Label.new()
+	how.text = "Build it, then right-click it to confirm."
+	how.add_theme_font_size_override("font_size", 11)
+	how.modulate = Color(0.98, 0.86, 0.58)
+	right.add_child(how)
+	return hb
+
+
+## One square of a pattern grid: the material's icon on its colour, or a faint
+## outline where the cell is left empty.
+func _pattern_cell(def: Dictionary, ch: String, planet: Planet) -> Control:
+	const CELL := 22
+	var id := Blocks.pattern_letter_id(def, ch)
+	var box := ColorRect.new()
+	box.custom_minimum_size = Vector2(CELL, CELL)
+	if id == Blocks.AIR:
+		box.color = Color(1, 1, 1, 0.06)
+		return box
+	var c := Blocks.color_of(id)
+	box.color = Color(c.r, c.g, c.b, 0.35)
+	var icon := TextureRect.new()
+	icon.texture = ItemIcon.of(id, c, planet)
+	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(icon)
+	box.tooltip_text = Blocks.pattern_letter_label(def, ch)
+	return box
 
 
 func _toggle_inventory() -> void:
