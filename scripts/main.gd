@@ -1812,6 +1812,7 @@ func _setup_environment() -> void:
 # in an atmospheric planet the player is. No per-planet sun math -- just a mood
 # that fades in as you descend and out as you climb toward space.
 var _underground := 0.0   # smoothed "how far inside the planet the camera is"
+var _underwater := 0.0    # smoothed "is the camera under water"; see Player.underwater
 
 ## Twenty updates a second. More than that is more than anyone can see on a body
 ## that is being smoothed anyway, and position is the cheapest thing to overspend
@@ -2056,6 +2057,22 @@ func _process(delta: float) -> void:
 	_env.fog_depth_end = lerpf(reach * 1.02, 32.0, _underground)
 	_env.fog_depth_curve = 1.0
 	_env.fog_density = lerpf(_atmo, 1.0, _underground)
+	# Under water the fog BECOMES the water: its colour, closing in to a couple
+	# of dozen blocks, and over the sky too -- looking up from a lake bed at a
+	# crisp blue sky through twenty blocks of water is what gave it away as a
+	# tinted window. The screen overlay on the player does the rest.
+	var uw_want := 1.0 if (_world.player != null and _world.player.underwater) else 0.0
+	_underwater = move_toward(_underwater, uw_want, delta * 5.0)
+	if _underwater > 0.0:
+		var wpl: Planet = _world.nearest_planet(ppos)
+		var wcol: Color = wpl.color_of(Blocks.WATER) if wpl != null else Color(0.12, 0.38, 0.52)
+		wcol = wcol.darkened(0.45)
+		_env.fog_enabled = true
+		_env.fog_light_color = _env.fog_light_color.lerp(wcol, _underwater)
+		_env.fog_depth_begin = lerpf(_env.fog_depth_begin, 0.5, _underwater)
+		_env.fog_depth_end = lerpf(_env.fog_depth_end, 26.0, _underwater)
+		_env.fog_density = lerpf(_env.fog_density, 1.0, _underwater)
+		_env.fog_sky_affect = _underwater
 
 	# Hide each planet's low-res LOD sphere when you're close to it (on/near the
 	# surface) so you never see it through gaps or at the horizon; show it far away.

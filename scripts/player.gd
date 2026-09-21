@@ -1310,11 +1310,13 @@ func _physics_process(delta: float) -> void:
 			return
 	var g := world.gravity_at(global_position) if world else Vector3(0, -9.8, 0)
 	var up := -g.normalized() if g.length() > 0.01 else Vector3.UP
-	if _in_water(global_position + up * 0.5) or _in_water(global_position - up * 0.8):
+	var in_water := _in_water(global_position + up * 0.5) or _in_water(global_position - up * 0.8)
+	_water_fx(delta, up, in_water)
+	if in_water:
 		# align to the snapped axis (like walking) so you stay upright vs gravity
 		var sup := _face_up(g)
 		crouching = false
-		_swim(delta, sup)
+		_swim(delta, sup, g.length())
 	else:
 		grounded = g.length() > FLIGHT_THRESHOLD
 		if grounded:
@@ -2035,7 +2037,7 @@ func _in_water(wp: Vector3) -> bool:
 
 # Buoyant, draggy movement: swim relative to the camera, hold Space to rise / Shift
 # to dive, and float gently up to the surface when you let go.
-func _swim(delta: float, up: Vector3) -> void:
+func _swim(delta: float, up: Vector3, gmag: float) -> void:
 	grounded = false
 	_align_up(up, delta)
 	if _look.x != 0.0:
@@ -2051,16 +2053,162 @@ func _swim(delta: float, up: Vector3) -> void:
 	if wish.length() > 0.01:
 		desired = wish.normalized() * SWIM_SPEED
 	var vy := 0.0
-	if not menu_open and not ui_typing and key_down("jump"): vy += 1.0
+	var jump := not menu_open and not ui_typing and key_down("jump")
+	if jump: vy += 1.0
 	if key_down("crouch"): vy -= 1.0
 	if vy != 0.0:
 		desired += up * vy * SWIM_SPEED
 	elif _in_water(global_position + up * 0.5):
 		desired += up * SWIM_BUOY  # submerged & idle: bob up to the surface
 
-	velocity = velocity.lerp(desired, clampf(delta * SWIM_ACCEL, 0.0, 1.0))
+	# Scrambling out. Swimming up only ever lifts you until your feet reach the
+	# surface -- past that you are out of the water and gravity has you -- and a
+	# bank is nearly always a block higher than the water beside it. So you
+	# could tread water against a one-block ledge for ever. Surfaced, pressing
+	# into something and holding jump is a real jump instead: out and onto it,
+	# the way climbing out of a pool works.
+	_water_leap_t = maxf(_water_leap_t - delta, 0.0)
+	var surfaced := not _in_water(global_position + up * 0.5)
+	if _water_leap_t <= 0.0 and jump and surfaced and is_on_wall() \
+			and velocity.dot(up) < JUMP_SPEED * 0.5:
+		velocity += up * (JUMP_SPEED - velocity.dot(up))
+		_water_leap_t = WATER_LEAP_TIME
+		_splash(global_position + up * 0.3, 0.8)
+
+	if _water_leap_t > 0.0:
+		# Mid-leap the water does not get to drag you back: the climb is left
+		# to gravity, and only the sideways part eases toward where you steer.
+		var v_up := velocity.dot(up) - gmag * delta
+		var flat := velocity - up * velocity.dot(up)
+		var flat_want := desired - up * desired.dot(up)
+		velocity = flat.lerp(flat_want, clampf(delta * SWIM_ACCEL, 0.0, 1.0)) + up * v_up
+	else:
+		velocity = velocity.lerp(desired, clampf(delta * SWIM_ACCEL, 0.0, 1.0))
 	up_direction = up
 	move_and_slide()
+
+
+# --- WATER EFFECTS ------------------------------------------------------------
+
+## How long a scramble out of the water belongs to gravity rather than to the
+## water. Long enough to clear the surface; after that you are out anyway.
+const WATER_LEAP_TIME := 0.45
+## Least time between two small splashes. A big one ignores it: jumping in
+## while the last bob's ripple is still going should still make a splash.
+const SPLASH_GAP := 0.3
+
+## True while the CAMERA is under water. The environment reads it to turn its
+## fog into the water; the overlay below reads it for everything else.
+var underwater := false
+var _water_leap_t := 0.0
+var _chest_wet := false
+var _splash_cool := 0.0
+var _wake_t := 0.0
+var _uw_layer: CanvasLayer
+var _uw_mat: ShaderMaterial
+var _uw_strength := 0.0
+static var _drop_mat: StandardMaterial3D
+static var _drop_mesh: BoxMesh
+
+
+## Splashes, and the view from under the surface.
+func _water_fx(delta: float, up: Vector3, in_water: bool) -> void:
+	_splash_cool = maxf(_splash_cool - delta, 0.0)
+	var chest := _in_water(global_position + up * 0.5)
+	var v_up := velocity.dot(up)
+	# Crossing the surface, either way: falling in, bobbing up, and every bob
+	# after that. How hard is how fast you were going through it.
+	if chest != _chest_wet and absf(v_up) > 0.5:
+		_splash(global_position + up * 0.5, clampf(absf(v_up) / 9.0, 0.12, 1.0))
+	_chest_wet = chest
+	# Swimming along the top: a small wash off the front every so often.
+	if in_water and not chest:
+		var flat := velocity - up * v_up
+		_wake_t -= delta
+		if flat.length() > 2.0 and _wake_t <= 0.0:
+			_wake_t = 0.35
+			_splash(global_position + up * 0.45 + flat.normalized() * 0.45, 0.15)
+
+	# The overlay eases in and out rather than snapping, so bobbing at the
+	# surface flickers softly instead of strobing.
+	underwater = _camera != null and _in_water(_camera.global_position)
+	_uw_strength = move_toward(_uw_strength, 1.0 if underwater else 0.0, delta * 6.0)
+	if _uw_strength <= 0.0 and _uw_layer == null:
+		return
+	if _uw_layer == null:
+		_uw_layer = CanvasLayer.new()
+		# Under the HUD (layer 1): the water should colour the world, not the
+		# health bar.
+		_uw_layer.layer = 0
+		add_child(_uw_layer)
+		var r := ColorRect.new()
+		r.set_anchors_preset(Control.PRESET_FULL_RECT)
+		r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_uw_mat = ShaderMaterial.new()
+		_uw_mat.shader = load("res://shaders/underwater.gdshader")
+		r.material = _uw_mat
+		_uw_layer.add_child(r)
+	_uw_layer.visible = _uw_strength > 0.0
+	_uw_mat.set_shader_parameter("strength", _uw_strength)
+	var p := world.nearest_planet(global_position) if world != null else null
+	if p != null:
+		var wc: Color = p.color_of(Blocks.WATER)
+		_uw_mat.set_shader_parameter("water_color", Vector3(wc.r, wc.g, wc.b))
+
+
+## Throw up a burst of droplets where the body met the water. Little cubes
+## rather than soft dots -- everything else in the world is made of blocks, and
+## so is its water.
+func _splash(pos: Vector3, strength: float) -> void:
+	if strength < 0.5 and _splash_cool > 0.0:
+		return
+	_splash_cool = SPLASH_GAP
+	var host := get_tree().current_scene
+	if host == null:
+		return
+	var up := -world.gravity_at(pos).normalized() if world != null else Vector3.UP
+	if up.length() < 0.5:
+		up = global_transform.basis.y
+	if _drop_mesh == null:
+		_drop_mesh = BoxMesh.new()
+		_drop_mesh.size = Vector3.ONE * 0.07
+		_drop_mat = StandardMaterial3D.new()
+		_drop_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		_drop_mat.vertex_color_use_as_albedo = true
+		_drop_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_drop_mesh.material = _drop_mat
+	var wc := Color(0.75, 0.88, 1.0)
+	var p := world.nearest_planet(pos) if world != null else null
+	if p != null:
+		wc = p.color_of(Blocks.WATER).lerp(Color.WHITE, 0.6)
+	var ps := CPUParticles3D.new()
+	ps.mesh = _drop_mesh
+	ps.one_shot = true
+	ps.explosiveness = 0.92
+	ps.amount = int(lerpf(8.0, 42.0, strength))
+	ps.lifetime = lerpf(0.4, 0.95, strength)
+	# Emitted up out of the surface in the node's own frame, which is turned to
+	# face the planet's up below; gravity is in the world's frame, so it is
+	# simply the real down.
+	ps.direction = Vector3.UP
+	ps.spread = lerpf(40.0, 28.0, strength)
+	ps.initial_velocity_min = lerpf(1.2, 3.0, strength)
+	ps.initial_velocity_max = lerpf(2.6, 6.5, strength)
+	ps.gravity = -up * 11.0
+	ps.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	ps.emission_sphere_radius = lerpf(0.2, 0.55, strength)
+	ps.scale_amount_min = lerpf(0.6, 0.9, strength)
+	ps.scale_amount_max = lerpf(1.0, 1.8, strength)
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(wc.r, wc.g, wc.b, 0.9))
+	ramp.set_color(1, Color(wc.r, wc.g, wc.b, 0.0))
+	ps.color_ramp = ramp
+	host.add_child(ps)
+	var x := up.cross(Vector3(0.31, 0.12, 0.94)).normalized()
+	ps.global_transform = Transform3D(Basis(x, up, x.cross(up)), pos)
+	ps.emitting = true
+	get_tree().create_timer(ps.lifetime + 0.3).timeout.connect(ps.queue_free)
+	Audio.at("splash_big" if strength >= 0.5 else "splash", pos)
 
 
 # --- FLOAT --------------------------------------------------------------------
