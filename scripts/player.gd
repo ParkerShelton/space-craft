@@ -5545,34 +5545,11 @@ Feed it combustible ore — the higher its Combustion, the longer and harder it 
 				int(pct), st.burn_rate, st.burn_t]
 		return "Power %d%%   idle
 Load ore with a Combustion rating to start burning." % int(pct)
-	if kind == Blocks.CARPENTER:
-		return "Load Wood, Rock, and Metal to build →"
-	if kind == Blocks.SHAPER:
-		if _station_open != null and not _shaper_crafts(_station_open).is_empty():
-			return ""
-		return "Load a plain block (rock, dirt, wood…)
-to see what it can become →"
-	var mtype := Blocks.primary_material_for(kind)
-	var m := _station_primary_material(mtype)
-	if m.is_empty():
-		var label: String = {"refined": "a refined material", "circuit": "Circuitry",
-			"alloy": "Alloy Plating"}.get(mtype, "material")
-		var extra_hint := "\n(plus some Metal, loaded here too)" if Blocks.is_smelter_kind(kind) else ""
-		return "Load %s to build from →%s" % [label, extra_hint]
-	var p: Dictionary = m["props"]
-	var s := "%s   H%d D%d E%d R%d C%d" % [m["mat"].get("name", "material"),
-		int(p.get("h", 0)), int(p.get("d", 0)), int(p.get("e", 0)),
-		int(p.get("r", 0)), int(p.get("c", 0))]
-	if kind == Blocks.FABRICATOR:
-		var power := Blocks.drill_power(p)
-		s += "\nDrill: power %.1f — up to Tier %d" % [power, Blocks.max_tier_for_power(power)]
-		s += "\nWeapon: %.1f dmg/hit" % Blocks.weapon_damage(p)
-	elif kind == Blocks.SHIPWORKS:
-		s += "\nThruster thrust ↑ with Energy   |   Hull mass ↑ with Density"
-	elif Blocks.is_smelter_kind(kind):
-		s += "\nAlso load Metal, then pick a blueprint below:" \
-			+ "\nAlloy Plating (for Shipworks) or Circuitry (for Fabricator)"
-	return s
+	# Every bench is just its list of what it makes. The line of instructions
+	# that used to sit under it ("Load Wood, Rock, and Metal to build", the
+	# loaded material's stats) went: the list already says what the bench is
+	# for, and clicking one you cannot afford says what is missing.
+	return ""
 
 
 func _on_station_craft(craft: Dictionary, times: int = 1) -> void:
