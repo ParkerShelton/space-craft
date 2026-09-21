@@ -199,6 +199,10 @@ func _begin() -> void:
 	for c in leaves:
 		gone[c] = Blocks.AIR
 	planet.set_blocks(gone)
+	# What it swings about. Needed by the stop search just below, so set before
+	# it -- it was set after, the search ran with a zero axis (an engine error
+	# every fell), and a tree never stopped against a hillside.
+	_axis = Vector3(up).cross(Vector3(fall)).normalized()
 	# Where it stops, decided NOW and in fixed steps. It used to be tested each
 	# frame as it swung, which put a hillside landing at whatever angle the
 	# frame happened to fall on -- a different angle on a different machine, and
@@ -219,7 +223,6 @@ func _begin() -> void:
 		hi = Vector3i(maxi(hi.x, c.x), maxi(hi.y, c.y), maxi(hi.z, c.z))
 	if cutter:
 		LeafDecay.nudge_box(planet, world, player, lo - Vector3i(3, 3, 3), hi + Vector3i(3, 3, 3))
-	_axis = Vector3(up).cross(Vector3(fall)).normalized()
 	planet.add_child(self)
 	position = pivot
 	_mesh = MeshInstance3D.new()
