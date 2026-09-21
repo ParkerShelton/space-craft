@@ -1080,7 +1080,7 @@ func _populate_game_settings_menu() -> void:
 	_game_menu_slider(vb, "Mouse sensitivity", "sensitivity", 1.0, 0.25, 3.0, 0.05, "%.2fx")
 	_game_menu_check(vb, "Invert mouse Y", "invert_y", false)
 	_game_menu_check(vb, "Placement preview", "placement_ghost", true)
-	_game_menu_check(vb, "Name what you look at", "show_names", true)
+	_game_menu_check(vb, "Block names", "show_names", true)
 	_game_menu_slider(vb, "Autosave", "autosave_min", 5.0, 0.0, 20.0, 1.0, "%d min")
 	var note := Label.new()
 	note.text = "autosave is single player only; 0 turns it off"
