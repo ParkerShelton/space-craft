@@ -1505,10 +1505,15 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	player.name = "Player"
 	player.world = world
 	player.menu_requested.connect(_toggle_game_menu)
-	_apply_settings()
 	player.position = home.find_spawn_point(Vector3.UP)
 	add_child(player)
 	world.player = player
+	# AFTER world.player is set, not before. _apply_settings only reaches the
+	# player through world.player, so calling it a line early skipped the whole
+	# player half: every world opened with the preview on, default sensitivity,
+	# FOV and key bindings, whatever the settings said -- until something made
+	# it run again, which is why toggling a setting off and on "fixed" it.
+	_apply_settings()
 
 
 	if load_existing:
