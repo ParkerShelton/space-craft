@@ -4236,6 +4236,7 @@ var _wanted := {}
 var _gen_cache := {}      # chunk -> its generated terrain; see Chunk.GEN_KEY
 var _bslot_cache := {}    # chunk -> its region slots
 var _depth_cache := {}    # chunk -> its skylight columns' depths; see Chunk.DEPTH_KEY
+var _ground_memo := {}    # chunk -> terrain height over it; see _chunk_ground
 var _unload_later := {}   # left range while still building; see _unload_stragglers
 var _stream_last_cc0 := Vector3i(0x7fffffff, 0, 0)  # sentinel: never a real chunk coord
 var _stream_last_rd := -1
@@ -4294,7 +4295,7 @@ func _stream_full(cc0: Vector3i, rd: int) -> void:
 		for dy in range(-rd, rd + 1):
 			for dz in range(-rd, rd + 1):
 				var cc := cc0 + Vector3i(dx, dy, dz)
-				if _chunk_possibly_solid(cc):
+				if _want_chunk(cc, cc0):
 					wanted[cc] = true
 					if not loaded_chunks.has(cc) and not _load_queue_set.has(cc):
 						_load_queue.append(cc)
@@ -4333,11 +4334,8 @@ func _stream_step(prev: Vector3i, cc0: Vector3i, rd: int) -> void:
 				var o := cc - prev
 				if absi(o.x) <= rd and absi(o.y) <= rd and absi(o.z) <= rd:
 					continue
-				if _chunk_possibly_solid(cc):
-					_wanted[cc] = true
-					if not loaded_chunks.has(cc) and not _load_queue_set.has(cc):
-						_load_queue.append(cc)
-						_load_queue_set[cc] = true
+				if _want_chunk(cc, cc0):
+					_want_add(cc)
 	# Going out of range: in the old cube, not in the new one.
 	var dropped := false
 	for dx in range(-rd, rd + 1):
@@ -4347,15 +4345,116 @@ func _stream_step(prev: Vector3i, cc0: Vector3i, rd: int) -> void:
 				var o := cc - cc0
 				if absi(o.x) <= rd and absi(o.y) <= rd and absi(o.z) <= rd:
 					continue
-				_wanted.erase(cc)
-				if _load_queue_set.has(cc):
+				if _want_drop(cc):
 					dropped = true
-				if loaded_chunks.has(cc):
-					_unload_later[cc] = true
+	# The deep chunks kept loaded around the player moved with them: whatever
+	# is in the old or the new near cube, and still in range, is decided again.
+	for dx in range(-NEAR_CHUNKS, NEAR_CHUNKS + 1):
+		for dy in range(-NEAR_CHUNKS, NEAR_CHUNKS + 1):
+			for dz in range(-NEAR_CHUNKS, NEAR_CHUNKS + 1):
+				for c0 in [prev, cc0]:
+					var cc: Vector3i = c0 + Vector3i(dx, dy, dz)
+					var o := cc - cc0
+					if absi(o.x) > rd or absi(o.y) > rd or absi(o.z) > rd:
+						continue
+					if _want_chunk(cc, cc0):
+						_want_add(cc)
+					elif _wanted.has(cc) and _want_drop(cc):
+						dropped = true
 	_unload_stragglers()
 	if dropped:
 		_drop_unwanted_queued()
 	_sort_load_queue(cc0)
+
+
+## How far below the lowest ground anywhere on this world a chunk is still
+## loaded for its own sake. Deeper than that, it is only loaded when the player
+## is within NEAR_CHUNKS of it.
+##
+## The streamed cube is 21 chunks tall at render distance 10 -- 336 blocks -- and
+## on a big world every one of those chunks is inside the planet, so all of them
+## qualified. Chunk builds used to be slow enough that the world never got
+## round to the buried ones; once a build took a fifth of the time, it did, and
+## the loaded count climbed by about forty a second without stopping, dragging
+## draw calls and physics with it, for rock nobody could see. A cave deep
+## enough to fall outside this band is dark and closed anyway, and loads around
+## you the moment you are in it.
+const DEEP_BAND := 48.0
+const NEAR_CHUNKS := 3
+
+
+## Is this chunk worth loading with the player's chunk at `cc0`?
+func _want_chunk(cc: Vector3i, cc0: Vector3i) -> bool:
+	if not _chunk_possibly_solid(cc):
+		return false
+	var o := cc - cc0
+	if absi(o.x) <= NEAR_CHUNKS and absi(o.y) <= NEAR_CHUNKS and absi(o.z) <= NEAR_CHUNKS:
+		return true
+	# The farthest corner from the centre is the shallowest the chunk gets.
+	var lo := Vector3(cc * CS)
+	var far := 0.0
+	for i in 8:
+		var corner := lo + Vector3(CS if (i & 1) else 0, CS if (i & 2) else 0, CS if (i & 4) else 0)
+		far = maxf(far, _norm(corner))
+	# Deeper than the band below the lowest ground ANYWHERE: settled without
+	# asking the terrain. Otherwise it is measured against the ground right
+	# above it -- the world's lowest basin is far below the hill you are
+	# standing on, and measuring from there kept nearly everything.
+	if far < _min_surface() - DEEP_BAND:
+		return false
+	var ground := _chunk_ground(cc)
+	if far < ground - DEEP_BAND:
+		return false
+	# And the other way: open sky well above the ground, the tallest tree or
+	# building and the sea, holding nothing anybody has built. Those chunks are
+	# empty -- but there were thousands of them, each a node and a build.
+	var hi := lo + Vector3(CS, CS, CS)
+	var near := _norm(Vector3(clampf(0.0, lo.x, hi.x), clampf(0.0, lo.y, hi.y), clampf(0.0, lo.z, hi.z)))
+	if near > maxf(ground + maxf(tree_reach, settlement_reach) + 2.0, water_level + 1.0) 			and not _edits_by_chunk.has(cc) and not _parts_by_chunk.has(cc):
+		return false
+	return true
+
+
+## The terrain height over a chunk, asked once per chunk and remembered: a step
+## across a chunk boundary re-decides several hundred chunks, and the height
+## noise is the expensive part of deciding. Keyed by chunk and never stale --
+## terrain is a function of the seed.
+func _chunk_ground(cc: Vector3i) -> float:
+	var g = _ground_memo.get(cc)
+	if g != null:
+		return g
+	var mid := Vector3(cc * CS) + Vector3(CS, CS, CS) * 0.5
+	var h := _surf(mid / maxf(mid.length(), 0.0001))
+	_ground_memo[cc] = h
+	return h
+
+
+## The lowest the ground gets anywhere on this world, allowing for the deepest
+## basin a region can sink to. Conservative: a little lower than the real floor
+## costs a few extra chunks, a little higher would leave holes in valleys.
+func _min_surface() -> float:
+	var b_amp := 1.0
+	var b_sink := 0.0
+	for i in _b_amp.size():
+		b_amp = maxf(b_amp, _b_amp[i])
+		b_sink = maxf(b_sink, absf(_b_lift[i]))
+	return radius - terrain_amp * (b_amp + b_sink) - 2.0
+
+
+func _want_add(cc: Vector3i) -> void:
+	_wanted[cc] = true
+	_unload_later.erase(cc)
+	if not loaded_chunks.has(cc) and not _load_queue_set.has(cc):
+		_load_queue.append(cc)
+		_load_queue_set[cc] = true
+
+
+## Returns whether it was waiting in the load queue, which then needs pruning.
+func _want_drop(cc: Vector3i) -> bool:
+	_wanted.erase(cc)
+	if loaded_chunks.has(cc):
+		_unload_later[cc] = true
+	return _load_queue_set.has(cc)
 
 
 ## Unload whatever has left range, except chunks still being built -- those are
