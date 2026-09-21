@@ -22,6 +22,7 @@ var _job := ""                    # "" / "refine" / "craft"
 var _job_t := 0.0
 var _job_total := 0.0
 var _job_craft := {}
+var _job_times := 1              # how many of _job_craft this job makes
 
 var _mi: MeshInstance3D
 var _col: CollisionShape3D
@@ -264,17 +265,25 @@ func start_refine() -> int:
 
 
 # Start a craft. Returns 1 (started), 0 (not enough material), -1 (busy).
-func start_craft(craft: Dictionary) -> int:
+## `times` is how many to make; 0 or less means as many as what is loaded
+## allows. They are made as ONE job, a little longer than a single one rather
+## than that many single ones end to end -- sawing twenty planks should not be
+## twelve seconds of watching a bar. Returns how many will be made, 0 if not
+## even one can be, -1 if busy.
+func start_craft(craft: Dictionary, times: int = 1) -> int:
 	if _job != "":
 		return -1
 	if craft.has("reqs"):
-		if not _afford_reqs(craft["reqs"]):
+		var most := _affordable(craft["reqs"])
+		if most <= 0:
 			return 0
+		var k := most if times <= 0 else mini(times, most)
 		_job = "craft"
 		_job_craft = craft
+		_job_times = k
 		_job_t = 0.0
-		_job_total = 0.6
-		return 1
+		_job_total = minf(0.6 + 0.12 * float(k - 1), 4.0)
+		return k
 	var mtype := Blocks.primary_material_for(kind)
 	var cost := int(craft["cost"])
 	var has_primary := false
@@ -288,9 +297,23 @@ func start_craft(craft: Dictionary) -> int:
 		return 0
 	_job = "craft"
 	_job_craft = craft
+	# Made one after another at the end, each only if it can still be paid
+	# for, so "all" simply stops when the material runs out.
+	_job_times = 999 if times <= 0 else times
 	_job_t = 0.0
 	_job_total = maxf(0.4, cost * CRAFT_TIME_PER)
-	return 1
+	return 1 if times == 1 else _job_times
+
+
+## How many times over `reqs` can be paid from what is loaded.
+func _affordable(reqs: Array) -> int:
+	var most := 1 << 30
+	for r in reqs:
+		var need := int(r["n"])
+		if need <= 0:
+			continue
+		most = mini(most, _count_req(r) / need)
+	return 0 if most == 1 << 30 else most
 
 
 ## Burns ore for power. Duration and output both scale with the ore's
@@ -389,7 +412,10 @@ func _process(delta: float) -> void:
 	if _job == "refine":
 		refine_all()
 	elif _job == "craft":
-		_do_craft(_job_craft)
+		for i in _job_times:
+			if not _do_craft(_job_craft):
+				break
+	_job_times = 1
 	_job = ""
 	_job_t = 0.0
 	_job_total = 0.0
@@ -400,11 +426,14 @@ func _process(delta: float) -> void:
 # resource) and output the crafted item into storage. Gear/ship-part outputs
 # carry the source material's identity + a derived stat; plain outputs (Alloy,
 # Circuitry, Hull Plate, Door, Glass) don't need one.
-func _do_craft(craft: Dictionary) -> void:
+## Returns whether one was made -- false once the material has run out.
+func _do_craft(craft: Dictionary) -> bool:
 	if craft.has("reqs"):
+		if not _afford_reqs(craft["reqs"]):
+			return false
 		_consume_reqs(craft["reqs"])
 		store_add(int(craft["out"]), int(craft.get("n", 1)))
-		return
+		return true
 	var mtype := Blocks.primary_material_for(kind)
 	var m = null
 	for s in storage:
@@ -412,12 +441,12 @@ func _do_craft(craft: Dictionary) -> void:
 			m = s
 			break
 	if m == null:
-		return
+		return false
 	var cost := int(craft["cost"])
 	if m["count"] < cost:
-		return
+		return false
 	if craft.has("extra") and _count_req(craft["extra"]) < int(craft["extra"]["n"]):
-		return
+		return false
 	var props: Dictionary = m["props"]
 	var src: String = m.get("src", "")
 	var mname: String = m["mat"].get("name", "")
@@ -443,3 +472,4 @@ func _do_craft(craft: Dictionary) -> void:
 		Blocks.PULSE_PISTOL:
 			cmat["damage"] = Blocks.ranged_weapon_damage(props)
 	store_add(out, int(craft.get("n", 1)), props, src, cmat)
+	return true

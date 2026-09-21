@@ -396,6 +396,7 @@ var _refine_btn: Button            # Smelter action
 var _craft_row: Control            # holds per-station craft buttons
 var _craft_scroll: ScrollContainer # scrolls them when a bench has many
 var _craft_buttons: Array = []     # current station's craft buttons
+var _craft_multi: Array = []         # the x5 / All buttons beside each craft
 var _preview_label: Label          # live craft-stat preview (Fabricator/Shipworks)
 var _job_label: Label              # "Refining… 60%" / "Crafting… 30%" while a job runs
 var _markers: Array[Label] = []   # one navigation marker per planet
@@ -3737,9 +3738,11 @@ func _process_mining(delta: float) -> void:
 				# rotated stair or an axis-aligned log would otherwise come back
 				# as a packed value that can't be placed again.
 				_add_item(Blocks.bottom_of(id), 1)
-				# Cut through a trunk and what is above it comes down.
+				# Cut through a trunk and what is above it comes down; and any
+				# leaves this log was holding up start to wither.
 				if Blocks.is_wood(Blocks.bottom_of(id)):
 					TreeFall.try_fell(planet, world, self, v)
+					LeafDecay.nudge(planet, world, self, v)
 		elif ship != null:
 			ship.set_block(v, Blocks.AIR)
 			_add_item(Blocks.bottom_of(id), 1)
@@ -4913,7 +4916,8 @@ func _recipe_text(recipe: Dictionary) -> String:
 
 # --- crafting stations --------------------------------------------------------
 
-const _LEFT_W := 168   # left column (blueprints/actions) width
+const _LEFT_W := 250   # left column (blueprints/actions) width
+const _MULTI_W := 40   # each of the x5 / All buttons beside a craft
 ## Height of the recipe column. Four rows: enough to read a bench at a glance,
 ## short enough to leave the preview and progress lines below it alone.
 const CRAFT_LIST_H := 140
@@ -5044,15 +5048,35 @@ func _rebuild_craft_buttons(st) -> void:
 		crafts = _shaper_crafts(st)
 	var craft_top := 62.0 + (34.0 if is_smelter else 0.0)
 	_craft_scroll.position = Vector2(12, craft_top)
+	for b in _craft_multi:
+		b.queue_free()
+	_craft_multi.clear()
 	var by := 0.0
+	var main_w := _LEFT_W - 2 * (_MULTI_W + 4)
 	for craft in crafts:
 		var b := Button.new()
 		b.text = craft["label"]
 		b.position = Vector2(0, by)
-		b.custom_minimum_size = Vector2(_LEFT_W, 30)
-		b.pressed.connect(_on_station_craft.bind(craft))
+		b.custom_minimum_size = Vector2(main_w, 30)
+		b.size = Vector2(main_w, 30)
+		b.clip_text = true
+		b.tooltip_text = "Make one"
+		b.pressed.connect(_on_station_craft.bind(craft, 1))
 		_craft_row.add_child(b)
 		_craft_buttons.append(b)
+		# Five, and as many as what is loaded will make.
+		var x := main_w + 4
+		for opt in [[5, "x5", "Make five"], [0, "All", "Make as many as the loaded material allows"]]:
+			var mb := Button.new()
+			mb.text = str(opt[1])
+			mb.tooltip_text = str(opt[2])
+			mb.position = Vector2(x, by)
+			mb.custom_minimum_size = Vector2(_MULTI_W, 30)
+			mb.size = Vector2(_MULTI_W, 30)
+			mb.pressed.connect(_on_station_craft.bind(craft, int(opt[0])))
+			_craft_row.add_child(mb)
+			_craft_multi.append(mb)
+			x += _MULTI_W + 4
 		by += 34.0
 	_craft_row.custom_minimum_size = Vector2(_LEFT_W, by)
 
@@ -5438,7 +5462,11 @@ func _refresh_station_ui() -> void:
 		for c in _shaper_crafts(_station_open):
 			want.append(c["label"])
 		if want != _craft_button_labels():
-			_rebuild_craft_buttons(_station_open)
+			# Opened again, not just refilled: the list was sized for what it
+			# held when the panel opened -- nothing -- so a loaded block showed
+			# one option and a scrollbar instead of all of them.
+			_open_station(_station_open)
+			return
 	var craft_key: int = Blocks.SMELTER if Blocks.is_smelter_kind(_station_open.kind) else _station_open.kind
 	var has_crafts: bool = Blocks.STATION_CRAFTS.has(craft_key) or _station_open.kind == Blocks.SHAPER
 	if has_crafts:
@@ -5514,7 +5542,7 @@ Load ore with a Combustion rating to start burning." % int(pct)
 		return "Load Wood, Rock, and Metal to build →"
 	if kind == Blocks.SHAPER:
 		if _station_open != null and not _shaper_crafts(_station_open).is_empty():
-			return "Pick a shape to cut →"
+			return ""
 		return "Load a plain block (rock, dirt, wood…)
 to see what it can become →"
 	var mtype := Blocks.primary_material_for(kind)
@@ -5540,10 +5568,10 @@ to see what it can become →"
 	return s
 
 
-func _on_station_craft(craft: Dictionary) -> void:
+func _on_station_craft(craft: Dictionary, times: int = 1) -> void:
 	if _station_open == null:
 		return
-	var r := _station_open.start_craft(craft)
+	var r := _station_open.start_craft(craft, times)
 	if r == -1:
 		_toast("Busy…")
 	elif r == 0:
@@ -5557,6 +5585,8 @@ func _on_station_craft(craft: Dictionary) -> void:
 			if craft.has("extra"):
 				msg += ", plus " + Blocks.req_text(craft["extra"])
 			_toast(msg)
+	elif r > 1 and craft.has("reqs"):
+		_toast("Crafting %s ×%d…" % [Blocks.name_of(int(craft["out"])), r])
 	else:
 		_toast("Crafting %s…" % Blocks.name_of(int(craft["out"])))
 	_refresh_station_ui()

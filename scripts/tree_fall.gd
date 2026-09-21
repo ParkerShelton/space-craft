@@ -161,6 +161,14 @@ func _begin() -> void:
 	for c in leaves:
 		gone[c] = Blocks.AIR
 	world.edit_blocks(planet, gone)
+	# Whatever crown this search did not take -- leaves further out than
+	# LEAF_REACH -- is now hanging off nothing, and withers away.
+	var lo := Vector3i(1 << 30, 1 << 30, 1 << 30)
+	var hi := -lo
+	for c in gone:
+		lo = Vector3i(mini(lo.x, c.x), mini(lo.y, c.y), mini(lo.z, c.z))
+		hi = Vector3i(maxi(hi.x, c.x), maxi(hi.y, c.y), maxi(hi.z, c.z))
+	LeafDecay.nudge_box(planet, world, player, lo - Vector3i(3, 3, 3), hi + Vector3i(3, 3, 3))
 	_axis = Vector3(up).cross(Vector3(fall)).normalized()
 	planet.add_child(self)
 	position = pivot
@@ -290,6 +298,12 @@ func _burst_leaves(b: Basis) -> void:
 
 
 func _burst(where: Vector3, col: Color) -> void:
+	TreeFall.burst(planet, up, where, col, 10)
+
+
+## A puff of leaf-coloured bits at `where` (planet space). Shared with leaf
+## decay, which is the same leaf going, just on its own.
+static func burst(planet: Planet, up: Vector3i, where: Vector3, col: Color, amount: int) -> void:
 	var ps := CPUParticles3D.new()
 	var box := BoxMesh.new()
 	box.size = Vector3.ONE * 0.13
@@ -298,7 +312,7 @@ func _burst(where: Vector3, col: Color) -> void:
 	m.albedo_color = col
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	ps.material_override = m
-	ps.amount = 10
+	ps.amount = amount
 	ps.lifetime = 0.8
 	ps.one_shot = true
 	ps.explosiveness = 0.95
