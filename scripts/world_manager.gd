@@ -340,6 +340,8 @@ func save_game() -> bool:
 			data.get_or_add("machine_kinds", {})[p.planet_name] = p.machine_kinds.duplicate()
 		# A field has to still be there tomorrow, or planting is a waste of an
 		# afternoon.
+		if not p.sites_opened.is_empty():
+			data.get_or_add("sites_opened", {})[p.planet_name] = p.sites_opened.keys()
 		var crows: Array = p.crops_snapshot()
 		if not crows.is_empty():
 			data.get_or_add("crops", {})[p.planet_name] = crows
@@ -413,6 +415,9 @@ func load_game() -> bool:
 		p.machine_cores = (data.get("machines", {}).get(p.planet_name, []) as Array).duplicate()
 		p.machine_kinds = (data.get("machine_kinds", {}).get(p.planet_name, {}) as Dictionary).duplicate()
 		p.load_crops((data.get("crops", {}).get(p.planet_name, []) as Array))
+		p.sites_opened = {}
+		for sid in (data.get("sites_opened", {}).get(p.planet_name, []) as Array):
+			p.sites_opened[str(sid)] = true
 		# Re-check each saved machine against the blocks actually present, so a
 		# structure someone dismantled while it was unloaded comes back damaged
 		# rather than silently still working.
@@ -721,6 +726,9 @@ func _physics_process(delta: float) -> void:
 				t = Time.get_ticks_usec()
 				p.update_npcs(delta, here, self)
 				perf_mark("npcs", t)
+				t = Time.get_ticks_usec()
+				p.tick_sites(delta, self)
+				perf_mark("sites", t)
 		else:
 			if not p._creatures.is_empty():
 				p.clear_fauna()  # wildlife only exists meaningfully near the player

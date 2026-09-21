@@ -605,6 +605,7 @@ func configure(cfg: Dictionary) -> void:
 	civ_tier = cfg.get("civ_tier", 2)
 	_derive_settlements(cfg.get("force_settlement", false))
 	_derive_npcs()  # after settlements: NPCs only exist where there's a town to live in
+	_derive_sites()  # after settlements and water: a site keeps out of both
 	_add_distant_sphere()
 
 
@@ -630,6 +631,117 @@ func _derive_water(cfg: Dictionary) -> void:
 
 func _water_block() -> int:
 	return Blocks.WATER if water_style == WATER_LIQUID else Blocks.ICE
+
+
+# --- sites: wrecks, outposts, ruins, vaults -----------------------------------
+
+## How likely each kind of site is in any one region of this world (see Sites).
+## A kind rolled at zero does not exist here.
+var site_density := {}
+## Sites whose chests have been put out, by site id -- saved, so a chest you
+## emptied is not refilled next time you pass.
+var sites_opened := {}
+var _site_shared := {}        # region -> its sites; shared by build threads
+var _site_mutex := Mutex.new()
+var _site_tick := 0.0
+
+
+func _derive_sites() -> void:
+	var r := RandomNumberGenerator.new()
+	r.seed = _seed + 4321
+	site_density = {}
+	var any := false
+	for kind in Sites.DENSITY_CHOICES:
+		var choices: Array = Sites.DENSITY_CHOICES[kind]
+		var d: float = choices[r.randi() % choices.size()]
+		site_density[kind] = d
+		any = any or d > 0.0
+	if not any:
+		site_density = {}      # nothing left behind on this world at all
+
+
+## The sites in one region, worked out once and shared. Worked out OUTSIDE the
+## lock: two threads racing on the same region compute the same answer, and
+## holding the lock across the terrain sampling would stall every build.
+func _sites_in(rk: Vector3i) -> Array:
+	_site_mutex.lock()
+	var got = _site_shared.get(rk)
+	_site_mutex.unlock()
+	if got != null:
+		return got
+	var fresh := Sites.derive_region(self, rk)
+	_site_mutex.lock()
+	_site_shared[rk] = fresh
+	_site_mutex.unlock()
+	return fresh
+
+
+## What a site puts at `c`, or -1. The region's list is kept in the build's own
+## cache, so the shared one is asked once per region per chunk, not per cell.
+func _site_block(c: Vector3i, tcache) -> int:
+	var rk := Sites.region_of(c)
+	var list: Array
+	if tcache != null:
+		var sm = tcache.get("sites")
+		if sm == null:
+			sm = {}
+			tcache["sites"] = sm
+		var got = sm.get(rk)
+		if got == null:
+			got = _sites_in(rk)
+			sm[rk] = got
+		list = got
+	else:
+		list = _sites_in(rk)
+	for s in list:
+		var b := Sites.block_at(self, s, c)
+		if b >= 0:
+			return b
+	return -1
+
+
+## Put out the chests at any site the player has come near. Chests are real
+## stations -- they hold things and are saved -- so unlike the site's blocks
+## they are made once, when first needed, and remembered.
+func tick_sites(delta: float, world: WorldManager) -> void:
+	if site_density.is_empty() or world == null or world.player == null:
+		return
+	_site_tick -= delta
+	if _site_tick > 0.0:
+		return
+	_site_tick = 1.0
+	var lp := to_local(world.player.global_position)
+	var rk0 := Sites.region_of(Vector3i(lp.floor()))
+	for dx in range(-1, 2):
+		for dy in range(-1, 2):
+			for dz in range(-1, 2):
+				for s in _sites_in(rk0 + Vector3i(dx, dy, dz)):
+					_open_site(s, lp, world)
+
+
+func _open_site(s: Dictionary, lp: Vector3, world: WorldManager) -> void:
+	var sid: String = s["id"]
+	if sites_opened.has(sid):
+		return
+	var chests: Array = s["chests"]
+	if chests.is_empty() or (Vector3(chests[0] as Vector3i) - lp).length() > 48.0:
+		return
+	for cc in chests:
+		if not loaded_chunks.has(chunk_of(cc)):
+			return       # not drawn yet: try again next second
+	sites_opened[sid] = true
+	var upw := (global_transform.basis * Vector3(s["up"] as Vector3i)).normalized()
+	var fw := (global_transform.basis * Vector3(s["u"] as Vector3i)).normalized()
+	var i := 0
+	for cc in chests:
+		var cell: Vector3i = cc
+		# Somebody has built or dug here since: no chest in a wall.
+		if get_id(cell) == Blocks.AIR:
+			var st := world.spawn_station(Blocks.CHEST, to_global(Vector3(cell)), upw, -fw)
+			Sites.fill(self, s, st, i)
+		i += 1
+	if world.player.has_method("_toast"):
+		world.player.call("_toast", "Discovered: " + Sites.KIND_NAMES[int(s["kind"])])
 
 
 # --- fauna: invent this planet's creatures from its seed, exactly like ores ----
@@ -3356,6 +3468,12 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 	var d := _norm(p)
 	if d > _max_reach() + 2.0:
 		return Blocks.AIR
+	# Wrecks, outposts, ruins and vaults come first: a site's walls stand
+	# through a cave, and its rooms are carved out of whatever rock is there.
+	if not site_density.is_empty():
+		var sb := _site_block(Vector3i(gx, gy, gz), tcache)
+		if sb >= 0:
+			return sb
 	var l2 := p.length()
 	var dir := p / maxf(l2, 0.0001)
 	# One lookup, shared by the height below, the ground material and the
