@@ -158,6 +158,14 @@ const REACH_BARE := 3.6
 const REACH_MAX := 6.0
 var reach := REACH_BARE          # block interaction distance, with what you carry
 const BARE_MINE_MULT := 2.5       # bare-hand mining is slow; a drill divides this
+## How much slower bare hands are than BARE_MINE_MULT on the three kinds of
+## material a basic tool is for -- the gap that makes the tool worth making.
+## At a flat 2.5 for everything, a Pick only halved the time it took to break
+## rock, and 2.25 seconds a block was never long enough to want one. These put
+## hands close to Minecraft's: rock about 7 seconds, a log 3, dirt about 1. The
+## times WITH the tool are unchanged; only doing without got slower. Anything
+## no tool helps with -- glass, metal, a torch -- keeps BARE_MINE_MULT.
+const HAND_MINE_MULT := {"rock": 8.0, "wood": 5.0, "soil": 3.0}
 var mine_power := 1.0             # >1 once you craft a drill (Phase 2)
 ## How hard you hit each kind of material, from the best tool you carry for it.
 ## Bare hands are 1.0 at everything.
@@ -3692,6 +3700,11 @@ func _process_mining(delta: float) -> void:
 		# you want a drill for stone, and applying it to leaves just makes
 		# clearing a canopy a chore.
 		var bare := 1.0 if Blocks.is_leaf(Blocks.bottom_of(id)) else BARE_MINE_MULT
+		# Nothing in hand that helps with this material: the full cost of
+		# doing it by hand. See HAND_MINE_MULT.
+		var mclass := Blocks.material_class(id)
+		if power <= 1.0 and HAND_MINE_MULT.has(mclass) and not Blocks.is_leaf(Blocks.bottom_of(id)):
+			bare = float(HAND_MINE_MULT[mclass])
 		_mine_total = hardness * bare / power
 	_mine_time += delta
 	# Asked for every frame while the button is held; Audio decides how often it
