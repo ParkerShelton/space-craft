@@ -1089,12 +1089,8 @@ func _rebuild_book() -> void:
 func _pattern_view(def: Dictionary) -> Control:
 	var hb := HBoxContainer.new()
 	hb.add_theme_constant_override("separation", 14)
-	var pic := TextureRect.new()
-	pic.texture = PatternPicture.of(def)
-	pic.custom_minimum_size = Vector2(PatternPicture.SIZE)
-	pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	hb.add_child(pic)
+	# The finished build as a live model, turning, and turned by dragging.
+	hb.add_child(PatternView.new(def))
 
 	var right := VBoxContainer.new()
 	right.add_theme_constant_override("separation", 6)
