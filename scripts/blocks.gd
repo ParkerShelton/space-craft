@@ -464,8 +464,16 @@ static func stair_state_name(state: int) -> String:
 		stair_state_facing(state) * 90]
 
 
-static func make_stair(stair_id: int, facing: int, variant: int) -> int:
-	return (stair_id & ID_MASK) 		| ((facing & FACING_MASK) << FACING_SHIFT) 		| ((variant & VARIANT_MASK) << VARIANT_SHIFT)
+## Upside down: the solid half on top and the step hanging below it, for the
+## underside of a staircase and for eaves. Above the facing and the variant.
+const STAIR_FLIP_SHIFT := 20
+
+static func make_stair(stair_id: int, facing: int, variant: int, flipped := false) -> int:
+	return (stair_id & ID_MASK) 		| ((facing & FACING_MASK) << FACING_SHIFT) 		| ((variant & VARIANT_MASK) << VARIANT_SHIFT) 		| ((1 if flipped else 0) << STAIR_FLIP_SHIFT)
+
+
+static func stair_flipped_of(v: int) -> bool:
+	return ((v >> STAIR_FLIP_SHIFT) & 1) == 1
 
 
 static func stair_facing_of(v: int) -> int:
@@ -1913,8 +1921,22 @@ const SAPLING_DROP_CHANCE := 0.08
 const CROSS_SEED_CHANCE := 0.25
 
 
+## Whatever is packed above the id: a leaf somebody placed carries a flag
+## there (see placed_leaf), and is still a leaf.
 static func is_leaf(id: int) -> bool:
-	return id in LEAF_IDS
+	return bottom_of(id) in LEAF_IDS
+
+
+## A leaf somebody PLACED, as opposed to one a tree grew -- wild or from a
+## sapling, which write the plain id. Only grown leaves wither without wood, or
+## come down with a felled tree: a hedge has no trunk and was never meant to.
+const LEAF_PLACED_SHIFT := 16
+
+static func placed_leaf(id: int) -> int:
+	return (id & ID_MASK) | (1 << LEAF_PLACED_SHIFT)
+
+static func leaf_is_placed(v: int) -> bool:
+	return is_leaf(v) and ((v >> LEAF_PLACED_SHIFT) & 1) == 1
 
 
 static func is_wood(id: int) -> bool:
@@ -2087,5 +2109,7 @@ static func name_of(raw: int) -> String:
 	if STAIR_MATERIAL.has(id):
 		var v := stair_variant_of(raw)
 		var t := " Stairs" if v == STAIR_STRAIGHT else " %s Stairs" % stair_variant_name(v)
+		if stair_flipped_of(raw):
+			t += " (upside down)"
 		return shape_prefix(int(STAIR_MATERIAL[id])) + t
 	return NAMES.get(id, "Unknown")

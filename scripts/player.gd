@@ -3257,7 +3257,8 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 	if Blocks.is_stair(place_id):
 		return {"voxel": pv, "value": Blocks.make_stair(place_id,
 			Blocks.stair_state_facing(_stair_state),
-			Blocks.stair_state_variant(_stair_state))}
+			Blocks.stair_state_variant(_stair_state),
+			_stair_upside_down(tgt, obj, pv))}
 	if fine_place and Blocks.is_partable(place_id):
 		var target := _sub_hit(tgt) + (tgt.get("normal", Vector3i.ZERO) as Vector3i)
 		var sp := _sub_split(target)
@@ -3291,6 +3292,9 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 		# brightness step is baked in here from the ore it was crafted with.
 		var pr: Dictionary = inv[active_slot].get("props", {}) if active_slot < inv.size() else {}
 		return {"voxel": pv, "value": Blocks.make_torch(place_id, Blocks.torch_tier_for(pr))}
+	if Blocks.is_leaf(place_id):
+		# Marked as placed, so it neither withers nor comes down with a tree.
+		return {"voxel": pv, "value": Blocks.placed_leaf(place_id)}
 	if Blocks.is_wood(place_id):
 		# A log lies along the face you placed it against, the way stacking logs
 		# up a wall lays them sideways rather than standing them all upright.
@@ -3302,6 +3306,27 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 			axis = Blocks.AXIS_Z
 		return {"voxel": pv, "value": Blocks.make_log(place_id, axis)}
 	return {"voxel": pv, "value": place_id}
+
+
+## Minecraft's rule, and the one that needs no extra key: a stair is placed
+## upside down when you aim at the underside of a block, or at the upper half
+## of a block's side. Aiming at the top of a block, or the lower half of a
+## side, places it the right way up. R still turns it either way.
+func _stair_upside_down(tgt: Dictionary, obj: Object, pv: Vector3i) -> bool:
+	var n: Vector3i = tgt.get("normal", Vector3i.ZERO)
+	var upv := Vector3.UP
+	if obj is Planet:
+		upv = (obj as Planet)._axis_of(Vector3(pv) + Vector3(0.5, 0.5, 0.5))
+	var upi := Vector3i(roundi(upv.x), roundi(upv.y), roundi(upv.z))
+	if n == -upi:
+		return true       # against a ceiling
+	if n == upi:
+		return false      # on a floor
+	# A side: which half of the face you clicked, measured up the cell.
+	var hit_cell := pv - n
+	var pt: Vector3 = tgt.get("point", Vector3(hit_cell) + Vector3(0.5, 0.5, 0.5))
+	var along := (pt - Vector3(hit_cell) - Vector3(0.5, 0.5, 0.5)).dot(Vector3(upi))
+	return along > 0.0
 
 
 const _CUBE26_OFFSETS := [
@@ -4754,9 +4779,10 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 			world.nearest_planet(global_position) if world != null else null)
 		icon.texture = tex
 		icon.visible = tex != null
-		# Less than a whole block is drawn smaller, by how much of one there
-		# is: a quarter at a bit over half size, seven eighths nearly full.
-		var part: float = 1.0 if int(slot["count"]) > 0 else 0.45 + 0.45 * float(eighths) / 8.0
+		# Less than a whole block is drawn clearly smaller, by how much of one
+		# there is: a quarter at a third of the size, seven eighths at half --
+		# never close enough to a whole block to be mistaken for one.
+		var part: float = 1.0 if int(slot["count"]) > 0 else 0.25 + 0.30 * float(eighths) / 8.0
 		icon.pivot_offset = icon.size * 0.5
 		icon.scale = Vector2.ONE * part
 		swatch.color = Color(col.r, col.g, col.b, 0.22) if tex != null else col

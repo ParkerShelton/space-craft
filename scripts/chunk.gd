@@ -1264,13 +1264,17 @@ static func shape_boxes(raw: int, up: Vector3, conn: int = 0x3F) -> Array:
 			bx = Vector3(0, 1, 0)
 		var f: Vector3 = [ax, bx, -ax, -bx][Blocks.stair_facing_of(raw)]
 		var side: Vector3 = [bx, -ax, -bx, ax][Blocks.stair_facing_of(raw)]
-		var step := _half_toward(lo, hi, up)
+		# Upside down is the same shape turned over: the solid half against the
+		# top of the cell and the step hanging beneath it. Facing is untouched,
+		# so a flipped stair still points the way it was turned.
+		var u: Vector3 = -up if Blocks.stair_flipped_of(raw) else up
+		var step := _half_toward(lo, hi, u)
 		step = _half_toward(step[0], step[1], f)
 		# A corner keeps only a quarter of the upper step, on one side or the
 		# other, so a staircase can turn either way.
 		if Blocks.stair_variant_of(raw) == Blocks.STAIR_CORNER:
 			step = _half_toward(step[0], step[1], side)
-		return [_half_toward(lo, hi, -up), step]
+		return [_half_toward(lo, hi, -u), step]
 	if base == Blocks.DOOR or base == Blocks.DOOR_OPEN:
 		# A door is a PANEL on one edge of its cell, not a cube filling it.
 		#

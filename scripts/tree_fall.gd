@@ -109,20 +109,24 @@ static func _up_at(p: Planet, cut: Vector3i) -> Vector3i:
 	return _snap_axis(upf)
 
 
-## A log the world grew, as opposed to one somebody placed: a cabin wall with
-## its bottom row knocked out is not a tree, and must not fall over.
+## A log a tree grew, as opposed to one somebody placed: a cabin wall with its
+## bottom row knocked out is not a tree, and must not fall over.
+##
+## Told apart by the log itself rather than by whether the cell was edited. A
+## placed log always records which way it lies (Blocks.make_log), and a grown
+## one never does -- wild, or grown from a sapling. The edit test this replaced
+## took a sapling's tree for a building, because growing it writes its blocks
+## as edits just as building does, and so a tree you planted never fell. A log
+## that has already fallen was laid with an axis, so it does not fall again.
 static func _is_tree_log(p: Planet, v: Vector3i) -> bool:
-	if not Blocks.is_wood(Blocks.bottom_of(p.get_id(v))):
-		return false
-	var d = p._edits_by_chunk.get(p.chunk_of(v))
-	return d == null or not (d as Dictionary).has(v)
+	var id := p.get_id(v)
+	return Blocks.is_wood(Blocks.bottom_of(id)) and Blocks.log_axis_of(id) < 0
 
 
+## A leaf a tree grew: see Blocks.placed_leaf.
 static func _is_tree_leaf(p: Planet, v: Vector3i) -> bool:
-	if not Blocks.is_leaf(Blocks.bottom_of(p.get_id(v))):
-		return false
-	var d = p._edits_by_chunk.get(p.chunk_of(v))
-	return d == null or not (d as Dictionary).has(v)
+	var id := p.get_id(v)
+	return Blocks.is_leaf(id) and not Blocks.leaf_is_placed(id)
 
 
 ## The connected logs from `start`, or empty if any of them still stands on
