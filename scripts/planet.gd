@@ -4233,6 +4233,7 @@ func chunk_of(v: Vector3i) -> Vector3i:
 ## which chunks exist is thousands of cells of geometry, and re-checking whether
 ## the ones we already chose have arrived is a dictionary lookup each.
 var _wanted := {}
+var _unload_later := {}   # left range while still building; see _unload_stragglers
 var _stream_last_cc0 := Vector3i(0x7fffffff, 0, 0)  # sentinel: never a real chunk coord
 var _stream_last_rd := -1
 var _stream_last_ms := 0
@@ -4268,9 +4269,23 @@ func stream(center_voxel: Vector3i, rd: int) -> void:
 		# as long as the game was open: measured at 49ms a time and 12% of the
 		# frame budget, with 73ms spikes.
 		_requeue_missing(cc0)
+		_unload_stragglers()
 		return
+	var prev := _stream_last_cc0
+	var prev_rd := _stream_last_rd
 	_stream_last_cc0 = cc0
 	_stream_last_rd = rd
+	var step := cc0 - prev
+	if prev_rd == rd and not _wanted.is_empty() 			and absi(step.x) <= 1 and absi(step.y) <= 1 and absi(step.z) <= 1:
+		_stream_step(prev, cc0, rd)
+		return
+	_stream_full(cc0, rd)
+
+
+## The whole neighbourhood from scratch. Only when there is nothing to step
+## from: the first scan, a change of render distance, or a jump of more than a
+## chunk (a respawn, a landing).
+func _stream_full(cc0: Vector3i, rd: int) -> void:
 	var wanted := {}
 	for dx in range(-rd, rd + 1):
 		for dy in range(-rd, rd + 1):
@@ -4289,14 +4304,107 @@ func stream(center_voxel: Vector3i, rd: int) -> void:
 			node.queue_free()
 			# Nothing needs stand-in collision in a chunk that is gone.
 			_clear_temp_colliders(cc, true)
-	# drop queued loads that are no longer wanted
-	_load_queue = _load_queue.filter(func(cc): return wanted.has(cc))
+	_wanted = wanted
+	_drop_unwanted_queued()
+	_sort_load_queue(cc0)
+
+
+## One chunk's worth of walking: only the slab coming into range and the slab
+## going out of it are looked at.
+##
+## The full scan asks about every chunk in the cube -- 9261 of them at render
+## distance 10 -- and then sorted the whole load queue with a script-side
+## comparison. Together that was 40-75ms, once per chunk boundary crossed:
+## a hitch every couple of seconds of walking. A step changes a few hundred
+## chunks at most, and whether a chunk could hold ground is a fixed fact about
+## it, so the rest of the cube's answers are still right from last time.
+func _stream_step(prev: Vector3i, cc0: Vector3i, rd: int) -> void:
+	# Coming into range: in the new cube, not in the old one.
+	for dx in range(-rd, rd + 1):
+		for dy in range(-rd, rd + 1):
+			for dz in range(-rd, rd + 1):
+				var cc := cc0 + Vector3i(dx, dy, dz)
+				var o := cc - prev
+				if absi(o.x) <= rd and absi(o.y) <= rd and absi(o.z) <= rd:
+					continue
+				if _chunk_possibly_solid(cc):
+					_wanted[cc] = true
+					if not loaded_chunks.has(cc) and not _load_queue_set.has(cc):
+						_load_queue.append(cc)
+						_load_queue_set[cc] = true
+	# Going out of range: in the old cube, not in the new one.
+	var dropped := false
+	for dx in range(-rd, rd + 1):
+		for dy in range(-rd, rd + 1):
+			for dz in range(-rd, rd + 1):
+				var cc := prev + Vector3i(dx, dy, dz)
+				var o := cc - cc0
+				if absi(o.x) <= rd and absi(o.y) <= rd and absi(o.z) <= rd:
+					continue
+				_wanted.erase(cc)
+				if _load_queue_set.has(cc):
+					dropped = true
+				if loaded_chunks.has(cc):
+					_unload_later[cc] = true
+	_unload_stragglers()
+	if dropped:
+		_drop_unwanted_queued()
+	_sort_load_queue(cc0)
+
+
+## Unload whatever has left range, except chunks still being built -- those are
+## tried again on the next scan, standing still or not. The full scan used to
+## pick these up the next time it ran; a step never revisits them, so they are
+## remembered here instead of being left loaded for ever.
+func _unload_stragglers() -> void:
+	if _unload_later.is_empty():
+		return
+	for cc in _unload_later.keys():
+		if _wanted.has(cc):
+			_unload_later.erase(cc)      # walked back into range before it went
+			continue
+		if _inflight.has(cc):
+			continue
+		_unload_later.erase(cc)
+		var node = loaded_chunks.get(cc)
+		if node != null:
+			loaded_chunks.erase(cc)
+			(node as Node).queue_free()
+			_clear_temp_colliders(cc, true)
+
+
+func _drop_unwanted_queued() -> void:
+	var kept: Array[Vector3i] = []
+	for cc in _load_queue:
+		if _wanted.has(cc):
+			kept.append(cc)
+	_load_queue = kept
 	_load_queue_set.clear()
 	for cc in _load_queue:
 		_load_queue_set[cc] = true
-	# nearest-first so the world fills outward from the player
-	_load_queue.sort_custom(func(a, b): return (a - cc0).length_squared() < (b - cc0).length_squared())
-	_wanted = wanted
+
+
+## Nearest first, so the world fills in outward from the player.
+##
+## Sorted as packed integers -- distance in the high bits, position in the queue
+## in the low ones -- so the comparison happens in the engine rather than in a
+## script callback. For a few thousand chunks that is the difference between
+## tens of milliseconds and well under one.
+func _sort_load_queue(cc0: Vector3i) -> void:
+	var n := _load_queue.size()
+	if n < 2:
+		return
+	var keys := PackedInt64Array()
+	keys.resize(n)
+	for i in n:
+		var d: Vector3i = _load_queue[i] - cc0
+		keys[i] = (d.x * d.x + d.y * d.y + d.z * d.z) * 1048576 + i
+	keys.sort()
+	var out: Array[Vector3i] = []
+	out.resize(n)
+	for i in n:
+		out[i] = _load_queue[keys[i] & 0xFFFFF]
+	_load_queue = out
 
 
 ## Ask again for anything the last scan wanted that still is not here.
@@ -4324,8 +4432,7 @@ func _requeue_missing(cc0: Vector3i) -> void:
 			_load_queue_set[cc] = true
 			added = true
 	if added:
-		_load_queue.sort_custom(func(a, b):
-			return (a - cc0).length_squared() < (b - cc0).length_squared())
+		_sort_load_queue(cc0)
 
 
 ## Apply finished worker results, then dispatch more build tasks. `budget` is unused
@@ -5194,9 +5301,13 @@ func _sim_water(queue: Dictionary, background: bool, until: int) -> Array:
 	var count := 0
 	for c in todo:
 		count += 1
-		# Checked in batches: asking the clock per cell costs more than some of
-		# the cells do.
-		if (count & 15) == 0 and (count >= FLOW_BUDGET or Time.get_ticks_usec() > until):
+		# Checked EVERY cell. It used to be every sixteenth, on the reasoning
+		# that asking the clock costs more than some cells do -- which is true of
+		# the cheap ones, but a cell next to the sea asks the terrain generator
+		# about itself and its neighbours and can cost most of a millisecond.
+		# Sixteen of those overran a 2.5ms slice to 14ms, and on a busy coast to
+		# 64ms: a visible hitch every tenth of a second, standing still.
+		if count >= FLOW_BUDGET or Time.get_ticks_usec() > until:
 			break                    # the rest keep their place for the next step
 		queue.erase(c)
 		if _ocean_source(c):
