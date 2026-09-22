@@ -3831,7 +3831,7 @@ func _process_mining(delta: float) -> void:
 	# Ore cannot be worked with hands at all -- see Blocks.needs_tool for why it
 	# is ore and not rock.
 	if Blocks.needs_tool(id) and power <= 1.0:
-		_look_name = "%s  — bare hands cannot get ore out, make a Pick" % _look_name
+		_look_name = "%s  — bare hands cannot get ore out, hold a Pick" % _look_name
 		_mine_key = ""
 		_mine_time = 0.0
 		return
@@ -5047,8 +5047,12 @@ func _update_mine_power() -> void:
 	var best := 1.0
 	var by_class := {"rock": 1.0, "wood": 1.0, "soil": 1.0}
 	var bonus := 0.0
-	for s in inv:
-		if s["count"] <= 0:
+	# Only what is in your HAND helps. Carrying a Pick in the bag used to be
+	# enough, which meant digging with bare hands was never slow once you had
+	# made one -- and there was no telling the two apart.
+	var held_slot: Dictionary = inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
+	for s in [held_slot]:
+		if s.is_empty() or int(s.get("count", 0)) <= 0:
 			continue
 		var mat: Dictionary = s.get("mat", {})
 		var id: int = s["id"]
@@ -5103,12 +5107,21 @@ func _update_held_item(active: Dictionary) -> void:
 		return
 	_held_root = Node3D.new()
 	_hand_pivot.add_child(_held_root)
-	if id == Blocks.WEAPON:
-		_build_held_weapon(mat.get("color", Color(0.8, 0.8, 0.85)))
-	elif id == Blocks.PULSE_PISTOL:
-		_build_held_pistol(mat.get("color", Color(0.3, 0.75, 0.85)))
-	elif id == Blocks.DRILL:
-		_build_held_drill(mat.get("color", Color(0.7, 0.7, 0.75)))
+	if ToolModels.has_model(id):
+		var tint: Color = mat.get("color", _tool_tint(id))
+		var mi := MeshInstance3D.new()
+		mi.mesh = ToolModels.mesh(id, tint)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# Held smaller than life, low in the corner of the view and leaning away,
+		# so the working end is on screen rather than up past the top edge.
+		if ToolModels.is_upright(id):
+			mi.scale = Vector3.ONE * 0.6
+			mi.position = Vector3(0, -0.04, 0)
+			mi.rotation = Vector3(-0.55, 0, 0)
+		else:
+			mi.scale = Vector3.ONE * 0.6
+			mi.position = Vector3(0, -0.04, 0)
+		_held_root.add_child(mi)
 	elif Blocks.is_placeable_block(id) or Blocks.is_ore(id) or Blocks.is_refined(id) or Blocks.is_intermediate(id):
 		_build_held_block(mat.get("color", Blocks.color_of(id)))
 	# other gear (the Suit) is worn, not wielded -- nothing shown in hand
@@ -5128,21 +5141,15 @@ func _mk_view_box(size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
 	return mi
 
 
-func _build_held_weapon(color: Color) -> void:
-	_mk_view_box(Vector3(0.05, 0.22, 0.05), Vector3(0, -0.14, 0), Color(0.25, 0.22, 0.2))  # hilt
-	_mk_view_box(Vector3(0.16, 0.03, 0.03), Vector3(0, 0.0, 0), Color(0.35, 0.32, 0.3))    # guard
-	_mk_view_box(Vector3(0.05, 0.55, 0.02), Vector3(0, 0.32, 0), color)                    # blade -- held vertical, not pointing forward
-
-
-func _build_held_pistol(color: Color) -> void:
-	_mk_view_box(Vector3(0.08, 0.16, 0.1), Vector3(0, -0.14, 0.02), Color(0.2, 0.2, 0.22))  # grip
-	_mk_view_box(Vector3(0.1, 0.09, 0.3), Vector3(0, 0, -0.08), Color(0.28, 0.28, 0.3))     # body
-	_mk_view_box(Vector3(0.05, 0.05, 0.14), Vector3(0, 0.01, -0.28), color)                  # barrel/emitter
-
-
-func _build_held_drill(color: Color) -> void:
-	_mk_view_box(Vector3(0.16, 0.16, 0.34), Vector3(0, 0, 0.06), Color(0.3, 0.3, 0.32))  # body
-	_mk_view_box(Vector3(0.06, 0.06, 0.3), Vector3(0, 0, -0.28), color)                   # bit
+## The colour of what a tool's working end is made of, when its material does
+## not say.
+static func _tool_tint(id: int) -> Color:
+	match id:
+		Blocks.WEAPON:
+			return Color(0.8, 0.8, 0.85)
+		Blocks.PULSE_PISTOL:
+			return Color(0.3, 0.75, 0.85)
+	return Color(0.7, 0.7, 0.75)
 
 
 func _build_held_block(color: Color) -> void:
