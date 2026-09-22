@@ -1161,6 +1161,15 @@ static func all_recipes() -> Array:
 		out.append({"key": "part:%s" % str(d["name"]), "src": "Built from blocks",
 			"cat": "Machines", "out": int(d["result"]), "n": 1, "reqs": [],
 			"cost": 0, "extra": {}, "diagram": part_structure_diagram(d, false), "def": d})
+	# Upgrades: stations you do not build or craft at all, but GROW out of one
+	# you already have by packing blocks round it -- the Smelter, the Forge, the
+	# Fabricator and the rest. Drawn like the built ones, from an example of the
+	# packing (growth_example_def).
+	for g in STATION_GROWTH:
+		out.append({"key": "grow:%d" % int(g["to"]), "src": "Upgrades",
+			"cat": "Machines", "out": int(g["to"]), "n": 1, "reqs": g["needs"],
+			"cost": 0, "extra": {}, "diagram": "", "def": growth_example_def(g),
+			"grow_from": int(g["from"])})
 	for d in STRUCTURES:
 		out.append({"key": "struct:%s" % str(d["name"]), "src": "Built from blocks",
 			"cat": "Machines", "out": int(d["result"]), "n": 1, "reqs": [],
@@ -1202,6 +1211,50 @@ static func recipe_needs(rec: Dictionary) -> String:
 ## just saying no.
 ## `with_name` is off in the Recipe Book, where the entry's own header already
 ## says which machine this is.
+## One way to pack a station's growth materials round it, as a whole-block
+## pattern the Recipe Book can draw: the station in the middle of a 3x3, its
+## materials filling the ring around it and then the layer above. Any cell
+## touching the station counts in the game -- this is just a tidy example.
+static func growth_example_def(g: Dictionary) -> Dictionary:
+	var legend := {".": AIR, "C": int(g["from"])}
+	var fill: Array = []      # letter per material cell, in order
+	var letters := "abcdefgh"
+	var i := 0
+	for req in g["needs"]:
+		var id: int = int(req["id"]) if req.has("id") else int((req["any"] as Array)[0])
+		var ch := letters[i]
+		legend[ch] = id
+		for k in int(req["n"]):
+			fill.append(ch)
+		i += 1
+	# The ring round the station first, then the layer over it.
+	var ring := [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(2, 1),
+		Vector2i(2, 2), Vector2i(1, 2), Vector2i(0, 2), Vector2i(0, 1)]
+	var grid := [[[".", ".", "."], [".", "C", "."], [".", ".", "."]]]
+	var n := 0
+	for c in ring:
+		if n >= fill.size():
+			break
+		grid[0][c.y][c.x] = fill[n]
+		n += 1
+	if n < fill.size():
+		grid.append([[".", ".", "."], [".", ".", "."], [".", ".", "."]])
+		var over := [Vector2i(1, 1)] + ring
+		for c in over:
+			if n >= fill.size():
+				break
+			grid[1][c.y][c.x] = fill[n]
+			n += 1
+	var layers: Array = []
+	for lay in grid:
+		var rows: Array = []
+		for r in lay:
+			rows.append("".join(PackedStringArray(r)))
+		layers.append(rows)
+	return {"name": "grow:%d" % int(g["to"]), "legend": legend, "layers": layers,
+		"size": Vector3i(3, layers.size(), 3)}
+
+
 ## A build pattern's filled cells, as {Vector3i: block to show there}. Eighths
 ## for a part pattern, whole blocks for one with a legend. What the Recipe Book
 ## draws -- see PatternPicture.

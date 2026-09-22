@@ -375,7 +375,9 @@ var all_known := true
 
 
 func knows_recipe(key: String) -> bool:
-	return all_known or known_recipes.has(key)
+	# Upgrades are always listed: they are how half the stations in the game
+	# come to exist, and nothing else in the game says so.
+	return all_known or known_recipes.has(key) or key.begins_with("grow:")
 
 
 ## Learn a recipe. Returns true if it was actually new, so callers can announce
@@ -1071,7 +1073,15 @@ func _rebuild_book() -> void:
 		mats.custom_minimum_size = Vector2(548, 0)
 		mats.modulate = Color(1, 1, 1, 0.75)
 		vb.add_child(mats)
-		if rec.has("def"):
+		if rec.has("grow_from"):
+			# An upgrade: what it grows out of, then the same picture a build
+			# gets -- here, the station with its materials packed round it.
+			var from_name := Blocks.name_of(int(rec["grow_from"]))
+			where.text = "Upgrade a %s" % from_name
+			vb.add_child(_pattern_view(rec["def"],
+				"Pack these anywhere touching a %s -- corners count -- then right-click it and choose %s." % [
+					from_name, name]))
+		elif rec.has("def"):
 			# Multiblocks are the reason this screen exists. Shown as a picture
 			# of the finished build, each layer drawn out with the materials'
 			# own icons, and a key in words -- not letters to decode.
@@ -1090,7 +1100,7 @@ func _rebuild_book() -> void:
 ## A build pattern drawn out for the Recipe Book: the finished thing in 3D on
 ## the left; on the right, each layer from the ground up as a grid of the
 ## materials' icons, and a key saying what each one is.
-func _pattern_view(def: Dictionary) -> Control:
+func _pattern_view(def: Dictionary, how_text: String = "") -> Control:
 	var hb := HBoxContainer.new()
 	hb.add_theme_constant_override("separation", 14)
 	# The finished build as a live model, turning, and turned by dragging.
@@ -1159,7 +1169,9 @@ func _pattern_view(def: Dictionary) -> Control:
 		key.add_child(item)
 	right.add_child(key)
 	var how := Label.new()
-	how.text = "Build it, then right-click it to confirm."
+	how.text = how_text if how_text != "" else "Build it, then right-click it to confirm."
+	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	how.custom_minimum_size = Vector2(340, 0)
 	how.add_theme_font_size_override("font_size", 11)
 	how.modulate = Color(0.98, 0.86, 0.58)
 	right.add_child(how)
