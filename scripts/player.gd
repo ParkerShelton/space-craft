@@ -2708,6 +2708,11 @@ func _shape_boxes_at(obj: Object, v: Vector3i, id: int, kind: String) -> Array:
 	if Blocks.is_stacked_slab(id):
 		return []
 	var low := Blocks.bottom_of(id)
+	if low == Blocks.CROP:
+		# A crop is aimed at only by its small stem, so the tilled ground around
+		# it -- where the next seed goes -- can be aimed at past it.
+		var cb := _crop_box((obj as Planet)._axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5)))
+		return [[Vector3(v) + (cb[0] as Vector3), Vector3(v) + (cb[1] as Vector3)]]
 	if low == Blocks.PARTS:
 		# Each filled eighth is its own target, so you aim at, and mine, one
 		# part at a time rather than the cell holding them.
@@ -2729,6 +2734,23 @@ func _shape_boxes_at(obj: Object, v: Vector3i, id: int, kind: String) -> Array:
 	for b in Chunk.shape_boxes(id, up):
 		out.append([Vector3(v) + (b[0] as Vector3), Vector3(v) + (b[1] as Vector3)])
 	return out
+
+
+## A crop's target: a small post standing on the ground of its cell, in the
+## cell's own 0..1 space. `up` is the way the ground faces there.
+const CROP_W := 0.36
+const CROP_H := 0.4
+static func _crop_box(up: Vector3) -> Array:
+	var lo := Vector3.ONE * (0.5 - CROP_W * 0.5)
+	var hi := Vector3.ONE * (0.5 + CROP_W * 0.5)
+	for a in 3:
+		if up[a] > 0.5:
+			lo[a] = 0.0
+			hi[a] = CROP_H
+		elif up[a] < -0.5:
+			lo[a] = 1.0 - CROP_H
+			hi[a] = 1.0
+	return [lo, hi]
 
 
 ## Slab-method ray/AABB test. Returns {hit, normal}, where normal points back
@@ -2812,6 +2834,10 @@ func _update_outline(tgt: Dictionary) -> void:
 				floori(sv.z / 2.0)) * 2
 			lo = Vector3(o) * 0.5
 			hi = lo + Vector3(0.5, 0.5, 0.5)
+		elif Blocks.bottom_of(raw) == Blocks.CROP:
+			var cb := _crop_box(up)
+			lo = cb[0]
+			hi = cb[1]
 		elif Blocks.is_light(Blocks.bottom_of(raw)) 				and Blocks.bottom_of(raw) != Blocks.GLOW_LAMP:
 			# A torch is a post on a wall, not a cube.
 			var tb: Array = Chunk.torch_box(up)

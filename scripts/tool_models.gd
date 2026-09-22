@@ -24,6 +24,25 @@ static func is_upright(id: int) -> bool:
 ## [position, size, colour] boxes for the tool, or [] if it has no model.
 ## `tint` is the material's own colour, for what is made of it.
 static func boxes_for(id: int, tint: Color) -> Array:
+	# A bucket is thin walls round a hole; thickened it is just a cube.
+	if id == Blocks.BUCKET or id == Blocks.WATER_BUCKET:
+		return _boxes(id, tint)
+	var out: Array = []
+	for b in _boxes(id, tint):
+		out.append([b[0], _beef(b[1]), b[2]])
+	return out
+
+
+## Everything a bit chunkier than drawn below: thin parts (handles, blades)
+## thickened the most, so a tool reads as solid rather than as a wire.
+static func _beef(sz: Vector3) -> Vector3:
+	var o := sz
+	for a in 3:
+		o[a] = sz[a] * 1.15 + 0.022
+	return o
+
+
+static func _boxes(id: int, tint: Color) -> Array:
 	match id:
 		Blocks.PICK:
 			return [
