@@ -967,6 +967,7 @@ func _toggle_book() -> void:
 		_book_panel.visible = book_open
 		if book_open:
 			_rebuild_book()
+			_fit_panel(_book_panel)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if book_open else Input.MOUSE_MODE_CAPTURED
 
 
@@ -1239,6 +1240,8 @@ func _toggle_inventory() -> void:
 			_char_preview.refresh_skin(main.call("current_skin_image"))
 	if _inv_panel != null:
 		_inv_panel.visible = inv_open
+		if inv_open:
+			_fit_panel(_inv_panel)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if inv_open else Input.MOUSE_MODE_CAPTURED
 	_refresh_slots()
 
@@ -4244,7 +4247,9 @@ func _update_markers() -> void:
 	# Underground you cannot see the sky, so you cannot see what is in it. These
 	# are drawn as flat HUD text with no depth test, so without this they hang in
 	# front of solid rock like the planets are inside the cave with you.
-	if underground:
+	# ...and not over a menu, which they used to be drawn straight across.
+	var menu := inv_open or book_open or _station_open != null
+	if underground or menu:
 		for m in _markers:
 			m.visible = false
 		return
@@ -4658,6 +4663,7 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	fsb.set_corner_radius_all(8)
 	fig_back.add_theme_stylebox_override("panel", fsb)
 	_inv_panel.add_child(fig_back)
+	get_viewport().size_changed.connect(_refit_panels)
 	_char_preview = CharacterPreview.new(Vector2i(fig_w, int(grid_h - BAG_GAP)))
 	_char_preview.position = Vector2(fig_x, 48)
 	_inv_panel.add_child(_char_preview)
@@ -5758,12 +5764,38 @@ func _open_station(st: Station) -> void:
 	h = maxi(h, 250)
 	_station_panel.custom_minimum_size = Vector2(w, h)
 	_station_panel.size = Vector2(w, h)
-	var vp := get_viewport().get_visible_rect().size
-	_station_panel.position = ((vp - Vector2(w, h)) * 0.5).round()
+	_fit_panel(_station_panel)
 
 	_station_panel.visible = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_refresh_station_ui()
+
+
+## Blow a menu up to fill most of the screen, centred. The UI is laid out in
+## pixels, so on a big monitor it used to sit small in the middle; scaling the
+## whole panel keeps every slot, drag and tooltip lined up with what is drawn.
+const PANEL_FILL := Vector2(0.8, 0.82)
+const PANEL_MAX_SCALE := 2.2
+
+func _fit_panel(p: Control) -> void:
+	if p == null or not p.is_inside_tree():
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var sz := p.size
+	if sz.x <= 0.0 or sz.y <= 0.0:
+		return
+	var s := clampf(minf(vp.x * PANEL_FILL.x / sz.x, vp.y * PANEL_FILL.y / sz.y), 1.0, PANEL_MAX_SCALE)
+	p.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	p.pivot_offset = Vector2.ZERO
+	p.scale = Vector2.ONE * s
+	p.position = ((vp - sz * s) * 0.5).round()
+
+
+## A window resized while a menu is open refits it.
+func _refit_panels() -> void:
+	for p in [_inv_panel, _station_panel, _book_panel]:
+		if p != null and (p as Control).visible:
+			_fit_panel(p)
 
 
 func _close_station() -> void:
