@@ -165,7 +165,11 @@ const BARE_MINE_MULT := 2.5       # bare-hand mining is slow; a drill divides th
 ## hands close to Minecraft's: rock about 7 seconds, a log 3, dirt about 1. The
 ## times WITH the tool are unchanged; only doing without got slower. Anything
 ## no tool helps with -- glass, metal, a torch -- keeps BARE_MINE_MULT.
-const HAND_MINE_MULT := {"rock": 8.0, "wood": 5.0, "soil": 3.0}
+## Soil was 3.0 -- about a second a block by hand against a third of one with a
+## Spade -- and at those speeds the two felt the same: both quick enough not to
+## notice. At 7.0 a block of dirt is two and a half seconds by hand, and the
+## Spade is the difference between digging a hole and waiting for one.
+const HAND_MINE_MULT := {"rock": 8.0, "wood": 5.0, "soil": 7.0}
 var mine_power := 1.0             # >1 once you craft a drill (Phase 2)
 ## How hard you hit each kind of material, from the best tool you carry for it.
 ## Bare hands are 1.0 at everything.
