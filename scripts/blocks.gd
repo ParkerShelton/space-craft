@@ -251,7 +251,7 @@ const DRILL := 51            # mining tool; its power (from its material) sets m
 const O2_TANK := 55
 const SUIT := 56             # worn gear: reduces hazard damage (insulation from Density)
 const WEAPON := 59           # melee weapon: its damage (from its material) beats bare hands
-const TOOL_IDS := [DRILL, SUIT, WEAPON, PULSE_PISTOL, WRENCH, PICK, AXE, SPADE]
+const TOOL_IDS := [DRILL, SUIT, WEAPON, PULSE_PISTOL, WRENCH, PICK, AXE, SPADE, SWORD]
 
 const LIFE_SUPPORT := 53     # ship block: with a sealed interior it makes the ship habitable
 const GLASS := 54            # transparent, solid hull -- windows that still seal a cabin
@@ -694,6 +694,27 @@ const WATER_BUCKET := 126
 const PICK := 127
 const AXE := 128
 const SPADE := 129
+## Rock on a wooden grip: the first thing you can fight with that beats a fist,
+## made at the same bench as the tools and from the same two materials.
+const SWORD := 140
+const SWORD_DAMAGE := 6.0
+
+## How many uses each tool has in it before it breaks: a block broken, a patch
+## tilled, a hit landed, a shot fired. Anything not listed never wears out.
+const DURABILITY := {
+	PICK: 150, AXE: 150, SPADE: 150, HOE: 120, SWORD: 130,
+	DRILL: 1500, WEAPON: 500, PULSE_PISTOL: 400,
+}
+
+
+static func max_durability(id: int) -> int:
+	return int(DURABILITY.get(id, 0))
+
+
+## How many of an item one slot holds. Things that wear out are one to a slot,
+## since each carries its own wear.
+static func stack_cap(id: int, normal: int) -> int:
+	return 1 if DURABILITY.has(id) else normal
 
 ## What each tool is for, and how much better than bare hands it is at it.
 ## `reach` is added to how far you can touch the world -- a tool is a thing on
@@ -1474,6 +1495,9 @@ const STATION_CRAFTS := {
 		{"label": "Spade", "out": SPADE, "n": 1,
 			"reqs": [{"any": WOOD_IDS, "n": 2, "label": "Wood"},
 				{"any": STONE_IDS, "n": 2, "label": "Rock"}]},
+		{"label": "Stone Sword", "out": SWORD, "n": 1,
+			"reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"},
+				{"any": STONE_IDS, "n": 3, "label": "Rock"}]},
 		# Metal, at the bench you can reach with nothing -- so it costs a trip
 		# to a smelter and no more than that. A field has to be near water, and
 		# a bucket is what stops that meaning "on a beach".
@@ -1559,6 +1583,7 @@ const NAMES := {
 	PICK: "Pick",
 	AXE: "Axe",
 	SPADE: "Spade",
+	SWORD: "Stone Sword",
 	COOKED_CROP: "Cooked Vegetables",
 	BONEMEAL: "Bone Meal",
 	FIBRE: "Plant Fibre",
@@ -1712,6 +1737,7 @@ const COLORS := {
 	PICK: Color(0.62, 0.62, 0.66),
 	AXE: Color(0.70, 0.55, 0.36),
 	SPADE: Color(0.56, 0.50, 0.42),
+	SWORD: Color(0.60, 0.60, 0.63),
 	COOKED_CROP: Color(0.78, 0.55, 0.24),
 	RAW_MEAT: Color(0.72, 0.26, 0.28),
 	COOKED_MEAT: Color(0.55, 0.34, 0.18),

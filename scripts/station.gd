@@ -153,6 +153,25 @@ func _build_visual() -> void:
 func store_add(id: int, n: int, props: Dictionary = {}, src: String = "", mat: Dictionary = {}) -> int:
 	if id == Blocks.AIR or n <= 0:
 		return n
+	# Things that wear out are one to a slot, each with its own wear.
+	if Blocks.max_durability(id) > 0:
+		while n > 0:
+			var put := false
+			for s in storage:
+				if int(s.get("count", 0)) == 0 and int(s.get("eighths", 0)) == 0:
+					s["id"] = id
+					s["count"] = 1
+					s["eighths"] = 0
+					s["props"] = props
+					s["src"] = src
+					s["mat"] = mat
+					s.erase("dur")
+					put = true
+					break
+			if not put:
+				return n
+			n -= 1
+		return 0
 	for s in storage:
 		if s["count"] > 0 and s["id"] == id and s.get("src", "") == src:
 			s["count"] += n

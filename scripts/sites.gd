@@ -39,7 +39,7 @@ const LOOT := {
 		[Blocks.GLOW_LAMP, 1, 3, 0.3]],
 	OUTPOST: [[Blocks.TORCH, 4, 12, 0.7], [Blocks.GLOW_LAMP, 1, 4, 0.5],
 		[Blocks.COOKED_MEAT, 2, 6, 0.6], [Blocks.CLOTH, 2, 6, 0.4],
-		[Blocks.PICK, 1, 1, 0.25], [Blocks.AXE, 1, 1, 0.25], [Blocks.SPADE, 1, 1, 0.25],
+		[Blocks.PICK, 1, 1, 0.25], [Blocks.AXE, 1, 1, 0.25], [Blocks.SPADE, 1, 1, 0.25], [Blocks.SWORD, 1, 1, 0.25],
 		[Blocks.METAL, 2, 6, 0.5], [Blocks.BATTERY, 1, 1, 0.2]],
 	RUIN: [[Blocks.CRYSTAL, 2, 8, 0.5], [Blocks.TORCH, 3, 8, 0.6],
 		[Blocks.BONE, 2, 6, 0.5], [Blocks.GLOW_LAMP, 1, 2, 0.3]],
