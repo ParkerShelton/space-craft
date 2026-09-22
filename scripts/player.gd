@@ -254,6 +254,20 @@ const STACK_MAX := 99
 const INV_CELL := 56
 const INV_CELL_GAP := 10
 const INV_CELL_STEP := INV_CELL + INV_CELL_GAP
+## The hotbar and the bag are drawn bigger than a station's storage: they are
+## what you look at most, and 56 pixels was small enough to squint at. Station
+## panels keep INV_CELL, because their layout is measured in fixed steps of it.
+const HOTBAR_CELL := 68
+const HOTBAR_GAP := 6
+const BAG_CELL := 64
+const BAG_GAP := 8
+const BAG_STEP := BAG_CELL + BAG_GAP
+## Slot frames: a dark translucent tile with a soft border, and a bright gold
+## one for the slot in your hand. Shared, so every slot in the game matches.
+const SLOT_BG := Color(0.07, 0.08, 0.11, 0.78)
+const SLOT_EDGE := Color(0.34, 0.40, 0.50, 0.85)
+const SLOT_EDGE_HOVER := Color(0.55, 0.64, 0.78, 0.95)
+const SLOT_SELECT := Color(1.0, 0.84, 0.38, 1.0)
 # each slot: {"id": int, "count": int, "props": Dictionary, "src": String}
 # props/src are set for refined materials & crafted gear; plain blocks leave them empty.
 var inv: Array = []
@@ -410,7 +424,8 @@ var _refine_btn: Button            # Smelter action
 var _craft_row: Control            # holds per-station craft buttons
 var _craft_scroll: ScrollContainer # scrolls them when a bench has many
 var _craft_buttons: Array = []     # current station's craft buttons
-var _craft_multi: Array = []         # the x5 / All buttons beside each craft
+var _craft_multi: Array = []
+var _char_preview: CharacterPreview   # you, in the inventory         # the x5 / All buttons beside each craft
 var _preview_label: Label          # live craft-stat preview (Fabricator/Shipworks)
 var _job_label: Label              # "Refining… 60%" / "Crafting… 30%" while a job runs
 var _markers: Array[Label] = []   # one navigation marker per planet
@@ -1203,6 +1218,10 @@ func _pattern_cell(def: Dictionary, ch: String, planet: Planet) -> Control:
 
 func _toggle_inventory() -> void:
 	inv_open = not inv_open
+	if inv_open and _char_preview != null:
+		var main := get_tree().current_scene
+		if main != null and main.has_method("current_skin_image"):
+			_char_preview.refresh_skin(main.call("current_skin_image"))
 	if _inv_panel != null:
 		_inv_panel.visible = inv_open
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if inv_open else Input.MOUSE_MODE_CAPTURED
@@ -4458,65 +4477,116 @@ func _toast(msg: String) -> void:
 
 # Build the always-visible hotbar strip and the toggleable full-inventory grid.
 func _build_inventory_ui(layer: CanvasLayer) -> void:
-	# hotbar strip, bottom-center
+	# hotbar strip, bottom-center, on a backing strip of its own
+	var pad := 8.0
+	var strip_w := HOTBAR_SLOTS * HOTBAR_CELL + (HOTBAR_SLOTS - 1) * HOTBAR_GAP + pad * 2.0
+	var strip_h := HOTBAR_CELL + pad * 2.0
+	var strip := Panel.new()
+	strip.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	strip.size = Vector2(strip_w, strip_h)
+	strip.position = Vector2(-strip_w * 0.5, -strip_h - 14.0)
+	strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var ssb := StyleBoxFlat.new()
+	ssb.bg_color = Color(0.03, 0.04, 0.06, 0.45)
+	ssb.set_corner_radius_all(12)
+	strip.add_theme_stylebox_override("panel", ssb)
+	layer.add_child(strip)
 	var hb := HBoxContainer.new()
-	hb.add_theme_constant_override("separation", 4)
-	hb.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	hb.grow_horizontal = Control.GROW_DIRECTION_BOTH
-	hb.position = Vector2(-8 * 32, -76)
-	layer.add_child(hb)
+	hb.add_theme_constant_override("separation", HOTBAR_GAP)
+	hb.position = Vector2(pad, pad)
+	strip.add_child(hb)
 	for i in HOTBAR_SLOTS:
-		_hotbar_cells.append(_make_slot(hb, i, "none"))
+		var cell := _make_slot(hb, i, "none", HOTBAR_CELL)
+		# Its number, faint in the corner: the key that selects it.
+		var num := Label.new()
+		num.text = str(i + 1)
+		num.position = Vector2(6, 2)
+		num.add_theme_font_size_override("font_size", 12)
+		num.modulate = Color(1, 1, 1, 0.5)
+		num.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cell["root"].add_child(num)
+		_hotbar_cells.append(cell)
 
 	# full inventory overlay (E): inventory grid, a 2-tall Suit equip slot, and a
 	# scrollable "Craft" list (scrolls instead of growing as recipes are added)
 	# One source of truth for cell metrics: the tall-item renderer needs the
 	# exact row pitch, and a hardcoded copy would silently misalign the moment
 	# spacing changed.
-	var grid_w := HOTBAR_SLOTS * INV_CELL_STEP
-	var grid_h := 4 * INV_CELL_STEP
+	var grid_w := HOTBAR_SLOTS * BAG_STEP
+	var grid_h := 4 * BAG_STEP
 	# Suit sits on the LEFT, ahead of the grid: it's worn gear, so it reads as
 	# part of "you" rather than as an afterthought tacked on past the bag.
-	var equip_w := 64
-	var equip_x := 12
-	var grid_x := equip_x + equip_w + 16
+	var equip_w := BAG_CELL + 8
+	var equip_x := 14
+	# You, between what you wear and what you carry -- see CharacterPreview.
+	var fig_w := 150
+	var fig_x := equip_x + equip_w + 6
+	var grid_x := fig_x + fig_w + 14
 	_inv_panel = Panel.new()
 	_inv_panel.set_anchors_preset(Control.PRESET_CENTER)
 	# Just the bag and what you are wearing. The crafting column that used to sit
 	# to the right of this is gone: everything is made at a bench now, so a list
 	# of what you can make from your pockets would be an empty list.
-	_inv_panel.custom_minimum_size = Vector2(grid_x + grid_w + 12, 44 + grid_h + 24)
+	_inv_panel.custom_minimum_size = Vector2(grid_x + grid_w + 12, 48 + grid_h + 20)
 	_inv_panel.size = _inv_panel.custom_minimum_size
 	_inv_panel.position = -_inv_panel.size * 0.5
 	_inv_panel.visible = false
+	# The same framed window as the Recipe Book.
+	var isb := StyleBoxFlat.new()
+	isb.bg_color = Color(0.06, 0.07, 0.10, 0.94)
+	isb.border_color = Color(0.40, 0.52, 0.62, 0.9)
+	isb.set_border_width_all(1)
+	isb.set_corner_radius_all(8)
+	_inv_panel.add_theme_stylebox_override("panel", isb)
 	layer.add_child(_inv_panel)
 	var title := Label.new()
-	title.text = "Inventory  (drag to rearrange)"
-	title.position = Vector2(grid_x + 2, 8)
+	title.text = "Inventory"
+	title.position = Vector2(grid_x + 2, 10)
+	title.add_theme_font_size_override("font_size", 18)
 	_inv_panel.add_child(title)
+	var sub := Label.new()
+	sub.text = "drag to rearrange"
+	sub.position = Vector2(grid_x + 94, 15)
+	sub.add_theme_font_size_override("font_size", 12)
+	sub.modulate = Color(1, 1, 1, 0.45)
+	_inv_panel.add_child(sub)
 	var grid := GridContainer.new()
 	grid.columns = HOTBAR_SLOTS
-	grid.add_theme_constant_override("h_separation", INV_CELL_GAP)
-	grid.add_theme_constant_override("v_separation", INV_CELL_GAP)
-	grid.position = Vector2(grid_x, 44)
+	grid.add_theme_constant_override("h_separation", BAG_GAP)
+	grid.add_theme_constant_override("v_separation", BAG_GAP)
+	grid.position = Vector2(grid_x, 48)
 	_inv_panel.add_child(grid)
 	for i in SLOTS:
-		_grid_cells.append(_make_slot(grid, i, "select"))
+		_grid_cells.append(_make_slot(grid, i, "select", BAG_CELL))
 
 	# equip slot: a Suit only protects you once dragged here -- carrying one loose
 	# in the grid above does nothing (unlike the Drill)
 	var equip_label := Label.new()
 	equip_label.text = "Suit"
 	equip_label.modulate = Color(1, 1, 1, 0.7)
-	equip_label.position = Vector2(equip_x, 8)
+	equip_label.position = Vector2(equip_x, 12)
 	_inv_panel.add_child(equip_label)
-	_equip_cell = _make_equip_slot(_inv_panel, Vector2(equip_x, 44))
+	_equip_cell = _make_equip_slot(_inv_panel, Vector2(equip_x, 48))
+	var fig_back := Panel.new()
+	fig_back.position = Vector2(fig_x, 48)
+	fig_back.size = Vector2(fig_w, grid_h - BAG_GAP)
+	fig_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var fsb := StyleBoxFlat.new()
+	fsb.bg_color = Color(0.03, 0.04, 0.06, 0.7)
+	fsb.border_color = SLOT_EDGE
+	fsb.set_border_width_all(1)
+	fsb.set_corner_radius_all(8)
+	fig_back.add_theme_stylebox_override("panel", fsb)
+	_inv_panel.add_child(fig_back)
+	_char_preview = CharacterPreview.new(Vector2i(fig_w, int(grid_h - BAG_GAP)))
+	_char_preview.position = Vector2(fig_x, 48)
+	_inv_panel.add_child(_char_preview)
 
 
 # One slot cell: colored square + count. `mode`: "none" = display only,
 # "select" = click picks the active slot, "inv"/"stor" = drag source & drop target
 # (inventory slot / station-storage slot). Items are moved by dragging.
-func _make_slot(parent: Node, index: int, mode: String) -> Dictionary:
+func _make_slot(parent: Node, index: int, mode: String, px: int = INV_CELL) -> Dictionary:
 	var root: Control
 	if mode == "select":
 		var b := Button.new()
@@ -4524,7 +4594,8 @@ func _make_slot(parent: Node, index: int, mode: String) -> Dictionary:
 		root = b
 	else:
 		root = Panel.new()
-	root.custom_minimum_size = Vector2(INV_CELL, INV_CELL)
+	root.custom_minimum_size = Vector2(px, px)
+	_style_slot(root, false)
 	parent.add_child(root)
 	var swatch := ColorRect.new()
 	swatch.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -4532,10 +4603,7 @@ func _make_slot(parent: Node, index: int, mode: String) -> Dictionary:
 	swatch.offset_right = -6; swatch.offset_bottom = -6
 	swatch.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(swatch)
-	var count := Label.new()
-	count.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
-	count.offset_left = -30; count.offset_top = -22
-	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var count := _slot_count_label(px)
 	root.add_child(count)
 	# drag & drop: "select"/"to_station" cells map to inventory slots, "from_station"
 	# to the open station's storage
@@ -4549,15 +4617,51 @@ func _make_slot(parent: Node, index: int, mode: String) -> Dictionary:
 			_slot_get_drag.bind(dcont, index, root),
 			_slot_can_drop.bind(dcont, index),
 			_slot_do_drop.bind(dcont, index))
-	return {"root": root, "swatch": swatch, "count": count}
+	return {"root": root, "swatch": swatch, "count": count, "selected": false}
+
+
+## A slot's frame. Buttons (the bag's slots) get the hover and pressed states
+## too, so the slot under the mouse lights up.
+func _style_slot(root: Control, selected: bool) -> void:
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = SLOT_BG if not selected else Color(0.16, 0.14, 0.08, 0.85)
+	sb.border_color = SLOT_SELECT if selected else SLOT_EDGE
+	sb.set_border_width_all(3 if selected else 2)
+	sb.set_corner_radius_all(7)
+	if root is Button:
+		var hv := sb.duplicate() as StyleBoxFlat
+		if not selected:
+			hv.border_color = SLOT_EDGE_HOVER
+			hv.bg_color = Color(0.11, 0.13, 0.17, 0.85)
+		for st in ["normal", "hover", "pressed", "focus", "hover_pressed"]:
+			root.add_theme_stylebox_override(st, hv if st != "normal" else sb)
+	else:
+		root.add_theme_stylebox_override("panel", sb)
+
+
+## How many: bottom right, white with a dark outline so it reads over any icon.
+func _slot_count_label(px: int) -> Label:
+	var count := Label.new()
+	count.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	count.offset_left = -px * 0.6
+	count.offset_top = -24
+	count.offset_right = -5
+	count.offset_bottom = -1
+	count.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	count.add_theme_font_size_override("font_size", 15 if px >= 60 else 13)
+	count.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+	count.add_theme_constant_override("outline_size", 5)
+	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return count
 
 
 # A single equip slot that's visually two grid cells tall, holding one Suit at a
 # time (the item fills the whole slot, not spread across two separate cells).
 func _make_equip_slot(parent: Node, pos: Vector2) -> Dictionary:
 	var root := Panel.new()
-	root.custom_minimum_size = Vector2(56, 116)  # 2x56 + gap
+	root.custom_minimum_size = Vector2(BAG_CELL, BAG_CELL * 2 + BAG_GAP)  # two bag cells tall
 	root.position = pos
+	_style_slot(root, false)
 	parent.add_child(root)
 	var swatch := ColorRect.new()
 	swatch.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -4751,7 +4855,7 @@ func _refresh_slots() -> void:
 		# which is what makes it read as a single bulky object rather than two
 		# copies stacked up.
 		var tall := int(inv[i].get("count", 0)) > 0 			and Blocks.item_cells_tall(int(inv[i]["id"])) > 1
-		sw.offset_bottom = (-6.0 + float(INV_CELL_STEP)) if tall else -6.0
+		sw.offset_bottom = (-6.0 + float(BAG_STEP)) if tall else -6.0
 	if not _equip_cell.is_empty():
 		_paint_cell(_equip_cell, suit_slot, false)
 	_update_mine_power()
@@ -4928,12 +5032,17 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 		count.text = ("%d%s" % [whole, EIGHTH_GLYPH[eighths]]) if whole > 0 			else EIGHTH_GLYPH[eighths]
 		cell["root"].tooltip_text = _item_tooltip(slot)
 	else:
-		swatch.color = Color(0.15, 0.15, 0.18, 0.6)
+		# Empty: the slot's own frame is the picture of "nothing here".
+		swatch.color = Color(0, 0, 0, 0)
 		icon.texture = null
 		icon.visible = false
 		count.text = ""
 		cell["root"].tooltip_text = ""
-	cell["root"].modulate = Color(1.4, 1.4, 0.7) if highlight else Color(1, 1, 1)
+	# The slot in hand gets the gold frame. Restyled only when it changes, not
+	# every time the bag is repainted.
+	if bool(cell.get("selected", false)) != highlight:
+		cell["selected"] = highlight
+		_style_slot(cell["root"], highlight)
 
 
 # Hover text. Raw ore stays unidentified (tier & stats hidden); a refined material
@@ -5492,6 +5601,7 @@ func _make_stor_cell(index: int, cx: int, cy: int) -> Dictionary:
 	root.custom_minimum_size = Vector2(INV_CELL, INV_CELL)
 	root.size = Vector2(56, 56)
 	root.position = Vector2(cx * 60, cy * 60)
+	_style_slot(root, false)
 	_stor_container.add_child(root)
 	var swatch := ColorRect.new()
 	swatch.position = Vector2(6, 6)
