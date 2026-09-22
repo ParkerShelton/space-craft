@@ -972,6 +972,11 @@ func announce_skin(png: PackedByteArray) -> void:
 	my_skin = png
 	if active:
 		skin_worn.rpc(png)
+		# Anything put on or picked up before the connection was up goes now.
+		if my_held != 0:
+			held_worn.rpc(my_held)
+		if not my_look.is_empty():
+			look_worn.rpc(my_look)
 
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -1022,6 +1027,7 @@ func _send_skins_to(id: int) -> void:
 # numbers, sent when they change rather than with every position update.
 
 var my_look := {}
+var my_held := 0
 
 
 ## Only real cosmetic ids in their own slots get through, so a bad packet can at
@@ -1061,7 +1067,42 @@ func look_of(id: int, look: Dictionary) -> void:
 	peers[id]["look"] = _clean_look(look)
 
 
+## What is in your hand, for everyone else to draw. Sent when you switch to
+## something different, like the look is.
+func announce_held(item: int) -> void:
+	if item == my_held:
+		return
+	my_held = item
+	if active:
+		held_worn.rpc(item)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func held_worn(item: int) -> void:
+	var id := multiplayer.get_remote_sender_id()
+	if not peers.has(id):
+		peers[id] = {}
+	peers[id]["held"] = item
+	if is_host:
+		for other in peers:
+			if int(other) != id:
+				held_of.rpc_id(int(other), id, item)
+
+
+@rpc("authority", "call_remote", "reliable")
+func held_of(id: int, item: int) -> void:
+	if not peers.has(id):
+		peers[id] = {}
+	peers[id]["held"] = item
+
+
 func _send_looks_to(id: int) -> void:
+	if my_held != 0:
+		held_of.rpc_id(id, 1, my_held)
+	for other in peers:
+		var h := int(peers[other].get("held", 0))
+		if int(other) != id and h != 0:
+			held_of.rpc_id(id, int(other), h)
 	if not my_look.is_empty():
 		look_of.rpc_id(id, 1, my_look)
 	for other in peers:

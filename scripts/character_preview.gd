@@ -66,6 +66,10 @@ func wear(look: Dictionary) -> void:
 	_figure.wear_look(look)
 
 
+func hold(id: int) -> void:
+	_figure.hold(id)
+
+
 func _process(delta: float) -> void:
 	if not is_visible_in_tree():
 		return
