@@ -779,6 +779,12 @@ func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 		life_density = maxf(life_density, 0.75)
 	for i in n_land:
 		fauna_land.append(_make_species(rng, "land"))
+	# How many Night Stalkers can be out at once here after dark: none on some
+	# worlds, a pack on others -- and always some where you start, so the night
+	# there is something to prepare for.
+	spider_cap = ([0, 1, 2, 2, 3, 4] as Array)[lr.randi() % 6]
+	if force_hostile_enemy:
+		spider_cap = maxi(spider_cap, 2)
 	if force_hostile_enemy and not HOSTILES_DISABLED:
 		# Guaranteed on top of the normal roll (not instead of it) -- for combat
 		# testing on the home planet regardless of what the random wildlife mix
@@ -1084,6 +1090,7 @@ func creature_cap() -> int:
 
 
 func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> void:
+	_update_spiders(delta, player_pos, world)
 	_creatures = _creatures.filter(func(c): return is_instance_valid(c))
 	for c in _creatures.duplicate():
 		if c.global_position.distance_to(player_pos) > CREATURE_DESPAWN_RADIUS:
@@ -1103,6 +1110,63 @@ func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> voi
 	_try_spawn_creature(player_pos, world)
 
 
+# --- Night Stalkers ---------------------------------------------------------------
+
+var spider_cap := 0
+var _spiders: Array = []
+var _spider_timer := 4.0
+const SPIDER_INTERVAL := 10.0
+
+
+## They come out only once it is properly dark, one every few seconds up to
+## this world's cap, somewhere out of arm's reach but close enough to find you.
+func _update_spiders(delta: float, player_pos: Vector3, world: WorldManager) -> void:
+	_spiders = _spiders.filter(func(s): return is_instance_valid(s))
+	for s in _spiders:
+		if (s as Node3D).global_position.distance_to(player_pos) > CREATURE_DESPAWN_RADIUS:
+			s.queue_free()
+	if spider_cap <= 0 or night_factor() < 0.6:
+		return
+	_spider_timer -= delta
+	if _spider_timer > 0.0 or _spiders.size() >= spider_cap:
+		return
+	_spider_timer = SPIDER_INTERVAL * randf_range(0.7, 1.4)
+	spawn_spider_near(player_pos, world, 22.0, 40.0)
+
+
+## Put one on the ground somewhere between `near` and `far` blocks from `pos`.
+## Returns it, or null if no spot could be found this time.
+func spawn_spider_near(pos: Vector3, world: WorldManager, near: float, far: float) -> NightSpider:
+	var g := world.gravity_at(pos)
+	if g.length() < 0.01:
+		return null
+	var up := -g.normalized()
+	var t1 := up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
+	var t2 := up.cross(t1).normalized()
+	var space := get_world_3d().direct_space_state
+	for attempt in 8:
+		var ang := randf() * TAU
+		var r := randf_range(near, far)
+		var p := pos + (t1 * cos(ang) + t2 * sin(ang)) * r
+		var q := PhysicsRayQueryParameters3D.create(p + up * 30.0, p - up * 40.0, 1)
+		var hit := space.intersect_ray(q)
+		if hit.is_empty() or not (hit["collider"] is Chunk):
+			continue
+		var at: Vector3 = hit["position"]
+		# Not in water, and not on top of a roof where it could never reach you.
+		if get_id(world_to_voxel(at + up * 0.5)) != Blocks.AIR:
+			continue
+		if not _chunk_ready_at(at):
+			continue
+		var s := NightSpider.new()
+		add_child(s)
+		s.global_position = at + up * NightSpider.RIDE
+		s.setup_spider(self, world)
+		_spiders.append(s)
+		return s
+	return null
+
+
 ## 0 in broad daylight, 1 in the dead of night. Airless worlds have no dusk to
 ## speak of, so their transition is much sharper -- the same rule the sky uses.
 func night_factor() -> float:
@@ -1114,6 +1178,10 @@ func night_factor() -> float:
 ## Immediately clears all fauna (called when this planet stops being the active
 ## one -- wildlife only exists meaningfully near the player).
 func clear_fauna() -> void:
+	for s in _spiders:
+		if is_instance_valid(s):
+			s.queue_free()
+	_spiders.clear()
 	for c in _creatures:
 		if is_instance_valid(c):
 			c.queue_free()

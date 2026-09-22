@@ -847,7 +847,7 @@ func _run_command(line: String) -> void:
 	# Unknown first: a word that is not a command is not a command whether or
 	# not there is a world, and hearing "not in a world yet" for a typo sends
 	# you looking in the wrong place.
-	if not cmd in ["give", "bed", "time", "perf", "water", "help"]:
+	if not cmd in ["give", "bed", "time", "perf", "water", "help", "spider"]:
 		_on_chat_line("unknown command: /" + cmd + "  (try /help)")
 		return
 	# The rest need somewhere to put things. Saying so beats returning quietly,
@@ -914,8 +914,16 @@ func _run_command(line: String) -> void:
 			# is where water would go, so both are worth reporting.
 			for l in wp.water_debug(tgt["place"] as Vector3i):
 				_on_chat_line(l)
+		"spider":
+			# One on demand, near enough to watch it walk: its legs are the whole
+			# point, and night alone may not bring one for a while.
+			var sp: Planet = _world.nearest_planet(pl.global_position)
+			var s = sp.spawn_spider_near(pl.global_position, _world, 8.0, 14.0) if sp != null else null
+			if s != null:
+				s.daylight_ok = true
+			_on_chat_line("a Night Stalker is coming" if s != null else "nowhere to put one here")
 		"help":
-			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [day|night]  ·  /perf  ·  /water")
+			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [day|night]  ·  /spider  ·  /perf  ·  /water")
 		_:
 			pass   # unreachable: the list above is the same list
 
