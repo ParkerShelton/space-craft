@@ -1863,6 +1863,7 @@ func _sync_players(delta: float) -> void:
 		var lk = st.get("look", null)
 		if lk is Dictionary:
 			av.wear_look(lk)
+		av.hold(int(st.get("held", 0)))
 		var pos: Vector3 = st["pos"]
 		var pl: Planet = _world.nearest_planet(pos)
 		# SNAPPED to an axis, because that is how a player stands: Player._walk is

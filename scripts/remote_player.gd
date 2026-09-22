@@ -220,6 +220,51 @@ func wear_look(look: Dictionary) -> void:
 					_worn.append(_trail)
 
 
+# --- what is in their hand ----------------------------------------------------
+
+var _held: MeshInstance3D
+var held_id := -1
+
+
+## Put an item in the figure's right hand: its tool model if it has one, a small
+## block of its colour if it is a block, nothing otherwise.
+func hold(id: int) -> void:
+	if id == held_id:
+		return
+	held_id = id
+	if _held != null:
+		_held.queue_free()
+		_held = null
+	if _arms.is_empty() or id <= 0:
+		return
+	var mi := MeshInstance3D.new()
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if ToolModels.has_model(id):
+		mi.mesh = ToolModels.mesh(id, Color(0.7, 0.7, 0.75))
+		if ToolModels.is_upright(id):
+			# Handle out forward from the fist, gripped near its end, so the
+			# head swings down in front with the chop.
+			mi.rotation = Vector3(-PI * 0.5, 0, 0)
+			mi.position = Vector3(0, -0.62, -0.2)
+		else:
+			mi.position = Vector3(0, -0.5, -0.12)
+	elif Blocks.is_placeable_block(Blocks.bottom_of(id)) or Blocks.is_ore(id) 			or Blocks.is_refined(id) or Blocks.is_intermediate(id):
+		var bm := BoxMesh.new()
+		bm.size = Vector3.ONE * 0.2
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Blocks.color_of(id)
+		mat.roughness = 0.85
+		bm.material = mat
+		mi.mesh = bm
+		mi.position = Vector3(0, -0.66, -0.1)
+	else:
+		mi.queue_free()
+		return
+	# The arm the mining chop animates.
+	_arms[0].add_child(mi)
+	_held = mi
+
+
 func _mirror(boxes: Array, side_x: float) -> Array:
 	if side_x >= 0.0:
 		return boxes

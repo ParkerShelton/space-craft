@@ -5132,6 +5132,15 @@ func _update_held_item(active: Dictionary) -> void:
 	if key == _held_key:
 		return
 	_held_key = key
+	# Everyone else sees it in your figure's hand, and so does your own in the
+	# inventory.
+	if _char_preview != null:
+		_char_preview.hold(id)
+	var main := get_tree().current_scene if is_inside_tree() else null
+	if main != null:
+		var net = main.get("_net")
+		if net != null and net.has_method("announce_held"):
+			net.announce_held(id)
 	if _held_root != null:
 		_held_root.queue_free()
 		_held_root = null
