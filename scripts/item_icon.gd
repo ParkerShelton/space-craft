@@ -43,6 +43,8 @@ var _lit := {}                   # planet id -> its material, held at noon
 ## everything with a shape or a lump. Tools are still a coloured square: a box
 ## is not a bucket, and pretending otherwise would be worse than the square.
 static func can_draw(raw: int) -> bool:
+	if Cosmetics.is_cosmetic(raw) or ToolModels.has_model(raw):
+		return true
 	var id := Blocks.bottom_of(raw)
 	return Blocks.is_placeable_block(id) or Blocks.is_ore(id) 		or Blocks.is_refined(id) or Blocks.is_intermediate(id)
 
@@ -178,8 +180,25 @@ func _shoot(job: Array) -> void:
 	var raw := int(job[2])
 	var col: Color = job[3]
 	var planet: Planet = job[4]
-	_mi.mesh = Chunk.icon_mesh(raw, col)
-	var mat: Material = _lit_material(planet)
+	var tool := ToolModels.has_model(raw)
+	var worn := Cosmetics.is_cosmetic(raw) or tool
+	if tool:
+		_mi.mesh = ToolModels.icon_mesh(raw, col)
+	else:
+		_mi.mesh = Cosmetics.icon_mesh(raw) if Cosmetics.is_cosmetic(raw) else Chunk.icon_mesh(raw, col)
+	# Tools lie across the picture, head up and to the right, as they do in
+	# every inventory; everything else stands square to the camera.
+	# Turned side-on to the camera first, so the head is seen in profile rather
+	# than end-on, then leant over; and drawn larger, since lying diagonally it
+	# fills the frame corner to corner rather than edge to edge.
+	if tool:
+		_mi.rotation = Vector3(deg_to_rad(40.0), YAW - PI * 0.5, 0)
+		_mi.scale = Vector3.ONE * 1.3
+	else:
+		_mi.rotation = Vector3.ZERO
+		_mi.scale = Vector3.ONE
+	# Cosmetics carry their own vertex-colour material, in the mesh.
+	var mat: Material = null if worn else _lit_material(planet)
 	if mat == null:
 		# No planet yet -- out on the menu, or in space. A plain material still
 		# reads the vertex colours the mesher baked, so the block keeps its
@@ -188,7 +207,7 @@ func _shoot(job: Array) -> void:
 		fallback.vertex_color_use_as_albedo = true
 		fallback.roughness = 0.9
 		mat = fallback
-	_mi.material_override = mat
+	_mi.material_override = null if worn else mat
 	# Each block sits at its OWN spot in the world, because the shader draws its
 	# surface pattern from world position: posed at the same place every time,
 	# every material would wear an identical smear of noise.

@@ -300,6 +300,7 @@ func save_game() -> bool:
 			"inv": pl.inv,
 			"active_slot": pl.active_slot,
 			"suit_slot": pl.suit_slot,
+			"vanity": pl.vanity,
 			"known_recipes": pl.known_recipes,
 			"all_known": pl.all_known,
 			"bed_planet": pl.bed_planet,
@@ -478,6 +479,8 @@ func load_game() -> bool:
 			pl.inv = pd["inv"]
 		if pd.has("suit_slot"):
 			pl.suit_slot = pd["suit_slot"]
+		if pd.has("vanity"):
+			pl.vanity = pd["vanity"]
 		pl.active_slot = pd.get("active_slot", 0)
 		# Saves from before the Recipe Book carry no learned set; they keep the
 		# blanket "everything known" rather than losing every recipe.

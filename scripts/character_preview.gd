@@ -47,8 +47,8 @@ func _init(box: Vector2i) -> void:
 	_cam = Camera3D.new()
 	_cam.fov = 30.0
 	# The figure faces -Z, so the camera stands on that side looking back at it,
-	# a little above centre so the whole body fits with the head near the top.
-	_cam.look_at_from_position(Vector3(0.0, 0.25, -4.2), Vector3(0.0, 0.05, 0.0), Vector3.UP)
+	# a little above centre, and far enough back that a tall hat still fits.
+	_cam.look_at_from_position(Vector3(0.0, 0.42, -5.0), Vector3(0.0, 0.25, 0.0), Vector3.UP)
 	vp.add_child(_cam)
 
 
@@ -57,6 +57,13 @@ func _init(box: Vector2i) -> void:
 func refresh_skin(img: Image) -> void:
 	if img != null:
 		_figure.set_skin(img)
+
+
+## Dress the figure in what the vanity slots hold. Its trail runs all the time
+## here, since the figure never walks anywhere to leave one.
+func wear(look: Dictionary) -> void:
+	_figure.trail_always = true
+	_figure.wear_look(look)
 
 
 func _process(delta: float) -> void:

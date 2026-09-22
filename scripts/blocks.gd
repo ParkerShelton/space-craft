@@ -2179,6 +2179,8 @@ static func hue_name(c: Color) -> String:
 
 
 static func color_of(raw: int) -> Color:
+	if Cosmetics.is_cosmetic(raw):
+		return Cosmetics.color_of(raw)
 	# Stacked slabs are looked up by their LOWER half; the mesher draws each
 	# half in its own colour, this is just for UI and single-colour uses.
 	# Mask off any packed orientation/stacking bits: everything below keys off
@@ -2204,6 +2206,8 @@ static func shape_prefix(mat: int) -> String:
 
 
 static func name_of(raw: int) -> String:
+	if Cosmetics.is_cosmetic(raw):
+		return Cosmetics.name_of(raw)
 	if is_stacked_slab(raw):
 		return "%s + %s" % [name_of(bottom_of(raw)), name_of(top_slab_of(raw))]
 	var id := bottom_of(raw)

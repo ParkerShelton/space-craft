@@ -162,6 +162,84 @@ func wear_png(png: PackedByteArray) -> void:
 	set_skin(img)
 
 
+# --- cosmetics -------------------------------------------------------------
+
+var _worn: Array = []              # nodes added by wear_look, to take off again
+var _trail: CPUParticles3D
+var look_tag := 0
+## The inventory's figure trails all the time, so you can see the one you chose
+## without having to walk about; everyone else's only while they move.
+var trail_always := false
+
+
+## Put on what is in the vanity slots: {slot: item id}. Called every frame from
+## what the network holds, so it only rebuilds when that actually changes.
+func wear_look(look: Dictionary) -> void:
+	var tag := hash(look)
+	if tag == look_tag:
+		return
+	look_tag = tag
+	for n in _worn:
+		if is_instance_valid(n):
+			(n as Node).queue_free()
+	_worn.clear()
+	_trail = null
+	if _body == null:
+		return
+	for slot in look:
+		var id := int(look[slot])
+		if not Cosmetics.is_cosmetic(id) or Cosmetics.slot_of(id) != str(slot):
+			continue
+		match str(slot):
+			"hat":
+				_wear_mesh(_body, Cosmetics.piece_mesh(id), Cosmetics.HEAD_TOP)
+			"face":
+				_wear_mesh(_body, Cosmetics.piece_mesh(id), Cosmetics.HEAD_FRONT)
+			"back":
+				_wear_mesh(_body, Cosmetics.piece_mesh(id), Cosmetics.BACK)
+			"shoes":
+				for hip in _legs:
+					_wear_mesh(hip, Cosmetics.piece_mesh(id), Cosmetics.SOLE)
+			"shirt", "pants":
+				var cb := Cosmetics.clothes_boxes(id)
+				if not (cb["torso"] as Array).is_empty():
+					_wear_mesh(_body, Cosmetics._boxes_mesh(cb["torso"], Vector3.ZERO, 1.0), Cosmetics.TORSO)
+				# Sleeves and trouser legs are mirrored onto each side, so a stripe
+				# down the outside of one leg is on the outside of the other too.
+				for arm in _arms:
+					if not (cb["arm"] as Array).is_empty():
+						_wear_mesh(arm, Cosmetics._boxes_mesh(_mirror(cb["arm"], arm.position.x), Vector3.ZERO, 1.0), Vector3.ZERO)
+				for hip in _legs:
+					if not (cb["leg"] as Array).is_empty():
+						_wear_mesh(hip, Cosmetics._boxes_mesh(_mirror(cb["leg"], hip.position.x), Vector3.ZERO, 1.0), Vector3.ZERO)
+			"trail":
+				_trail = Cosmetics.make_trail(id)
+				if _trail != null:
+					_trail.position = Vector3(0, -0.7, 0)
+					add_child(_trail)
+					_worn.append(_trail)
+
+
+func _mirror(boxes: Array, side_x: float) -> Array:
+	if side_x >= 0.0:
+		return boxes
+	var out: Array = []
+	for b in boxes:
+		out.append([(b[0] as Vector3) * Vector3(-1, 1, 1), b[1], b[2]])
+	return out
+
+
+func _wear_mesh(parent: Node3D, mesh: Mesh, pos: Vector3) -> void:
+	if mesh == null:
+		return
+	var mi := MeshInstance3D.new()
+	mi.mesh = mesh
+	mi.position = pos
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(mi)
+	_worn.append(mi)
+
+
 func _box(parent: Node3D, size: Vector3, pos: Vector3, col: Color) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	var m := BoxMesh.new()
@@ -215,6 +293,8 @@ func _process(delta: float) -> void:
 		global_position = global_position.lerp(_target, clampf(delta * 12.0, 0.0, 1.0))
 
 	_animate(delta)
+	if _trail != null:
+		_trail.emitting = trail_always or _speed > 0.8
 
 
 func _animate(delta: float) -> void:

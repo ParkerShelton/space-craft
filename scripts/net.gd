@@ -217,6 +217,7 @@ func _on_peer_connected(id: int) -> void:
 	# ...who everyone here is, so the newcomer does not spend the session
 	# looking at a field of default characters.
 	_send_skins_to(id)
+	_send_looks_to(id)
 	# ...and everything that has been built or dug since the world was made.
 	# Without this a late joiner sees the world as it was GENERATED: it would
 	# generate the same terrain from the seed and then be missing every change
@@ -1013,3 +1014,60 @@ func _send_skins_to(id: int) -> void:
 		var png = peers[other].get("skin", PackedByteArray())
 		if png is PackedByteArray and not (png as PackedByteArray).is_empty():
 			skin_of.rpc_id(id, o, png)
+
+
+# --- what everyone is wearing -------------------------------------------------
+#
+# Cosmetics travel the same way skins do, as {slot: item id}: a handful of
+# numbers, sent when they change rather than with every position update.
+
+var my_look := {}
+
+
+## Only real cosmetic ids in their own slots get through, so a bad packet can at
+## worst dress somebody in nothing.
+static func _clean_look(look: Dictionary) -> Dictionary:
+	var out := {}
+	for slot in look:
+		var id := int(look[slot])
+		if Cosmetics.SLOTS.has(str(slot)) and Cosmetics.is_cosmetic(id) and Cosmetics.slot_of(id) == str(slot):
+			out[str(slot)] = id
+	return out
+
+
+func announce_look(look: Dictionary) -> void:
+	my_look = look.duplicate()
+	if active:
+		look_worn.rpc(my_look)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func look_worn(look: Dictionary) -> void:
+	var id := multiplayer.get_remote_sender_id()
+	var clean := _clean_look(look)
+	if not peers.has(id):
+		peers[id] = {}
+	peers[id]["look"] = clean
+	if is_host:
+		for other in peers:
+			if int(other) != id:
+				look_of.rpc_id(int(other), id, clean)
+
+
+@rpc("authority", "call_remote", "reliable")
+func look_of(id: int, look: Dictionary) -> void:
+	if not peers.has(id):
+		peers[id] = {}
+	peers[id]["look"] = _clean_look(look)
+
+
+func _send_looks_to(id: int) -> void:
+	if not my_look.is_empty():
+		look_of.rpc_id(id, 1, my_look)
+	for other in peers:
+		var o := int(other)
+		if o == id:
+			continue
+		var lk = peers[other].get("look", {})
+		if lk is Dictionary and not (lk as Dictionary).is_empty():
+			look_of.rpc_id(id, o, lk)
