@@ -44,6 +44,12 @@ const POUNCE_MIN := 3.5
 const BITE_RANGE := 3.0      # the claws reach
 const HIT_REACH := 2.8       # how close a pounce has to bring it to land
 const BITE_DAMAGE := 8.0
+const BITE_TIME := 0.8       # a slash: wind-up, strike, follow-through
+const SPIT_TIME := 1.0       # rear back, spit, recover
+const SPIT_MIN := 6.0
+const SPIT_MAX := 20.0
+const SPIT_CD := 4.5
+const SPIT_SPEED := 17.0
 const POUNCE_DAMAGE := 12.0
 const GRAV := 22.0
 const HEALTH := 60.0
@@ -90,6 +96,9 @@ var _eye_mat: StandardMaterial3D
 var _twitch := 0.0
 var _twitch_t := 0.0
 var _clock := 0.0
+var _spit_cd := 2.0
+var _spits := 0
+var _spr := {}               # spring states: key -> [value, velocity]
 var _air_t := 0.0
 ## Set on one summoned by hand, so it can be watched in daylight.
 var daylight_ok := false
@@ -286,7 +295,7 @@ func _foot_target(i: int) -> Vector3:
 	var lead := _hvel * LEAD
 	var want: Vector3 = global_transform * (_rest[i] as Vector3) + lead
 	# Threat pose: the front pair lifted and reaching while it squares up or bites.
-	if i % PER_SIDE == 0 and (_ai == "crouch" or _ai == "bite"):
+	if i % PER_SIDE == 0 and (_ai == "crouch" or _ai == "bite" or _ai == "spit"):
 		return global_transform * ((_rest[i] as Vector3) * Vector3(0.7, 0, 0.8) + Vector3(0, 0.55, -0.1))
 	var g = _ground(want)
 	return g if g != null else want
@@ -326,6 +335,7 @@ func _flat(v: Vector3) -> Vector3:
 ## What it wants to do, and which way.
 func _think(delta: float) -> void:
 	_cd = maxf(_cd - delta, 0.0)
+	_spit_cd = maxf(_spit_cd - delta, 0.0)
 	_ai_t -= delta
 	var pl = _player()
 	var to_p := Vector3.ZERO
@@ -350,9 +360,15 @@ func _think(delta: float) -> void:
 				_ai = "wander"
 			elif dist < BITE_RANGE and _cd <= 0.0:
 				_ai = "bite"
-				_ai_t = 0.4
+				_ai_t = BITE_TIME
 				_hit_done = false
-			elif dist < POUNCE_RANGE and dist > POUNCE_MIN and _cd <= 0.0 and randf() < delta * 1.5:
+			elif dist > SPIT_MIN and dist < SPIT_MAX and _spit_cd <= 0.0 and randf() < delta * 0.9 \
+					and _can_see(pl):
+				_ai = "spit"
+				_ai_t = SPIT_TIME
+				_spits = 0
+			# Stuck in its webbing, you are what it has been waiting for.
+			elif dist < POUNCE_RANGE and dist > POUNCE_MIN and _cd <= 0.0 					and (randf() < delta * 1.5 or _player_stuck(pl)):
 				_ai = "crouch"
 				_ai_t = 0.5
 			# Closing in, with a little weave so it does not come in a straight line.
@@ -377,14 +393,29 @@ func _think(delta: float) -> void:
 		"bite":
 			_face(to_p, delta * 12.0)
 			_wish(Vector3.ZERO, 0.0, delta)
-			if not _hit_done and _ai_t < 0.2:
+			# Lands as the first claw comes down through you.
+			if not _hit_done and _ai_t < BITE_TIME * 0.5:
 				_hit_done = true
-				if pl != null and dist < BITE_RANGE + 0.4:
+				if pl != null and dist < BITE_RANGE + 0.5:
 					_hurt_player(pl, BITE_DAMAGE)
 			if _ai_t <= 0.0:
 				_ai = "retreat"
 				_ai_t = 0.6
 				_cd = 1.3
+		"spit":
+			_face(to_p, delta * 8.0)
+			_wish(Vector3.ZERO, 0.0, delta)
+			# A volley of three, close together, so a volley that lands leaves
+			# you badly slowed and two leave you stuck.
+			var due := [0.42, 0.3, 0.18]
+			if _spits < due.size() and _ai_t < SPIT_TIME * float(due[_spits]):
+				_spits += 1
+				_spit_cd = SPIT_CD * randf_range(0.8, 1.4)
+				_spit(pl)
+				_kick("head_x", 9.0)
+				_kick("jaw", 12.0)
+			if _ai_t <= 0.0:
+				_ai = "stalk"
 		"retreat":
 			_wish(-to_p.normalized() if to_p.length() > 0.01 else -_heading, SPEED * 0.7, delta)
 			if to_p.length() > 0.01:
@@ -431,6 +462,71 @@ func _pounce(pl) -> void:
 	_hvel = to_p / t if flat_d > 0.01 else _heading * 6.0
 	_vy = (rise + 0.5 * GRAV * t * t) / t
 	_vy = clampf(_vy, 4.0, 11.0)
+
+
+func _player_stuck(pl) -> bool:
+	return pl != null and "_stuck_t" in pl and float(pl._stuck_t) > 0.0
+
+
+## Whether it has a clear line from its head to you.
+func _can_see(pl) -> bool:
+	if pl == null or _head == null:
+		return false
+	var q := PhysicsRayQueryParameters3D.create(_head.global_position, (pl as Node3D).global_position, 1)
+	q.exclude = [get_rid()]
+	var hit := _space().intersect_ray(q)
+	return hit.is_empty() or hit["collider"] == pl
+
+
+## A glob of webbing from the mouth, led to where you are going.
+func _spit(pl) -> void:
+	if pl == null or _head == null:
+		return
+	var from: Vector3 = _head.global_transform * (Vector3(0, 0.05, -0.3) * S)
+	var target: Vector3 = (pl as Node3D).global_position
+	var tv: Vector3 = pl.velocity if "velocity" in pl else Vector3.ZERO
+	var g := world.gravity_at(from)
+	var glob := SpitGlob.new()
+	get_parent().add_child(glob)
+	# Each of a volley a little off the last, so it cannot all be dodged the same way.
+	var v := SpitGlob.aim(from, target, tv, SPIT_SPEED, g)
+	var side := v.cross(_up).normalized()
+	v += side * randf_range(-1.2, 1.2) * float(_spits - 1)
+	glob.launch(from, v, world, self)
+
+
+## A damped spring: every joint of the upper body is one, chasing its target
+## pose rather than being set to it. A soft one eases; a stiff, lightly damped
+## one overshoots and settles, which is what makes a strike whip rather than
+## tick into place.
+func _spring(key: String, target: float, k: float, zeta: float, delta: float) -> float:
+	var st: Array = _spr.get(key, [target, 0.0])
+	var c := 2.0 * zeta * sqrt(k)
+	var h := delta * 0.5
+	for i in 2:
+		st[1] = float(st[1]) + (k * (target - float(st[0])) - c * float(st[1])) * h
+		st[0] = float(st[0]) + float(st[1]) * h
+	_spr[key] = st
+	return float(st[0])
+
+
+## A shove to one spring, for flinches and twitches.
+func _kick(key: String, impulse: float) -> void:
+	if _spr.has(key):
+		_spr[key][1] = float(_spr[key][1]) + impulse
+
+
+## One arm's slash, `t` 0..1 through it: [shoulder x, shoulder spread, elbow,
+## stiffness, damping]. Raised overhead and cocked back, then brought down and
+## across hard enough to overshoot, then let swing back up into the reach.
+func _slash_pose(t: float) -> Array:
+	if t < 0.0:
+		return [1.0, 0.3, 0.8, 90.0, 0.7]
+	if t < 0.36:
+		return [2.9, 0.6, 1.55, 150.0, 0.75]
+	if t < 0.62:
+		return [-0.4, -0.2, 0.05, 750.0, 0.3]
+	return [0.9, 0.3, 0.7, 110.0, 0.55]
 
 
 func _hurt_player(pl, dmg: float) -> void:
@@ -585,8 +681,9 @@ func _pose(delta: float) -> void:
 	_crouch = move_toward(_crouch, 1.0 if _ai == "crouch" else 0.0, delta * 4.0)
 	var lunge_want := 0.0
 	if _ai == "bite":
-		lunge_want = sin(clampf(1.0 - _ai_t / 0.4, 0.0, 1.0) * PI)
-	_lunge = move_toward(_lunge, lunge_want, delta * 8.0)
+		var bt := clampf(1.0 - _ai_t / BITE_TIME, 0.0, 1.0)
+		lunge_want = -0.3 if bt < 0.36 else (1.0 if bt < 0.66 else 0.2)
+	_lunge = _spring("lunge", lunge_want, 260.0, 0.45, delta)
 	_look.position = Vector3(0, -0.28 * S * _crouch, -0.4 * S * _lunge)
 	_clock += delta
 	# Twitches: now and then the whole body jerks a little, more often when it
@@ -596,54 +693,91 @@ func _pose(delta: float) -> void:
 		var hunting := _ai == "stalk" or _ai == "crouch"
 		_twitch_t = randf_range(0.25, 0.8) if hunting else randf_range(0.8, 2.5)
 		_twitch = randf_range(-1.0, 1.0) * (0.16 if hunting else 0.07)
+		# ...and the head and shoulders jerk with it, and ring out.
+		_kick("head_z", randf_range(-1.0, 1.0) * (6.0 if hunting else 2.5))
+		_kick("head_y", randf_range(-1.0, 1.0) * (4.0 if hunting else 1.5))
+		_kick("twist", randf_range(-1.0, 1.0) * 1.5)
 	_twitch = move_toward(_twitch, 0.0, delta * 0.9)
 	_look.rotation = Vector3(0.18 * _crouch - 0.15 * _lunge, _twitch * 0.6, _twitch)
-	# The upper body: hunched over at rest, rearing up and back to strike,
-	# thrown forward into a slash. The head cocks with every twitch.
-	var rear := 0.0
-	var slash := 0.0
-	if _ai == "bite":
-		var t := clampf(1.0 - _ai_t / 0.4, 0.0, 1.0)
-		rear = 1.0 - smoothstep(0.35, 0.6, t)
-		slash = smoothstep(0.45, 0.7, t)
-	var lean := 0.45 - 0.55 * _crouch - 0.5 * rear + 0.5 * slash
-	_torso.rotation.x = lerp_angle(_torso.rotation.x, -lean, clampf(delta * 10.0, 0.0, 1.0))
-	_head.rotation = Vector3(lean * 0.8 + 0.08 * sin(_clock * 1.3), _twitch * 2.0, _twitch * 3.0)
-	# Arms: hanging, reaching once it hunts, spread wide before it springs,
-	# raised overhead and brought down in a slash.
-	var sh_x := 0.35 + 0.08 * sin(_clock * 1.1)
-	var sh_z := 0.12
-	var el_x := 0.45
-	if _ai == "stalk" or _ai == "retreat":
-		sh_x = 1.0 + 0.15 * sin(_clock * 4.0)
-		sh_z = 0.3
-		el_x = 0.8
-	elif _ai == "crouch" or _ai == "pounce":
-		sh_x = 1.6
-		sh_z = 0.85
-		el_x = 0.35
-	elif _ai == "bite":
-		sh_x = lerpf(2.7, 0.5, slash)
-		sh_z = 0.35
-		el_x = lerpf(0.9, 0.1, slash)
-	var k := clampf(delta * (22.0 if _ai == "bite" else 7.0), 0.0, 1.0)
+	# The upper body, every joint a spring. Hunched over at rest; reaching as it
+	# hunts; rearing and spreading before a pounce; and a slash that winds up,
+	# twists into the blow and follows through.
+	var lean := 0.45 - 0.55 * _crouch
+	var twist := 0.0
+	var head_x := 0.08 * sin(_clock * 1.3)
+	var jaw := 0.1
+	var lk := 120.0
+	var lz := 0.6
+	var bt := clampf(1.0 - _ai_t / BITE_TIME, 0.0, 1.0)
+	var st := clampf(1.0 - _ai_t / SPIT_TIME, 0.0, 1.0)
+	match _ai:
+		"stalk", "retreat":
+			jaw = 0.35 + 0.15 * sin(_clock * 11.0)
+		"crouch", "pounce":
+			jaw = 0.75
+		"bite":
+			jaw = 0.8
+			if bt < 0.36:
+				lean = -0.3
+				twist = 0.45
+			elif bt < 0.66:
+				lean = 0.8
+				twist = -0.5
+				lk = 420.0
+				lz = 0.45
+			else:
+				lean = 0.55
+				twist = -0.1
+		"spit":
+			# Rears back with its head up and its mouth shut, swelling -- then the
+			# head snaps forward, jaw wide.
+			if st < 0.6:
+				lean = -0.4
+				head_x = -0.55
+				jaw = 0.0
+			else:
+				lean = 0.75
+				head_x = 0.5
+				jaw = 1.1
+				lk = 600.0
+				lz = 0.35
+	_torso.rotation.x = -_spring("lean", lean, lk, lz, delta)
+	_torso.rotation.y = _spring("twist", twist, lk, lz, delta)
+	var hx := _spring("head_x", lean * 0.8 + head_x, 380.0 if _ai == "spit" else 160.0, 0.4, delta)
+	var hy := _spring("head_y", _twitch * 2.0, 140.0, 0.3, delta)
+	var hz := _spring("head_z", _twitch * 3.0, 140.0, 0.3, delta)
+	_head.rotation = Vector3(hx, hy, hz)
+	if _ai == "spit" and st < 0.6:
+		# The throat swelling as it draws the glob up.
+		_head.scale = Vector3.ONE * (1.0 + 0.08 * sin(st * 40.0) * st)
+	else:
+		_head.scale = Vector3.ONE
+	_jaw.rotation.x = _spring("jaw", jaw, 300.0 if jaw > 0.9 else 150.0, 0.45, delta)
+	# Arms. In a slash the second arm comes down a beat after the first.
 	for a in _arms_p.size():
 		var sh: Node3D = _arms_p[a][0]
 		var el: Node3D = _arms_p[a][1]
 		var sgn := -1.0 if a == 0 else 1.0
-		sh.rotation.x = lerp_angle(sh.rotation.x, sh_x, k)
-		sh.rotation.z = lerp_angle(sh.rotation.z, sgn * sh_z, k)
-		el.rotation.x = lerp_angle(el.rotation.x, el_x, k)
-	# The jaw hangs open when it hunts, wider before it strikes.
-	var jaw := 0.1
-	if _ai in ["stalk", "retreat"]:
-		jaw = 0.35 + 0.15 * sin(_clock * 11.0)
-	elif _ai in ["crouch", "pounce", "bite"]:
-		jaw = 0.75
-	_jaw.rotation.x = lerp_angle(_jaw.rotation.x, jaw, clampf(delta * 14.0, 0.0, 1.0))
+		var pose: Array
+		match _ai:
+			"bite":
+				pose = _slash_pose(bt - (0.0 if a == 0 else 0.13))
+			"stalk", "retreat":
+				pose = [1.0 + 0.15 * sin(_clock * 4.0 + a), 0.3, 0.8, 90.0, 0.55]
+			"crouch", "pounce":
+				pose = [1.6, 0.85, 0.35, 140.0, 0.5]
+			"spit":
+				pose = [0.6, 0.7, 1.0, 120.0, 0.55]
+			_:
+				pose = [0.35 + 0.08 * sin(_clock * 1.1 + a), 0.12, 0.45, 60.0, 0.6]
+		var key := "arm%d" % a
+		sh.rotation.x = _spring(key + "x", pose[0], pose[3], pose[4], delta)
+		sh.rotation.z = sgn * _spring(key + "z", pose[1], pose[3], pose[4], delta)
+		# The elbow lags the shoulder a little, so the forearm whips.
+		el.rotation.x = _spring(key + "e", pose[2], float(pose[3]) * 0.7, float(pose[4]) * 0.85, delta)
 	# Eyes throb, faster when it has seen you.
 	if _eye_mat != null:
-		var rate := 9.0 if _ai in ["stalk", "crouch", "pounce", "bite"] else 2.0
+		var rate := 9.0 if _ai in ["stalk", "crouch", "pounce", "bite", "spit"] else 2.0
 		_eye_mat.emission_energy_multiplier = 4.0 + 1.5 * sin(_clock * rate)
 	if _flash > 0.0:
 		_flash = maxf(_flash - delta * 4.0, 0.0)
