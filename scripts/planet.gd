@@ -2322,6 +2322,16 @@ func machine_surround(anchor: Vector3i) -> Dictionary:
 		own[v] = true
 	var seen := {}
 	var tally := {}
+	# Nothing BELOW the station counts: it stands on the ground, and a fire lit
+	# on bare rock used to find nine of its eight rock already underneath it.
+	# What counts is what the Recipe Book shows -- the ring round it and the
+	# layer over it.
+	var upf := _axis_of(Vector3(anchor) + Vector3(0.5, 0.5, 0.5))
+	var up_i := Vector3i(roundi(upf.x), roundi(upf.y), roundi(upf.z))
+	var floor_h := 1 << 30
+	for v in own:
+		var hv: Vector3i = v
+		floor_h = mini(floor_h, hv.x * up_i.x + hv.y * up_i.y + hv.z * up_i.z)
 	# Everything in the shell around it -- corners and edges included, not only
 	# the six faces. A campfire is ONE voxel: counting faces alone left it six
 	# possible neighbours, so "bank eight rock around the fire" was a thing the
@@ -2337,6 +2347,8 @@ func machine_surround(anchor: Vector3i) -> Dictionary:
 					if own.has(n) or seen.has(n):
 						continue
 					seen[n] = true
+					if n.x * up_i.x + n.y * up_i.y + n.z * up_i.z < floor_h:
+						continue
 					var id := Blocks.bottom_of(get_id(n) & Blocks.ID_MASK)
 					if id == Blocks.AIR:
 						continue
@@ -2364,7 +2376,9 @@ func station_growth_options(anchor: Vector3i) -> Array:
 	var m: Dictionary = _machines.get(anchor, {})
 	if m.is_empty() or not bool(m.get("online", true)):
 		return []
-	var kind := int((m["def"] as Dictionary)["result"])
+	# What it IS now, not what its pattern built: a campfire already made a
+	# Smelter is offered what a Smelter grows into, not the Smelter again.
+	var kind := machine_kind_at(anchor)
 	var opts := Blocks.growth_from(kind)
 	if opts.is_empty():
 		return []
