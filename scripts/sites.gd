@@ -412,3 +412,8 @@ static func fill(p: Planet, s: Dictionary, st: Station, which: int) -> void:
 			st.store_add(int(od["block"]), rng.randi_range(2, 6) if kind == RUIN else rng.randi_range(4, 10),
 				od["props"], p.planet_name,
 				{"name": od["name"], "color": od["color"], "tier": od["tier"]})
+	# Something to wear, now and then -- the only place cosmetics come from. A
+	# vault always has one; the rest about half the time.
+	var pool := Cosmetics.pool_for(kind)
+	if not pool.is_empty() and rng.randf() < (1.0 if kind == VAULT else 0.5):
+		st.store_add(int(pool[rng.randi() % pool.size()]), 1)

@@ -424,14 +424,26 @@ var _refine_btn: Button            # Smelter action
 var _craft_row: Control            # holds per-station craft buttons
 var _craft_scroll: ScrollContainer # scrolls them when a bench has many
 var _craft_buttons: Array = []     # current station's craft buttons
-var _craft_multi: Array = []
-var _char_preview: CharacterPreview   # you, in the inventory         # the x5 / All buttons beside each craft
+var _craft_multi: Array = []       # the x5 / All buttons beside each craft
+var _char_preview: CharacterPreview   # you, in the inventory
+# Vanity: what you look like, and nothing else -- see Cosmetics. One slot per
+# Cosmetics.SLOTS entry, each shaped like an `inv` entry.
+var vanity: Dictionary = {}
+var _vanity_cells: Dictionary = {}    # slot -> cell
+var _gear_box: Control                # the Suit slot, on the Gear tab
+var _vanity_box: Control              # the seven vanity slots, on the Vanity tab
+var _gear_tab: Button
+var _vanity_tab: Button
+var _look_tag := -1
+var _trail: CPUParticles3D            # your own trail, left where you walk
+var _trail_id := 0
 var _preview_label: Label          # live craft-stat preview (Fabricator/Shipworks)
 var _job_label: Label              # "Refining… 60%" / "Crafting… 30%" while a job runs
 var _markers: Array[Label] = []   # one navigation marker per planet
 
 
 func _ready() -> void:
+	call_deferred("_apply_look")   # whatever a loaded save has you wearing
 	# collision capsule
 	_body_shape = CollisionShape3D.new()
 	var cap := CapsuleShape3D.new()
@@ -561,6 +573,7 @@ func make_profile() -> Dictionary:
 		"inv": inv,
 		"active_slot": active_slot,
 		"suit_slot": suit_slot,
+		"vanity": vanity,
 		"known_recipes": known_recipes,
 		"all_known": all_known,
 	}
@@ -573,6 +586,8 @@ func apply_profile(d: Dictionary) -> void:
 		inv = d["inv"]
 	if d.has("suit_slot"):
 		suit_slot = d["suit_slot"]
+	if d.has("vanity"):
+		vanity = d["vanity"]
 	active_slot = int(d.get("active_slot", 0))
 	known_recipes = d.get("known_recipes", {})
 	all_known = bool(d.get("all_known", true))
@@ -1410,6 +1425,8 @@ func _update_eye_clearance(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	_update_eye_clearance(delta)
+	if _trail != null:
+		_trail.emitting = velocity.length() > 0.8
 	# The build diff fades on its own; it is a hint, not a mode.
 	if _diff != null and _diff.visible:
 		_diff_t -= delta
@@ -4516,7 +4533,8 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 	var grid_h := 4 * BAG_STEP
 	# Suit sits on the LEFT, ahead of the grid: it's worn gear, so it reads as
 	# part of "you" rather than as an afterthought tacked on past the bag.
-	var equip_w := BAG_CELL + 8
+	# Two columns wide, for the vanity slots; the Suit sits in the middle of it.
+	var equip_w := BAG_STEP + BAG_CELL + 8
 	var equip_x := 14
 	# You, between what you wear and what you carry -- see CharacterPreview.
 	var fig_w := 150
@@ -4561,12 +4579,48 @@ func _build_inventory_ui(layer: CanvasLayer) -> void:
 
 	# equip slot: a Suit only protects you once dragged here -- carrying one loose
 	# in the grid above does nothing (unlike the Drill)
-	var equip_label := Label.new()
-	equip_label.text = "Suit"
-	equip_label.modulate = Color(1, 1, 1, 0.7)
-	equip_label.position = Vector2(equip_x, 12)
-	_inv_panel.add_child(equip_label)
-	_equip_cell = _make_equip_slot(_inv_panel, Vector2(equip_x, 48))
+	# Two tabs over it: Gear, what protects you, and Vanity, what you look like.
+	var tab_w := (BAG_STEP + BAG_CELL) * 0.5 - 2.0
+	_gear_tab = _inv_tab("Gear", Vector2(equip_x, 10), tab_w)
+	_vanity_tab = _inv_tab("Vanity", Vector2(equip_x + tab_w + 4.0, 10), tab_w)
+	_gear_tab.pressed.connect(_show_vanity.bind(false))
+	_vanity_tab.pressed.connect(_show_vanity.bind(true))
+	_gear_box = Control.new()
+	_gear_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_inv_panel.add_child(_gear_box)
+	_equip_cell = _make_equip_slot(_gear_box, Vector2(equip_x + BAG_STEP * 0.5, 48))
+	var suit_lbl := Label.new()
+	suit_lbl.text = "Suit"
+	suit_lbl.modulate = Color(1, 1, 1, 0.55)
+	suit_lbl.add_theme_font_size_override("font_size", 13)
+	suit_lbl.position = Vector2(equip_x + BAG_STEP * 0.5 + 18, 48 + BAG_CELL * 2 + BAG_GAP + 4)
+	_gear_box.add_child(suit_lbl)
+	_vanity_box = Control.new()
+	_vanity_box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_inv_panel.add_child(_vanity_box)
+	# Down the body on the left, head to foot; the extras on the right.
+	var at := {"hat": Vector2(0, 0), "shirt": Vector2(0, 1), "pants": Vector2(0, 2),
+		"shoes": Vector2(0, 3), "face": Vector2(1, 0), "back": Vector2(1, 1), "trail": Vector2(1, 2)}
+	for slot in Cosmetics.SLOTS:
+		var ix: int = Cosmetics.SLOTS.find(slot)
+		var holder := Control.new()
+		holder.position = Vector2(equip_x, 48) + at[slot] * BAG_STEP
+		holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_vanity_box.add_child(holder)
+		var cell := _make_slot(holder, ix, "vanity", BAG_CELL)
+		# The slot's name, faint, for while it is empty.
+		var nm := Label.new()
+		nm.text = Cosmetics.SLOT_NAMES[slot]
+		nm.set_anchors_preset(Control.PRESET_FULL_RECT)
+		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		nm.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		nm.add_theme_font_size_override("font_size", 13)
+		nm.modulate = Color(1, 1, 1, 0.3)
+		nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cell["root"].add_child(nm)
+		cell["name"] = nm
+		_vanity_cells[slot] = cell
+	_show_vanity(false)
 	var fig_back := Panel.new()
 	fig_back.position = Vector2(fig_x, 48)
 	fig_back.size = Vector2(fig_w, grid_h - BAG_GAP)
@@ -4612,6 +4666,8 @@ func _make_slot(parent: Node, index: int, mode: String, px: int = INV_CELL) -> D
 		dcont = "inv"
 	elif mode == "from_station":
 		dcont = "stor"
+	elif mode == "vanity":
+		dcont = "vanity"
 	if dcont != "":
 		root.set_drag_forwarding(
 			_slot_get_drag.bind(dcont, index, root),
@@ -4693,6 +4749,8 @@ func _slot_ref(cont: String, index: int) -> Dictionary:
 		return inv[index]
 	if cont == "equip":
 		return suit_slot
+	if cont == "vanity":
+		return _vanity_slot(index)
 	if cont == "stor" and index >= 0 and index < _stor_map.size():
 		var m: Dictionary = _stor_map[index]
 		var st: Station = m["st"]
@@ -4783,6 +4841,34 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 	if tc == "equip" and from["id"] != Blocks.SUIT:
 		_toast("Only a Suit fits there")
 		return
+	# Swapping puts what was at the far end back where this came from, so that
+	# has to fit there too -- or a rock ends up worn as a hat.
+	if fc == "equip" and _slot_holds(to) and to["id"] != Blocks.SUIT:
+		_toast("Only a Suit fits there")
+		return
+	if tc == "vanity" and not _fits_vanity(int(from["id"]), ti):
+		_toast(_vanity_refusal(ti))
+		return
+	if fc == "vanity" and _slot_holds(to) and int(to["id"]) != int(from["id"]):
+		if not _fits_vanity(int(to["id"]), fi):
+			_toast(_vanity_refusal(fi))
+			return
+		if int(to["count"]) > 1:
+			_toast("Wear one at a time -- move the rest out first")
+			return
+	# One of a stack is worn; the rest stay in the bag.
+	if tc == "vanity" and int(from["count"]) > 1:
+		if _slot_holds(to):
+			_toast("Take off the one you are wearing first")
+			return
+		_copy_slot(from, to)
+		to["count"] = 1
+		from["count"] = int(from["count"]) - 1
+		if fc == "inv":
+			_sync_cover(fi)
+		_refresh_slots()
+		_refresh_station_ui()
+		return
 	# A two-cell item needs the space beneath its destination, and swapping it
 	# with something else has no sensible footprint, so both are refused rather
 	# than silently doing something surprising.
@@ -4795,7 +4881,7 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 			_toast("Move that item out first")
 			return
 	if _slot_holds(to) and to["id"] == from["id"] and to.get("src", "") == from.get("src", ""):
-		var cap: int = STACK_MAX if tc == "inv" else (1 if tc == "equip" else 100000)
+		var cap: int = STACK_MAX if tc == "inv" else (1 if tc == "equip" or tc == "vanity" else 100000)
 		var mv: int = mini(cap - int(to["count"]), int(from["count"]))
 		to["count"] += mv
 		from["count"] -= mv
@@ -4858,7 +4944,99 @@ func _refresh_slots() -> void:
 		sw.offset_bottom = (-6.0 + float(BAG_STEP)) if tall else -6.0
 	if not _equip_cell.is_empty():
 		_paint_cell(_equip_cell, suit_slot, false)
+	for slot in _vanity_cells:
+		var vc: Dictionary = _vanity_cells[slot]
+		var vs := _vanity_slot(Cosmetics.SLOTS.find(slot))
+		_paint_cell(vc, vs, false)
+		(vc["name"] as Label).visible = not _slot_holds(vs)
+		(vc["count"] as Label).text = ""
+	_apply_look()
 	_update_mine_power()
+
+
+# --- vanity ---------------------------------------------------------------------
+
+func _vanity_slot(index: int) -> Dictionary:
+	if index < 0 or index >= Cosmetics.SLOTS.size():
+		return {}
+	var slot: String = Cosmetics.SLOTS[index]
+	if not vanity.has(slot):
+		vanity[slot] = {"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}}
+	return vanity[slot]
+
+
+func _fits_vanity(id: int, index: int) -> bool:
+	return index >= 0 and index < Cosmetics.SLOTS.size() 		and Cosmetics.slot_of(id) == Cosmetics.SLOTS[index]
+
+
+func _vanity_refusal(index: int) -> String:
+	var slot: String = Cosmetics.SLOTS[clampi(index, 0, Cosmetics.SLOTS.size() - 1)]
+	var n: String = Cosmetics.SLOT_NAMES[slot]
+	if slot == "pants" or slot == "shoes":
+		return "Only %s go there" % n.to_lower()
+	return "Only a %s goes there" % n.to_lower()
+
+
+## What you are wearing, as {slot: item id} -- all anybody else needs to draw it.
+func worn_look() -> Dictionary:
+	var out := {}
+	for i in Cosmetics.SLOTS.size():
+		var s := _vanity_slot(i)
+		if _slot_holds(s) and Cosmetics.is_cosmetic(int(s["id"])):
+			out[Cosmetics.SLOTS[i]] = int(s["id"])
+	return out
+
+
+## Put what is worn on the inventory's figure, on your own trail, and tell
+## everyone else -- only when it has changed.
+func _apply_look() -> void:
+	var look := worn_look()
+	var tag := hash(look)
+	# Not remembered until it can be told to anyone, so a look put on before
+	# the player is in the world is still announced once it is.
+	if tag == _look_tag or not is_inside_tree():
+		return
+	_look_tag = tag
+	if _char_preview != null:
+		_char_preview.wear(look)
+	var tid := int(look.get("trail", 0))
+	if tid != _trail_id:
+		_trail_id = tid
+		if _trail != null:
+			_trail.queue_free()
+			_trail = null
+		if tid != 0:
+			_trail = Cosmetics.make_trail(tid)
+			if _trail != null:
+				_trail.position = Vector3(0, -0.75, 0)
+				add_child(_trail)
+	var main := get_tree().current_scene if is_inside_tree() else null
+	if main != null:
+		var net = main.get("_net")
+		if net != null and net.has_method("announce_look"):
+			net.announce_look(look)
+
+
+func _inv_tab(text: String, pos: Vector2, w: float) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.toggle_mode = true
+	b.position = pos
+	b.custom_minimum_size = Vector2(w, 28)
+	b.size = b.custom_minimum_size
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 14)
+	_inv_panel.add_child(b)
+	return b
+
+
+func _show_vanity(on: bool) -> void:
+	if _gear_box == null or _vanity_box == null:
+		return
+	_gear_box.visible = not on
+	_vanity_box.visible = on
+	_gear_tab.set_pressed_no_signal(not on)
+	_vanity_tab.set_pressed_no_signal(on)
 
 
 # Your effective mining power is the best drill you carry (bare hands = 1.0). This
@@ -5053,6 +5231,9 @@ func _item_tooltip(slot: Dictionary) -> String:
 	var mname: String = mat.get("name", Blocks.name_of(id))
 	var src: String = slot.get("src", "")
 	var suffix := ("  ·  " + src) if src != "" else ""
+	if Cosmetics.is_cosmetic(id):
+		return "%s\nCosmetic  ·  %s — wear it from the Vanity tab" % [
+			Cosmetics.name_of(id), Cosmetics.SLOT_NAMES.get(Cosmetics.slot_of(id), "")]
 	if id == Blocks.DRILL:
 		var power := float(mat.get("power", 1.0))
 		return "%s Drill%s\nMining power %.1f — breaks up to Tier %d" % [

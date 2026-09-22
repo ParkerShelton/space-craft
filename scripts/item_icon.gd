@@ -43,6 +43,8 @@ var _lit := {}                   # planet id -> its material, held at noon
 ## everything with a shape or a lump. Tools are still a coloured square: a box
 ## is not a bucket, and pretending otherwise would be worse than the square.
 static func can_draw(raw: int) -> bool:
+	if Cosmetics.is_cosmetic(raw):
+		return true
 	var id := Blocks.bottom_of(raw)
 	return Blocks.is_placeable_block(id) or Blocks.is_ore(id) 		or Blocks.is_refined(id) or Blocks.is_intermediate(id)
 
@@ -178,8 +180,10 @@ func _shoot(job: Array) -> void:
 	var raw := int(job[2])
 	var col: Color = job[3]
 	var planet: Planet = job[4]
-	_mi.mesh = Chunk.icon_mesh(raw, col)
-	var mat: Material = _lit_material(planet)
+	var worn := Cosmetics.is_cosmetic(raw)
+	_mi.mesh = Cosmetics.icon_mesh(raw) if worn else Chunk.icon_mesh(raw, col)
+	# Cosmetics carry their own vertex-colour material, in the mesh.
+	var mat: Material = null if worn else _lit_material(planet)
 	if mat == null:
 		# No planet yet -- out on the menu, or in space. A plain material still
 		# reads the vertex colours the mesher baked, so the block keeps its
@@ -188,7 +192,7 @@ func _shoot(job: Array) -> void:
 		fallback.vertex_color_use_as_albedo = true
 		fallback.roughness = 0.9
 		mat = fallback
-	_mi.material_override = mat
+	_mi.material_override = null if worn else mat
 	# Each block sits at its OWN spot in the world, because the shader draws its
 	# surface pattern from world position: posed at the same place every time,
 	# every material would wear an identical smear of noise.
