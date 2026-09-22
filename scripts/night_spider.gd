@@ -1,15 +1,18 @@
 class_name NightSpider
 extends Creature
-## Something that comes out after dark: six long legs, a crooked cluster of
-## burning eyes, a stinging tail curled over its back, and a jump.
+## Something that comes out after dark. From a distance, a spider: a swollen
+## black abdomen slung low between eight long legs that rise high above it at
+## the knee. Closer, the wrong part -- a thin, hunched, almost human torso grows
+## up out of the front of it, with long clawed arms and a pale skull of a face,
+## a cluster of red eyes in it and a crown of spines behind.
 ##
 ## Nothing about how it moves is animated by hand. Each leg has a spot on the
 ## ground it would like its foot to be -- found by casting a ray down from where
 ## the leg rests, relative to the body -- and the foot stays planted where it
 ## last landed until the body has carried that spot too far away. Then it steps:
 ## lifted in a short arc to the new spot, while its neighbours hold still. Legs
-## go in two alternating sets of three (a tripod gait, as insects walk), so it
-## always has three feet down. Each leg is two segments bent by two-bone inverse kinematics from the
+## go in two alternating sets of four, as a spider's do, so it always has four
+## feet down. Each leg is two segments bent by two-bone inverse kinematics from the
 ## hip to wherever the foot is, with the knee pushed up and out.
 ##
 ## The body rides at a fixed height over its feet and tilts to the plane they
@@ -19,35 +22,38 @@ extends Creature
 
 ## Everything about its size in one number, so it can be grown or shrunk
 ## without its gait coming apart.
-const S := 1.7
-const LEGS := 6
-const UPPER := 1.15 * S      # hip to knee
-const LOWER := 1.35 * S      # knee to foot
-const RIDE := 0.7 * S        # body height over the ground
-const STEP_DIST := 0.75 * S  # how far the ground spot drifts before a foot moves
-const STEP_TIME := 0.15
-const STEP_LIFT := 0.38 * S
+const S := 1.45
+const LEGS := 8
+const PER_SIDE := 4
+const UPPER := 1.9 * S       # hip to knee: long, so the knee stands high over the body
+const LOWER := 2.3 * S       # knee to foot
+const RIDE := 0.85 * S       # body height over the ground
+const STEP_DIST := 0.95 * S  # how far the ground spot drifts before a foot moves
+const STEP_TIME := 0.17
+const STEP_LIFT := 0.5 * S
 const LEAD := 0.22           # feet land ahead of a moving body by this many seconds
-const RAY_UP := 1.8 * S
-const RAY_DOWN := 2.6 * S
+const RAY_UP := 2.0 * S
+const RAY_DOWN := 2.8 * S
 const MAX_CLIMB := 3.4       # a ledge higher than this turns it back
 
 const SPEED := 4.6
-const RUSH := 1.4            # how much faster it skitters once it is close
+const RUSH := 1.45           # how much faster it comes once it is close
 const AGGRO := 32.0
 const POUNCE_RANGE := 10.0
 const POUNCE_MIN := 3.5
-const BITE_RANGE := 2.7
-const HIT_REACH := 2.6       # how close a pounce has to bring it to land
+const BITE_RANGE := 3.0      # the claws reach
+const HIT_REACH := 2.8       # how close a pounce has to bring it to land
 const BITE_DAMAGE := 8.0
 const POUNCE_DAMAGE := 12.0
 const GRAV := 22.0
 const HEALTH := 60.0
 
-const C_BODY := Color(0.07, 0.04, 0.05)
-const C_LEG := Color(0.10, 0.06, 0.07)
-const C_BONE := Color(0.50, 0.45, 0.37)
-const C_EYE := Color(1.0, 0.32, 0.04)
+const C_BODY := Color(0.035, 0.03, 0.035)
+const C_LEG := Color(0.05, 0.045, 0.05)
+const C_SKIN := Color(0.16, 0.14, 0.15)
+const C_BONE := Color(0.72, 0.68, 0.62)
+const C_EYE := Color(1.0, 0.06, 0.04)
+const C_VEIN := Color(0.75, 0.04, 0.06)
 
 var _hips: Array = []        # body-local
 var _rest: Array = []        # body-local resting foot spot
@@ -75,9 +81,11 @@ var _die_t := 0.0
 var _blocked_t := 0.0
 var _mats: Array = []
 var _planted := false
-var _jaws: Array = []        # mandible pivots, left then right
-var _tail: Array = []        # tail segment pivots, base first
-var _spikes: Array = []      # a bone spike off each knee
+var _jaw: Node3D             # the skull's lower jaw
+var _torso: Node3D           # the upper body, which leans and rears
+var _head: Node3D
+var _arms_p: Array = []      # [shoulder, elbow] per arm, left then right
+var _spikes: Array = []      # a pale knob at each knee
 var _eye_mat: StandardMaterial3D
 var _twitch := 0.0
 var _twitch_t := 0.0
@@ -97,10 +105,18 @@ func setup_spider(p: Planet, w: WorldManager) -> void:
 	_build_spider()
 	var col := CollisionShape3D.new()
 	var sh := SphereShape3D.new()
-	sh.radius = 0.5 * S
+	sh.radius = 0.6 * S
 	col.shape = sh
 	add_child(col)
 	_hitbox = col
+	# The abdomen and the upright torso are things to hit as well.
+	for spot in [[Vector3(0, 0.2, 0.95) * S, 0.6 * S], [Vector3(0, 1.4, -0.8) * S, 0.45 * S]]:
+		var c2 := CollisionShape3D.new()
+		var s2 := SphereShape3D.new()
+		s2.radius = spot[1]
+		c2.shape = s2
+		c2.position = spot[0]
+		add_child(c2)
 	_heading = Vector3(randf() - 0.5, 0, randf() - 0.5).normalized()
 
 
@@ -137,71 +153,94 @@ func _build_spider() -> void:
 	_look = Node3D.new()
 	add_child(_look)
 	var body := _mat(C_BODY)
+	var skin := _mat(C_SKIN)
 	var bone := _mat(C_BONE)
-	_eye_mat = _mat(C_EYE, 4.0)
-	# A long body in segments, front (-Z) to back, each capped with a bone plate
-	# and a pair of spines -- more like something's ribcage than a spider.
-	var segs := [
-		[Vector3(0.62, 0.40, 0.58), Vector3(0, 0.02, -0.42)],   # head
-		[Vector3(0.82, 0.50, 0.62), Vector3(0, 0.10, 0.14)],    # thorax
-		[Vector3(0.70, 0.44, 0.52), Vector3(0, 0.14, 0.66)],
-		[Vector3(0.54, 0.36, 0.42), Vector3(0, 0.18, 1.08)],
-	]
-	for i in segs.size():
-		var sz: Vector3 = segs[i][0] * S
-		var at: Vector3 = segs[i][1] * S
-		_box(_look, sz, at, body)
-		_box(_look, Vector3(sz.x * 0.86, 0.07 * S, sz.z * 0.78), at + Vector3(0, sz.y * 0.5 + 0.02 * S, 0), bone)
-		if i > 0:
-			for sx in [-1.0, 1.0]:
-				_box(_look, Vector3(0.06, 0.26 + 0.05 * i, 0.06) * S,
-					at + Vector3(sx * sz.x * 0.28, sz.y * 0.5 + 0.15 * S, 0), bone)
-	# Eyes: a crooked cluster, no two alike, which is most of what makes a face
-	# stop reading as a face.
-	var head_front := -0.71 * S
-	for e in [[-0.17, 0.06, 0.11], [0.15, 0.08, 0.13], [-0.05, 0.13, 0.07], [0.04, 0.02, 0.06],
-			[-0.24, -0.02, 0.05], [0.25, 0.12, 0.05], [0.09, 0.16, 0.04], [-0.12, -0.07, 0.04]]:
-		var sz: float = e[2] * S
-		_box(_look, Vector3(sz, sz, 0.03 * S), Vector3(e[0] * S, e[1] * S, head_front), _eye_mat)
-	# The eyes light the ground in front of it -- at night the first thing you
-	# see is a red glow moving where nothing should be.
+	_eye_mat = _mat(C_EYE, 5.0)
+	var vein := _mat(C_VEIN, 1.6)
+	# The spider half: a small front body the legs grow from, and behind it a
+	# swollen abdomen, hanging low, split by glowing red seams.
+	_box(_look, Vector3(0.9, 0.5, 0.9) * S, Vector3(0, 0.0, -0.15) * S, body)
+	_box(_look, Vector3(1.25, 1.0, 1.4) * S, Vector3(0, 0.2, 0.95) * S, body)
+	_box(_look, Vector3(1.05, 0.82, 1.62) * S, Vector3(0, 0.2, 0.98) * S, body)
+	_box(_look, Vector3(0.06, 0.9, 1.3) * S, Vector3(0, 0.26, 0.98) * S, vein)
+	for sx in [-1.0, 1.0]:
+		_box(_look, Vector3(0.04, 0.55, 0.9) * S, Vector3(sx * 0.4, 0.3, 1.0) * S, vein)
+	# Eyes low on the spider half too, where a spider's are.
+	for e in [[-0.14, 0.12], [0.14, 0.12], [-0.28, 0.05], [0.28, 0.05]]:
+		_box(_look, Vector3(0.07, 0.07, 0.03) * S, Vector3(e[0], e[1], -0.61) * S, _eye_mat)
+
+	# The other half. Grows up out of the front and leans forward over it.
+	_torso = Node3D.new()
+	_torso.position = Vector3(0, 0.2, -0.45) * S
+	# Bigger than the spider half would suggest, so it is the upper body you see.
+	_torso.scale = Vector3.ONE * 1.4
+	_look.add_child(_torso)
+	_box(_torso, Vector3(0.36, 0.5, 0.26) * S, Vector3(0, 0.25, 0) * S, skin)        # waist
+	_box(_torso, Vector3(0.5, 0.55, 0.3) * S, Vector3(0, 0.72, 0) * S, skin)         # chest
+	for r in 4:                                                                    # ribs
+		_box(_torso, Vector3(0.52, 0.035, 0.32) * S, Vector3(0, 0.55 + r * 0.1, 0) * S, bone)
+	_box(_torso, Vector3(0.04, 0.8, 0.04) * S, Vector3(0, 0.5, -0.16) * S, vein)     # a seam down the front
+	_box(_torso, Vector3(0.12, 0.2, 0.12) * S, Vector3(0, 1.08, 0) * S, skin)        # neck
+	_head = Node3D.new()
+	_head.position = Vector3(0, 1.2, 0) * S
+	_torso.add_child(_head)
+	_box(_head, Vector3(0.36, 0.34, 0.36) * S, Vector3(0, 0.12, 0) * S, bone)        # skull
+	_box(_head, Vector3(0.3, 0.12, 0.05) * S, Vector3(0, 0.02, -0.19) * S, body)     # the hollow of the face
+	for e in [[-0.09, 0.14, 0.07], [0.09, 0.15, 0.08], [0.0, 0.22, 0.05], [-0.13, 0.05, 0.045],
+			[0.13, 0.06, 0.05], [-0.04, 0.07, 0.04], [0.05, 0.25, 0.035], [-0.07, 0.24, 0.03]]:
+		_box(_head, Vector3(e[2], e[2], 0.03) * S, Vector3(e[0], e[1], -0.19) * S, _eye_mat)
+	_jaw = Node3D.new()
+	_jaw.position = Vector3(0, -0.04, 0.02) * S
+	_head.add_child(_jaw)
+	_box(_jaw, Vector3(0.3, 0.07, 0.3) * S, Vector3(0, -0.03, -0.05) * S, bone)
+	for sx in [-1.0, 1.0]:
+		_box(_jaw, Vector3(0.03, 0.12, 0.03) * S, Vector3(sx * 0.1, 0.03, -0.19) * S, bone)  # fangs
+	# A crown of spines fanned out behind the head.
+	for c in 9:
+		var ang := lerpf(-1.25, 1.25, c / 8.0)
+		var sp := Node3D.new()
+		sp.position = Vector3(0, 0.14, 0.12) * S
+		sp.rotation = Vector3(0.35, 0, ang)
+		_head.add_child(sp)
+		var ln := (0.55 if c % 2 == 0 else 0.38) * S
+		_box(sp, Vector3(0.035 * S, ln, 0.035 * S), Vector3(0, ln * 0.5 + 0.12 * S, 0), bone if c % 2 == 0 else body)
+	# Long thin arms, and longer claws.
+	for sx in [-1.0, 1.0]:
+		var sh := Node3D.new()
+		sh.position = Vector3(sx * 0.3, 0.92, 0) * S
+		_torso.add_child(sh)
+		_box(sh, Vector3(0.08, 0.62, 0.08) * S, Vector3(0, -0.31, 0) * S, skin)
+		var el := Node3D.new()
+		el.position = Vector3(0, -0.62, 0) * S
+		sh.add_child(el)
+		_box(el, Vector3(0.065, 0.58, 0.065) * S, Vector3(0, -0.29, 0) * S, skin)
+		for f in 3:
+			var cl := Node3D.new()
+			cl.position = Vector3((f - 1) * 0.035, -0.58, 0) * S
+			cl.rotation = Vector3(0.25, 0, (f - 1) * 0.22)
+			el.add_child(cl)
+			_box(cl, Vector3(0.025, 0.42, 0.025) * S, Vector3(0, -0.21, 0) * S, bone)
+		_arms_p.append([sh, el])
+
+	# The glow of its eyes on the ground in front of it -- at night the first
+	# thing you see is a red light moving where nothing should be.
 	var glow := OmniLight3D.new()
 	glow.light_color = C_EYE
-	glow.light_energy = 1.2
-	glow.omni_range = 5.0 * S * 0.6
+	glow.light_energy = 1.3
+	glow.omni_range = 4.5 * S
 	glow.shadow_enabled = false
-	glow.position = Vector3(0, 0.05, -0.95) * S
+	glow.position = Vector3(0, 1.0, -1.1) * S
 	_look.add_child(glow)
-	# Mandibles, which open as it gets close and snap shut on a bite.
-	for sx in [-1.0, 1.0]:
-		var jp := Node3D.new()
-		jp.position = Vector3(sx * 0.16, -0.1, -0.66) * S
-		_look.add_child(jp)
-		_box(jp, Vector3(0.07, 0.09, 0.34) * S, Vector3(0, 0, -0.15) * S, bone)
-		_box(jp, Vector3(0.12, 0.06, 0.06) * S, Vector3(-sx * 0.05, -0.02, -0.31) * S, bone)
-		_jaws.append(jp)
-	# A tail curled up over the back, ending in a sting that glows.
-	var parent: Node3D = _look
-	var base := Vector3(0, 0.22, 1.3) * S
-	for i in 6:
-		var tp := Node3D.new()
-		tp.position = base if i == 0 else Vector3(0, 0, 0.3 * S * (1.0 - i * 0.08))
-		parent.add_child(tp)
-		var w := (0.3 - i * 0.035) * S
-		_box(tp, Vector3(w, w * 0.85, 0.32 * S), Vector3(0, 0, 0.14 * S), body)
-		_box(tp, Vector3(w * 0.7, 0.05 * S, 0.2 * S), Vector3(0, w * 0.45, 0.14 * S), bone)
-		_tail.append(tp)
-		parent = tp
-	_box(parent, Vector3(0.1, 0.1, 0.28) * S, Vector3(0, -0.04, 0.38) * S, _eye_mat)
+
 	var leg := _mat(C_LEG)
 	for i in LEGS:
-		var side := -1.0 if i < 3 else 1.0
-		var k := i % 3
-		var z: float = [-0.3, 0.1, 0.45][k] * S
-		_hips.append(Vector3(side * 0.36 * S, 0.0, z))
-		# Front pair reaches far forward, the back pair far back.
-		var rz: float = [-1.55, 0.15, 1.55][k] * S
-		var rx: float = [1.35, 1.8, 1.45][k] * S
+		var side := -1.0 if i < PER_SIDE else 1.0
+		var k := i % PER_SIDE
+		var z: float = [-0.5, -0.25, 0.0, 0.25][k] * S
+		_hips.append(Vector3(side * 0.4 * S, 0.1 * S, z))
+		# Wide: front pair far forward, back pair far back.
+		var rz: float = [-2.3, -0.8, 0.8, 2.2][k] * S
+		var rx: float = [1.9, 2.5, 2.5, 2.0][k] * S
 		_rest.append(Vector3(side * rx, -RIDE, rz))
 		_foot.append(Vector3.ZERO)
 		_from.append(Vector3.ZERO)
@@ -211,11 +250,11 @@ func _build_spider() -> void:
 			var mi := MeshInstance3D.new()
 			var bm := BoxMesh.new()
 			if arr == _femur:
-				bm.size = Vector3(0.12 * S, 0.12 * S, 1.0)
+				bm.size = Vector3(0.11 * S, 0.11 * S, 1.0)
 			elif arr == _tibia:
-				bm.size = Vector3(0.08 * S, 0.08 * S, 1.0)
+				bm.size = Vector3(0.06 * S, 0.06 * S, 1.0)
 			else:
-				bm.size = Vector3(0.05 * S, 0.05 * S, 1.0)
+				bm.size = Vector3(0.14 * S, 0.14 * S, 1.0)
 			mi.mesh = bm
 			mi.material_override = bone if arr == _spikes else leg
 			# Placed in world space every frame by the IK, not carried by the body.
@@ -247,7 +286,7 @@ func _foot_target(i: int) -> Vector3:
 	var lead := _hvel * LEAD
 	var want: Vector3 = global_transform * (_rest[i] as Vector3) + lead
 	# Threat pose: the front pair lifted and reaching while it squares up or bites.
-	if i % 3 == 0 and (_ai == "crouch" or _ai == "bite"):
+	if i % PER_SIDE == 0 and (_ai == "crouch" or _ai == "bite"):
 		return global_transform * ((_rest[i] as Vector3) * Vector3(0.7, 0, 0.8) + Vector3(0, 0.55, -0.1))
 	var g = _ground(want)
 	return g if g != null else want
@@ -476,9 +515,9 @@ func _orient(delta: float) -> void:
 		var right := Vector3.ZERO
 		for i in LEGS:
 			var f: Vector3 = _foot[i]
-			if i % 3 == 0: front += f
-			elif i % 3 == 2: back += f
-			if i < 3: left += f
+			if i % PER_SIDE < PER_SIDE / 2: front += f
+			else: back += f
+			if i < PER_SIDE: left += f
 			else: right += f
 		var fwd := front - back
 		var side := right - left
@@ -535,9 +574,10 @@ func _step_legs(delta: float) -> void:
 			stepping[_group(i)] = true
 
 
-## The two tripods: front-left, middle-right, back-left -- and the other three.
+## The two alternating sets: front-left, second-right, third-left, back-right --
+## and the other four.
 func _group(i: int) -> int:
-	return ((i % 3) + (1 if i >= 3 else 0)) % 2
+	return ((i % PER_SIDE) + (1 if i >= PER_SIDE else 0)) % 2
 
 
 ## Two-bone IK: hip to foot, knee up and out.
@@ -558,24 +598,49 @@ func _pose(delta: float) -> void:
 		_twitch = randf_range(-1.0, 1.0) * (0.16 if hunting else 0.07)
 	_twitch = move_toward(_twitch, 0.0, delta * 0.9)
 	_look.rotation = Vector3(0.18 * _crouch - 0.15 * _lunge, _twitch * 0.6, _twitch)
-	# Jaws: shut when calm, working when it hunts, wide before a bite and
-	# snapped shut on it.
-	var jaw := 0.12 + 0.05 * sin(_clock * 3.0)
+	# The upper body: hunched over at rest, rearing up and back to strike,
+	# thrown forward into a slash. The head cocks with every twitch.
+	var rear := 0.0
+	var slash := 0.0
+	if _ai == "bite":
+		var t := clampf(1.0 - _ai_t / 0.4, 0.0, 1.0)
+		rear = 1.0 - smoothstep(0.35, 0.6, t)
+		slash = smoothstep(0.45, 0.7, t)
+	var lean := 0.45 - 0.55 * _crouch - 0.5 * rear + 0.5 * slash
+	_torso.rotation.x = lerp_angle(_torso.rotation.x, -lean, clampf(delta * 10.0, 0.0, 1.0))
+	_head.rotation = Vector3(lean * 0.8 + 0.08 * sin(_clock * 1.3), _twitch * 2.0, _twitch * 3.0)
+	# Arms: hanging, reaching once it hunts, spread wide before it springs,
+	# raised overhead and brought down in a slash.
+	var sh_x := 0.35 + 0.08 * sin(_clock * 1.1)
+	var sh_z := 0.12
+	var el_x := 0.45
 	if _ai == "stalk" or _ai == "retreat":
-		jaw = 0.3 + 0.18 * sin(_clock * 17.0)
+		sh_x = 1.0 + 0.15 * sin(_clock * 4.0)
+		sh_z = 0.3
+		el_x = 0.8
 	elif _ai == "crouch" or _ai == "pounce":
-		jaw = 0.75
+		sh_x = 1.6
+		sh_z = 0.85
+		el_x = 0.35
 	elif _ai == "bite":
-		jaw = 0.8 if _ai_t > 0.2 else 0.0
-	for j in _jaws.size():
-		var jp: Node3D = _jaws[j]
-		jp.rotation.y = lerp_angle(jp.rotation.y, jaw * (1.0 if j == 0 else -1.0), clampf(delta * 18.0, 0.0, 1.0))
-	# The tail curls up over the back and sways; drawn back to strike before a pounce.
-	var coil := 0.42 + 0.2 * _crouch
-	for t in _tail.size():
-		var tp: Node3D = _tail[t]
-		tp.rotation.x = -coil + (0.2 if t == 0 else 0.0)
-		tp.rotation.y = sin(_clock * 1.7 + t * 0.6) * 0.08
+		sh_x = lerpf(2.7, 0.5, slash)
+		sh_z = 0.35
+		el_x = lerpf(0.9, 0.1, slash)
+	var k := clampf(delta * (22.0 if _ai == "bite" else 7.0), 0.0, 1.0)
+	for a in _arms_p.size():
+		var sh: Node3D = _arms_p[a][0]
+		var el: Node3D = _arms_p[a][1]
+		var sgn := -1.0 if a == 0 else 1.0
+		sh.rotation.x = lerp_angle(sh.rotation.x, sh_x, k)
+		sh.rotation.z = lerp_angle(sh.rotation.z, sgn * sh_z, k)
+		el.rotation.x = lerp_angle(el.rotation.x, el_x, k)
+	# The jaw hangs open when it hunts, wider before it strikes.
+	var jaw := 0.1
+	if _ai in ["stalk", "retreat"]:
+		jaw = 0.35 + 0.15 * sin(_clock * 11.0)
+	elif _ai in ["crouch", "pounce", "bite"]:
+		jaw = 0.75
+	_jaw.rotation.x = lerp_angle(_jaw.rotation.x, jaw, clampf(delta * 14.0, 0.0, 1.0))
 	# Eyes throb, faster when it has seen you.
 	if _eye_mat != null:
 		var rate := 9.0 if _ai in ["stalk", "crouch", "pounce", "bite"] else 2.0
@@ -596,7 +661,7 @@ func _pose(delta: float) -> void:
 		var sa := sqrt(1.0 - ca * ca)
 		var outward := hip - global_position
 		outward = (outward - body_up * outward.dot(body_up)).normalized()
-		var pole := body_up + outward * 0.25
+		var pole := body_up + outward * 0.1
 		var bend := pole - dir * pole.dot(dir)
 		if bend.length() < 0.001:
 			bend = body_up
@@ -604,8 +669,8 @@ func _pose(delta: float) -> void:
 		var knee := hip + dir * UPPER * ca + bend * UPPER * sa
 		_segment(_femur[i], hip, knee, body_up)
 		_segment(_tibia[i], knee, hip + dir * d, body_up)
-		# A spur of bone off the top of each knee, raked back.
-		_segment(_spikes[i], knee, knee + (bend * 0.8 - dir * 0.3).normalized() * 0.42 * S, body_up)
+		# A pale knob at the knee, the highest point of the leg.
+		_segment(_spikes[i], knee - bend * 0.07 * S, knee + bend * 0.1 * S, body_up)
 
 
 func _segment(mi: MeshInstance3D, a: Vector3, b: Vector3, up_hint: Vector3) -> void:
