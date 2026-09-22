@@ -18,7 +18,7 @@ static func has_model(id: int) -> bool:
 
 ## Held by a handle standing up, rather than pointing forward like a drill.
 static func is_upright(id: int) -> bool:
-	return id in [Blocks.PICK, Blocks.AXE, Blocks.SPADE, Blocks.HOE, Blocks.WEAPON]
+	return id in [Blocks.PICK, Blocks.AXE, Blocks.SPADE, Blocks.HOE, Blocks.WEAPON, Blocks.SWORD]
 
 
 ## [position, size, colour] boxes for the tool, or [] if it has no model.
@@ -76,6 +76,13 @@ static func _boxes(id: int, tint: Color) -> Array:
 				[Vector3(0, 0.02, -0.2), Vector3(0.09, 0.09, 0.08), tint],
 				[Vector3(0, 0.02, -0.3), Vector3(0.05, 0.05, 0.12), tint],
 				[Vector3(0, 0.02, -0.39), Vector3(0.025, 0.025, 0.06), tint]]
+		Blocks.SWORD:
+			return [
+				[Vector3(0, -0.24, 0), Vector3(0.045, 0.2, 0.045), HANDLE],
+				[Vector3(0, -0.35, 0), Vector3(0.06, 0.04, 0.06), HANDLE],
+				[Vector3(0, -0.12, 0), Vector3(0.17, 0.035, 0.04), HANDLE],
+				[Vector3(0, 0.15, 0), Vector3(0.07, 0.5, 0.03), STONE],
+				[Vector3(0, 0.43, 0), Vector3(0.04, 0.06, 0.03), STONE]]
 		Blocks.WEAPON:
 			return [
 				[Vector3(0, -0.14, 0), Vector3(0.05, 0.22, 0.05), Color(0.25, 0.22, 0.2)],

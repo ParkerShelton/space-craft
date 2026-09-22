@@ -659,9 +659,10 @@ func _sync_cover(i: int) -> void:
 func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: Dictionary = {}) -> int:
 	if id == Blocks.AIR or n <= 0:
 		return n
+	var cap := Blocks.stack_cap(id, STACK_MAX)
 	for s in inv:
-		if s["id"] == id and s.get("src", "") == src and s["count"] > 0 and s["count"] < STACK_MAX:
-			var add: int = mini(n, STACK_MAX - s["count"])
+		if s["id"] == id and s.get("src", "") == src and s["count"] > 0 and s["count"] < cap:
+			var add: int = mini(n, cap - s["count"])
 			s["count"] += add
 			n -= add
 			if n <= 0:
@@ -679,7 +680,8 @@ func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 		s["props"] = props
 		s["src"] = src
 		s["mat"] = mat
-		var add: int = mini(n, STACK_MAX)
+		s.erase("dur")
+		var add: int = mini(n, cap)
 		s["count"] = add
 		n -= add
 		_sync_cover(i)
@@ -3178,6 +3180,7 @@ func _try_till(tgt: Dictionary) -> bool:
 		_toast("Too dry -- soil has to be worked near water")
 		return true
 	world.edit_block(planet, v, Blocks.TILLED)
+	_wear_held(1)
 	return true
 
 
@@ -3906,6 +3909,7 @@ func _process_mining(delta: float) -> void:
 			if pid != Blocks.AIR:
 				world.edit_part(planet, sp[0], int(sp[1]), Blocks.AIR)
 				_add_eighth(pid)
+				_wear_from_block()
 			_mine_key = ""
 			_mine_time = 0.0
 			if _crack != null:
@@ -3932,6 +3936,7 @@ func _process_mining(delta: float) -> void:
 			return
 		if planet != null:
 			world.edit_block(planet, v, Blocks.AIR)
+			_wear_from_block()
 			# A doorway is two cells. Taking one and leaving the other floating
 			# is not a thing a door does.
 			if Blocks.is_door(id):
@@ -4061,6 +4066,9 @@ func _process_attack(creature: Creature, delta: float, lmb_down: bool, lmb_press
 			_attack_cd = float(shape.get("light_cooldown", MELEE_COOLDOWN))
 			_swing_t = 0.0
 			var died := creature.take_hit(_melee_damage * mult, stagger)
+			# A blade is for this; anything else used as a club wears twice as fast.
+			var hid := _selected_id()
+			_wear_held(1 if hid == Blocks.SWORD or hid == Blocks.WEAPON else 2)
 			if died:
 				_toast("Killed " + cname)
 	if _attack_cd > 0.0:
@@ -4093,6 +4101,7 @@ func _process_ranged_fire(lmb_pressed: bool) -> bool:
 		_look_name = "%s  (%.0f dmg, click to fire)" % [Blocks.name_of(id), dmg]
 	if lmb_pressed and _ranged_cd <= 0.0:
 		_fire_ranged_weapon(shape, dmg)
+		_wear_held(1)
 		_ranged_cd = float(shape.get("cooldown", 0.4))
 		_swing_t = 0.0  # reuses the same recoil-ish hand-flick as melee
 	return true
@@ -4821,6 +4830,7 @@ func _clear_slot(s: Dictionary) -> void:
 	s["props"] = {}
 	s["src"] = ""
 	s["mat"] = {}
+	s.erase("dur")
 
 
 func _copy_slot(src: Dictionary, dst: Dictionary) -> void:
@@ -4833,6 +4843,90 @@ func _copy_slot(src: Dictionary, dst: Dictionary) -> void:
 	dst["props"] = src.get("props", {})
 	dst["src"] = src.get("src", "")
 	dst["mat"] = src.get("mat", {})
+	# How worn it is goes with it, or moving a tool would mend it.
+	if src.has("dur"):
+		dst["dur"] = int(src["dur"])
+	else:
+		dst.erase("dur")
+
+
+## A tool's wear, as a bar along the bottom of its slot -- only once it has
+## been used, so a new tool's slot stays clean. Green when fresh, red near the end.
+func _paint_wear(cell: Dictionary, mx: int, dur: int) -> void:
+	var bar = cell.get("wear")
+	if mx <= 0 or dur >= mx:
+		if bar != null:
+			(bar as Control).visible = false
+		return
+	if bar == null:
+		var bg := ColorRect.new()
+		bg.color = Color(0, 0, 0, 0.85)
+		bg.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+		bg.offset_left = 8
+		bg.offset_right = -8
+		bg.offset_top = -10
+		bg.offset_bottom = -6
+		bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var fill := ColorRect.new()
+		fill.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		fill.position = Vector2.ZERO
+		bg.add_child(fill)
+		(cell["root"] as Control).add_child(bg)
+		cell["wear"] = bg
+		bar = bg
+	var f := clampf(float(dur) / float(mx), 0.0, 1.0)
+	var fill_r: ColorRect = (bar as Control).get_child(0)
+	fill_r.anchor_left = 0.0
+	fill_r.anchor_top = 0.0
+	fill_r.anchor_bottom = 1.0
+	fill_r.anchor_right = maxf(f, 0.04)
+	fill_r.offset_left = 0
+	fill_r.offset_top = 0
+	fill_r.offset_right = 0
+	fill_r.offset_bottom = 0
+	fill_r.color = Color(1.0, 0.2, 0.1).lerp(Color(0.3, 0.9, 0.2), f)
+	(bar as Control).visible = true
+
+
+## Use up some of what is in your hand, if it wears. Breaks it at nothing left.
+func _wear_held(amount: int) -> void:
+	if active_slot < 0 or active_slot >= inv.size():
+		return
+	var s: Dictionary = inv[active_slot]
+	if int(s.get("count", 0)) <= 0:
+		return
+	var id := int(s["id"])
+	var mx := Blocks.max_durability(id)
+	if mx <= 0:
+		return
+	if int(s["count"]) > 1:
+		# A stack from before tools wore out: the rest step aside into a free
+		# slot, so only the one in hand takes the wear.
+		for i in inv.size():
+			var e: Dictionary = inv[i]
+			if i != active_slot and not _slot_holds(e) and _cover_owner(i) < 0:
+				_copy_slot(s, e)
+				e["count"] = int(s["count"]) - 1
+				e.erase("dur")
+				s["count"] = 1
+				break
+	var left := int(s.get("dur", mx)) - amount
+	if left <= 0:
+		_toast("Your %s broke" % Blocks.name_of(id))
+		if int(s["count"]) > 1:
+			s["count"] = int(s["count"]) - 1
+			s.erase("dur")
+		else:
+			_clear_slot(s)
+	else:
+		s["dur"] = left
+	_refresh_slots()
+
+
+## Breaking a block with a blade is misuse, and costs it double.
+func _wear_from_block() -> void:
+	var id := _selected_id()
+	_wear_held(2 if id == Blocks.SWORD or id == Blocks.WEAPON else 1)
 
 
 ## Whether a slot holds anything at all. Five eighths of a rock is something,
@@ -4914,6 +5008,7 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 			return
 	if _slot_holds(to) and to["id"] == from["id"] and to.get("src", "") == from.get("src", ""):
 		var cap: int = STACK_MAX if tc == "inv" else (1 if tc == "equip" or tc == "vanity" else 100000)
+		cap = Blocks.stack_cap(int(from["id"]), cap)
 		var mv: int = mini(cap - int(to["count"]), int(from["count"]))
 		to["count"] += mv
 		from["count"] -= mv
@@ -4939,6 +5034,8 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 		var tmp := {"id": to["id"], "count": to["count"],
 			"eighths": int(to.get("eighths", 0)), "props": to.get("props", {}),
 			"src": to.get("src", ""), "mat": to.get("mat", {})}
+		if to.has("dur"):
+			tmp["dur"] = int(to["dur"])
 		_copy_slot(from, to)
 		from["id"] = tmp["id"]
 		from["count"] = tmp["count"]
@@ -4946,6 +5043,10 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 		from["props"] = tmp["props"]
 		from["src"] = tmp["src"]
 		from["mat"] = tmp["mat"]
+		if tmp.has("dur"):
+			from["dur"] = tmp["dur"]
+		else:
+			from.erase("dur")
 	# Footprints can change on either end of a move, so re-derive both.
 	if fc == "inv":
 		_sync_cover(fi)
@@ -5114,6 +5215,8 @@ func _update_mine_power() -> void:
 	var active: Dictionary = inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
 	if active.get("id", -1) == Blocks.WEAPON and int(active.get("count", 0)) > 0:
 		_melee_damage = float(active.get("mat", {}).get("damage", UNARMED_DAMAGE))
+	elif active.get("id", -1) == Blocks.SWORD and int(active.get("count", 0)) > 0:
+		_melee_damage = Blocks.SWORD_DAMAGE
 	else:
 		_melee_damage = UNARMED_DAMAGE
 	_update_held_item(active)
@@ -5257,7 +5360,12 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 		var whole: int = int(slot["count"])
 		count.text = ("%d%s" % [whole, EIGHTH_GLYPH[eighths]]) if whole > 0 			else EIGHTH_GLYPH[eighths]
 		cell["root"].tooltip_text = _item_tooltip(slot)
+		var mx := Blocks.max_durability(int(slot["id"]))
+		if mx > 0 and whole == 1:
+			count.text = ""
+		_paint_wear(cell, mx, int(slot.get("dur", mx)))
 	else:
+		_paint_wear(cell, 0, 0)
 		# Empty: the slot's own frame is the picture of "nothing here".
 		swatch.color = Color(0, 0, 0, 0)
 		icon.texture = null
@@ -5274,6 +5382,19 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 # Hover text. Raw ore stays unidentified (tier & stats hidden); a refined material
 # shows its tier and property bars. Source planet is shown for both.
 func _item_tooltip(slot: Dictionary) -> String:
+	var id: int = slot["id"]
+	var mat: Dictionary = slot.get("mat", {})
+	var mname: String = mat.get("name", Blocks.name_of(id))
+	var src: String = slot.get("src", "")
+	var suffix := ("  ·  " + src) if src != "" else ""
+	var mx := Blocks.max_durability(id)
+	if mx > 0:
+		var base := _item_tooltip_base(slot)
+		return "%s\nDurability %d / %d" % [base, int(slot.get("dur", mx)), mx]
+	return _item_tooltip_base(slot)
+
+
+func _item_tooltip_base(slot: Dictionary) -> String:
 	var id: int = slot["id"]
 	var mat: Dictionary = slot.get("mat", {})
 	var mname: String = mat.get("name", Blocks.name_of(id))
