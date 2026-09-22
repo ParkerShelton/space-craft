@@ -1,14 +1,15 @@
 class_name NightSpider
 extends Creature
-## Something that comes out after dark: eight legs, red eyes, and a jump.
+## Something that comes out after dark: six long legs, a crooked cluster of
+## burning eyes, a stinging tail curled over its back, and a jump.
 ##
 ## Nothing about how it moves is animated by hand. Each leg has a spot on the
 ## ground it would like its foot to be -- found by casting a ray down from where
 ## the leg rests, relative to the body -- and the foot stays planted where it
 ## last landed until the body has carried that spot too far away. Then it steps:
 ## lifted in a short arc to the new spot, while its neighbours hold still. Legs
-## go in two alternating sets, as a real spider's do, so it always has four feet
-## down. Each leg is two segments bent by two-bone inverse kinematics from the
+## go in two alternating sets of three (a tripod gait, as insects walk), so it
+## always has three feet down. Each leg is two segments bent by two-bone inverse kinematics from the
 ## hip to wherever the foot is, with the knee pushed up and out.
 ##
 ## The body rides at a fixed height over its feet and tilts to the plane they
@@ -16,32 +17,37 @@ extends Creature
 ## on a slope. It is a Creature, so swords, bullets and loot treat it like any
 ## other animal; everything it does in the world is its own.
 
-const LEGS := 8
-const UPPER := 1.15          # hip to knee
-const LOWER := 1.35          # knee to foot
-const RIDE := 0.7            # body height over the ground
-const STEP_DIST := 0.75      # how far the ground spot drifts before a foot moves
-const STEP_TIME := 0.14
-const STEP_LIFT := 0.38
+## Everything about its size in one number, so it can be grown or shrunk
+## without its gait coming apart.
+const S := 1.7
+const LEGS := 6
+const UPPER := 1.15 * S      # hip to knee
+const LOWER := 1.35 * S      # knee to foot
+const RIDE := 0.7 * S        # body height over the ground
+const STEP_DIST := 0.75 * S  # how far the ground spot drifts before a foot moves
+const STEP_TIME := 0.15
+const STEP_LIFT := 0.38 * S
 const LEAD := 0.22           # feet land ahead of a moving body by this many seconds
-const RAY_UP := 1.8
-const RAY_DOWN := 2.6
-const MAX_CLIMB := 2.6       # a ledge higher than this turns it back
+const RAY_UP := 1.8 * S
+const RAY_DOWN := 2.6 * S
+const MAX_CLIMB := 3.4       # a ledge higher than this turns it back
 
-const SPEED := 4.4
-const AGGRO := 30.0
-const POUNCE_RANGE := 7.5
-const POUNCE_MIN := 2.6
-const BITE_RANGE := 1.9
-const BITE_DAMAGE := 6.0
-const POUNCE_DAMAGE := 9.0
+const SPEED := 4.6
+const RUSH := 1.4            # how much faster it skitters once it is close
+const AGGRO := 32.0
+const POUNCE_RANGE := 10.0
+const POUNCE_MIN := 3.5
+const BITE_RANGE := 2.7
+const HIT_REACH := 2.6       # how close a pounce has to bring it to land
+const BITE_DAMAGE := 8.0
+const POUNCE_DAMAGE := 12.0
 const GRAV := 22.0
-const HEALTH := 36.0
+const HEALTH := 60.0
 
-const C_BODY := Color(0.10, 0.08, 0.11)
-const C_LEG := Color(0.14, 0.11, 0.14)
-const C_MARK := Color(0.42, 0.12, 0.40)
-const C_EYE := Color(1.0, 0.12, 0.08)
+const C_BODY := Color(0.07, 0.04, 0.05)
+const C_LEG := Color(0.10, 0.06, 0.07)
+const C_BONE := Color(0.50, 0.45, 0.37)
+const C_EYE := Color(1.0, 0.32, 0.04)
 
 var _hips: Array = []        # body-local
 var _rest: Array = []        # body-local resting foot spot
@@ -69,6 +75,14 @@ var _die_t := 0.0
 var _blocked_t := 0.0
 var _mats: Array = []
 var _planted := false
+var _jaws: Array = []        # mandible pivots, left then right
+var _tail: Array = []        # tail segment pivots, base first
+var _spikes: Array = []      # a bone spike off each knee
+var _eye_mat: StandardMaterial3D
+var _twitch := 0.0
+var _twitch_t := 0.0
+var _clock := 0.0
+var _air_t := 0.0
 ## Set on one summoned by hand, so it can be watched in daylight.
 var daylight_ok := false
 
@@ -78,12 +92,12 @@ func setup_spider(p: Planet, w: WorldManager) -> void:
 	world = w
 	species = {"name": "Night Stalker", "kind": "land", "temperament": "hostile",
 		"health": HEALTH,
-		"drops": [{"id": Blocks.FIBRE, "min": 2, "max": 4}, {"id": Blocks.BONE, "min": 0, "max": 1}]}
+		"drops": [{"id": Blocks.FIBRE, "min": 3, "max": 6}, {"id": Blocks.BONE, "min": 1, "max": 3}]}
 	_health = HEALTH
 	_build_spider()
 	var col := CollisionShape3D.new()
 	var sh := SphereShape3D.new()
-	sh.radius = 0.55
+	sh.radius = 0.5 * S
 	col.shape = sh
 	add_child(col)
 	_hitbox = col
@@ -123,38 +137,87 @@ func _build_spider() -> void:
 	_look = Node3D.new()
 	add_child(_look)
 	var body := _mat(C_BODY)
-	var mark := _mat(C_MARK)
-	var eye := _mat(C_EYE, 3.0)
-	# Front (-Z) the head and jaws, behind it the big abdomen.
-	_box(_look, Vector3(0.72, 0.42, 0.72), Vector3(0, 0.02, -0.28), body)
-	_box(_look, Vector3(0.95, 0.72, 1.05), Vector3(0, 0.18, 0.6), body)
-	_box(_look, Vector3(0.6, 0.1, 0.7), Vector3(0, 0.55, 0.62), mark)
-	_box(_look, Vector3(0.12, 0.3, 0.5), Vector3(0, 0.5, 0.62), mark)
+	var bone := _mat(C_BONE)
+	_eye_mat = _mat(C_EYE, 4.0)
+	# A long body in segments, front (-Z) to back, each capped with a bone plate
+	# and a pair of spines -- more like something's ribcage than a spider.
+	var segs := [
+		[Vector3(0.62, 0.40, 0.58), Vector3(0, 0.02, -0.42)],   # head
+		[Vector3(0.82, 0.50, 0.62), Vector3(0, 0.10, 0.14)],    # thorax
+		[Vector3(0.70, 0.44, 0.52), Vector3(0, 0.14, 0.66)],
+		[Vector3(0.54, 0.36, 0.42), Vector3(0, 0.18, 1.08)],
+	]
+	for i in segs.size():
+		var sz: Vector3 = segs[i][0] * S
+		var at: Vector3 = segs[i][1] * S
+		_box(_look, sz, at, body)
+		_box(_look, Vector3(sz.x * 0.86, 0.07 * S, sz.z * 0.78), at + Vector3(0, sz.y * 0.5 + 0.02 * S, 0), bone)
+		if i > 0:
+			for sx in [-1.0, 1.0]:
+				_box(_look, Vector3(0.06, 0.26 + 0.05 * i, 0.06) * S,
+					at + Vector3(sx * sz.x * 0.28, sz.y * 0.5 + 0.15 * S, 0), bone)
+	# Eyes: a crooked cluster, no two alike, which is most of what makes a face
+	# stop reading as a face.
+	var head_front := -0.71 * S
+	for e in [[-0.17, 0.06, 0.11], [0.15, 0.08, 0.13], [-0.05, 0.13, 0.07], [0.04, 0.02, 0.06],
+			[-0.24, -0.02, 0.05], [0.25, 0.12, 0.05], [0.09, 0.16, 0.04], [-0.12, -0.07, 0.04]]:
+		var sz: float = e[2] * S
+		_box(_look, Vector3(sz, sz, 0.03 * S), Vector3(e[0] * S, e[1] * S, head_front), _eye_mat)
+	# The eyes light the ground in front of it -- at night the first thing you
+	# see is a red glow moving where nothing should be.
+	var glow := OmniLight3D.new()
+	glow.light_color = C_EYE
+	glow.light_energy = 1.2
+	glow.omni_range = 5.0 * S * 0.6
+	glow.shadow_enabled = false
+	glow.position = Vector3(0, 0.05, -0.95) * S
+	_look.add_child(glow)
+	# Mandibles, which open as it gets close and snap shut on a bite.
 	for sx in [-1.0, 1.0]:
-		_box(_look, Vector3(0.09, 0.09, 0.03), Vector3(sx * 0.12, 0.12, -0.65), eye)
-		_box(_look, Vector3(0.06, 0.06, 0.03), Vector3(sx * 0.26, 0.16, -0.62), eye)
-		_box(_look, Vector3(0.05, 0.05, 0.03), Vector3(sx * 0.07, 0.2, -0.65), eye)
-		_box(_look, Vector3(0.07, 0.2, 0.07), Vector3(sx * 0.1, -0.2, -0.62), mark)
+		var jp := Node3D.new()
+		jp.position = Vector3(sx * 0.16, -0.1, -0.66) * S
+		_look.add_child(jp)
+		_box(jp, Vector3(0.07, 0.09, 0.34) * S, Vector3(0, 0, -0.15) * S, bone)
+		_box(jp, Vector3(0.12, 0.06, 0.06) * S, Vector3(-sx * 0.05, -0.02, -0.31) * S, bone)
+		_jaws.append(jp)
+	# A tail curled up over the back, ending in a sting that glows.
+	var parent: Node3D = _look
+	var base := Vector3(0, 0.22, 1.3) * S
+	for i in 6:
+		var tp := Node3D.new()
+		tp.position = base if i == 0 else Vector3(0, 0, 0.3 * S * (1.0 - i * 0.08))
+		parent.add_child(tp)
+		var w := (0.3 - i * 0.035) * S
+		_box(tp, Vector3(w, w * 0.85, 0.32 * S), Vector3(0, 0, 0.14 * S), body)
+		_box(tp, Vector3(w * 0.7, 0.05 * S, 0.2 * S), Vector3(0, w * 0.45, 0.14 * S), bone)
+		_tail.append(tp)
+		parent = tp
+	_box(parent, Vector3(0.1, 0.1, 0.28) * S, Vector3(0, -0.04, 0.38) * S, _eye_mat)
 	var leg := _mat(C_LEG)
 	for i in LEGS:
-		var side := -1.0 if i < 4 else 1.0
-		var k := i % 4
-		var z: float = [-0.52, -0.26, -0.02, 0.22][k]
-		_hips.append(Vector3(side * 0.34, 0.0, z))
-		# Front pair reaches forward, back pair back, the middle two out.
-		var rz: float = [-1.35, -0.5, 0.35, 1.15][k]
-		var rx: float = [1.25, 1.55, 1.55, 1.3][k]
+		var side := -1.0 if i < 3 else 1.0
+		var k := i % 3
+		var z: float = [-0.3, 0.1, 0.45][k] * S
+		_hips.append(Vector3(side * 0.36 * S, 0.0, z))
+		# Front pair reaches far forward, the back pair far back.
+		var rz: float = [-1.55, 0.15, 1.55][k] * S
+		var rx: float = [1.35, 1.8, 1.45][k] * S
 		_rest.append(Vector3(side * rx, -RIDE, rz))
 		_foot.append(Vector3.ZERO)
 		_from.append(Vector3.ZERO)
 		_to.append(Vector3.ZERO)
 		_step.append(-1.0)
-		for arr in [_femur, _tibia]:
+		for arr in [_femur, _tibia, _spikes]:
 			var mi := MeshInstance3D.new()
 			var bm := BoxMesh.new()
-			bm.size = Vector3(0.1, 0.1, 1.0) if arr == _femur else Vector3(0.07, 0.07, 1.0)
+			if arr == _femur:
+				bm.size = Vector3(0.12 * S, 0.12 * S, 1.0)
+			elif arr == _tibia:
+				bm.size = Vector3(0.08 * S, 0.08 * S, 1.0)
+			else:
+				bm.size = Vector3(0.05 * S, 0.05 * S, 1.0)
 			mi.mesh = bm
-			mi.material_override = leg
+			mi.material_override = bone if arr == _spikes else leg
 			# Placed in world space every frame by the IK, not carried by the body.
 			mi.top_level = true
 			add_child(mi)
@@ -184,7 +247,7 @@ func _foot_target(i: int) -> Vector3:
 	var lead := _hvel * LEAD
 	var want: Vector3 = global_transform * (_rest[i] as Vector3) + lead
 	# Threat pose: the front pair lifted and reaching while it squares up or bites.
-	if i % 4 == 0 and (_ai == "crouch" or _ai == "bite"):
+	if i % 3 == 0 and (_ai == "crouch" or _ai == "bite"):
 		return global_transform * ((_rest[i] as Vector3) * Vector3(0.7, 0, 0.8) + Vector3(0, 0.55, -0.1))
 	var g = _ground(want)
 	return g if g != null else want
@@ -256,16 +319,18 @@ func _think(delta: float) -> void:
 			# Closing in, with a little weave so it does not come in a straight line.
 			var weave := sin(Time.get_ticks_msec() * 0.0021 + get_instance_id()) * 0.45
 			var d := to_p.normalized().rotated(_up, weave) if to_p.length() > 0.01 else _heading
-			_wish(d, SPEED, delta)
+			# Slow and watchful at a distance, then a sudden rush once close.
+			_wish(d, SPEED * (RUSH if dist < 14.0 else 0.8), delta)
 		"crouch":
 			_face(to_p, delta * 10.0)
 			_wish(Vector3.ZERO, 0.0, delta)
 			if _ai_t <= 0.0:
 				_pounce(pl)
 		"pounce":
-			if not _hit_done and pl != null and dist < 1.7:
+			if not _hit_done and pl != null and dist < HIT_REACH:
 				_hit_done = true
 				_hurt_player(pl, POUNCE_DAMAGE)
+				_hvel *= 0.2
 			if not _air:
 				_ai = "retreat"
 				_ai_t = 0.9
@@ -348,11 +413,18 @@ func _move(delta: float) -> void:
 	up_direction = _up
 	move_and_slide()
 	if _air:
+		_air_t += delta
 		var g = _ground(global_position, 0.2, RIDE + 0.05)
-		if _vy < 0.0 and g != null:
+		# Down on the ground -- or on anything else, you included: landing on top
+		# of you used to leave it "in the air" for good, since its ground ray
+		# looks straight through you.
+		var landed := _vy < 0.0 and (g != null or is_on_floor())
+		if landed or _air_t > 3.0:
 			_air = false
+			_air_t = 0.0
 			_vy = 0.0
-			global_position = (g as Vector3) + _up * RIDE
+			if g != null:
+				global_position = (g as Vector3) + _up * RIDE
 			for i in LEGS:
 				_step[i] = -1.0
 				_foot[i] = _foot_target(i)
@@ -367,7 +439,7 @@ func _move(delta: float) -> void:
 		target = (under as Vector3).dot(_up)
 	var ahead_dir := _flat(_hvel).normalized() if _hvel.length() > 0.2 else Vector3.ZERO
 	if ahead_dir != Vector3.ZERO:
-		var ahead = _ground(global_position + ahead_dir * 0.95, MAX_CLIMB, RAY_DOWN)
+		var ahead = _ground(global_position + ahead_dir * 0.95 * S, MAX_CLIMB, RAY_DOWN)
 		if ahead != null:
 			var ah := (ahead as Vector3).dot(_up)
 			if ah - h < MAX_CLIMB - RIDE:
@@ -404,9 +476,9 @@ func _orient(delta: float) -> void:
 		var right := Vector3.ZERO
 		for i in LEGS:
 			var f: Vector3 = _foot[i]
-			if i % 4 < 2: front += f
-			else: back += f
-			if i < 4: left += f
+			if i % 3 == 0: front += f
+			elif i % 3 == 2: back += f
+			if i < 3: left += f
 			else: right += f
 		var fwd := front - back
 		var side := right - left
@@ -454,7 +526,7 @@ func _step_legs(delta: float) -> void:
 				_foot[i] = a.lerp(b, s) + _up * sin(s * PI) * STEP_LIFT
 			continue
 		var drift := (_foot[i] as Vector3).distance_to(tgt)
-		var need := drift > STEP_DIST or (still and drift > 0.3) or drift > STEP_DIST * 2.2
+		var need := drift > STEP_DIST or (still and drift > 0.3 * S) or drift > STEP_DIST * 2.2
 		# A leg lifts only while the other set is all down, so four feet always are.
 		if need and not stepping[1 - _group(i)]:
 			_step[i] = 0.0
@@ -463,10 +535,9 @@ func _step_legs(delta: float) -> void:
 			stepping[_group(i)] = true
 
 
-## The two alternating sets: front-left, second-right, third-left, back-right --
-## and the rest.
+## The two tripods: front-left, middle-right, back-left -- and the other three.
 func _group(i: int) -> int:
-	return ((i % 4) + (1 if i >= 4 else 0)) % 2
+	return ((i % 3) + (1 if i >= 3 else 0)) % 2
 
 
 ## Two-bone IK: hip to foot, knee up and out.
@@ -476,8 +547,39 @@ func _pose(delta: float) -> void:
 	if _ai == "bite":
 		lunge_want = sin(clampf(1.0 - _ai_t / 0.4, 0.0, 1.0) * PI)
 	_lunge = move_toward(_lunge, lunge_want, delta * 8.0)
-	_look.position = Vector3(0, -0.28 * _crouch, -0.35 * _lunge)
-	_look.rotation = Vector3(0.18 * _crouch - 0.15 * _lunge, 0, 0)
+	_look.position = Vector3(0, -0.28 * S * _crouch, -0.4 * S * _lunge)
+	_clock += delta
+	# Twitches: now and then the whole body jerks a little, more often when it
+	# is hunting -- stillness broken by a flinch is what reads as wrong.
+	_twitch_t -= delta
+	if _twitch_t <= 0.0:
+		var hunting := _ai == "stalk" or _ai == "crouch"
+		_twitch_t = randf_range(0.25, 0.8) if hunting else randf_range(0.8, 2.5)
+		_twitch = randf_range(-1.0, 1.0) * (0.16 if hunting else 0.07)
+	_twitch = move_toward(_twitch, 0.0, delta * 0.9)
+	_look.rotation = Vector3(0.18 * _crouch - 0.15 * _lunge, _twitch * 0.6, _twitch)
+	# Jaws: shut when calm, working when it hunts, wide before a bite and
+	# snapped shut on it.
+	var jaw := 0.12 + 0.05 * sin(_clock * 3.0)
+	if _ai == "stalk" or _ai == "retreat":
+		jaw = 0.3 + 0.18 * sin(_clock * 17.0)
+	elif _ai == "crouch" or _ai == "pounce":
+		jaw = 0.75
+	elif _ai == "bite":
+		jaw = 0.8 if _ai_t > 0.2 else 0.0
+	for j in _jaws.size():
+		var jp: Node3D = _jaws[j]
+		jp.rotation.y = lerp_angle(jp.rotation.y, jaw * (1.0 if j == 0 else -1.0), clampf(delta * 18.0, 0.0, 1.0))
+	# The tail curls up over the back and sways; drawn back to strike before a pounce.
+	var coil := 0.42 + 0.2 * _crouch
+	for t in _tail.size():
+		var tp: Node3D = _tail[t]
+		tp.rotation.x = -coil + (0.2 if t == 0 else 0.0)
+		tp.rotation.y = sin(_clock * 1.7 + t * 0.6) * 0.08
+	# Eyes throb, faster when it has seen you.
+	if _eye_mat != null:
+		var rate := 9.0 if _ai in ["stalk", "crouch", "pounce", "bite"] else 2.0
+		_eye_mat.emission_energy_multiplier = 4.0 + 1.5 * sin(_clock * rate)
 	if _flash > 0.0:
 		_flash = maxf(_flash - delta * 4.0, 0.0)
 		for m in _mats:
@@ -502,6 +604,8 @@ func _pose(delta: float) -> void:
 		var knee := hip + dir * UPPER * ca + bend * UPPER * sa
 		_segment(_femur[i], hip, knee, body_up)
 		_segment(_tibia[i], knee, hip + dir * d, body_up)
+		# A spur of bone off the top of each knee, raked back.
+		_segment(_spikes[i], knee, knee + (bend * 0.8 - dir * 0.3).normalized() * 0.42 * S, body_up)
 
 
 func _segment(mi: MeshInstance3D, a: Vector3, b: Vector3, up_hint: Vector3) -> void:
@@ -547,8 +651,8 @@ func _die(delta: float) -> void:
 	for i in LEGS:
 		var r: Vector3 = _rest[i]
 		_foot[i] = global_transform * r.lerp(Vector3(r.x * 0.2, -RIDE * 0.4, r.z * 0.2), k)
-	_look.position = Vector3(0, -0.45 * k, 0)
 	_pose(delta)
+	_look.position = Vector3(0, -0.45 * S * k, 0)
 	if _die_t > 1.6:
 		var s := clampf(1.0 - (_die_t - 1.6) / 0.6, 0.0, 1.0)
 		scale = Vector3.ONE * maxf(s, 0.01)
