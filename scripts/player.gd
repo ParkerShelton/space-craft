@@ -25,6 +25,14 @@ const WALK_SPEED := 4.6
 ## what let a standing jump go as far as a running one.
 const AIR_CONTROL := 2.5
 const JUMP_SPEED := 8.0
+## Webbing (see webbed): each glob that hits slows you more, and enough of them
+## in a row hold you fast until you struggle out.
+const WEB_MAX := 5.0
+const WEB_SLOW := 0.15          # speed lost per glob
+const WEB_STUCK_AT := 4.0       # this many and you are stuck
+const WEB_STUCK_TIME := 1.8
+const WEB_HOLD := 5.0           # seconds after a hit before it starts to wear off
+const WEB_WEAR := 0.5           # globs' worth shed per second after that
 const FLY_SPEED := 16.0
 const FLY_ACCEL := 6.0
 const FLY_DAMP := 3.0
@@ -281,6 +289,10 @@ var menu_open := false
 ## you can still look around; what stops is the body, which polls the keyboard
 ## directly and would otherwise walk you across the room as you typed.
 var ui_typing := false
+var _web := 0.0
+var _web_hold := 0.0
+var _stuck_t := 0.0
+var _web_overlay: TextureRect
 # dedicated 2-slot-tall equip slot: a Suit only protects you once it's WORN here,
 # not just carried in the general grid (unlike the Drill, which stays
 # passively equipped from anywhere). Same slot shape as an `inv` entry.
@@ -1430,6 +1442,7 @@ func _update_eye_clearance(delta: float) -> void:
 
 func _physics_process(delta: float) -> void:
 	_update_eye_clearance(delta)
+	_tick_web(delta)
 	if _trail != null:
 		_trail.emitting = velocity.length() > 0.8
 	# The build diff fades on its own; it is a hint, not a mode.
@@ -1742,9 +1755,9 @@ func _walk_interior(delta: float, ship: Ship) -> void:
 	var wish := right * input.x + fwd * input.y
 	if wish.length() > 0.001:
 		wish = wish.normalized()
-	var disp := wish * WALK_SPEED * (STARVE_SPEED_MULT if hunger <= 0.0 else 1.0) * delta
+	var disp := wish * WALK_SPEED * (STARVE_SPEED_MULT if hunger <= 0.0 else 1.0) * _web_mult() * delta
 
-	if _interior_floor and key_down("jump"):
+	if _interior_floor and key_down("jump") and _stuck_t <= 0.0:
 		_iv_y = JUMP_SPEED
 	_iv_y -= ARTIFICIAL_G * delta
 
@@ -1887,7 +1900,7 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	# Split velocity into tangent (horizontal) and along-up (vertical) parts.
 	var v_up := velocity.dot(up)
 	# Starving drags: you keep moving, just not well.
-	var horiz := wish * WALK_SPEED * (STARVE_SPEED_MULT if hunger <= 0.0 else 1.0)
+	var horiz := wish * WALK_SPEED * (STARVE_SPEED_MULT if hunger <= 0.0 else 1.0) * _web_mult()
 
 	v_up += -gmag * delta  # gravity pulls along -up (the snapped down axis)
 
@@ -1905,8 +1918,14 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 		_jump_buffer = JUMP_BUFFER
 	_jump_was_held = held
 	_jump_buffer = maxf(_jump_buffer - delta, 0.0)
-	if _coyote > 0.0 and v_up <= 0.0 and (held or _jump_buffer > 0.0):
-		v_up = JUMP_SPEED
+	# Stuck fast: jumping is struggling, and every press works you a bit freer.
+	if _stuck_t > 0.0:
+		if held and not _jump_was_held_web:
+			_stuck_t -= 0.3
+		_jump_was_held_web = held
+		_jump_buffer = 0.0
+	elif _coyote > 0.0 and v_up <= 0.0 and (held or _jump_buffer > 0.0):
+		v_up = JUMP_SPEED * lerpf(1.0, 0.55, _web / WEB_MAX)
 		# One jump per departure, not one per frame in the air, and the buffered
 		# press is spent rather than left to fire again on the next landing.
 		_coyote = 0.0
@@ -5298,6 +5317,95 @@ static func _tool_tint(id: int) -> Color:
 
 func _build_held_block(color: Color) -> void:
 	_mk_view_box(Vector3(0.22, 0.22, 0.22), Vector3(0, 0, -0.15), color)
+
+
+## Hit by a glob of webbing. Each one slows you further; enough in a row and
+## you are held fast for a moment -- press jump to struggle free sooner.
+func webbed(amount: float) -> void:
+	_web = minf(_web + amount, WEB_MAX)
+	_web_hold = WEB_HOLD
+	if _web >= WEB_STUCK_AT and _stuck_t <= 0.0:
+		_stuck_t = WEB_STUCK_TIME
+		_toast("Stuck fast in webbing -- mash jump to break free!")
+	elif _stuck_t <= 0.0:
+		_toast("Webbed -- %d%% slower" % int(round((1.0 - _web_mult()) * 100.0)))
+	if _web_overlay == null and _ui_layer != null:
+		_web_overlay = TextureRect.new()
+		_web_overlay.texture = ImageTexture.create_from_image(_web_image())
+		_web_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_web_overlay.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_web_overlay.stretch_mode = TextureRect.STRETCH_SCALE
+		_web_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_ui_layer.add_child(_web_overlay)
+		_ui_layer.move_child(_web_overlay, 0)
+
+
+var _jump_was_held_web := false
+
+
+func _web_mult() -> float:
+	if _stuck_t > 0.0:
+		return 0.0
+	return clampf(1.0 - _web * WEB_SLOW, 0.25, 1.0)
+
+
+func _tick_web(delta: float) -> void:
+	if _stuck_t > 0.0:
+		_stuck_t -= delta
+		if _stuck_t <= 0.0:
+			# Out -- still gummed up, but able to run.
+			_web = minf(_web, 2.0)
+			_web_hold = 1.0
+	elif _web > 0.0:
+		_web_hold -= delta
+		if _web_hold <= 0.0:
+			_web = maxf(_web - WEB_WEAR * delta, 0.0)
+	if _web_overlay != null:
+		var a := clampf(_web / WEB_MAX, 0.0, 1.0)
+		if _stuck_t > 0.0:
+			a = 1.0
+		_web_overlay.modulate = Color(1, 1, 1, a * 0.9)
+		_web_overlay.visible = a > 0.01
+
+
+## Webbing across the corners of the view: strands out from each corner and
+## sagging threads between them, drawn once.
+static func _web_image() -> Image:
+	var w := 480
+	var h := 270
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var col := Color(0.9, 0.95, 0.85, 0.85)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7
+	for c in [Vector2(0, 0), Vector2(w, 0), Vector2(0, h), Vector2(w, h)]:
+		var corner: Vector2 = c
+		var into: Vector2 = (Vector2(w, h) * 0.5 - corner).normalized()
+		var base_ang: float = into.angle()
+		var reach := rng.randf_range(150.0, 210.0)
+		var spokes: Array = []
+		for k in 7:
+			var ang: float = base_ang + lerpf(-0.8, 0.8, k / 6.0) + rng.randf_range(-0.08, 0.08)
+			spokes.append(ang)
+			_web_line(img, corner, corner + Vector2.from_angle(ang) * reach * rng.randf_range(0.8, 1.1), col)
+		for r in [40.0, 75.0, 110.0, 145.0]:
+			for k in spokes.size() - 1:
+				var p0: Vector2 = corner + Vector2.from_angle(spokes[k]) * r
+				var p1: Vector2 = corner + Vector2.from_angle(spokes[k + 1]) * r
+				var mid: Vector2 = (p0 + p1) * 0.5 - into * float(r) * 0.12
+				_web_line(img, p0, mid, col * Color(1, 1, 1, 0.8))
+				_web_line(img, mid, p1, col * Color(1, 1, 1, 0.8))
+	return img
+
+
+static func _web_line(img: Image, a: Vector2, b: Vector2, col: Color) -> void:
+	var n := int(a.distance_to(b)) + 1
+	for i in n:
+		var p := a.lerp(b, float(i) / n)
+		var x := int(p.x)
+		var y := int(p.y)
+		if x >= 0 and y >= 0 and x < img.get_width() and y < img.get_height():
+			img.set_pixel(x, y, col)
 
 
 func _max_oxygen() -> float:
