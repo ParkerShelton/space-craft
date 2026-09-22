@@ -5774,8 +5774,8 @@ func _open_station(st: Station) -> void:
 ## Blow a menu up to fill most of the screen, centred. The UI is laid out in
 ## pixels, so on a big monitor it used to sit small in the middle; scaling the
 ## whole panel keeps every slot, drag and tooltip lined up with what is drawn.
-const PANEL_FILL := Vector2(0.8, 0.82)
-const PANEL_MAX_SCALE := 2.2
+const PANEL_FILL := Vector2(0.62, 0.64)
+const PANEL_MAX_SCALE := 1.6
 
 func _fit_panel(p: Control) -> void:
 	if p == null or not p.is_inside_tree():
