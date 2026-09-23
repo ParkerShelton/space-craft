@@ -787,8 +787,9 @@ func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	# worlds, a pack on others -- and always some where you start, so the night
 	# there is something to prepare for.
 	spider_cap = ([0, 0, 1, 1, 2, 3] as Array)[lr.randi() % 6]
-	# Watchers need trees to hide behind, so they are rarer and not everywhere.
-	watcher_cap = ([0, 0, 0, 1, 1, 2] as Array)[lr.randi() % 6]
+	# Watchers: every world has at least one abroad at night while they are the
+	# thing being tested, some have a few.
+	watcher_cap = ([1, 1, 1, 2, 2, 3] as Array)[lr.randi() % 6]
 	# ...and what kind they are here: every world's are built their own way.
 	var sr := RandomNumberGenerator.new()
 	sr.seed = _seed + 7373
@@ -1127,8 +1128,8 @@ var spider_cap := 0
 ## How many Watchers this world can have out at once, and the ones that are.
 var watcher_cap := 0
 var _watchers: Array = []
-var _watcher_timer := 20.0
-const WATCHER_INTERVAL := 30.0
+var _watcher_timer := 8.0
+const WATCHER_INTERVAL := 14.0
 ## This world's kind of Night Stalker -- see NightSpider.make_species.
 var stalker_species: Dictionary = {}
 var _spiders: Array = []
@@ -1145,7 +1146,7 @@ func _update_watchers(delta: float, player_pos: Vector3, world: WorldManager) ->
 	for s in _watchers:
 		if (s as Node3D).global_position.distance_to(player_pos) > CREATURE_DESPAWN_RADIUS:
 			s.queue_free()
-	if watcher_cap <= 0 or night_factor() < 0.7:
+	if watcher_cap <= 0 or night_factor() < 0.55:
 		return
 	_watcher_timer -= delta
 	if _watcher_timer > 0.0 or _watchers.size() >= watcher_cap:
@@ -1180,7 +1181,7 @@ func spawn_watcher_near(pos: Vector3, world: WorldManager, near: float, far: flo
 		if space.intersect_ray(los).is_empty():
 			continue
 		# ...and trees to work with once it is here.
-		if not _wood_near(at, up):
+		if not _cover_near(at, up):
 			continue
 		var s := Watcher.new()
 		add_child(s)
@@ -1191,14 +1192,28 @@ func spawn_watcher_near(pos: Vector3, world: WorldManager, near: float, far: flo
 	return null
 
 
-## Is there a tree (or anything wooden) close enough to hide behind?
-func _wood_near(at: Vector3, up: Vector3) -> bool:
+## Is there anything close by to hide behind -- a tree for choice, but a rock
+## face or the wall of your own house will do. Swept properly rather than
+## sampled at random: twenty-six random points in a cube this size found a
+## trunk about one time in fifty, which is why they never turned up.
+func _cover_near(at: Vector3, up: Vector3) -> bool:
 	var v := world_to_voxel(at + up * 1.0)
-	for i in 26:
-		var o := Vector3i(randi_range(-9, 9), randi_range(-9, 9), randi_range(-9, 9))
-		if Blocks.is_wood(Blocks.bottom_of(get_id(v + o))):
-			return true
-	return false
+	var ux := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
+	var a1 := Vector3i(ux.y, ux.z, ux.x)
+	var a2 := Vector3i(ux.z, ux.x, ux.y)
+	var wood := false
+	var solid := false
+	for du in range(-8, 9, 2):
+		for dv in range(-8, 9, 2):
+			for dh in range(0, 4):
+				var id := Blocks.bottom_of(get_id(v + a1 * du + a2 * dv + ux * dh))
+				if id == Blocks.AIR or id == Blocks.WATER:
+					continue
+				solid = true
+				if Blocks.is_wood(id) or Blocks.is_leaf(id):
+					wood = true
+					break
+	return wood or solid
 
 
 func _update_spiders(delta: float, player_pos: Vector3, world: WorldManager) -> void:
