@@ -25,7 +25,7 @@ extends Creature
 # What stays the same whatever kind it is.
 const STEP_TIME := 0.17
 const LEAD := 0.22           # feet land ahead of a moving body by this many seconds
-const RUSH := 1.45           # how much faster it comes once it is close
+const RUSH := 1.25           # how much faster it comes once it is close
 const AGGRO := 32.0
 const POUNCE_MIN := 3.5
 const BITE_TIME := 0.8       # a slash: wind-up, strike, follow-through
@@ -117,7 +117,9 @@ static func make_species(rng: RandomNumberGenerator) -> Dictionary:
 		"health": rng.randf_range(38.0, 95.0),
 		"bite": rng.randf_range(6.0, 12.0),
 		"pounce": rng.randf_range(8.0, 16.0),
-		"speed": rng.randf_range(3.6, 5.6),
+		# Slower than you can run, even rushing: a stalker catches you by cutting
+		# you off and sticking you, not by simply outpacing you.
+		"speed": rng.randf_range(2.9, 4.1),
 		"c_body": body_c,
 		"c_bone": bone_c,
 		"c_eye": eye_c,
