@@ -782,13 +782,13 @@ func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	# How many Night Stalkers can be out at once here after dark: none on some
 	# worlds, a pack on others -- and always some where you start, so the night
 	# there is something to prepare for.
-	spider_cap = ([0, 1, 2, 2, 3, 4] as Array)[lr.randi() % 6]
+	spider_cap = ([0, 0, 1, 1, 2, 3] as Array)[lr.randi() % 6]
 	# ...and what kind they are here: every world's are built their own way.
 	var sr := RandomNumberGenerator.new()
 	sr.seed = _seed + 7373
 	stalker_species = NightSpider.make_species(sr)
 	if force_hostile_enemy:
-		spider_cap = maxi(spider_cap, 2)
+		spider_cap = maxi(spider_cap, 1)
 	if force_hostile_enemy and not HOSTILES_DISABLED:
 		# Guaranteed on top of the normal roll (not instead of it) -- for combat
 		# testing on the home planet regardless of what the random wildlife mix
@@ -1121,7 +1121,7 @@ var spider_cap := 0
 var stalker_species: Dictionary = {}
 var _spiders: Array = []
 var _spider_timer := 4.0
-const SPIDER_INTERVAL := 10.0
+const SPIDER_INTERVAL := 18.0
 
 
 ## They come out only once it is properly dark, one every few seconds up to
