@@ -783,6 +783,10 @@ func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	# worlds, a pack on others -- and always some where you start, so the night
 	# there is something to prepare for.
 	spider_cap = ([0, 1, 2, 2, 3, 4] as Array)[lr.randi() % 6]
+	# ...and what kind they are here: every world's are built their own way.
+	var sr := RandomNumberGenerator.new()
+	sr.seed = _seed + 7373
+	stalker_species = NightSpider.make_species(sr)
 	if force_hostile_enemy:
 		spider_cap = maxi(spider_cap, 2)
 	if force_hostile_enemy and not HOSTILES_DISABLED:
@@ -1113,6 +1117,8 @@ func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> voi
 # --- Night Stalkers ---------------------------------------------------------------
 
 var spider_cap := 0
+## This world's kind of Night Stalker -- see NightSpider.make_species.
+var stalker_species: Dictionary = {}
 var _spiders: Array = []
 var _spider_timer := 4.0
 const SPIDER_INTERVAL := 10.0
@@ -1160,8 +1166,8 @@ func spawn_spider_near(pos: Vector3, world: WorldManager, near: float, far: floa
 			continue
 		var s := NightSpider.new()
 		add_child(s)
-		s.global_position = at + up * NightSpider.RIDE
-		s.setup_spider(self, world)
+		s.setup_spider(self, world, stalker_species)
+		s.global_position = at + up * s.sp_ride
 		_spiders.append(s)
 		return s
 	return null
