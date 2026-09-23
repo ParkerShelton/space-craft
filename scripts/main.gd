@@ -847,7 +847,7 @@ func _run_command(line: String) -> void:
 	# Unknown first: a word that is not a command is not a command whether or
 	# not there is a world, and hearing "not in a world yet" for a typo sends
 	# you looking in the wrong place.
-	if not cmd in ["give", "bed", "time", "perf", "water", "help", "spider"]:
+	if not cmd in ["give", "bed", "time", "perf", "water", "help", "spider", "watcher"]:
 		_on_chat_line("unknown command: /" + cmd + "  (try /help)")
 		return
 	# The rest need somewhere to put things. Saying so beats returning quietly,
@@ -922,8 +922,14 @@ func _run_command(line: String) -> void:
 			if s != null:
 				s.daylight_ok = true
 			_on_chat_line("a Night Stalker is coming" if s != null else "nowhere to put one here")
+		"watcher":
+			var wp: Planet = _world.nearest_planet(pl.global_position)
+			var wc = wp.spawn_watcher_near(pl.global_position, _world, 14.0, 22.0) if wp != null else null
+			if wc != null:
+				wc.daylight_ok = true
+			_on_chat_line("something is out there" if wc != null else "nowhere out of sight to put one")
 		"help":
-			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [day|night]  ·  /spider  ·  /perf  ·  /water")
+			_on_chat_line("/give <item> [n]  ·  /bed  ·  /time [day|night]  ·  /spider  ·  /watcher  ·  /perf  ·  /water")
 		_:
 			pass   # unreachable: the list above is the same list
 
