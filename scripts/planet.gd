@@ -22,6 +22,10 @@ const SETTLEMENTS_DISABLED := true
 ## species are still generated from the seed either way, so turning it off and on
 ## does not change what a world rolls.
 const HOSTILES_DISABLED := true
+## Night Stalkers parked while the Watcher is being played with. /spider still
+## summons one, so nothing about them is lost -- they just stop coming on their
+## own. Set false to have them back.
+const STALKERS_DISABLED := true
 
 # --- configuration (set via configure()) ---
 var planet_name := "Planet"
@@ -1202,7 +1206,7 @@ func _update_spiders(delta: float, player_pos: Vector3, world: WorldManager) -> 
 	for s in _spiders:
 		if (s as Node3D).global_position.distance_to(player_pos) > CREATURE_DESPAWN_RADIUS:
 			s.queue_free()
-	if spider_cap <= 0 or night_factor() < 0.6:
+	if STALKERS_DISABLED or spider_cap <= 0 or night_factor() < 0.6:
 		return
 	_spider_timer -= delta
 	if _spider_timer > 0.0 or _spiders.size() >= spider_cap:
