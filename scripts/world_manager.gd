@@ -27,6 +27,91 @@ var net: Net
 var _ships: Array[Ship] = []
 var _stations: Array[Station] = []
 
+## Every world you have, newest played first. One line per world: which slot's
+## files it lives in, what you called it, and when you were last in it. The save
+## files themselves are the truth about a world's CONTENTS -- this is only the
+## shelf they sit on, so losing it costs you the names, not the worlds.
+const INDEX_PATH := "user://worlds.json"
+
+
+## What is written down, whether or not the files are still there.
+static func _read_index() -> Array:
+	var out: Array = []
+	if FileAccess.file_exists(INDEX_PATH):
+		var f := FileAccess.open(INDEX_PATH, FileAccess.READ)
+		if f != null:
+			var got = JSON.parse_string(f.get_as_text())
+			if got is Array:
+				out = got
+	return out
+
+
+## The worlds you have, most recently played first. A world whose files have
+## gone is dropped from what is shown, but see note_world: it is not dropped
+## from what is WRITTEN, or a world made and not yet saved would vanish the
+## moment another was made.
+static func list_worlds() -> Array:
+	var out: Array = _read_index()
+	# A save from before worlds had names still has to be playable, so it is
+	# taken onto the shelf the first time this is asked.
+	var legacy := FileAccess.file_exists(SAVE_PATH) or FileAccess.file_exists(SAVE_BAK)
+	var has_legacy := false
+	for w in out:
+		if str((w as Dictionary).get("slot", "")) == "":
+			has_legacy = true
+	if legacy and not has_legacy:
+		out.append({"slot": "", "name": "My World", "played": 0})
+	out = out.filter(func(w):
+		var sl := str((w as Dictionary).get("slot", ""))
+		return FileAccess.file_exists(_path_for(sl)) or FileAccess.file_exists(_bak_for(sl)))
+	out.sort_custom(func(a, b): return int(a.get("played", 0)) > int(b.get("played", 0)))
+	return out
+
+
+static func _path_for(slot: String) -> String:
+	return SAVE_PATH if slot == "" else "user://%s.dat" % slot
+
+
+static func _bak_for(slot: String) -> String:
+	return SAVE_BAK if slot == "" else "user://%s.bak" % slot
+
+
+static func _write_index(arr: Array) -> void:
+	var f := FileAccess.open(INDEX_PATH, FileAccess.WRITE)
+	if f != null:
+		f.store_string(JSON.stringify(arr))
+
+
+## Remember this world, or bring it to the top of the list because it has just
+## been played.
+static func note_world(slot: String, wname: String) -> void:
+	var arr := _read_index()
+	var found := false
+	for w in arr:
+		if str((w as Dictionary).get("slot", "")) == slot:
+			found = true
+			if wname != "":
+				(w as Dictionary)["name"] = wname
+			(w as Dictionary)["played"] = int(Time.get_unix_time_from_system())
+	if not found:
+		arr.append({"slot": slot, "name": wname, "played": int(Time.get_unix_time_from_system())})
+	_write_index(arr)
+
+
+## A world and everything in it, gone.
+static func forget_world(slot: String) -> void:
+	for p in [_path_for(slot), _bak_for(slot)]:
+		if FileAccess.file_exists(p):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(p))
+	var arr := _read_index().filter(func(w): return str((w as Dictionary).get("slot", "")) != slot)
+	_write_index(arr)
+
+
+## A slot name nothing else is using.
+static func new_slot() -> String:
+	return "world_%d_%d" % [int(Time.get_unix_time_from_system()), randi() % 1000]
+
+
 const SAVE_PATH := "user://spacecraft_save.dat"
 const SAVE_BAK := "user://spacecraft_save.bak"
 const SAVE_VERSION := 1

@@ -15,6 +15,78 @@ class_name Net
 ## decides the seed, and every block edit is broadcast from it.
 
 const PORT := 24565
+## Games shout on this port so machines on the same network can find each other
+## without anybody typing an address. One small packet a second and a half.
+const BEACON_PORT := 24566
+const BEACON_EVERY := 1.5
+const BEACON_FORGET := 5.0   # a game unheard from this long has gone
+
+var _beacon: PacketPeerUDP
+var _beacon_t := 0.0
+var _beacon_name := ""
+var _browser: PacketPeerUDP
+## Games heard on this network: address -> {name, players, when}.
+var found_games: Dictionary = {}
+
+
+## Start telling the network this game is here.
+func start_beacon(game_name: String) -> void:
+	_beacon_name = game_name
+	if _beacon != null:
+		return
+	_beacon = PacketPeerUDP.new()
+	_beacon.set_broadcast_enabled(true)
+	_beacon.set_dest_address("255.255.255.255", BEACON_PORT)
+	_beacon_t = 0.0
+
+
+func stop_beacon() -> void:
+	if _beacon != null:
+		_beacon.close()
+		_beacon = null
+
+
+## Start listening for games on this network.
+func start_browse() -> void:
+	if _browser != null:
+		return
+	_browser = PacketPeerUDP.new()
+	_browser.set_broadcast_enabled(true)
+	if _browser.bind(BEACON_PORT) != OK:
+		_browser = null
+
+
+func stop_browse() -> void:
+	if _browser != null:
+		_browser.close()
+		_browser = null
+	found_games.clear()
+
+
+func _process(delta: float) -> void:
+	if _beacon != null:
+		_beacon_t -= delta
+		if _beacon_t <= 0.0:
+			_beacon_t = BEACON_EVERY
+			_beacon.put_packet(JSON.stringify({
+				"game": "spacecraft", "name": _beacon_name,
+				"players": peers.size() + 1, "port": PORT}).to_utf8_buffer())
+	if _browser != null:
+		while _browser.get_available_packet_count() > 0:
+			var from := _browser.get_packet_ip()
+			var got = JSON.parse_string(_browser.get_packet().get_string_from_utf8())
+			# Our own broadcast comes back to us with no address on some
+			# machines; there is nothing to join at "".
+			if from.is_empty():
+				continue
+			if got is Dictionary and str((got as Dictionary).get("game", "")) == "spacecraft":
+				found_games[from] = {"name": str((got as Dictionary).get("name", "Game")),
+					"players": int((got as Dictionary).get("players", 1)),
+					"when": Time.get_ticks_msec()}
+		# Anything that has stopped shouting has stopped being there.
+		for ip in found_games.keys():
+			if Time.get_ticks_msec() - int(found_games[ip]["when"]) > int(BEACON_FORGET * 1000.0):
+				found_games.erase(ip)
 const MAX_PLAYERS := 8
 
 signal world_ready(seed_value: int, system_index: int, phases: PackedFloat32Array)

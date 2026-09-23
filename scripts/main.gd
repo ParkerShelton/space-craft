@@ -79,6 +79,11 @@ var _menu_layer: CanvasLayer
 var _net: Net
 var _join_ip: LineEdit
 var _menu_skin_corner: MarginContainer
+var _lan_box: VBoxContainer         # where games found on the network are listed
+var _lan_shown := -1                # how many were in that list last time
+var _browsing := false              # the multiplayer page is open
+var _forced_seed := -1              # a seed typed in on the new-world page
+var _hosting_name := ""             # what to call this world to the network
 var _skin_editor: SkinEditor
 var _skin_names: Array = []
 var _skin_index := 0
@@ -153,7 +158,7 @@ func _notification(what: int) -> void:
 		# never headless
 		# Never from a networked session: co-op runs on a throwaway world and has
 		# no business overwriting the single-player one.
-		if _world != null and _world.player != null and _net_mode == "single" 				and DisplayServer.get_name() != "headless":
+		if _world != null and _world.player != null and (_net_mode == "single" or _net_mode == "host") 				and DisplayServer.get_name() != "headless":
 			_world.save_game()
 		# Leaving a server: send up what we are carrying before the connection goes,
 		# so quitting does not cost whatever was gathered since the last periodic
@@ -295,35 +300,247 @@ func _menu_label(text: String, size: int, alpha := 1.0) -> void:
 	_menu_vb.add_child(l)
 
 
-func _menu_populate(confirm_delete: bool) -> void:
+func _menu_populate(_unused := false) -> void:
+	_browsing = false
+	_net.stop_browse()
 	for c in _menu_vb.get_children():
 		c.queue_free()
-	if confirm_delete:
-		_menu_label("Delete your current world", 26)
-		_menu_label("and start a new one?", 26)
-		_menu_label(" ", 8)
-		_menu_button("Yes, start new world", func():
-			_delete_save()
-			_start_world(false))
-		_menu_button("Cancel", func(): _menu_populate(false), "ui_back")
-		return
 	_menu_label("SPACECRAFT", 52)
 	_menu_label("a voxel game in space", 18, 0.55)
 	_menu_label(" ", 14)
 	_refresh_menu_skin(true)
-	var has_world: bool = _world.saved_world_seed() >= 0
-	if has_world:
-		_menu_button("Continue", func(): _start_world(true))
-	if _world.has_save():
-		_menu_button("New World", func(): _menu_populate(true))
-	else:
-		_menu_button("New World", func(): _start_world(false))
-	# Co-op. A multiplayer session always uses a FRESH world and never touches the
-	# single-player save, so a networking bug cannot damage the world you have.
-	_menu_label(" ", 10)
-	_menu_button("Host Co-op Game", func(): _start_world(false, "host"))
-	_menu_button("Join Co-op Game", func(): _menu_join())
+	_menu_button("Singleplayer", func(): _menu_worlds())
+	_menu_button("Multiplayer", func(): _menu_multi())
 	_menu_button("Quit", func(): get_tree().quit())
+
+
+## A row in a list on the menu: something to press, and a small button on the
+## end of it for the thing you rarely want.
+func _menu_entry(title: String, sub: String, go: Callable, extra := "", extra_cb := Callable()) -> void:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	_menu_vb.add_child(row)
+	var b := Button.new()
+	b.custom_minimum_size = Vector2(420 if extra != "" else 470, 52)
+	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	b.text = "  " + title
+	b.tooltip_text = sub
+	_wire_button(b)
+	b.pressed.connect(go)
+	row.add_child(b)
+	# The second line, laid over the button rather than inside it: a Button draws
+	# one line of text and nothing else.
+	var l := Label.new()
+	l.text = sub
+	l.add_theme_font_size_override("font_size", 12)
+	l.modulate = Color(1, 1, 1, 0.5)
+	l.position = Vector2(12, 28)
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	b.add_child(l)
+	if extra != "":
+		var x := Button.new()
+		x.text = extra
+		x.custom_minimum_size = Vector2(44, 52)
+		_wire_button(x)
+		x.pressed.connect(extra_cb)
+		row.add_child(x)
+
+
+## Your worlds. Play one, make another, or throw one away.
+func _menu_worlds(confirm_slot := "") -> void:
+	for c in _menu_vb.get_children():
+		c.queue_free()
+	if confirm_slot != "":
+		_menu_label("Delete this world?", 26)
+		_menu_label("everything in it goes with it", 15, 0.55)
+		_menu_label(" ", 8)
+		_menu_button("Delete it", func():
+			WorldManager.forget_world(confirm_slot)
+			_menu_worlds())
+		_menu_button("Keep it", func(): _menu_worlds(), "ui_back")
+		return
+	_menu_label("Singleplayer", 34)
+	var worlds := WorldManager.list_worlds()
+	if worlds.is_empty():
+		_menu_label("no worlds yet", 15, 0.5)
+	for w in worlds:
+		var slot := str((w as Dictionary).get("slot", ""))
+		var nm := str((w as Dictionary).get("name", "World"))
+		_menu_entry(nm, _played_text(int((w as Dictionary).get("played", 0))),
+			func(): _play_world(slot, nm), "X", func(): _menu_worlds(slot))
+	_menu_label(" ", 6)
+	_menu_button("Create New World", func(): _menu_new_world())
+	_menu_button("Back", func(): _menu_populate(), "ui_back")
+
+
+func _played_text(when: int) -> String:
+	if when <= 0:
+		return "never played"
+	var ago := int(Time.get_unix_time_from_system()) - when
+	if ago < 120:
+		return "last played just now"
+	if ago < 3600:
+		return "last played %d minutes ago" % (ago / 60)
+	if ago < 7200:
+		return "last played an hour ago"
+	if ago < 86400:
+		return "last played %d hours ago" % (ago / 3600)
+	if ago < 172800:
+		return "last played yesterday"
+	return "last played %d days ago" % (ago / 86400)
+
+
+## Naming a new world. The name is yours; the seed is the world itself, and
+## leaving it blank rolls one.
+func _menu_new_world(host := false) -> void:
+	for c in _menu_vb.get_children():
+		c.queue_free()
+	_menu_label("Create a world", 30)
+	var name_edit := LineEdit.new()
+	name_edit.text = "World %d" % (WorldManager.list_worlds().size() + 1)
+	name_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	name_edit.custom_minimum_size = Vector2(320, 40)
+	_menu_vb.add_child(name_edit)
+	_menu_label("seed -- leave empty for a new one", 13, 0.5)
+	var seed_edit := LineEdit.new()
+	seed_edit.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	seed_edit.custom_minimum_size = Vector2(320, 36)
+	_menu_vb.add_child(seed_edit)
+	_menu_button("Create", func():
+		var nm := name_edit.text.strip_edges()
+		if nm.is_empty():
+			nm = "World"
+		var txt := seed_edit.text.strip_edges()
+		if txt != "":
+			# Any words at all will do: what matters is that the same words give
+			# the same world.
+			_forced_seed = int(txt) if txt.is_valid_int() else int(hash(txt) & 0x7fffffff)
+		var slot := WorldManager.new_slot()
+		WorldManager.note_world(slot, nm)
+		_world.save_slot = slot
+		_hosting_name = nm
+		_start_world(false, "host" if host else "single"))
+	_menu_button("Back", func(): _menu_worlds() if not host else _menu_host(), "ui_back")
+
+
+func _play_world(slot: String, nm: String) -> void:
+	WorldManager.note_world(slot, nm)
+	_world.save_slot = slot
+	_hosting_name = nm
+	_start_world(true)
+
+
+## Multiplayer: the servers you have saved, and whatever is shouting on your
+## network right now, in the same list.
+func _menu_multi() -> void:
+	for c in _menu_vb.get_children():
+		c.queue_free()
+	_browsing = true
+	_net.start_browse()
+	_lan_shown = -1
+	_menu_label("Multiplayer", 34)
+	var servers: Array = setting("servers", [])
+	for i in servers.size():
+		var srv: Dictionary = servers[i]
+		var addr := str(srv.get("address", ""))
+		_menu_entry(str(srv.get("name", addr)), addr, func(): _join_address(addr),
+			"X", func():
+				var arr: Array = (setting("servers", []) as Array).duplicate()
+				arr.remove_at(i)
+				set_setting("servers", arr)
+				_menu_multi())
+	_lan_box = VBoxContainer.new()
+	_lan_box.add_theme_constant_override("separation", 6)
+	_menu_vb.add_child(_lan_box)
+	_menu_label(" ", 6)
+	_menu_button("Add Server", func(): _menu_add_server())
+	_menu_button("Host a World", func(): _menu_host())
+	_menu_button("Back", func(): _menu_populate(), "ui_back")
+
+
+## Games found on this network, refreshed in place while the page is open so
+## somebody opening theirs appears without you doing anything.
+func _refresh_lan() -> void:
+	if _lan_box == null or not is_instance_valid(_lan_box):
+		return
+	var games: Dictionary = _net.found_games
+	if games.size() == _lan_shown:
+		return
+	_lan_shown = games.size()
+	for c in _lan_box.get_children():
+		c.queue_free()
+	var head := Label.new()
+	head.text = "on your network" if games.size() > 0 else "searching your network..."
+	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	head.add_theme_font_size_override("font_size", 13)
+	head.modulate = Color(1, 1, 1, 0.5)
+	_lan_box.add_child(head)
+	for ip in games:
+		var g: Dictionary = games[ip]
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(470, 44)
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		b.text = "  %s   (%d playing)   %s" % [str(g.get("name", "Game")), int(g.get("players", 1)), ip]
+		_wire_button(b)
+		b.pressed.connect(func(): _join_address(str(ip)))
+		_lan_box.add_child(b)
+
+
+func _menu_add_server() -> void:
+	for c in _menu_vb.get_children():
+		c.queue_free()
+	_menu_label("Add a server", 30)
+	var nm := LineEdit.new()
+	nm.text = "My Server"
+	nm.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	nm.custom_minimum_size = Vector2(320, 40)
+	_menu_vb.add_child(nm)
+	_menu_label("address", 13, 0.5)
+	var addr := LineEdit.new()
+	addr.text = "127.0.0.1"
+	addr.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	addr.custom_minimum_size = Vector2(320, 40)
+	_menu_vb.add_child(addr)
+	_menu_button("Save", func():
+		var arr: Array = (setting("servers", []) as Array).duplicate()
+		arr.append({"name": nm.text.strip_edges(), "address": addr.text.strip_edges()})
+		set_setting("servers", arr)
+		_menu_multi())
+	_menu_button("Connect Without Saving", func(): _join_address(addr.text.strip_edges()))
+	_menu_button("Back", func(): _menu_multi(), "ui_back")
+
+
+func _join_address(addr: String) -> void:
+	if addr.is_empty():
+		return
+	_browsing = false
+	_net.stop_browse()
+	if not _net.join(addr):
+		Audio.ui("ui_deny")
+		_menu_label(_net.last_error, 15, 0.9)
+		return
+	_start_world(false, "client")
+
+
+## Hosting: which of your worlds do you want everyone in? A hosted world is one
+## of your own now, and it saves like one -- co-op is no longer a throwaway.
+func _menu_host() -> void:
+	for c in _menu_vb.get_children():
+		c.queue_free()
+	_menu_label("Host a world", 30)
+	_menu_label("anyone on your network will see it listed", 14, 0.5)
+	var worlds := WorldManager.list_worlds()
+	for w in worlds:
+		var slot := str((w as Dictionary).get("slot", ""))
+		var nm := str((w as Dictionary).get("name", "World"))
+		_menu_entry(nm, _played_text(int((w as Dictionary).get("played", 0))), func():
+			WorldManager.note_world(slot, nm)
+			_world.save_slot = slot
+			_hosting_name = nm
+			_start_world(true, "host"))
+	_menu_label(" ", 6)
+	_menu_button("Host a New World", func(): _menu_new_world(true))
+	_menu_button("Back", func(): _menu_multi(), "ui_back")
 
 
 # --- skins --------------------------------------------------------------------
@@ -1276,7 +1493,7 @@ func _close_game_menu() -> void:
 ## hand: planets, chunks, ships, stations, creatures and the network session all
 ## go at once, and none of them can be left half torn down.
 func _exit_to_main_menu() -> void:
-	if _net_mode == "single" and _world != null and _world.player != null:
+	if (_net_mode == "single" or _net_mode == "host") and _world != null and _world.player != null:
 		_world.save_game()
 	elif _net_mode == "client" and _world != null and _world.player != null:
 		# Same courtesy the window-close path does: hand the server what we are
@@ -1479,7 +1696,8 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	_show_loading_screen()
 
 	var world := _world
-	var wseed := _client_seed if mode == "joined" 		else (world.saved_world_seed() if load_existing else _rand_seed())
+	var wseed := _client_seed if mode == "joined" 		else (world.saved_world_seed() if load_existing else (_forced_seed if _forced_seed >= 0 else _rand_seed()))
+	_forced_seed = -1
 	if wseed < 0:
 		wseed = _rand_seed()
 	world.world_seed = wseed
@@ -1493,6 +1711,10 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	# so a new game always starts somewhere with intelligent life nearby -- not
 	# necessarily system 0. No warp travel yet, so this is also just "the" system.
 	world.current_system_index = galaxy.home_system_index()
+	if _net_mode == "host":
+		# Tell the network this game is here, so nobody has to be told an address.
+		_net.start_beacon("%s's %s" % [OS.get_environment("USERNAME") if OS.get_environment("USERNAME") != "" else "Someone",
+			_hosting_name if _hosting_name != "" else "world"])
 	if _net_mode == "host" and not _net.host(wseed, world.current_system_index):
 		_net_mode = "single"
 		push_warning("could not host: " + _net.last_error)
@@ -1897,6 +2119,9 @@ func _sync_players(delta: float) -> void:
 
 
 func _process(delta: float) -> void:
+	# On the multiplayer page, games appear in the list as they are heard from.
+	if _browsing:
+		_refresh_lan()
 	_sync_players(delta)
 	_fade_chat(delta)
 	# Crops grow on every world at once, not just the one underfoot: a field you
