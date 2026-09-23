@@ -296,6 +296,9 @@ var _web_hold := 0.0
 var _stuck_t := 0.0
 var _web_overlay: TextureRect
 var _burn_t := 0.0
+var _dread := 0.0
+var _dread_want := 0.0
+var _dread_rect: TextureRect
 # dedicated 2-slot-tall equip slot: a Suit only protects you once it's WORN here,
 # not just carried in the general grid (unlike the Drill, which stays
 # passively equipped from anywhere). Same slot shape as an `inv` entry.
@@ -1446,6 +1449,7 @@ func _update_eye_clearance(delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	_update_eye_clearance(delta)
 	_tick_web(delta)
+	_tick_dread(delta)
 	if _trail != null:
 		_trail.emitting = velocity.length() > 0.8
 	# The build diff fades on its own; it is a hint, not a mode.
@@ -5320,6 +5324,56 @@ static func _tool_tint(id: int) -> Color:
 
 func _build_held_block(color: Color) -> void:
 	_mk_view_box(Vector3(0.22, 0.22, 0.22), Vector3(0, 0, -0.15), color)
+
+
+## Something is close behind you that you cannot see (see Watcher). `level` is
+## 0..1 by how close. The screen darkens at the edges and pulses, and that is
+## the only warning there is.
+func dread(level: float) -> void:
+	_dread_want = maxf(_dread_want, clampf(level, 0.0, 1.0))
+
+
+func _tick_dread(delta: float) -> void:
+	# Rises quickly, falls away slowly -- the feeling outlasts the thing.
+	_dread = move_toward(_dread, _dread_want, delta * (2.5 if _dread_want > _dread else 0.5))
+	_dread_want = 0.0
+	if _dread <= 0.005:
+		if _dread_rect != null:
+			_dread_rect.visible = false
+		return
+	if _dread_rect == null and _ui_layer != null:
+		_dread_rect = TextureRect.new()
+		_dread_rect.texture = ImageTexture.create_from_image(_vignette_image())
+		_dread_rect.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_dread_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_dread_rect.stretch_mode = TextureRect.STRETCH_SCALE
+		_dread_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_ui_layer.add_child(_dread_rect)
+		_ui_layer.move_child(_dread_rect, 0)
+	if _dread_rect == null:
+		return
+	# A heartbeat: two beats and a rest, faster the closer it is.
+	var t := fmod(Time.get_ticks_msec() * 0.001 * lerpf(1.0, 1.8, _dread), 1.0)
+	var b1 := t / 0.09
+	var b2 := (t - 0.22) / 0.09
+	var beat := exp(-b1 * b1) + 0.7 * exp(-b2 * b2)
+	_dread_rect.visible = true
+	_dread_rect.modulate = Color(1, 1, 1, _dread * (0.35 + 0.65 * beat) * 0.85)
+
+
+## Darkness crowding in from the edges, with the faintest red in it.
+static func _vignette_image() -> Image:
+	var w := 192
+	var h := 108
+	var img := Image.create(w, h, false, Image.FORMAT_RGBA8)
+	var c := Vector2(w, h) * 0.5
+	var half := c.length()
+	for y in h:
+		for x in w:
+			var r := (Vector2(x, y) - c).length() / half
+			var a := smoothstep(0.45, 1.0, r)
+			img.set_pixel(x, y, Color(0.06, 0.0, 0.01, a))
+	return img
 
 
 ## Set alight. Burns for `secs`, and being hit again while burning tops it up

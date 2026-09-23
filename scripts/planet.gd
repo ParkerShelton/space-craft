@@ -783,6 +783,8 @@ func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	# worlds, a pack on others -- and always some where you start, so the night
 	# there is something to prepare for.
 	spider_cap = ([0, 0, 1, 1, 2, 3] as Array)[lr.randi() % 6]
+	# Watchers need trees to hide behind, so they are rarer and not everywhere.
+	watcher_cap = ([0, 0, 0, 1, 1, 2] as Array)[lr.randi() % 6]
 	# ...and what kind they are here: every world's are built their own way.
 	var sr := RandomNumberGenerator.new()
 	sr.seed = _seed + 7373
@@ -1095,6 +1097,7 @@ func creature_cap() -> int:
 
 func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> void:
 	_update_spiders(delta, player_pos, world)
+	_update_watchers(delta, player_pos, world)
 	_creatures = _creatures.filter(func(c): return is_instance_valid(c))
 	for c in _creatures.duplicate():
 		if c.global_position.distance_to(player_pos) > CREATURE_DESPAWN_RADIUS:
@@ -1117,6 +1120,11 @@ func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> voi
 # --- Night Stalkers ---------------------------------------------------------------
 
 var spider_cap := 0
+## How many Watchers this world can have out at once, and the ones that are.
+var watcher_cap := 0
+var _watchers: Array = []
+var _watcher_timer := 20.0
+const WATCHER_INTERVAL := 30.0
 ## This world's kind of Night Stalker -- see NightSpider.make_species.
 var stalker_species: Dictionary = {}
 var _spiders: Array = []
@@ -1126,6 +1134,69 @@ const SPIDER_INTERVAL := 18.0
 
 ## They come out only once it is properly dark, one every few seconds up to
 ## this world's cap, somewhere out of arm's reach but close enough to find you.
+## Watchers: never where you can see one arrive, never far from cover, and only
+## in the dead of night.
+func _update_watchers(delta: float, player_pos: Vector3, world: WorldManager) -> void:
+	_watchers = _watchers.filter(func(s): return is_instance_valid(s))
+	for s in _watchers:
+		if (s as Node3D).global_position.distance_to(player_pos) > CREATURE_DESPAWN_RADIUS:
+			s.queue_free()
+	if watcher_cap <= 0 or night_factor() < 0.7:
+		return
+	_watcher_timer -= delta
+	if _watcher_timer > 0.0 or _watchers.size() >= watcher_cap:
+		return
+	_watcher_timer = WATCHER_INTERVAL * randf_range(0.7, 1.5)
+	spawn_watcher_near(player_pos, world, 20.0, 40.0)
+
+
+func spawn_watcher_near(pos: Vector3, world: WorldManager, near: float, far: float) -> Watcher:
+	var g := world.gravity_at(pos)
+	if g.length() < 0.01:
+		return null
+	var up := -g.normalized()
+	var t1 := up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
+	var t2 := up.cross(t1).normalized()
+	var space := get_world_3d().direct_space_state
+	for attempt in 10:
+		var ang := randf() * TAU
+		var r := randf_range(near, far)
+		var p := pos + (t1 * cos(ang) + t2 * sin(ang)) * r
+		var q := PhysicsRayQueryParameters3D.create(p + up * 30.0, p - up * 40.0, 1)
+		var hit := space.intersect_ray(q)
+		if hit.is_empty() or not (hit["collider"] is Chunk):
+			continue
+		var at: Vector3 = hit["position"]
+		if get_id(world_to_voxel(at + up * 0.5)) != Blocks.AIR:
+			continue
+		if not _chunk_ready_at(at):
+			continue
+		# Out of sight to arrive -- something in the way between you and it.
+		var los := PhysicsRayQueryParameters3D.create(pos + up * 1.5, at + up * 1.6, 1)
+		if space.intersect_ray(los).is_empty():
+			continue
+		# ...and trees to work with once it is here.
+		if not _wood_near(at, up):
+			continue
+		var s := Watcher.new()
+		add_child(s)
+		s.global_position = at + up * 0.1
+		s.setup_watcher(self, world)
+		_watchers.append(s)
+		return s
+	return null
+
+
+## Is there a tree (or anything wooden) close enough to hide behind?
+func _wood_near(at: Vector3, up: Vector3) -> bool:
+	var v := world_to_voxel(at + up * 1.0)
+	for i in 26:
+		var o := Vector3i(randi_range(-9, 9), randi_range(-9, 9), randi_range(-9, 9))
+		if Blocks.is_wood(Blocks.bottom_of(get_id(v + o))):
+			return true
+	return false
+
+
 func _update_spiders(delta: float, player_pos: Vector3, world: WorldManager) -> void:
 	_spiders = _spiders.filter(func(s): return is_instance_valid(s))
 	for s in _spiders:
@@ -1188,6 +1259,10 @@ func clear_fauna() -> void:
 		if is_instance_valid(s):
 			s.queue_free()
 	_spiders.clear()
+	for s in _watchers:
+		if is_instance_valid(s):
+			s.queue_free()
+	_watchers.clear()
 	for c in _creatures:
 		if is_instance_valid(c):
 			c.queue_free()
