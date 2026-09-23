@@ -1,16 +1,20 @@
 class_name SpitGlob
 extends Node3D
-## A glob of webbing the Night Stalker spits: it arcs, and whatever it hits it
-## sticks to. On you, every glob adds to how gummed up you are (see
-## Player.webbed); on the ground it bursts into strands and is gone.
+## What a Night Stalker spits: it arcs, and it is thrown ahead of where you are
+## going. What it does when it lands is the `kind` its species spits --
+## "web" sticks you fast (see Player.webbed), "fire" sets you burning, "stone"
+## is a rock that simply hurts and knocks you back.
 
 ## Lighter than real gravity, so the arc is readable and can be sidestepped.
 const GRAVITY_SCALE := 0.55
 const HIT_RADIUS := 0.85
-const DAMAGE := 3.0
 const LIFE := 5.0
 const C_GOO := Color(0.82, 0.9, 0.72)
+const C_FIRE := Color(1.0, 0.55, 0.12)
+const C_STONE := Color(0.5, 0.48, 0.46)
 
+## What this glob is: "web", "fire" or "stone". Set before launch.
+var kind := "web"
 var vel := Vector3.ZERO
 var world: WorldManager
 var _life := LIFE
@@ -40,10 +44,10 @@ func _build() -> void:
 	_core = Node3D.new()
 	add_child(_core)
 	var m := StandardMaterial3D.new()
-	m.albedo_color = C_GOO
+	m.albedo_color = _colour()
 	m.emission_enabled = true
-	m.emission = C_GOO
-	m.emission_energy_multiplier = 0.8
+	m.emission = _colour()
+	m.emission_energy_multiplier = 2.5 if kind == "fire" else (0.0 if kind == "stone" else 0.8)
 	for b in [[Vector3(0.28, 0.28, 0.28), Vector3.ZERO], [Vector3(0.16, 0.16, 0.16), Vector3(0.14, 0.1, 0.05)],
 			[Vector3(0.14, 0.14, 0.14), Vector3(-0.12, -0.08, 0.1)], [Vector3(0.1, 0.1, 0.1), Vector3(0.02, -0.15, -0.12)]]:
 		var mi := MeshInstance3D.new()
@@ -58,7 +62,7 @@ func _build() -> void:
 	var dm := BoxMesh.new()
 	dm.size = Vector3.ONE * 0.05
 	var tm := StandardMaterial3D.new()
-	tm.albedo_color = C_GOO
+	tm.albedo_color = _colour()
 	tm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	dm.material = tm
 	tr.mesh = dm
@@ -70,6 +74,35 @@ func _build() -> void:
 	tr.initial_velocity_max = 0.4
 	tr.gravity = Vector3.ZERO
 	add_child(tr)
+
+
+func _colour() -> Color:
+	match kind:
+		"fire": return C_FIRE
+		"stone": return C_STONE
+	return C_GOO
+
+
+## What it does to you. Each kind hurts, and then has its own idea besides.
+func _land_on(pl) -> void:
+	match kind:
+		"fire":
+			if pl.has_method("take_damage"):
+				pl.take_damage(4.0)
+			if pl.has_method("ignite"):
+				pl.ignite(4.0)
+		"stone":
+			if pl.has_method("take_damage"):
+				pl.take_damage(9.0)
+			# A rock this size shoves you off your feet.
+			if "velocity" in pl and world != null:
+				var up := -world.gravity_at((pl as Node3D).global_position).normalized()
+				pl.velocity += vel.normalized() * 7.0 + up * 4.0
+		_:
+			if pl.has_method("webbed"):
+				pl.webbed(1.0)
+			if pl.has_method("take_damage"):
+				pl.take_damage(3.0)
 
 
 func _physics_process(delta: float) -> void:
@@ -88,10 +121,7 @@ func _physics_process(delta: float) -> void:
 		var seg := to - from
 		var t := clampf((c - from).dot(seg) / maxf(seg.length_squared(), 0.0001), 0.0, 1.0)
 		if (from + seg * t).distance_to(c) < HIT_RADIUS:
-			if pl.has_method("webbed"):
-				pl.webbed(1.0)
-			if pl.has_method("take_damage"):
-				pl.take_damage(DAMAGE)
+			_land_on(pl)
 			_splat(from + seg * t)
 			return
 		_exclude.append((pl as CollisionObject3D).get_rid())
@@ -113,7 +143,9 @@ func _splat(at: Vector3) -> void:
 	var dm := BoxMesh.new()
 	dm.size = Vector3(0.04, 0.04, 0.22)
 	var tm := StandardMaterial3D.new()
-	tm.albedo_color = C_GOO
+	tm.albedo_color = _colour()
+	if kind == "fire":
+		tm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	dm.material = tm
 	ps.mesh = dm
 	ps.one_shot = true

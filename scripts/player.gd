@@ -31,6 +31,8 @@ const WEB_MAX := 5.0
 const WEB_SLOW := 0.15          # speed lost per glob
 const WEB_STUCK_AT := 4.0       # this many and you are stuck
 const WEB_STUCK_TIME := 1.8
+## Fire sticks to you for a few seconds and burns while it does.
+const BURN_DPS := 2.5
 const WEB_HOLD := 5.0           # seconds after a hit before it starts to wear off
 const WEB_WEAR := 0.5           # globs' worth shed per second after that
 const FLY_SPEED := 16.0
@@ -293,6 +295,7 @@ var _web := 0.0
 var _web_hold := 0.0
 var _stuck_t := 0.0
 var _web_overlay: TextureRect
+var _burn_t := 0.0
 # dedicated 2-slot-tall equip slot: a Suit only protects you once it's WORN here,
 # not just carried in the general grid (unlike the Drill, which stays
 # passively equipped from anywhere). Same slot shape as an `inv` entry.
@@ -5319,6 +5322,14 @@ func _build_held_block(color: Color) -> void:
 	_mk_view_box(Vector3(0.22, 0.22, 0.22), Vector3(0, 0, -0.15), color)
 
 
+## Set alight. Burns for `secs`, and being hit again while burning tops it up
+## rather than starting over.
+func ignite(secs: float) -> void:
+	if _burn_t <= 0.0:
+		_toast("On fire!")
+	_burn_t = maxf(_burn_t, secs)
+
+
 ## Hit by a glob of webbing. Each one slows you further; enough in a row and
 ## you are held fast for a moment -- press jump to struggle free sooner.
 func webbed(amount: float) -> void:
@@ -5350,6 +5361,13 @@ func _web_mult() -> float:
 
 
 func _tick_web(delta: float) -> void:
+	if _burn_t > 0.0:
+		_burn_t -= delta
+		# Standing in water puts it out, which is the obvious thing to try.
+		if _in_water(global_position):
+			_burn_t = 0.0
+		else:
+			take_damage(BURN_DPS * delta)
 	if _stuck_t > 0.0:
 		_stuck_t -= delta
 		if _stuck_t <= 0.0:
