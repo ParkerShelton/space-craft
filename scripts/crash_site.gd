@@ -96,6 +96,12 @@ static func _plan() -> Dictionary:
 			var sweep := CABIN_BACK - 4 + i
 			for z2 in range(sweep, sweep + 2):
 				out[Vector3i(side * span, 1, z2)] = Blocks.METAL
+	# Nothing stands in the doorway. The wing root runs right down the side she
+	# is hinged in, so the chord across the door comes out -- which is where the
+	# clearance for a door would have been cut anyway.
+	for ox in range(DOOR_AT.x + 1, 8):
+		for oy in [DOOR_AT.y, DOOR_AT.y + 1]:
+			out.erase(Vector3i(ox, oy, DOOR_AT.z))
 	# The tail: a fin standing up and a stabiliser either side.
 	for y2 in range(H, H + 3):
 		out[Vector3i(0, y2, TAIL - 1)] = Blocks.METAL
@@ -173,7 +179,10 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 			for i in rng.randi_range(2, maxi(3, cells.size() / 3)):
 				var pick: Vector3i = cells[rng.randi() % cells.size()]
 				missing[pick] = int(plan[pick])
-	for s3 in [S_SPINE, S_BELLY]:
+	# The ROOF takes holes; the floor never does. A hole in the belly is one you
+	# fall through, and waking up somewhere you drop out of the bottom of is not
+	# a puzzle, it is a trap.
+	for s3 in [S_SPINE]:
 		var shell: Array = by_section.get(s3, [])
 		if shell.is_empty():
 			continue

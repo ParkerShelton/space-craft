@@ -83,15 +83,95 @@ func build_props() -> void:
 	if _props != null and is_instance_valid(_props):
 		_props.queue_free()
 	_props = null
-	if seat_at == Vector3.ZERO:
-		return
 	_props = Node3D.new()
 	add_child(_props)
+	# Every ship's controls get a console standing over the block, so the thing
+	# you talk to looks like something you would talk to rather than a painted
+	# cube. The block itself stays where it is: it is what the hull is built
+	# from and what your crosshair finds.
+	for v in blocks:
+		if int(blocks[v]) != Blocks.COCKPIT:
+			continue
+		var con := MeshInstance3D.new()
+		con.mesh = _console_mesh()
+		con.position = Vector3(v as Vector3i)
+		con.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_props.add_child(con)
+	if seat_at == Vector3.ZERO:
+		return
 	var seat := MeshInstance3D.new()
 	seat.mesh = _seat_mesh()
 	seat.position = seat_at
 	seat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_props.add_child(seat)
+
+
+## The ship's controls: a hooded screen leaning out of the panel with a keyboard
+## shelf under it and a couple of lamps on the corners. Built in the block's own
+## unit cell and hung off the front of it (-Z, the way the ship points), so the
+## screen and the shelf stand proud of the hull instead of being flush with it.
+##
+## Two surfaces: the casing is lit like anything else, and the screen and lamps
+## are unshaded, so a dark cabin has a computer glowing in the nose of it.
+static func _console_mesh() -> ArrayMesh:
+	const BODY := Color(0.20, 0.22, 0.26)
+	const TRIM := Color(0.40, 0.42, 0.48)
+	const DARK := Color(0.05, 0.09, 0.13)
+	const GLOW := Color(0.45, 0.95, 1.00)
+	const AMBER := Color(1.00, 0.62, 0.18)
+	var casing := [
+		[Vector3(0.5, 0.93, -0.13), Vector3(0.94, 0.10, 0.36), TRIM],    # hood
+		[Vector3(0.5, 0.64, -0.08), Vector3(0.88, 0.52, 0.20), BODY],    # bezel
+		[Vector3(0.07, 0.64, -0.10), Vector3(0.10, 0.54, 0.22), TRIM],   # left post
+		[Vector3(0.93, 0.64, -0.10), Vector3(0.10, 0.54, 0.22), TRIM],   # right post
+		[Vector3(0.5, 0.64, -0.185), Vector3(0.74, 0.42, 0.03), DARK],   # screen face
+		[Vector3(0.5, 0.35, -0.22), Vector3(0.86, 0.07, 0.40), BODY],    # keyboard shelf
+		[Vector3(0.5, 0.31, -0.41), Vector3(0.86, 0.06, 0.06), TRIM],    # shelf lip
+		[Vector3(0.5, 0.16, -0.10), Vector3(0.70, 0.24, 0.20), BODY],    # pedestal under it
+	]
+	var lit := [
+		[Vector3(0.5, 0.75, -0.205), Vector3(0.52, 0.035, 0.01), GLOW],
+		[Vector3(0.44, 0.67, -0.205), Vector3(0.38, 0.030, 0.01), GLOW],
+		[Vector3(0.48, 0.59, -0.205), Vector3(0.46, 0.030, 0.01), GLOW],
+		[Vector3(0.40, 0.51, -0.205), Vector3(0.28, 0.030, 0.01), AMBER],
+		[Vector3(0.5, 0.39, -0.30), Vector3(0.64, 0.015, 0.07), GLOW],   # keys, faintly lit
+		[Vector3(0.15, 0.31, -0.43), Vector3(0.07, 0.05, 0.02), AMBER],  # corner lamps
+		[Vector3(0.85, 0.31, -0.43), Vector3(0.07, 0.05, 0.02), GLOW],
+	]
+	var m := ArrayMesh.new()
+	_add_boxes(m, casing, false)
+	_add_boxes(m, lit, true)
+	return m
+
+
+## One surface of box geometry onto `m`. `unshaded` is what separates a screen
+## from the casing round it.
+static func _add_boxes(m: ArrayMesh, boxes: Array, unshaded: bool) -> void:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for b in boxes:
+		var c: Color = b[2]
+		var p0: Vector3 = (b[0] as Vector3) - (b[1] as Vector3) * 0.5
+		var p1: Vector3 = (b[0] as Vector3) + (b[1] as Vector3) * 0.5
+		for fi in 6:
+			st.set_color(c)
+			st.set_normal(Vector3(Chunk._WFACE[fi]))
+			var q := Chunk._box_face(p0, p1, fi)
+			st.add_vertex(q[0]); st.add_vertex(q[2]); st.add_vertex(q[1])
+			st.add_vertex(q[0]); st.add_vertex(q[3]); st.add_vertex(q[2])
+	var sub := st.commit()
+	if sub.get_surface_count() == 0:
+		return
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	if unshaded:
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	else:
+		mat.roughness = 0.55
+		mat.metallic = 0.25
+	var arrays := sub.surface_get_arrays(0)
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	m.surface_set_material(m.get_surface_count() - 1, mat)
 
 
 ## A pilot's seat: a pan to sit on, a raked back, head rest, arms and a pedestal
@@ -391,7 +471,21 @@ func toggle_door(local_v: Vector3i) -> bool:
 	var id: int = blocks.get(local_v, Blocks.AIR)
 	if not Blocks.is_door(id):
 		return false
-	set_block(local_v, Blocks.door_toggle_of(id), block_meta.get(local_v, {}))
+	# A doorway is two cells tall and swings as ONE thing: reach for the handle
+	# at waist height or at head height and the whole door opens. Its other half
+	# is the cell above a bottom or below a top, and only when that cell really
+	# is the opposite half -- so two separate doors stacked in a shaft still work
+	# independently. Each half is flipped from its OWN state, which is what keeps
+	# a top a top.
+	var step := Vector3i(0, -1, 0) if Blocks.door_is_top(id) else Vector3i(0, 1, 0)
+	var other: Vector3i = local_v + step
+	var oid: int = blocks.get(other, Blocks.AIR)
+	var paired: bool = Blocks.is_door(oid) and Blocks.door_is_top(oid) != Blocks.door_is_top(id)
+	blocks[local_v] = Blocks.door_toggle_of(id)
+	if paired:
+		blocks[other] = Blocks.door_toggle_of(oid)
+	rebuild()
+	_recompute_habitable()
 	return true
 
 
@@ -672,6 +766,9 @@ func rebuild() -> void:
 
 	_rebuild_collision()
 	_recompute_habitable()
+	# The fittings follow the blocks: fit a cockpit and its console appears,
+	# break it and the console goes with it.
+	build_props()
 
 
 # One box collider per block. Works both while the ship is a stationary build

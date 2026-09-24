@@ -3834,8 +3834,21 @@ func _edit_block(_break_it: bool) -> void:
 
 	elif tgt["kind"] == "ship":
 		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
-			# crafted ship blocks carry their material stats onto the ship
-			obj.set_block(pv, place_id, inv[active_slot].get("props", {}))
+			var props: Dictionary = inv[active_slot].get("props", {})
+			if place_id == Blocks.DOOR:
+				# A door is two cells tall on a ship exactly as it is on the
+				# ground. Placing one cell of it left a lone half in the wall --
+				# which the ship's mesher draws as a plain cube, so what you got
+				# back for your door was a block.
+				var above: Vector3i = pv + Vector3i(0, 1, 0)
+				if (obj as Ship).blocks.has(above):
+					_toast("No headroom for a door there")
+					return
+				obj.set_block(pv, Blocks.door_with(false, 0, 0, false), props)
+				obj.set_block(above, Blocks.door_with(false, 0, 0, true), props)
+			else:
+				# crafted ship blocks carry their material stats onto the ship
+				obj.set_block(pv, place_id, props)
 			_consume_active()
 
 
@@ -4724,6 +4737,14 @@ func _process_mining(delta: float) -> void:
 					LeafDecay.nudge(planet, world, self, v)
 		elif ship != null:
 			ship.set_block(v, Blocks.AIR)
+			# Both halves of a doorway come out together and give you back one
+			# door, rather than leaving a half hanging in the wall.
+			if Blocks.is_door(id):
+				var step := Vector3i(0, -1, 0) if Blocks.door_is_top(id) else Vector3i(0, 1, 0)
+				var other: Vector3i = v + step
+				var oid: int = ship.blocks.get(other, Blocks.AIR)
+				if Blocks.is_door(oid) and Blocks.door_is_top(oid) != Blocks.door_is_top(id):
+					ship.set_block(other, Blocks.AIR)
 			_add_item(Blocks.bottom_of(id), 1)
 		_break_burst(obj.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)),
 			Blocks.color_of(id))
