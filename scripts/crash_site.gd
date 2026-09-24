@@ -64,8 +64,8 @@ static func _plan() -> Dictionary:
 	# it. You wake standing at the controls in front of it, so both cells are
 	# BEHIND where the player comes round -- a seat back through the head is
 	# not the first thing anybody should see.
-	out[Vector3i(0, 1, 0)] = Blocks.METAL
-	out[Vector3i(0, 2, 1)] = Blocks.METAL
+	out[Vector3i(0, 1, -L + 1)] = Blocks.METAL
+	out[Vector3i(0, 2, -L + 2)] = Blocks.METAL
 	return out
 
 
@@ -85,7 +85,8 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 	var by_dist := shell.duplicate()
 	by_dist.sort_custom(func(a, b):
 		return (Vector3(a) - Vector3(impact)).length() < (Vector3(b) - Vector3(impact)).length())
-	var keep := {Vector3i(0, 1, -L): true, Vector3i(0, 1, 0): true, Vector3i(0, 2, 1): true}
+	var keep := {Vector3i(0, 1, -L): true, Vector3i(0, 1, -L + 1): true,
+		Vector3i(0, 2, -L + 2): true}
 	for i in mini(holes, by_dist.size()):
 		# Near the impact first, with the odd stray further out.
 		var pick: Vector3i = by_dist[i] if rng.randf() < 0.75 else shell[rng.randi() % shell.size()]

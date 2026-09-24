@@ -1741,7 +1741,7 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	# You come round standing at the controls, the seat at your back and the
 	# nose in front. Boarding first, because aboard a ship the facing lives in
 	# the player's LOCAL rotation, and local -Z is the way the ship points.
-	player.global_position = ship.to_global(Vector3(0, 1.45, -1.2))
+	player.global_position = ship.to_global(Vector3(0, 1.45, -0.4))
 	player.velocity = Vector3.ZERO
 	player.call("_board", ship, false)
 	player.rotation = Vector3.ZERO
