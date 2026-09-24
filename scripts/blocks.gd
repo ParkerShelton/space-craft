@@ -292,18 +292,28 @@ static func yield_for(out: int, props: Dictionary, base: int) -> int:
 static func ore_verdict(props: Dictionary) -> String:
 	var c := combustion_of(props)
 	var r := conductivity_of(props)
+	# Read off the YIELD rather than off a second set of thresholds. Two sets of
+	# bands drift apart: this said "casts the best plate" about an ore that cast
+	# four, the same as the one it called middling.
 	var parts: Array = []
+	match plate_yield(props):
+		5:
+			parts.append("inert: the best plate there is, and no use as fuel")
+		4:
+			parts.append("steady: good plate, poor fuel")
+		3:
+			parts.append("lively: middling either way")
+		_:
+			parts.append("volatile: burns hard, casts badly")
 	if c >= 62:
-		parts.append("burns fiercely -- fuel, poor plate")
-	elif c >= 38:
-		parts.append("burns; middling plate")
-	else:
-		parts.append("inert -- casts the best plate, no use as fuel")
+		parts.append("burns hot")
+	elif c <= 20:
+		parts.append("will barely light")
 	if r >= 62:
 		parts.append("conducts well")
 	elif r <= 25:
 		parts.append("barely conducts")
-	return " - ".join(PackedStringArray(parts))
+	return ", ".join(PackedStringArray(parts))
 
 
 static func torch_tier_for(props: Dictionary) -> int:
