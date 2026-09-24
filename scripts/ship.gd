@@ -135,9 +135,12 @@ static func _console_mesh() -> ArrayMesh:
 		[Vector3(0.44, 0.67, 1.205), Vector3(0.38, 0.030, 0.01), GLOW],
 		[Vector3(0.48, 0.59, 1.205), Vector3(0.46, 0.030, 0.01), GLOW],
 		[Vector3(0.40, 0.51, 1.205), Vector3(0.28, 0.030, 0.01), AMBER],
-		[Vector3(0.5, 0.39, 1.3), Vector3(0.64, 0.015, 0.07), GLOW],   # keys, faintly lit
-		[Vector3(0.15, 0.31, 1.43), Vector3(0.07, 0.05, 0.02), AMBER],  # corner lamps
-		[Vector3(0.85, 0.31, 1.43), Vector3(0.07, 0.05, 0.02), GLOW],
+		[Vector3(0.5, 0.395, 1.30), Vector3(0.64, 0.020, 0.07), GLOW],  # keys, faintly lit
+		# Lamps stand PROUD of the shelf lip rather than inside it. Sunk into it
+		# they shared a face with it, and two faces in the same plane flicker
+		# against each other from any distance.
+		[Vector3(0.15, 0.31, 1.465), Vector3(0.07, 0.045, 0.05), AMBER],
+		[Vector3(0.85, 0.31, 1.465), Vector3(0.07, 0.045, 0.05), GLOW],
 	]
 	var m := ArrayMesh.new()
 	_add_boxes(m, casing, false)
@@ -700,7 +703,17 @@ func rebuild() -> void:
 
 	for v in blocks:
 		var id: int = blocks[v]
-		if id == Blocks.AIR or id == Blocks.DOOR_OPEN:
+		if id == Blocks.AIR:
+			continue
+		# Blocks that are not cubes are not DRAWN as cubes. The hull mesher used
+		# to fill every cell, so a door was a slab of wall and a length of cable
+		# was a solid metre of it -- which is what made a conduit in the cabin
+		# look like somebody had left a crate there.
+		var shape := _shape_of(v, id)
+		if not shape.is_empty():
+			_emit_shape(v, id, shape, verts, normals, colors)
+			continue
+		if id == Blocks.DOOR_OPEN:
 			continue  # open doorways render as an empty gap
 		var is_glass: bool = id == Blocks.GLASS
 		var base := Blocks.color_of(id)
@@ -772,6 +785,52 @@ func rebuild() -> void:
 	build_props()
 
 
+## The sub-boxes a block is really made of, in its own cell, or [] when it is
+## an honest cube. Chunk.shape_boxes knows every shape the game has; all this
+## has to work out is which neighbours a cable should reach toward.
+func _shape_of(v: Vector3i, id: int) -> Array:
+	var base := Blocks.bottom_of(id)
+	var shaped: bool = base == Blocks.WIRE or Blocks.is_door(id) 		or Blocks.is_stair(base) or Blocks.is_slab(base)
+	if not shaped:
+		return []
+	var conn := 0
+	if base == Blocks.WIRE:
+		for fi in 6:
+			var nb: int = blocks.get(v + (Chunk._WFACE[fi] as Vector3i), Blocks.AIR)
+			if nb == Blocks.AIR:
+				continue
+			var nbase := Blocks.bottom_of(nb)
+			# Cable runs to other cable and to the machinery it feeds. It does
+			# NOT run into plain hull -- a conduit lying on the floor would
+			# otherwise sprout an arm into the floor it is lying on.
+			if nbase == Blocks.WIRE:
+				conn |= 1 << fi
+			elif nbase != Blocks.METAL and nbase != Blocks.GLASS and not Blocks.is_door(nb):
+				conn |= 1 << fi
+	return Chunk.shape_boxes(id, Vector3.UP, conn)
+
+
+## Every face of every sub-box. Nothing is culled against the neighbours here:
+## these shapes do not fill their cell, so the cell next door cannot hide them.
+func _emit_shape(v: Vector3i, id: int, boxes: Array, verts: PackedVector3Array,
+		normals: PackedVector3Array, colors: PackedColorArray) -> void:
+	var base := Blocks.color_of(id)
+	var origin := Vector3(v)
+	for b in boxes:
+		var lo: Vector3 = origin + (b[0] as Vector3)
+		var hi: Vector3 = origin + (b[1] as Vector3)
+		for fi in 6:
+			var sh: float = Chunk._face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
+			var col := Color(base.r * sh, base.g * sh, base.b * sh, 1.0)
+			var nrm := Vector3(Chunk._WFACE[fi])
+			var q := Chunk._box_face(lo, hi, fi)
+			verts.append(q[0]); verts.append(q[1]); verts.append(q[2])
+			verts.append(q[0]); verts.append(q[2]); verts.append(q[3])
+			for _k in 6:
+				normals.append(nrm)
+				colors.append(col)
+
+
 # One box collider per block. Works both while the ship is a stationary build
 # surface and while it moves (a moving body needs convex shapes, not a trimesh).
 func _rebuild_collision() -> void:
@@ -782,6 +841,8 @@ func _rebuild_collision() -> void:
 	for v in blocks:
 		if blocks[v] == Blocks.DOOR_OPEN:
 			continue  # open door has no collider -- walk through it
+		if Blocks.bottom_of(int(blocks[v])) == Blocks.WIRE:
+			continue  # you step over a cable, you do not climb it
 		var cs := CollisionShape3D.new()
 		var box := BoxShape3D.new()
 		box.size = Vector3.ONE
