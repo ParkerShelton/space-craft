@@ -108,8 +108,9 @@ func build_props() -> void:
 
 ## The ship's controls: a hooded screen leaning out of the panel with a keyboard
 ## shelf under it and a couple of lamps on the corners. Built in the block's own
-## unit cell and hung off the front of it (-Z, the way the ship points), so the
-## screen and the shelf stand proud of the hull instead of being flush with it.
+## unit cell and hung off the side the PILOT stands on (+Z, aft), so the screen
+## and the shelf lean out toward whoever is reading them. The cockpit block's
+## other face is the windscreen the hull mesher paints, and that stays outboard.
 ##
 ## Two surfaces: the casing is lit like anything else, and the screen and lamps
 ## are unshaded, so a dark cabin has a computer glowing in the nose of it.
@@ -120,23 +121,23 @@ static func _console_mesh() -> ArrayMesh:
 	const GLOW := Color(0.45, 0.95, 1.00)
 	const AMBER := Color(1.00, 0.62, 0.18)
 	var casing := [
-		[Vector3(0.5, 0.93, -0.13), Vector3(0.94, 0.10, 0.36), TRIM],    # hood
-		[Vector3(0.5, 0.64, -0.08), Vector3(0.88, 0.52, 0.20), BODY],    # bezel
-		[Vector3(0.07, 0.64, -0.10), Vector3(0.10, 0.54, 0.22), TRIM],   # left post
-		[Vector3(0.93, 0.64, -0.10), Vector3(0.10, 0.54, 0.22), TRIM],   # right post
-		[Vector3(0.5, 0.64, -0.185), Vector3(0.74, 0.42, 0.03), DARK],   # screen face
-		[Vector3(0.5, 0.35, -0.22), Vector3(0.86, 0.07, 0.40), BODY],    # keyboard shelf
-		[Vector3(0.5, 0.31, -0.41), Vector3(0.86, 0.06, 0.06), TRIM],    # shelf lip
-		[Vector3(0.5, 0.16, -0.10), Vector3(0.70, 0.24, 0.20), BODY],    # pedestal under it
+		[Vector3(0.5, 0.93, 1.13), Vector3(0.94, 0.10, 0.36), TRIM],    # hood
+		[Vector3(0.5, 0.64, 1.08), Vector3(0.88, 0.52, 0.20), BODY],    # bezel
+		[Vector3(0.07, 0.64, 1.1), Vector3(0.10, 0.54, 0.22), TRIM],   # left post
+		[Vector3(0.93, 0.64, 1.1), Vector3(0.10, 0.54, 0.22), TRIM],   # right post
+		[Vector3(0.5, 0.64, 1.185), Vector3(0.74, 0.42, 0.03), DARK],   # screen face
+		[Vector3(0.5, 0.35, 1.22), Vector3(0.86, 0.07, 0.40), BODY],    # keyboard shelf
+		[Vector3(0.5, 0.31, 1.41), Vector3(0.86, 0.06, 0.06), TRIM],    # shelf lip
+		[Vector3(0.5, 0.16, 1.1), Vector3(0.70, 0.24, 0.20), BODY],    # pedestal under it
 	]
 	var lit := [
-		[Vector3(0.5, 0.75, -0.205), Vector3(0.52, 0.035, 0.01), GLOW],
-		[Vector3(0.44, 0.67, -0.205), Vector3(0.38, 0.030, 0.01), GLOW],
-		[Vector3(0.48, 0.59, -0.205), Vector3(0.46, 0.030, 0.01), GLOW],
-		[Vector3(0.40, 0.51, -0.205), Vector3(0.28, 0.030, 0.01), AMBER],
-		[Vector3(0.5, 0.39, -0.30), Vector3(0.64, 0.015, 0.07), GLOW],   # keys, faintly lit
-		[Vector3(0.15, 0.31, -0.43), Vector3(0.07, 0.05, 0.02), AMBER],  # corner lamps
-		[Vector3(0.85, 0.31, -0.43), Vector3(0.07, 0.05, 0.02), GLOW],
+		[Vector3(0.5, 0.75, 1.205), Vector3(0.52, 0.035, 0.01), GLOW],
+		[Vector3(0.44, 0.67, 1.205), Vector3(0.38, 0.030, 0.01), GLOW],
+		[Vector3(0.48, 0.59, 1.205), Vector3(0.46, 0.030, 0.01), GLOW],
+		[Vector3(0.40, 0.51, 1.205), Vector3(0.28, 0.030, 0.01), AMBER],
+		[Vector3(0.5, 0.39, 1.3), Vector3(0.64, 0.015, 0.07), GLOW],   # keys, faintly lit
+		[Vector3(0.15, 0.31, 1.43), Vector3(0.07, 0.05, 0.02), AMBER],  # corner lamps
+		[Vector3(0.85, 0.31, 1.43), Vector3(0.07, 0.05, 0.02), GLOW],
 	]
 	var m := ArrayMesh.new()
 	_add_boxes(m, casing, false)
