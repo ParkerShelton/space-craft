@@ -482,7 +482,7 @@ func has_warp_drive() -> bool:
 # A cell counts as an airtight wall only if it holds a solid block -- an OPEN door
 # is a gap that air escapes through (so it breaks the seal).
 func _seals(cell: Vector3i) -> bool:
-	return blocks.has(cell) and blocks[cell] != Blocks.DOOR_OPEN
+	return blocks.has(cell) and Blocks.bottom_of(int(blocks[cell])) != Blocks.DOOR_OPEN
 
 
 # Sealed if some interior cell can't be reached by air flooding in from outside --
@@ -538,7 +538,7 @@ func contains(world_pos: Vector3) -> bool:
 		return false
 	if c.x > _bbox_max.x or c.y > _bbox_max.y or c.z > _bbox_max.z:
 		return false
-	if blocks.has(c) and blocks[c] != Blocks.DOOR_OPEN:
+	if blocks.has(c) and Blocks.bottom_of(int(blocks[c])) != Blocks.DOOR_OPEN:
 		return false
 	# Also require an actual ceiling somewhere overhead -- otherwise this is
 	# just an exposed deck/roof (e.g. a ship you're mid-build on), and standing
@@ -547,7 +547,7 @@ func contains(world_pos: Vector3) -> bool:
 		var above := c + Vector3i(0, dy, 0)
 		if above.y > _bbox_max.y:
 			break
-		if blocks.has(above) and blocks[above] != Blocks.DOOR_OPEN:
+		if blocks.has(above) and Blocks.bottom_of(int(blocks[above])) != Blocks.DOOR_OPEN:
 			return true
 	return false
 
@@ -804,15 +804,20 @@ func rebuild() -> void:
 		# so leaving it out here makes no hole.
 		if FITTINGS.has(id):
 			continue
-		if id == Blocks.DOOR_OPEN:
+		if Blocks.bottom_of(id) == Blocks.DOOR_OPEN:
 			continue  # open doorways render as an empty gap
 		var is_glass: bool = id == Blocks.GLASS
 		var base := Blocks.color_of(id)
 		var origin := Vector3(v)
 		for face in FACES:
 			var nid: int = blocks.get(v + face["n"], Blocks.AIR)
-			if nid == Blocks.DOOR_OPEN:
-				nid = Blocks.AIR  # draw the face that borders an open doorway
+			if not _fills_cell(nid):
+				# A door is a panel, a cable is a cable, a slab is half a block.
+				# None of them fills its cell, so the wall beside one has to
+				# draw the face that looks at it -- otherwise there is a hole in
+				# the hull around every doorway and you see straight out through
+				# the sides of it.
+				nid = Blocks.AIR
 			# glass draws only vs open air; opaque draws vs air OR glass (so you can
 			# see the hull through a window instead of a hole)
 			if is_glass:
@@ -876,6 +881,17 @@ func rebuild() -> void:
 	build_props()
 
 
+## Does this block fill its whole cell? Only something that does can hide the
+## face of the block next to it.
+func _fills_cell(id: int) -> bool:
+	if id == Blocks.AIR:
+		return false
+	var base := Blocks.bottom_of(id)
+	if base == Blocks.WIRE or Blocks.is_door(id) or Blocks.is_stair(base) or Blocks.is_slab(base):
+		return false
+	return true
+
+
 ## The sub-boxes a block is really made of, in its own cell, or [] when it is
 ## an honest cube. Chunk.shape_boxes knows every shape the game has; all this
 ## has to work out is which neighbours a cable should reach toward.
@@ -930,8 +946,13 @@ func _rebuild_collision() -> void:
 			cs.queue_free()
 	_col_shapes.clear()
 	for v in blocks:
-		if blocks[v] == Blocks.DOOR_OPEN:
-			continue  # open door has no collider -- walk through it
+		if Blocks.bottom_of(int(blocks[v])) == Blocks.DOOR_OPEN:
+			# An open door has no collider -- you walk through it. Compared
+			# through bottom_of because a door carries its facing, its hinge and
+			# its top/bottom flag packed into the id: a real open door NEVER
+			# equals the bare DOOR_OPEN constant, so this test was false every
+			# time and a full cube stayed standing in the doorway.
+			continue
 		if Blocks.bottom_of(int(blocks[v])) == Blocks.WIRE:
 			continue  # you step over a cable, you do not climb it
 		var cs := CollisionShape3D.new()

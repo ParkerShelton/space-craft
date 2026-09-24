@@ -2570,7 +2570,9 @@ func _walk_interior(delta: float, ship: Ship) -> void:
 # Highest solid block top at or below the player's feet (ship-local Y).
 # A ship cell is solid unless it's empty or an open doorway.
 func _ship_solid(ship: Ship, cell: Vector3i) -> bool:
-	return ship.blocks.has(cell) and ship.blocks[cell] != Blocks.DOOR_OPEN
+	# bottom_of, because a door packs its facing and hinge into the id and so
+	# never equals the bare constant (see Ship._rebuild_collision).
+	return ship.blocks.has(cell) 		and Blocks.bottom_of(int(ship.blocks[cell])) != Blocks.DOOR_OPEN
 
 
 func _interior_floor_top(ship: Ship, pos: Vector3) -> float:
