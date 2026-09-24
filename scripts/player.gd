@@ -6289,7 +6289,15 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 		var mx := Blocks.max_durability(int(slot["id"]))
 		if mx > 0 and whole == 1:
 			count.text = ""
-		_paint_wear(cell, mx, int(slot.get("dur", mx)))
+		if int(slot["id"]) == Blocks.BATTERY:
+			# A battery's bar is its charge, not its wear -- the same bar in the
+			# same place, so a glance at a chest full of them tells you which
+			# ones are worth carrying.
+			count.text = ""
+			var held: float = float((slot.get("props", {}) as Dictionary).get("charge", 0.0))
+			_paint_wear(cell, int(Station.BATTERY_CAP), int(held))
+		else:
+			_paint_wear(cell, mx, int(slot.get("dur", mx)))
 	else:
 		_paint_wear(cell, 0, 0)
 		# Empty: the slot's own frame is the picture of "nothing here".
@@ -6781,6 +6789,12 @@ func _get_up() -> void:
 
 
 func _open_station(st: Station) -> void:
+	# A battery cradle has no inventory to open. Right-clicking it IS the
+	# action: take the battery out, put one in, or swap the one in your hand
+	# for the one in the bay. One click, whichever of those it turns out to be.
+	if st.kind == Blocks.POWER_BAY:
+		_swap_bay_battery(st)
+		return
 	_station_open = st
 	if inv_open:
 		_toggle_inventory()
@@ -7257,3 +7271,55 @@ func _update_ui() -> void:
 			st["count"], "OK" if st["cockpit"] else "--", st["thrusters"], prompt]
 	else:
 		_ship_label.text = ""
+
+
+## Right-click a Power Bay. What happens depends on what is in each hand:
+## a battery in yours goes in (and whatever was in the bay comes out into your
+## hand), an empty hand takes the bay's battery, and an empty hand at an empty
+## bay says so rather than doing nothing silently.
+func _swap_bay_battery(bay: Station) -> void:
+	var held: Dictionary = inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
+	var holding_battery: bool = int(held.get("id", Blocks.AIR)) == Blocks.BATTERY 		and int(held.get("count", 0)) > 0
+	var in_bay: bool = bay.bay_has_battery()
+	if not holding_battery and not in_bay:
+		_toast("The cradle is empty -- put a battery in it")
+		return
+	var giving: Dictionary = {}
+	if holding_battery:
+		# One battery, not the stack: the cradle holds exactly one.
+		giving = held.duplicate(true)
+		giving["count"] = 1
+	var came_out: Dictionary = bay.bay_swap(giving)
+	if holding_battery:
+		_take_one_from_active()
+	if not came_out.is_empty():
+		var left := _add_item(int(came_out["id"]), int(came_out.get("count", 1)),
+			came_out.get("props", {}))
+		if left > 0:
+			# Nowhere to put it: leave it where it was rather than destroying it.
+			bay.bay_swap(came_out)
+			if holding_battery:
+				_add_item(int(giving["id"]), 1, giving.get("props", {}))
+			_toast("No room for the battery you are holding")
+			return
+	var pct := int(round(ShipComputer.battery_charge(bay) / Station.BATTERY_CAP * 100.0))
+	if holding_battery and not came_out.is_empty():
+		_toast("Battery swapped -- %d%%" % pct)
+	elif holding_battery:
+		_toast("Battery seated -- %d%%" % pct)
+	else:
+		_toast("Battery removed")
+	_refresh_slots()
+
+
+## Take one off the stack in your hand, clearing the slot when it runs out.
+func _take_one_from_active() -> void:
+	if active_slot < 0 or active_slot >= inv.size():
+		return
+	var s2: Dictionary = inv[active_slot]
+	var n := int(s2.get("count", 0)) - 1
+	if n <= 0:
+		inv[active_slot] = {"id": Blocks.AIR, "count": 0, "eighths": 0, "props": {},
+			"src": "", "mat": {}}
+	else:
+		s2["count"] = n

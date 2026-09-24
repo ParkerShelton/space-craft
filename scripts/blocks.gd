@@ -714,6 +714,11 @@ static func max_durability(id: int) -> int:
 ## How many of an item one slot holds. Things that wear out are one to a slot,
 ## since each carries its own wear.
 static func stack_cap(id: int, normal: int) -> int:
+	# A battery is one to a slot for the same reason a tool is: each carries its
+	# own state. Stacking them pooled two different charges into one slot and
+	# the difference simply vanished.
+	if id == BATTERY:
+		return 1
 	return 1 if DURABILITY.has(id) else normal
 
 ## What each tool is for, and how much better than bare hands it is at it.

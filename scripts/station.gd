@@ -48,6 +48,11 @@ const O2_POWER_RATE := 4.0    # power/sec to keep scrubbing
 const HEAT_POWER_RATE := 6.0  # power/sec to hold a room at 20 C (heater OR cooler)
 var o2 := 0.0                 # 0..1 breathable air in this machine's room
 var warmth := 15.0            # degrees C it is holding its room at
+## What the cradle's model is currently showing: x = is a battery seated, y =
+## how full its gauge is drawn. The model is rebuilt only when this would
+## visibly change, so a bay draining over minutes remeshes a few dozen times
+## rather than sixty times a second.
+var _bay_shown := Vector2(-1, -1)
 
 
 static func capacity_of(k: int) -> int:
@@ -56,7 +61,7 @@ static func capacity_of(k: int) -> int:
 	if k == Blocks.CHEST:
 		return CHEST_SLOTS
 	if k == Blocks.POWER_BAY:
-		return 4   # a rack of batteries
+		return 1   # one battery, seated in the cradle -- no inventory to open
 	if k == Blocks.OXYGEN_PLANT or k == Blocks.HEATER or k == Blocks.COOLER:
 		return 2   # spare filters / elements: no recipes, just somewhere to stash parts
 	if k == Blocks.FORGE:
@@ -137,7 +142,11 @@ func _build_visual() -> void:
 		add_child(_col)
 	# The station's own model, standing on the ground its footprint covers.
 	var fp := StationModels.footprint(kind)
-	_mi.mesh = StationModels.mesh_for(kind)
+	if kind == Blocks.POWER_BAY:
+		_bay_shown = _bay_state()
+		_mi.mesh = StationModels.power_bay_mesh(_bay_shown.x > 0.5, _bay_shown.y)
+	else:
+		_mi.mesh = StationModels.mesh_for(kind)
 	# The station's ORIGIN is the centre of the cell it was put down in, so the
 	# model hangs half a block below it to stand on that cell's floor, and a
 	# tall station's box reaches up from there.
@@ -419,7 +428,51 @@ func _tick_power_bay(delta: float) -> void:
 			sh.charge = minf(sh.charge + moved / SHIP_POWER, 1.0)
 		else:
 			sh.air = minf(sh.air + moved / SHIP_AIR_POWER, 1.0)
+		_refresh_bay()
 		return
+
+
+## What the cradle SHOULD be showing: whether a battery is seated, and its
+## charge rounded to the nearest step the gauge can actually draw.
+func _bay_state() -> Vector2:
+	var slot: Dictionary = storage[0] if storage.size() > 0 else {}
+	if int(slot.get("id", Blocks.AIR)) != Blocks.BATTERY:
+		return Vector2(0, 0)
+	var held: float = float((slot.get("props", {}) as Dictionary).get("charge", 0.0))
+	var f: float = clampf(held / BATTERY_CAP, 0.0, 1.0)
+	return Vector2(1, snappedf(f, 0.04))
+
+
+## Keep the cradle looking like what is in it.
+func _refresh_bay() -> void:
+	if kind != Blocks.POWER_BAY or headless or _mi == null:
+		return
+	var want := _bay_state()
+	if want.is_equal_approx(_bay_shown):
+		return
+	_bay_shown = want
+	_mi.mesh = StationModels.power_bay_mesh(want.x > 0.5, want.y)
+
+
+## Put `slot` in the cradle and hand back whatever was in it -- the swap that
+## right-clicking a bay with a battery in hand performs. Either side may be
+## empty, so this covers taking one out and putting one in as well.
+## Is there a battery seated in this cradle?
+func bay_has_battery() -> bool:
+	if storage.is_empty():
+		return false
+	return int(storage[0].get("id", Blocks.AIR)) == Blocks.BATTERY 		and int(storage[0].get("count", 0)) > 0
+
+
+func bay_swap(incoming: Dictionary) -> Dictionary:
+	if storage.is_empty():
+		_ensure_storage()
+	var was: Dictionary = storage[0].duplicate(true)
+	storage[0] = incoming.duplicate(true)
+	_refresh_bay()
+	if int(was.get("id", Blocks.AIR)) == Blocks.AIR or int(was.get("count", 0)) <= 0:
+		return {}
+	return was
 
 
 func _process(delta: float) -> void:
