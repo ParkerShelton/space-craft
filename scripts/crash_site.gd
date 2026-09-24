@@ -45,10 +45,13 @@ static func _plan() -> Dictionary:
 				var on_shell := absi(x) == W or absi(z) == L or y == 0 or y == H
 				if on_shell:
 					out[Vector3i(x, y, z)] = Blocks.METAL
-	# The nose: a cockpit you can see out of, with glass either side of it.
+	# The nose: the console at eye level with a windscreen over and beside it,
+	# so the first thing you see on waking is the world you came down on.
 	out[Vector3i(0, 1, -L)] = Blocks.COCKPIT
-	out[Vector3i(-1, 1, -L)] = Blocks.GLASS
-	out[Vector3i(1, 1, -L)] = Blocks.GLASS
+	for x in [-1, 1]:
+		out[Vector3i(x, 1, -L)] = Blocks.GLASS
+	for x in range(-1, 2):
+		out[Vector3i(x, 2, -L)] = Blocks.GLASS
 	# A way in, on the right-hand side.
 	out[Vector3i(W, 1, 1)] = Blocks.DOOR
 	# The works, along the back wall inside.

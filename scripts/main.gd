@@ -1728,13 +1728,16 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	if floor_at == null:
 		at = player.global_position
 	else:
-		at = (floor_at as Vector3) + up * float(CrashSite.H)
+		# Ploughed in rather than parked: the belly plate sits a little under
+		# the ground it stopped in.
+		at = (floor_at as Vector3) + up * 0.15
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _world.world_seed ^ 0x57A1
 	var ship := CrashSite.build(_world, at, up, fwd, rng)
 	if ship == null:
 		return
 	ship.ship_log.append("Came down hard. Ship's log resumes.")
+	_scar_the_ground(ground, ship, up, fwd, rng)
 	# Nothing of the world inside the hull: a wreck that came down in a wood
 	# would otherwise have half a tree through the cabin.
 	_clear_inside_ship(ground, ship)
@@ -1745,6 +1748,41 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	player.velocity = Vector3.ZERO
 	player.call("_board", ship, false)
 	player.rotation = Vector3.ZERO
+
+
+## The mark a ship leaves when it arrives badly: a gouge dug out behind it
+## along the way it came in, and pieces of itself thrown clear.
+func _scar_the_ground(ground: Planet, ship: Ship, up: Vector3, fwd: Vector3,
+		rng: RandomNumberGenerator) -> void:
+	var cells := {}
+	var back: Vector3 = -fwd
+	for i in range(2, 22):
+		# Wider and shallower the further back it goes -- the end of the furrow
+		# is where it first touched down.
+		var along: Vector3 = ship.global_position + back * float(i) * 1.0
+		var half := 2 if i < 12 else 1
+		var depth := 2 if i < 8 else 1
+		var side: Vector3 = up.cross(back).normalized()
+		for s in range(-half, half + 1):
+			for d in range(0, depth):
+				var at := along + side * float(s) - up * float(d)
+				var v := ground.world_to_voxel(at)
+				if Blocks.bottom_of(ground.get_id(v)) != Blocks.AIR:
+					cells[v] = Blocks.AIR
+	if not cells.is_empty():
+		ground.set_blocks(cells)
+	# Torn-off plate, scattered down the furrow.
+	var junk := {}
+	for i in rng.randi_range(4, 8):
+		var at2: Vector3 = ship.global_position + back * rng.randf_range(3.0, 20.0) 			+ up.cross(back).normalized() * rng.randf_range(-4.0, 4.0)
+		var g2 = _drop_to_ground(get_world_3d().direct_space_state, at2, up)
+		if g2 == null:
+			continue
+		var v2 := ground.world_to_voxel((g2 as Vector3) + up * 0.5)
+		if Blocks.bottom_of(ground.get_id(v2)) == Blocks.AIR:
+			junk[v2] = Blocks.METAL
+	if not junk.is_empty():
+		ground.set_blocks(junk)
 
 
 ## Empty every world block the hull touches, and the shell around it, so the
