@@ -2004,6 +2004,10 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	# world is visible -- this is the single biggest lever for shortening the
 	# wait, on top of the generation_sample optimizations.
 	ground.set_fast_loading(true)
+	if CRASH_REEL and not load_existing and mode != "joined" and _loading_root != null:
+		_reel = CrashReel.new()
+		_loading_root.add_child(_reel)
+		_loading_root.move_child(_reel, 1)   # over the backdrop, under the title
 	await _wait_for_world_ready(ground, player)
 	ground.set_fast_loading(false)
 	# A new world opens the way the game means to be played: in the wreck you
@@ -2011,9 +2015,16 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	# Loaded worlds already have theirs (or have taken it apart).
 	if not load_existing and mode != "joined":
 		_place_crash_site(ground, player)
-		_hide_loading_screen()
-		# ...and you come round: black, then the inside of your own ship.
+		# She goes in, the screen goes white and then black -- and the wake picks
+		# up from that black, so there is no seam between the two.
+		if _reel != null:
+			# The title has no business being over a ship hitting the ground.
+			if _loading_text != null:
+				create_tween().tween_property(_loading_text, "modulate:a", 0.0, 0.4)
+			await _reel.play_impact()
+			_reel = null
 		_wake_from_black()
+		_hide_loading_screen()
 	else:
 		_hide_loading_screen()
 	# Combat testing: don't leave the guaranteed home-planet enemy (see
@@ -2039,9 +2050,16 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 ## already does when you walk toward new terrain.
 const LOAD_READY_RADIUS := 2
 const LOAD_TIMEOUT_SEC := 25.0  # safety cap so a bug elsewhere can't hang the screen forever
+## The crash plays over the loading screen of a NEW world (see crash_reel.gd).
+## Turn this off and the loading screen is the plain one it used to be; delete
+## scripts/crash_reel.gd and the three CrashReel lines below and it is gone.
+const CRASH_REEL := true
+var _reel: CrashReel
+
 var _loading_layer: CanvasLayer
 var _loading_root: Control  # fades out on hide -- CanvasLayer itself has no modulate
 var _loading_label: Label
+var _loading_text: Control   # the title block, faded out when the crash lands
 
 func _show_loading_screen() -> void:
 	_loading_layer = CanvasLayer.new()
@@ -2066,6 +2084,7 @@ func _show_loading_screen() -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 40)
 	vb.add_child(title)
+	_loading_text = vb
 	_loading_label = Label.new()
 	_loading_label.text = "Generating world…"
 	_loading_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
