@@ -874,12 +874,12 @@ func _unhandled_input(event: InputEvent) -> void:
 		if piloting:
 			return  # no building while flying
 		if _place_kind != Blocks.AIR:
-			# A ghost in hand takes the click, whichever button it is.
-			if event.button_index == MOUSE_BUTTON_LEFT:
+			# A ghost in hand takes the click: right to put it down, the way
+			# everything else in this game is placed.
+			if event.button_index == MOUSE_BUTTON_RIGHT:
 				_do_place_station()
-			elif event.button_index == MOUSE_BUTTON_RIGHT:
-				_cancel_placing()
-				_toast("Cancelled")
+			elif event.button_index == MOUSE_BUTTON_LEFT:
+				_toast("Right-click to place it, Esc to put it away")
 			return
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			# right-click: open a station, or open/close a door, otherwise place a block
@@ -925,7 +925,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		_close_ring()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			if in_bed:
+			if _place_kind != Blocks.AIR:
+				_cancel_placing()
+				_toast("Put it away")
+			elif in_bed:
 				_get_up()
 			elif _station_open != null:
 				_close_station()
@@ -1278,7 +1281,7 @@ func _begin_placing(kind: int) -> void:
 	_place_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	if world != null:
 		world.add_child(_place_ghost)
-	_toast("%s — click to place, R to turn, right-click to cancel" % Blocks.name_of(kind))
+	_toast("%s — right-click to place, R to turn, Esc to put it away" % Blocks.name_of(kind))
 
 
 func _clear_ghost_model() -> void:
@@ -1353,10 +1356,11 @@ func _place_spot(tgt: Dictionary = {}) -> Dictionary:
 
 ## Follow the crosshair with the ghost, green where it would go, red where it
 ## would not.
-func _update_place_ghost() -> void:
+func _update_place_ghost(spot: Dictionary = {}) -> void:
 	if _place_kind == Blocks.AIR or _place_ghost == null:
 		return
-	var spot := _place_spot()
+	if spot.is_empty():
+		spot = _place_spot()
 	_place_ok = bool(spot.get("ok", false)) and _can_afford(Blocks.station_cost(_place_kind))
 	_place_ghost.visible = not spot.is_empty()
 	if spot.is_empty():

@@ -70,7 +70,11 @@ var block_material: ShaderMaterial
 ## a short day makes a planet feel small and frantic, a long one makes it feel
 ## vast. Only planets WITH an atmosphere run a visible cycle; an airless rock
 ## has no sky to redden, so it just gets hard light and hard shadow.
-var day_length := 240.0
+## How long one whole turn of the clock takes, and how much of it is daylight.
+## Two thirds, because what anybody means by "the days are too short" is the
+## LIT part: an even split spends half of every world in the dark.
+const DAY_SHARE := 0.66
+var day_length := 600.0
 ## How far through the current day, 0..1. Advanced by main's environment update
 ## rather than by the planet, so it keeps ticking for planets you aren't on.
 var day_phase := 0.0
@@ -86,7 +90,24 @@ const MORNING_PHASE := 0.05
 ## world turning -- so asking it here keeps "is it dark" as one answer rather
 ## than a comparison rewritten at each call site.
 func is_night() -> bool:
-	return sin(day_phase * TAU) < 0.0
+	return sun_height() < 0.0
+
+
+## How high the sun is, -1 to 1, at the hour the clock stands at.
+##
+## Not simply sin(phase): the lit half of the circle is stretched to DAY_SHARE
+## of the clock and the dark half squeezed into what is left, so a day really
+## is longer than its night while sunrise, noon and sunset keep their shape.
+func sun_height() -> float:
+	return sin(sun_angle())
+
+
+## Where the sun is on its circle, in radians -- shared with whatever draws it,
+## so the sky and the clock cannot disagree about the hour.
+func sun_angle() -> float:
+	var t := fposmod(day_phase, 1.0)
+	var u := (t / DAY_SHARE) * 0.5 if t < DAY_SHARE 		else 0.5 + (t - DAY_SHARE) / (1.0 - DAY_SHARE) * 0.5
+	return u * TAU
 
 # --- built machines ----------------------------------------------------------
 # Machines that must be physically constructed. Only the CONTROLLER position is
@@ -564,7 +585,7 @@ func configure(cfg: Dictionary) -> void:
 	# 3 to 9 minutes per day, per planet.
 	var dr := RandomNumberGenerator.new()
 	dr.seed = _seed + 4242
-	day_length = dr.randf_range(180.0, 540.0)
+	day_length = dr.randf_range(420.0, 900.0)
 	day_phase = dr.randf()   # so planets aren't all sunrise at world start
 	surface_noise.seed = _seed
 	# Several rolling hills across the surface, regardless of planet size.
@@ -1266,7 +1287,7 @@ func spawn_spider_near(pos: Vector3, world: WorldManager, near: float, far: floa
 ## 0 in broad daylight, 1 in the dead of night. Airless worlds have no dusk to
 ## speak of, so their transition is much sharper -- the same rule the sky uses.
 func night_factor() -> float:
-	var height := sin(day_phase * TAU)
+	var height := sun_height()
 	var soft: float = 0.22 if has_atmosphere else 0.04
 	return 1.0 - clampf(smoothstep(-soft, soft, height), 0.0, 1.0)
 
@@ -2861,7 +2882,7 @@ func ambient_temp() -> float:
 	if has_atmosphere:
 		# Night is colder than noon, which is what makes a Heater worth building
 		# on an otherwise mild world.
-		base += lerpf(-12.0, 6.0, clampf(sin(day_phase * TAU) * 0.5 + 0.5, 0.0, 1.0))
+		base += lerpf(-12.0, 6.0, clampf(sun_height() * 0.5 + 0.5, 0.0, 1.0))
 	return base
 
 

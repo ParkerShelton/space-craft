@@ -125,16 +125,15 @@ func _build_visual() -> void:
 	# The station's own model, standing on the ground its footprint covers.
 	var fp := StationModels.footprint(kind)
 	_mi.mesh = StationModels.mesh_for(kind)
-	_mi.position = Vector3(0, -0.5, 0)   # model space has y 0 at the floor
-	# the station's ORIGIN is the cell center (set on spawn), so the mesh/collision
-	# sit at local zero -- this keeps it centered regardless of the orientation basis
-	_mi.position = Vector3.ZERO
+	# The station's ORIGIN is the centre of the cell it was put down in, so the
+	# model hangs half a block below it to stand on that cell's floor, and a
+	# tall station's box reaches up from there.
+	_mi.position = Vector3(0, -0.5, 0)
 	_mi.material_override = null   # the model carries its own material
 	var shape := BoxShape3D.new()
 	shape.size = Vector3(fp)
-	_col.position = Vector3(0, (float(fp.y) - 1.0) * 0.5, 0)
 	_col.shape = shape
-	_col.position = Vector3.ZERO
+	_col.position = Vector3(0, (float(fp.y) - 1.0) * 0.5, 0)
 
 
 # --- storage helpers ----------------------------------------------------------
