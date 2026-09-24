@@ -53,11 +53,19 @@ static func checklist(ship: Ship) -> Array:
 	out.append(Item.new("Door", not door_missing,
 		"missing -- one needed" if door_missing else "fitted",
 		"A Door is made at a Carpenter's Bench."))
-	# 3. Power. Without it nothing else in here does anything.
-	var has_battery := _has(ship, Blocks.BATTERY)
-	out.append(Item.new("Power cell", has_battery,
-		"fitted" if has_battery else "torn out",
-		"Salvage one from a wreck or an outpost, or build one at a Fabricator."))
+	# 3. Power. Without it nothing else in here does anything. Power is not a
+	# block you bolt in -- it is a battery you carry, charged somewhere else and
+	# dropped into the rack. Saying so here is the only place the game ever
+	# explains it, so it says it plainly.
+	var bay := power_bay(ship)
+	var held := battery_charge(bay)
+	out.append(Item.new("Power", bay != null and held > 0.0,
+		("no battery rack aboard" if bay == null
+			else ("charged" if held > 0.0 else "rack empty" if not _bay_has_battery(bay)
+				else "battery flat")),
+		("A Power Bay is built at a Shipworks and mounts inside the hull."
+			if bay == null
+			else "Charge a battery in a Generator, then drop it in the rack.")))
 	# 4. Air.
 	var has_ls := bool(st.get("life_support", false))
 	out.append(Item.new("Life support", has_ls,
@@ -111,3 +119,33 @@ static func status_lines(ship: Ship) -> Array:
 	out.append("Thrusters: %d" % int(st.get("thrusters", 0)))
 	out.append("Warp drive: %s" % ("fitted" if bool(st.get("warp_drive", false)) else "none"))
 	return out
+
+
+## The battery rack mounted in this ship, if it has one. Stations are children
+## of the ship they are mounted on, so this is simply a look at its own nodes.
+static func power_bay(ship: Ship) -> Station:
+	for c in ship.get_children():
+		var st := c as Station
+		if st != null and is_instance_valid(st) and st.kind == Blocks.POWER_BAY:
+			return st
+	return null
+
+
+## How much charge is sitting in the rack, across every battery in it.
+static func battery_charge(bay: Station) -> float:
+	if bay == null:
+		return 0.0
+	var total := 0.0
+	for slot in bay.storage:
+		if int(slot.get("id", Blocks.AIR)) == Blocks.BATTERY:
+			total += float((slot.get("props", {}) as Dictionary).get("charge", 0.0))
+	return total
+
+
+static func _bay_has_battery(bay: Station) -> bool:
+	if bay == null:
+		return false
+	for slot in bay.storage:
+		if int(slot.get("id", Blocks.AIR)) == Blocks.BATTERY:
+			return true
+	return false

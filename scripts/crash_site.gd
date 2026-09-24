@@ -25,6 +25,8 @@ const CABIN_FRONT := -3  # the bulkhead the console sits in
 const CABIN_BACK := 2    # the back wall of the cabin
 const H := 3             # shell roof; the cabin inside is two blocks tall
 const DOOR_AT := Vector3i(2, 1, 1)
+## Where the battery rack stands, on the deck at the back of the cabin.
+const POWER_BAY_AT := Vector3i(0, 1, CABIN_BACK - 1)
 
 ## Which piece of the airframe a cell belongs to. Everything but the nose can be
 ## torn off; only the cabin's own shell has to be airtight to fly.
@@ -43,6 +45,7 @@ static func build(world: WorldManager, pos: Vector3, up: Vector3, fwd: Vector3,
 	for v in plan:
 		ship.blocks[v] = int(plan[v])
 	_wreck(ship, plan, rng)
+	_fit_systems(ship, world, rng)
 	ship.rebuild()
 	# The seat is a model rather than blocks: a thing you sit in, not a cube.
 	# Block centre, standing ON the floor plate (its top is y = 1), facing the nose.
@@ -110,13 +113,9 @@ static func _plan() -> Dictionary:
 	for side2 in [-1, 1]:
 		out[Vector3i(side2 * 2, 2, TAIL)] = Blocks.METAL
 		out[Vector3i(side2, 2, TAIL)] = Blocks.METAL
-	# The works, along the back wall of the cabin.
-	out[Vector3i(-1, 1, CABIN_BACK - 1)] = Blocks.LIFE_SUPPORT
-	out[Vector3i(1, 1, CABIN_BACK - 1)] = Blocks.BATTERY
-	out[Vector3i(0, 1, CABIN_BACK - 1)] = Blocks.WIRE
-	# Thrusters on the tail.
-	out[Vector3i(-1, 1, TAIL)] = Blocks.THRUSTER
-	out[Vector3i(1, 1, TAIL)] = Blocks.THRUSTER
+	# Machinery is NOT in the plan. What she still has aboard is rolled per
+	# world in _fit_systems -- a wreck with both thrusters and no air, or air
+	# and nothing to power it, or now and then very little at all.
 	# A lamp, so the first thing you see is not the dark.
 	out[Vector3i(0, H, 0)] = Blocks.GLOW_LAMP
 	return out
@@ -143,8 +142,15 @@ static func cabin_shell(plan: Dictionary) -> Array:
 	var out: Array = []
 	for v in plan:
 		var s := section_of(v)
-		if s == S_CABIN or s == S_SPINE or s == S_BELLY:
-			out.append(v)
+		if s != S_CABIN and s != S_SPINE and s != S_BELLY:
+			continue
+		# Only the SHELL. The fittings standing inside the room are not what
+		# holds the air in, and counting them made the computer ask for metal
+		# plates to replace a thruster.
+		var id := int(plan[v])
+		if id != Blocks.METAL and id != Blocks.GLASS and not Blocks.is_door(id):
+			continue
+		out.append(v)
 	return out
 
 
@@ -201,15 +207,6 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 	if rng.randf() < 0.6:
 		missing[DOOR_AT] = int(plan[DOOR_AT])
 		missing[DOOR_AT + Vector3i(0, 1, 0)] = int(plan[DOOR_AT + Vector3i(0, 1, 0)])
-	# Systems: the battery is always dead -- that is what put her down -- and one
-	# or two of the rest went with it.
-	var systems := [Vector3i(-1, 1, CABIN_BACK - 1), Vector3i(1, 1, CABIN_BACK - 1),
-		Vector3i(0, 1, CABIN_BACK - 1), Vector3i(-1, 1, TAIL), Vector3i(1, 1, TAIL)]
-	systems.shuffle()
-	for i3 in mini(rng.randi_range(1, 3), systems.size()):
-		var sv: Vector3i = systems[i3]
-		if plan.has(sv):
-			missing[sv] = int(plan[sv])
 	# The nose comes through whatever else does not.
 	for v3 in missing.keys():
 		if section_of(v3) == S_NOSE:
@@ -263,3 +260,32 @@ static func _passable(ship: Ship, v: Vector3i) -> bool:
 	if not ship.blocks.has(v):
 		return true
 	return Blocks.is_door(int(ship.blocks[v]))
+
+
+## What she still has aboard, rolled one fitting at a time so no two worlds open
+## on the same shopping list. Nothing is guaranteed: a wreck can keep both
+## thrusters and lose its air, keep its air and have nothing to power it, or
+## come down with hardly anything left in her at all.
+##
+## Power is a POWER BAY with a battery in it rather than a battery bolted to the
+## wall, because that is how power actually works in this game: a battery is a
+## thing you carry. You fill one at a Generator, drop it in the bay, and the bay
+## feeds the ship -- so a spare in a chest is a ship that never goes dark.
+static func _fit_systems(ship: Ship, world: WorldManager, rng: RandomNumberGenerator) -> void:
+	if rng.randf() < 0.55:
+		ship.blocks[Vector3i(-1, 1, CABIN_BACK - 1)] = Blocks.LIFE_SUPPORT
+	for side in [-1, 1]:
+		if rng.randf() < 0.45:
+			ship.blocks[Vector3i(side, 1, TAIL)] = Blocks.THRUSTER
+	# The bay itself usually survives -- it is a rack bolted to the deck. What is
+	# IN it is the question, and a battery that came through a crash is flat.
+	if rng.randf() < 0.75:
+		var bay := world.spawn_station_on_ship(Blocks.POWER_BAY, ship, POWER_BAY_AT)
+		if bay != null and rng.randf() < 0.5:
+			var charge := 0.0 if rng.randf() < 0.75 else rng.randf_range(20.0, 90.0)
+			for slot in bay.storage:
+				if int(slot.get("id", Blocks.AIR)) == Blocks.AIR:
+					slot["id"] = Blocks.BATTERY
+					slot["count"] = 1
+					slot["props"] = {"charge": charge}
+					break

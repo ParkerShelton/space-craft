@@ -90,10 +90,16 @@ func build_props() -> void:
 	# cube. The block itself stays where it is: it is what the hull is built
 	# from and what your crosshair finds.
 	for v in blocks:
-		if int(blocks[v]) != Blocks.COCKPIT:
+		var bid := int(blocks[v])
+		var mesh: ArrayMesh = null
+		if bid == Blocks.COCKPIT:
+			mesh = _console_mesh()
+		elif FITTINGS.has(bid):
+			mesh = _fitting_mesh(bid)
+		if mesh == null:
 			continue
 		var con := MeshInstance3D.new()
-		con.mesh = _console_mesh()
+		con.mesh = mesh
 		con.position = Vector3(v as Vector3i)
 		con.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_props.add_child(con)
@@ -104,6 +110,64 @@ func build_props() -> void:
 	seat.position = seat_at
 	seat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_props.add_child(seat)
+
+
+## Blocks that are built as MODELS rather than drawn as cubes. They still sit
+## in `blocks` -- they are part of the hull and of what the ship can do -- they
+## are just not boxes to look at.
+const FITTINGS := {Blocks.LIFE_SUPPORT: true, Blocks.THRUSTER: true}
+
+
+## A fitting's model, in its own cell, oriented to the ship: -Z is the nose.
+static func _fitting_mesh(id: int) -> ArrayMesh:
+	const CASE := Color(0.30, 0.33, 0.36)
+	const DEEP := Color(0.17, 0.19, 0.22)
+	const PIPE := Color(0.46, 0.49, 0.54)
+	const AIR_G := Color(0.40, 0.90, 0.75)
+	const BURN := Color(1.00, 0.55, 0.18)
+	var body: Array = []
+	var lit: Array = []
+	if id == Blocks.LIFE_SUPPORT:
+		# A scrubber: a cabinet with a filter drum on the front, pipework up the
+		# side and an intake grille you can see is breathing.
+		body = [
+			[Vector3(0.5, 0.06, 0.5), Vector3(0.86, 0.12, 0.86), DEEP],    # plinth
+			[Vector3(0.5, 0.52, 0.5), Vector3(0.80, 0.82, 0.76), CASE],    # cabinet
+			[Vector3(0.5, 0.96, 0.5), Vector3(0.88, 0.10, 0.84), DEEP],    # cap
+			[Vector3(0.5, 0.60, 0.10), Vector3(0.52, 0.52, 0.12), DEEP],   # drum recess
+			[Vector3(0.5, 0.60, 0.06), Vector3(0.44, 0.44, 0.06), PIPE],   # filter drum
+			[Vector3(0.16, 0.52, 0.12), Vector3(0.10, 0.74, 0.10), PIPE],  # riser
+			[Vector3(0.84, 0.52, 0.12), Vector3(0.10, 0.74, 0.10), PIPE],
+			[Vector3(0.5, 0.90, 0.16), Vector3(0.60, 0.08, 0.10), PIPE],   # header
+		]
+		for i in 3:
+			body.append([Vector3(0.5, 0.26 + float(i) * 0.06, 0.09),
+				Vector3(0.56, 0.03, 0.10), DEEP])                          # intake grille
+		lit = [
+			[Vector3(0.5, 0.60, 0.028), Vector3(0.26, 0.26, 0.02), AIR_G],
+			[Vector3(0.72, 0.86, 0.09), Vector3(0.07, 0.05, 0.03), AIR_G],
+		]
+	else:
+		# A thruster: a mounting ring in the cell and a bell stepping out of the
+		# tail behind it (+Z is aft), with the throat glowing.
+		body = [
+			[Vector3(0.5, 0.5, 0.30), Vector3(0.92, 0.92, 0.60), CASE],    # mount block
+			[Vector3(0.5, 0.5, 0.64), Vector3(0.74, 0.74, 0.12), DEEP],    # collar
+			[Vector3(0.5, 0.5, 0.78), Vector3(0.60, 0.60, 0.18), PIPE],    # bell, first step
+			[Vector3(0.5, 0.5, 0.94), Vector3(0.76, 0.76, 0.16), PIPE],    # bell, flare
+			[Vector3(0.5, 0.5, 1.06), Vector3(0.90, 0.90, 0.10), DEEP],    # lip
+		]
+		for sx in [-1.0, 1.0]:
+			body.append([Vector3(0.5 + sx * 0.40, 0.5, 0.46),
+				Vector3(0.10, 0.56, 0.30), PIPE])                          # feed lines
+		lit = [
+			[Vector3(0.5, 0.5, 1.02), Vector3(0.46, 0.46, 0.03), BURN],    # throat
+			[Vector3(0.5, 0.86, 0.22), Vector3(0.10, 0.06, 0.04), BURN],   # status lamp
+		]
+	var m := ArrayMesh.new()
+	_add_boxes(m, body, false)
+	_add_boxes(m, lit, true)
+	return m
 
 
 ## The ship's controls: a hooded screen leaning out of the panel with a keyboard
@@ -712,6 +776,11 @@ func rebuild() -> void:
 		var shape := _shape_of(v, id)
 		if not shape.is_empty():
 			_emit_shape(v, id, shape, verts, normals, colors)
+			continue
+		# Machinery is a model, built in build_props, not a painted cube. Its
+		# cell is still OCCUPIED -- the hull round it draws no faces toward it,
+		# so leaving it out here makes no hole.
+		if FITTINGS.has(id):
 			continue
 		if id == Blocks.DOOR_OPEN:
 			continue  # open doorways render as an empty gap
