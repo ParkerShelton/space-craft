@@ -250,55 +250,76 @@ static func material(ghost := false) -> StandardMaterial3D:
 
 ## The battery cradle, and what is sitting in it.
 ##
-## One cell wide: a plinth, two jaws either side of a slot, and contacts at the
-## back. With a battery in it the slot is FULL and a bar runs up the side of the
-## cell showing what is left in it -- so you can tell across the room whether
-## the ship has power, and how much, without opening anything.
-static func power_bay_boxes(has_battery: bool, charge: float) -> Array:
-	const CASE := Color(0.30, 0.33, 0.37)
+## A round pad one cell across with four arms standing up round its edge, which
+## close over the battery when one is seated and stand open when it is not. The
+## contact hub in the middle is exposed either way, so an empty cradle reads as
+## a thing waiting for something rather than as a broken thing.
+const BATT_Y0 := 0.20     # where the battery sits on the hub
+const BATT_Y1 := 0.76
+const G0 := 0.30          # the gauge's track, up the battery's face
+const G1 := 0.66
+const GX := -0.13         # off to one side, so the battery still reads as a battery
+const GZ := -0.23
+
+
+static func power_bay_boxes(has_battery: bool, _charge: float) -> Array:
+	const CASE := Color(0.31, 0.34, 0.38)
 	const DEEP := Color(0.15, 0.17, 0.20)
-	const CONT := Color(0.72, 0.60, 0.28)   # contacts
+	const CONT := Color(0.74, 0.62, 0.30)   # contacts
 	const CELL := Color(0.34, 0.40, 0.30)   # the battery's own casing
-	const TRACK := Color(0.10, 0.11, 0.13)  # the empty part of the gauge
-	var out: Array = [
-		[Vector3(0, 0.08, 0), Vector3(0.92, 0.16, 0.86), DEEP],     # plinth
-		[Vector3(-0.37, 0.46, 0), Vector3(0.18, 0.60, 0.80), CASE],  # left jaw
-		[Vector3(0.37, 0.46, 0), Vector3(0.18, 0.60, 0.80), CASE],   # right jaw
-		[Vector3(0, 0.46, 0.34), Vector3(0.60, 0.60, 0.14), CASE],   # back plate
-		[Vector3(0, 0.82, 0), Vector3(0.92, 0.10, 0.86), DEEP],      # yoke over the top
-		[Vector3(0, 0.30, 0.26), Vector3(0.30, 0.06, 0.06), CONT],   # contact bar
-	]
+	const TRACK := Color(0.09, 0.10, 0.12)  # the empty part of the gauge
+	var out: Array = []
+	out.append_array(_disc(0.05, 0.10, 0.46, DEEP))     # foot
+	out.append_array(_disc(0.13, 0.08, 0.42, CASE))     # pad
+	out.append_array(_disc(0.19, 0.06, 0.24, DEEP))     # hub the battery stands on
+	out.append([Vector3(0, 0.22, 0), Vector3(0.20, 0.04, 0.20), CONT])  # contact plate
+	# Four arms round the rim. Each is a post with a finger at the top that
+	# reaches in over the battery -- open when there is nothing to hold, closed
+	# over it when there is.
+	var reach: float = 0.06 if has_battery else 0.0
+	var lean: float = 0.0 if has_battery else 0.05
+	for dir in [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)]:
+		var d: Vector3 = dir
+		var across := Vector3(absf(d.z), 0, absf(d.x))   # the arm's width axis
+		var post: Vector3 = d * (0.34 + lean)
+		out.append([Vector3(post.x, 0.42, post.z),
+			Vector3(0.11 + across.x * 0.11, 0.52, 0.11 + across.z * 0.11), CASE])
+		var tip: Vector3 = d * (0.34 + lean - reach)
+		out.append([Vector3(tip.x, 0.70, tip.z),
+			Vector3(0.13 + across.x * 0.09, 0.09, 0.13 + across.z * 0.09), DEEP])
 	if not has_battery:
-		# Empty: you can see straight into the slot, and the contacts with it.
-		out.append([Vector3(0, 0.20, -0.02), Vector3(0.56, 0.06, 0.66), DEEP])
-		out.append([Vector3(0, 0.56, 0.24), Vector3(0.10, 0.10, 0.04), CONT])
 		return out
-	# The battery, seated: a block with a cap, and a gauge down its face.
-	var f := clampf(charge, 0.0, 1.0)
-	out.append([Vector3(0, 0.48, -0.02), Vector3(0.52, 0.58, 0.62), CELL])
-	out.append([Vector3(0, 0.79, -0.02), Vector3(0.44, 0.06, 0.52), DEEP])
-	out.append([Vector3(0, 0.84, 0.10), Vector3(0.14, 0.06, 0.12), CONT])   # terminal
-	# The gauge: a dark track the full height of the cell with the charge drawn
-	# up it. It is a box of its own rather than a stripe on the casing so that
-	# an empty battery reads as empty rather than as unlit.
-	out.append([Vector3(GX, (G0 + G1) * 0.5, -0.34), Vector3(0.18, G1 - G0, 0.05), TRACK])
+	# The battery, seated: a block on the hub with a cap, a terminal and a gauge
+	# down its face.
+	var cy: float = (BATT_Y0 + BATT_Y1) * 0.5
+	out.append([Vector3(0, cy, 0), Vector3(0.44, BATT_Y1 - BATT_Y0, 0.44), CELL])
+	out.append([Vector3(0, BATT_Y1 - 0.03, 0), Vector3(0.38, 0.06, 0.38), DEEP])
+	out.append([Vector3(0, BATT_Y1 + 0.03, 0.08), Vector3(0.12, 0.05, 0.10), CONT])
+	out.append([Vector3(GX, (G0 + G1) * 0.5, GZ), Vector3(0.16, G1 - G0, 0.03), TRACK])
 	# A label plate on the other side of the face, so the gauge is plainly a
 	# gauge ON something rather than the whole front of it.
-	out.append([Vector3(0.11, 0.48, -0.34), Vector3(0.20, 0.34, 0.04), DEEP])
+	out.append([Vector3(0.10, (G0 + G1) * 0.5, GZ), Vector3(0.16, 0.26, 0.03), DEEP])
 	return out
 
 
-## Where the gauge is drawn on a seated battery, shared by the casing (which
-## draws the empty track) and the lit surface (which draws the charge in it).
-const G0 := 0.26
-const G1 := 0.70
-const GX := -0.15   # off to one side, so the battery still reads as a battery
+## A circle in axis-aligned boxes: bands across Z, each as wide as the chord at
+## that depth. Five is enough to read as round at a block's scale, and it keeps
+## to the same flat-box vocabulary as everything else in the game.
+static func _disc(cy: float, h: float, r: float, col: Color) -> Array:
+	var out: Array = []
+	const BANDS := 5
+	for i in BANDS:
+		var z0: float = -r + 2.0 * r * float(i) / float(BANDS)
+		var z1: float = -r + 2.0 * r * float(i + 1) / float(BANDS)
+		var zm: float = (z0 + z1) * 0.5
+		var half: float = sqrt(maxf(r * r - zm * zm, 0.0))
+		out.append([Vector3(0, cy, zm), Vector3(half * 2.0, h, z1 - z0), col])
+	return out
 
 
-## The part of the cradle that is its own light: the charge in the gauge, and
-## the contact lamp when there is nothing seated. Unshaded, so it reads the
-## same in a dark cabin as it does outside in the sun -- an indicator that goes
-## dim when the room does is not an indicator.
+## The part of the cradle that is its own light: the charge drawn in the gauge.
+## Unshaded, so it reads the same in a dark cabin as it does outside in the sun
+## -- an indicator that goes dim when the room does is not an indicator.
 static func power_bay_lit(has_battery: bool, charge: float) -> Array:
 	if not has_battery:
 		return []
@@ -306,7 +327,7 @@ static func power_bay_lit(has_battery: bool, charge: float) -> Array:
 	if f <= 0.001:
 		return []
 	var h: float = (G1 - G0) * f
-	return [[Vector3(GX, G0 + h * 0.5, -0.355), Vector3(0.14, h, 0.04), gauge_colour(f)]]
+	return [[Vector3(GX, G0 + h * 0.5, GZ - 0.015), Vector3(0.12, h, 0.03), gauge_colour(f)]]
 
 
 ## Green when it is full, amber in the middle, red when it is nearly out -- the

@@ -1751,6 +1751,10 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	player.velocity = Vector3.ZERO
 	var nose: Vector3 = -ship.global_transform.basis.z
 	player.look_at(player.global_position + nose, up)
+	# ...with your eyes on the floor. The head comes up on its own over the next
+	# few seconds, under the fade, so the first thing a world does is a slow
+	# look up at the inside of the ship you came down in.
+	player.begin_wake(5.0, -1.25)
 
 
 ## The mark a ship leaves when it arrives badly: a gouge dug out behind it
@@ -1878,11 +1882,12 @@ func _wake_from_black() -> void:
 	layer.add_child(black)
 	var tw := create_tween()
 	# Held a moment, then up slowly, and one blink on the way -- eyes opening,
-	# not a fade-in on a title card.
-	tw.tween_interval(0.7)
-	tw.tween_property(black, "color:a", 0.35, 1.1)
-	tw.tween_property(black, "color:a", 0.75, 0.35)
-	tw.tween_property(black, "color:a", 0.0, 1.6)
+	# not a fade-in on a title card. It runs a little shorter than the head
+	# lift, so the last of the tilt happens with the cabin already in view.
+	tw.tween_interval(0.9)
+	tw.tween_property(black, "color:a", 0.45, 1.3)
+	tw.tween_property(black, "color:a", 0.8, 0.4)
+	tw.tween_property(black, "color:a", 0.0, 1.9)
 	tw.tween_callback(layer.queue_free)
 
 

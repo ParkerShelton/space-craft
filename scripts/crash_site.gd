@@ -277,15 +277,21 @@ static func _fit_systems(ship: Ship, world: WorldManager, rng: RandomNumberGener
 	for side in [-1, 1]:
 		if rng.randf() < 0.45:
 			ship.blocks[Vector3i(side, 1, TAIL)] = Blocks.THRUSTER
-	# The bay itself usually survives -- it is a rack bolted to the deck. What is
-	# IN it is the question, and a battery that came through a crash is flat.
-	if rng.randf() < 0.75:
-		var bay := world.spawn_station_on_ship(Blocks.POWER_BAY, ship, POWER_BAY_AT)
-		if bay != null and rng.randf() < 0.5:
-			var charge := 0.0 if rng.randf() < 0.75 else rng.randf_range(20.0, 90.0)
-			for slot in bay.storage:
-				if int(slot.get("id", Blocks.AIR)) == Blocks.AIR:
-					slot["id"] = Blocks.BATTERY
-					slot["count"] = 1
-					slot["props"] = {"charge": charge}
-					break
+	# The cradle and a battery in it, always. Leaving without one meant building
+	# a Generator before you could build anything else, and the first hour of a
+	# world should not be a list of prerequisites. What VARIES is how much is
+	# left in it: enough to go, enough to get started, or flat -- and a flat one
+	# is what sends you looking for a Generator, which is the lesson.
+	var bay := world.spawn_station_on_ship(Blocks.POWER_BAY, ship, POWER_BAY_AT)
+	if bay != null:
+		var roll := rng.randf()
+		var frac: float = 0.0
+		if roll > 0.2:
+			frac = rng.randf_range(0.12, 0.85)
+		for slot in bay.storage:
+			if int(slot.get("id", Blocks.AIR)) == Blocks.AIR:
+				slot["id"] = Blocks.BATTERY
+				slot["count"] = 1
+				slot["props"] = {"charge": frac * Station.BATTERY_CAP}
+				break
+		bay._refresh_bay()

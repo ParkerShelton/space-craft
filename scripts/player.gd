@@ -318,6 +318,12 @@ var _eva_ship: Ship = null        # ship we're tethered to
 var _eva_anchor_local := Vector3.ZERO  # tether attach point in ship-local space
 var _tether: MeshInstance3D
 var _iv_y := 0.0                  # interior vertical velocity (ship-local)
+## Coming round. You open your eyes looking at the floor and your head comes up
+## on its own; look input is ignored until it has, because you are not in
+## control yet and that is the whole point of the moment.
+var _wake_t := 0.0
+var _wake_len := 0.0
+var _wake_from := 0.0
 var _interior_floor := false
 var _body_shape: CollisionShape3D
 ## Where a bed has been claimed, and on which planet. Empty planet name means
@@ -2600,6 +2606,16 @@ func _ground_ahead(step: Vector3, up: Vector3) -> bool:
 
 func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	_align_up(up, delta)
+
+	if _wake_t > 0.0:
+		_wake_t = maxf(_wake_t - delta, 0.0)
+		# Eased out: it lifts quickly at first and settles level, the way a head
+		# does, rather than sweeping up at a constant rate like a camera rig.
+		var k: float = 1.0 - _wake_t / _wake_len
+		var inv: float = 1.0 - k
+		_pitch = _wake_from * (inv * inv * inv)
+		_camera.rotation.x = _pitch
+		_look = Vector2.ZERO
 
 	# Yaw around local up; pitch the camera.
 	if _look.x != 0.0:
@@ -7323,3 +7339,14 @@ func _take_one_from_active() -> void:
 			"src": "", "mat": {}}
 	else:
 		s2["count"] = n
+
+
+## Start the coming-round tilt: eyes on the floor, head lifting to level over
+## `seconds`. Called when a world opens in the wreck it began in.
+func begin_wake(seconds: float, from_pitch: float) -> void:
+	_wake_len = maxf(seconds, 0.01)
+	_wake_t = _wake_len
+	_wake_from = from_pitch
+	_pitch = from_pitch
+	if _camera != null:
+		_camera.rotation.x = _pitch
