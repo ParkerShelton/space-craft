@@ -458,7 +458,8 @@ func save_game() -> bool:
 		if is_instance_valid(s) and not s.blocks.is_empty():
 			ship_index[s] = data["ships"].size()
 			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform,
-				"meta": s.block_meta, "air": s.air, "charge": s.charge})
+				"meta": s.block_meta, "air": s.air, "charge": s.charge,
+				"wreck": s.wreck_missing, "log": s.ship_log})
 	for st in _stations:
 		if not is_instance_valid(st):
 			continue
@@ -547,6 +548,8 @@ func load_game() -> bool:
 		# their owner the moment the world loads.
 		ship.air = float(sd.get("air", 1.0))
 		ship.charge = float(sd.get("charge", 1.0))
+		ship.wreck_missing = sd.get("wreck", {})
+		ship.ship_log = sd.get("log", [])
 		ship.rebuild()
 		_ships.append(ship)
 

@@ -1715,6 +1715,68 @@ func _exit_tree() -> void:
 		print("[server] saved on shutdown")
 
 
+## Set the wreck down beside the player, and put the player on their feet
+## outside its door. Which parts are missing is rolled from the world seed, so
+## the same world always crashes the same way.
+func _place_crash_site(ground: Planet, player: Player) -> void:
+	var g := _world.gravity_at(player.global_position)
+	var up: Vector3 = (-g).normalized() if g.length() > 0.01 else Vector3.UP
+	var fwd := up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
+	var space := get_world_3d().direct_space_state
+	var at: Vector3 = player.global_position + fwd * 7.0
+	var floor_at = _drop_to_ground(space, at, up)
+	if floor_at == null:
+		at = player.global_position
+	else:
+		at = (floor_at as Vector3) + up * float(CrashSite.H)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _world.world_seed ^ 0x57A1
+	var ship := CrashSite.build(_world, at, up, fwd, rng)
+	if ship == null:
+		return
+	ship.ship_log.append("Came down hard. Ship's log resumes.")
+	# You wake in the seat, facing the controls: the floor of the cabin is the
+	# top of the hull's bottom plate, and the player stands on it.
+	player.global_position = ship.to_global(Vector3(0, 1.9, -CrashSite.L + 2.6))
+	var nose: Vector3 = -ship.global_transform.basis.z
+	var flat := nose - up * nose.dot(up)
+	if flat.length() > 0.01:
+		var z := -flat.normalized()
+		var x := up.cross(z).normalized()
+		player.global_transform.basis = Basis(x, up, x.cross(up).normalized()).orthonormalized()
+	player.velocity = Vector3.ZERO
+
+
+## Coming to after the crash. Black over everything, lifting slowly -- the one
+## bit of theatre this game has, and it costs a rectangle and a tween.
+func _wake_from_black() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 20
+	add_child(layer)
+	var black := ColorRect.new()
+	black.color = Color(0, 0, 0, 1)
+	black.set_anchors_preset(Control.PRESET_FULL_RECT)
+	black.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(black)
+	var tw := create_tween()
+	# Held a moment, then up slowly, and one blink on the way -- eyes opening,
+	# not a fade-in on a title card.
+	tw.tween_interval(0.7)
+	tw.tween_property(black, "color:a", 0.35, 1.1)
+	tw.tween_property(black, "color:a", 0.75, 0.35)
+	tw.tween_property(black, "color:a", 0.0, 1.6)
+	tw.tween_callback(layer.queue_free)
+
+
+## Where the ground is under a point, or null if there is none within reach.
+func _drop_to_ground(space: PhysicsDirectSpaceState3D, at: Vector3, up: Vector3):
+	var q := PhysicsRayQueryParameters3D.create(at + up * 40.0, at - up * 60.0, 1)
+	var hit := space.intersect_ray(q)
+	if hit.is_empty():
+		return null
+	return hit["position"]
+
+
 func _rand_seed() -> int:
 	var r := RandomNumberGenerator.new()
 	r.randomize()
@@ -1821,7 +1883,16 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	ground.set_fast_loading(true)
 	await _wait_for_world_ready(ground, player)
 	ground.set_fast_loading(false)
-	_hide_loading_screen()
+	# A new world opens the way the game means to be played: in the wreck you
+	# arrived in, with a computer in the nose that knows what is wrong with it.
+	# Loaded worlds already have theirs (or have taken it apart).
+	if not load_existing and mode != "joined":
+		_place_crash_site(ground, player)
+		_hide_loading_screen()
+		# ...and you come round: black, then the inside of your own ship.
+		_wake_from_black()
+	else:
+		_hide_loading_screen()
 	# Combat testing: don't leave the guaranteed home-planet enemy (see
 	# force_hostile_enemy) to the normal random wildlife spawner -- that only
 	# guarantees it EXISTS, not that you'll actually see it soon.

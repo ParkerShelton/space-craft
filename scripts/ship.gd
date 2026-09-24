@@ -15,6 +15,13 @@ var _sealed_cells := {}   # the enclosed interior air cells (local voxel -> true
 var _bbox_min := Vector3i.ZERO  # cached block bounding box (local voxels)
 var _bbox_max := Vector3i.ZERO
 var flying := false
+## If this ship is the wreck a world starts in: the cells it woke up missing,
+## cell -> the block that belongs there. Emptied as they are put back, which is
+## what the ship's computer reads its checklist from (see ShipComputer).
+var wreck_missing := {}
+## What has happened to this ship, in the order it happened. Shown by the
+## computer once she flies.
+var ship_log: Array = []
 var world: WorldManager  # set on spawn; used for gravity while coasting
 var in_gravity := false  # true while in launch/landing-assist mode (HUD)
 var landed := false      # resting on the ground (HUD)
@@ -116,6 +123,13 @@ func set_block(v: Vector3i, id: int, meta: Dictionary = {}) -> void:
 			block_meta[v] = meta   # crafted block carries its material stats
 		else:
 			block_meta.erase(v)
+		# Putting something back where the crash tore something out: a hole in
+		# the shell takes any solid plate, but a system has to be the system.
+		if wreck_missing.has(v):
+			var want := int(wreck_missing[v])
+			var structural: bool = want == Blocks.METAL or want == Blocks.GLASS
+			if id == want or (structural and Blocks.is_placeable_block(Blocks.bottom_of(id))):
+				wreck_missing.erase(v)
 	if blocks.is_empty():
 		queue_free()
 		return

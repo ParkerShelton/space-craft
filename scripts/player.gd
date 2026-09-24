@@ -911,6 +911,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				pass
 			elif _try_bucket(_raycast_voxel()):
 				pass
+			elif _try_ship_computer():
+				pass
 			elif _try_assemble_machine():
 				pass
 			elif _try_toggle_door():
@@ -925,7 +927,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_close_ring()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			if _place_kind != Blocks.AIR:
+			if _ship_panel != null:
+				_close_ship_computer()
+			elif _place_kind != Blocks.AIR:
 				_cancel_placing()
 				_toast("Put it away")
 			elif in_bed:
@@ -1424,6 +1428,239 @@ func _do_place_station() -> void:
 		_cancel_placing()
 
 
+# --- the ship's computer ---------------------------------------------------------
+#
+# Right-click the cockpit. While the ship is wrecked this is the game's only
+# tutorial: what is broken, what each repair is made of, and where that comes
+# from -- ticked off as you do it. Once she flies it turns into what a ship's
+# computer is for: how she is doing, where you have been, and where you can go.
+
+var _ship_panel: Control
+var _ship_panel_ship: Ship
+var _ship_panel_t := 0.0
+
+
+## Right-clicking the nose of a ship you are not flying.
+func _try_ship_computer() -> bool:
+	if piloting:
+		return false
+	var tgt := _raycast_voxel()
+	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "ship":
+		return false
+	if Blocks.bottom_of(int(tgt.get("id", Blocks.AIR))) != Blocks.COCKPIT:
+		return false
+	_open_ship_computer(tgt["obj"] as Ship)
+	return true
+
+
+func _open_ship_computer(ship: Ship) -> void:
+	if ship == null or not is_instance_valid(ship):
+		return
+	_close_ship_computer()
+	_ship_panel_ship = ship
+	_ship_panel = Panel.new()
+	_ship_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_ship_panel.custom_minimum_size = Vector2(560, 470)
+	_ship_panel.size = _ship_panel.custom_minimum_size
+	_ship_panel.position = -_ship_panel.size * 0.5
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.07, 0.09, 0.97)
+	sb.border_color = Color(0.3, 0.7, 0.8, 0.9)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(8)
+	_ship_panel.add_theme_stylebox_override("panel", sb)
+	_ui_layer.add_child(_ship_panel)
+	menu_open = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_refresh_ship_computer()
+	_fit_panel(_ship_panel)
+
+
+func _close_ship_computer() -> void:
+	if _ship_panel != null:
+		_ship_panel.queue_free()
+		_ship_panel = null
+	_ship_panel_ship = null
+	menu_open = false
+	if not (inv_open or book_open or _station_open != null):
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## Redrawn rather than updated: it is a dozen labels, and a screen that is
+## rebuilt cannot disagree with the ship it is describing.
+func _refresh_ship_computer() -> void:
+	if _ship_panel == null or _ship_panel_ship == null or not is_instance_valid(_ship_panel_ship):
+		_close_ship_computer()
+		return
+	for c in _ship_panel.get_children():
+		c.queue_free()
+	var ship := _ship_panel_ship
+	var flies := ShipComputer.flightworthy(ship)
+	var vb := VBoxContainer.new()
+	vb.position = Vector2(22, 18)
+	vb.custom_minimum_size = Vector2(516, 0)
+	vb.add_theme_constant_override("separation", 8)
+	_ship_panel.add_child(vb)
+	var title := Label.new()
+	title.text = "SHIP'S COMPUTER"
+	title.add_theme_font_size_override("font_size", 22)
+	title.modulate = Color(0.55, 0.9, 1.0)
+	vb.add_child(title)
+	var sub := Label.new()
+	sub.text = "systems check" if not flies else "all systems nominal"
+	sub.add_theme_font_size_override("font_size", 14)
+	sub.modulate = Color(1, 1, 1, 0.55)
+	vb.add_child(sub)
+	vb.add_child(_gap(6))
+	if not flies:
+		_draw_repair_screen(vb, ship)
+	else:
+		_draw_flight_screen(vb, ship)
+	var close := Button.new()
+	close.text = "Close"
+	close.custom_minimum_size = Vector2(120, 34)
+	close.mouse_entered.connect(func(): Audio.ui("ui_hover"))
+	close.pressed.connect(func(): Audio.ui("ui_back"))
+	close.pressed.connect(_close_ship_computer)
+	vb.add_child(_gap(4))
+	vb.add_child(close)
+
+
+func _gap(h: int) -> Control:
+	var c := Control.new()
+	c.custom_minimum_size = Vector2(0, h)
+	return c
+
+
+## The checklist, and under it the one thing worth doing next.
+func _draw_repair_screen(vb: VBoxContainer, ship: Ship) -> void:
+	for it in ShipComputer.checklist(ship):
+		var item: ShipComputer.Item = it
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		vb.add_child(row)
+		var tick := Label.new()
+		tick.text = "✓" if item.done else "✗"
+		tick.custom_minimum_size = Vector2(22, 0)
+		tick.add_theme_font_size_override("font_size", 18)
+		tick.modulate = Color(0.45, 0.95, 0.5) if item.done else Color(1.0, 0.45, 0.42)
+		row.add_child(tick)
+		var nm := Label.new()
+		nm.text = item.name
+		nm.custom_minimum_size = Vector2(180, 0)
+		nm.add_theme_font_size_override("font_size", 17)
+		nm.modulate = Color(1, 1, 1, 0.9) if item.done else Color(1, 1, 1)
+		row.add_child(nm)
+		var det := Label.new()
+		det.text = item.detail
+		det.add_theme_font_size_override("font_size", 15)
+		det.modulate = Color(0.55, 0.9, 1.0) if item.done else Color(1, 0.8, 0.6)
+		row.add_child(det)
+	vb.add_child(_gap(8))
+	var next := Label.new()
+	next.text = ShipComputer.next_step(ship)
+	next.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	next.custom_minimum_size = Vector2(500, 0)
+	next.add_theme_font_size_override("font_size", 15)
+	next.modulate = Color(0.75, 0.95, 1.0)
+	vb.add_child(next)
+
+
+## Once she flies: how she is doing, where you have been, and where you can go.
+func _draw_flight_screen(vb: VBoxContainer, ship: Ship) -> void:
+	for line in ShipComputer.status_lines(ship):
+		var l := Label.new()
+		l.text = str(line)
+		l.add_theme_font_size_override("font_size", 16)
+		vb.add_child(l)
+	vb.add_child(_gap(6))
+	# Where you could go. Nearby planets always; everything else once there is
+	# a warp drive aboard to reach it with.
+	var head := Label.new()
+	head.text = "NEARBY"
+	head.add_theme_font_size_override("font_size", 14)
+	head.modulate = Color(0.55, 0.9, 1.0)
+	vb.add_child(head)
+	if world != null:
+		var here := ship.global_position
+		var rows: Array = []
+		for p in world.planets:
+			rows.append([(p as Planet).planet_name, here.distance_to((p as Planet).global_position)])
+		rows.sort_custom(func(a, b): return float(a[1]) < float(b[1]))
+		for i in mini(rows.size(), 5):
+			var l2 := Label.new()
+			l2.text = "  %s   %.1f km" % [str(rows[i][0]), float(rows[i][1]) / 1000.0]
+			l2.add_theme_font_size_override("font_size", 15)
+			l2.modulate = Color(1, 1, 1, 0.85)
+			vb.add_child(l2)
+	var st: Dictionary = ship.get_status()
+	if bool(st.get("warp_drive", false)):
+		var b := Button.new()
+		b.text = "Star map"
+		b.custom_minimum_size = Vector2(160, 32)
+		b.mouse_entered.connect(func(): Audio.ui("ui_hover"))
+		b.pressed.connect(func():
+			Audio.ui("ui_click")
+			_close_ship_computer()
+			_try_open_starmap())
+		vb.add_child(b)
+	else:
+		var note := Label.new()
+		note.text = "A warp drive would put the other systems in reach."
+		note.add_theme_font_size_override("font_size", 14)
+		note.modulate = Color(1, 1, 1, 0.5)
+		vb.add_child(note)
+	if not ship.ship_log.is_empty():
+		vb.add_child(_gap(6))
+		var lh := Label.new()
+		lh.text = "LOG"
+		lh.add_theme_font_size_override("font_size", 14)
+		lh.modulate = Color(0.55, 0.9, 1.0)
+		vb.add_child(lh)
+		var start: int = maxi(ship.ship_log.size() - 4, 0)
+		for i in range(start, ship.ship_log.size()):
+			var le := Label.new()
+			le.text = "  " + str(ship.ship_log[i])
+			le.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			le.custom_minimum_size = Vector2(500, 0)
+			le.add_theme_font_size_override("font_size", 14)
+			le.modulate = Color(1, 1, 1, 0.65)
+			vb.add_child(le)
+
+
+## Watch the wreck being put right: each line that goes green is worth saying
+## out loud, and the moment she will fly is worth more than that.
+func _watch_repairs(delta: float) -> void:
+	if world == null:
+		return
+	_ship_panel_t -= delta
+	if _ship_panel_t > 0.0:
+		return
+	_ship_panel_t = 0.75
+	if _ship_panel != null:
+		_refresh_ship_computer()
+	for sh in world._ships:
+		var ship: Ship = sh
+		if not is_instance_valid(ship) or ship.wreck_missing == null:
+			continue
+		if ship.ship_log.is_empty():
+			continue     # not the wreck this world started in
+		var done_now: Array = []
+		for it in ShipComputer.checklist(ship):
+			var item: ShipComputer.Item = it
+			if item.done:
+				done_now.append(item.name)
+		var seen: Array = ship.ship_log
+		for name in done_now:
+			var line := "%s: restored." % name
+			if not seen.has(line):
+				ship.ship_log.append(line)
+				_toast("Ship's computer — %s restored" % str(name).to_lower())
+		if ShipComputer.flightworthy(ship) and not seen.has("She flies."):
+			ship.ship_log.append("She flies.")
+			_toast("Ship's computer: all systems nominal. She will fly.")
+
+
 func _cycle_slot(dir: int) -> void:
 	active_slot = (active_slot + dir + HOTBAR_SLOTS) % HOTBAR_SLOTS
 	_refresh_slots()
@@ -1908,6 +2145,7 @@ func _physics_process(delta: float) -> void:
 	if _ring != null:
 		_paint_ring()
 	_sync_held_station()
+	_watch_repairs(delta)
 	if _place_kind != Blocks.AIR:
 		_update_place_ghost()
 	_update_eye_clearance(delta)
