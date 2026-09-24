@@ -258,7 +258,7 @@ static func power_bay_boxes(has_battery: bool, charge: float) -> Array:
 	const CASE := Color(0.30, 0.33, 0.37)
 	const DEEP := Color(0.15, 0.17, 0.20)
 	const CONT := Color(0.72, 0.60, 0.28)   # contacts
-	const CELL := Color(0.22, 0.26, 0.32)   # the battery's own casing
+	const CELL := Color(0.34, 0.40, 0.30)   # the battery's own casing
 	const TRACK := Color(0.10, 0.11, 0.13)  # the empty part of the gauge
 	var out: Array = [
 		[Vector3(0, 0.08, 0), Vector3(0.92, 0.16, 0.86), DEEP],     # plinth
@@ -281,14 +281,32 @@ static func power_bay_boxes(has_battery: bool, charge: float) -> Array:
 	# The gauge: a dark track the full height of the cell with the charge drawn
 	# up it. It is a box of its own rather than a stripe on the casing so that
 	# an empty battery reads as empty rather than as unlit.
-	const G0 := 0.24
-	const G1 := 0.72
-	out.append([Vector3(0, (G0 + G1) * 0.5, -0.34), Vector3(0.34, G1 - G0, 0.05), TRACK])
-	if f > 0.001:
-		var h: float = (G1 - G0) * f
-		out.append([Vector3(0, G0 + h * 0.5, -0.36), Vector3(0.26, h, 0.04),
-			gauge_colour(f)])
+	out.append([Vector3(GX, (G0 + G1) * 0.5, -0.34), Vector3(0.18, G1 - G0, 0.05), TRACK])
+	# A label plate on the other side of the face, so the gauge is plainly a
+	# gauge ON something rather than the whole front of it.
+	out.append([Vector3(0.11, 0.48, -0.34), Vector3(0.20, 0.34, 0.04), DEEP])
 	return out
+
+
+## Where the gauge is drawn on a seated battery, shared by the casing (which
+## draws the empty track) and the lit surface (which draws the charge in it).
+const G0 := 0.26
+const G1 := 0.70
+const GX := -0.15   # off to one side, so the battery still reads as a battery
+
+
+## The part of the cradle that is its own light: the charge in the gauge, and
+## the contact lamp when there is nothing seated. Unshaded, so it reads the
+## same in a dark cabin as it does outside in the sun -- an indicator that goes
+## dim when the room does is not an indicator.
+static func power_bay_lit(has_battery: bool, charge: float) -> Array:
+	if not has_battery:
+		return []
+	var f := clampf(charge, 0.0, 1.0)
+	if f <= 0.001:
+		return []
+	var h: float = (G1 - G0) * f
+	return [[Vector3(GX, G0 + h * 0.5, -0.355), Vector3(0.14, h, 0.04), gauge_colour(f)]]
 
 
 ## Green when it is full, amber in the middle, red when it is nearly out -- the
@@ -301,4 +319,16 @@ static func gauge_colour(f: float) -> Color:
 ## The cradle's mesh for a given state. The battery's gauge is part of the
 ## geometry, so this is rebuilt when what it would show changes.
 static func power_bay_mesh(has_battery: bool, charge: float) -> ArrayMesh:
-	return _mesh_from(power_bay_boxes(has_battery, charge))
+	var m := _mesh_from(power_bay_boxes(has_battery, charge))
+	var lit := power_bay_lit(has_battery, charge)
+	if lit.is_empty():
+		return m
+	var sub := _mesh_from(lit)
+	if sub.get_surface_count() == 0:
+		return m
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sub.surface_get_arrays(0))
+	m.surface_set_material(m.get_surface_count() - 1, mat)
+	return m
