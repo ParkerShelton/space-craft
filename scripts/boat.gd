@@ -29,6 +29,11 @@ var _afloat := false
 
 
 func _ready() -> void:
+	# FLOATING, not the default GROUNDED. Grounded mode measures everything
+	# against up_direction and will stop a body it believes is standing on a
+	# slope -- which, to a boat sitting in water on a round world, is every
+	# frame. It answered the helm and refused the throttle.
+	motion_mode = CharacterBody3D.MOTION_MODE_FLOATING
 	add_to_group("ship_seat")
 	set_meta("sit_at", Vector3(0, 0.62, 0.25))
 	if get_child_count() == 0:
@@ -164,7 +169,14 @@ func _physics_process(delta: float) -> void:
 		var diff: float = want - here
 		vert = clampf(diff * RISE_RATE, -SINK_RATE, RISE_RATE)
 	velocity = flat * along + up * vert
-	move_and_slide()
+	# move_and_collide, not move_and_slide. The ship moves this way too, and on
+	# this project move_and_slide advanced the hull about two millimetres a
+	# frame while velocity sat at full speed -- whatever it was measuring, it
+	# was not the distance asked for.
+	var hit := move_and_collide(velocity * delta)
+	if hit != null:
+		velocity = velocity.slide(hit.get_normal())
+		move_and_collide(velocity * delta * 0.5)
 	_drive = Vector2.ZERO
 
 

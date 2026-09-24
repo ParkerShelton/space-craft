@@ -4691,7 +4691,10 @@ func _process_mining(delta: float) -> void:
 	# Ore cannot be worked with hands at all -- see Blocks.needs_tool for why it
 	# is ore and not rock.
 	if Blocks.needs_tool(id) and power <= 1.0:
-		_look_name = "%s  — bare hands cannot get ore out, hold a Pick" % _look_name
+		# The same refusal covers ore and metal now, so it says which it is.
+		_look_name = "%s  — %s, hold a Pick" % [_look_name,
+			"bare hands cannot get ore out" if Blocks.is_ore(Blocks.bottom_of(id))
+				else "bare hands will not shift metal"]
 		_mine_key = ""
 		_mine_time = 0.0
 		return

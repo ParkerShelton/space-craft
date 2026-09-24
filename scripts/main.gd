@@ -233,6 +233,8 @@ func _ready() -> void:
 	# WorldManager.purge_old_worlds), so they are cleared rather than broken.
 	var dropped := WorldManager.purge_old_worlds()
 	_build_menu()
+	if OS.get_environment("SPACECRAFT_BOAT") != "":
+		call_deferred("_boatshot")
 	if dropped > 0:
 		_menu_label(" ", 8)
 		_menu_label("%d world%s from an older build had to be cleared" % [
@@ -2631,3 +2633,91 @@ func _process(delta: float) -> void:
 	for pl in _world.planets:
 		if pl.lod_sphere != null:
 			pl.lod_sphere.visible = _underground < 0.6 and pl.altitude(ppos) > 260.0
+
+
+func _boatshot() -> void:
+	var dir := OS.get_environment("SPACECRAFT_BOAT")
+	_world.save_slot = "_boatshot"
+	_start_world(false)
+	while _world.player == null or not _world.player.is_inside_tree() or _loading_layer != null:
+		await get_tree().process_frame
+	for i in 380:
+		await get_tree().process_frame
+	var pl = _world.player
+	var pla: Planet = _world.nearest_planet(pl.global_position)
+	pla.day_phase = 0.33
+	var g := _world.gravity_at(pl.global_position)
+	var up: Vector3 = (-g).normalized()
+	# Find water anywhere near, and make some if this world is a desert -- the
+	# boat is what is on trial here, not the terrain generator.
+	var found = null
+	for r in range(2, 60):
+		for a2 in 12:
+			var ang := TAU * float(a2) / 12.0
+			var t1 := up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
+			var t2 := up.cross(t1).normalized()
+			var at: Vector3 = pl.global_position + (t1 * cos(ang) + t2 * sin(ang)) * float(r)
+			for dy in range(-6, 7):
+				var v := pla.world_to_voxel(at + up * float(dy))
+				if pla.get_id(v) == Blocks.WATER:
+					found = pla.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+					break
+			if found != null:
+				break
+		if found != null:
+			break
+	if found == null:
+		# Dig a pond next to her and fill it.
+		var centre: Vector3 = pl.global_position + (-up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()) * 8.0
+		var cells := {}
+		for dx in range(-6, 7):
+			for dz in range(-6, 7):
+				for dy in range(-3, 3):
+					var t1b := up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
+					var t2b := up.cross(t1b).normalized()
+					var at2: Vector3 = centre + t1b * float(dx) + t2b * float(dz) + up * float(dy)
+					var vv := pla.world_to_voxel(at2)
+					cells[vv] = Blocks.WATER if dy < 0 else Blocks.AIR
+		pla.set_blocks(cells)
+		await get_tree().physics_frame
+		found = centre - up * 1.0
+		print("POND dug (this world had no water near the wreck)")
+	var where: Vector3 = found
+	print("WATER at %s" % str(where))
+	var boat := _world.spawn_boat(where + up * 0.4, up, -pl.global_transform.basis.z)
+	for i2 in 30:
+		await get_tree().physics_frame
+	var y0: float = boat.global_position.dot(up)
+	print("BOAT settled, height along up = %.2f  afloat=%s" % [y0, str(boat._afloat)])
+	# Does a position written onto her stick at all?
+	var fwd0: Vector3 = -boat.global_transform.basis.z
+	var a := boat.global_position
+	boat.global_position = a + fwd0 * 3.0
+	print("TELEPORT asked for %s" % str((a + fwd0 * 3.0).round()))
+	await get_tree().physics_frame
+	print("TELEPORT after 1 frame %s (moved %.2f)"
+		% [str(boat.global_position.round()), a.distance_to(boat.global_position)])
+	for it in 30:
+		await get_tree().physics_frame
+	print("TELEPORT after 30 frames %s (moved %.2f)"
+		% [str(boat.global_position.round()), a.distance_to(boat.global_position)])
+	print("BOAT parent=%s parentxform=%s" % [str(boat.get_parent().name),
+		str(boat.get_parent().global_transform)])
+	# ...and turn.
+	var f0: Vector3 = -boat.global_transform.basis.z
+	for i4 in 60:
+		boat.drive(Vector2(1.0, 0.3))
+		await get_tree().physics_frame
+	var f1: Vector3 = -boat.global_transform.basis.z
+	print("TURNED %.0f degrees" % rad_to_deg(f0.angle_to(f1)))
+	var cam := Camera3D.new()
+	add_child(cam)
+	cam.current = true
+	for i5 in 10:
+		cam.look_at_from_position(boat.global_position + up * 2.2
+			+ boat.global_transform.basis.x * 4.2 - boat.global_transform.basis.z * 3.0,
+			boat.global_position + up * 0.3, up)
+		await get_tree().physics_frame
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png(dir + "/boat.png")
+	get_tree().quit()

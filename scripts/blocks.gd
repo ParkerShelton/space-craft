@@ -766,8 +766,15 @@ static func material_class(id: int) -> String:
 ##
 ## Bare hands are still slow at rock -- two and a quarter seconds against a
 ## Pick's under one -- so the tool is worth making long before it is required.
+## Things bare hands cannot take apart at all, however long you hold the button.
+##
+## Ore, because a seam is not something you pull out with your fingers -- and
+## metal plate, which is the same argument. A hull is a welded sheet: you get it
+## off with a pick, and until you have one the ship you woke up in stays the
+## shape it is rather than being quietly dismantled a plate at a time.
 static func needs_tool(id: int) -> bool:
-	return is_ore(bottom_of(id))
+	var b := bottom_of(id)
+	return is_ore(b) or b == METAL or b == METAL_SLAB or b == METAL_STAIR 		or b == ALLOY or b == COCKPIT or b == THRUSTER or b == LIFE_SUPPORT 		or b == WARP_DRIVE
 const PLANK_IDS := [PLANK, PLANK_PALE, PLANK_DARK]
 const PLANK_OF := {WOOD: PLANK, WOOD_PALE: PLANK_PALE, WOOD_DARK: PLANK_DARK}
 const PART_DIM := 2                    # sub-cells per axis
