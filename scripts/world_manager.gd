@@ -46,6 +46,27 @@ static func _read_index() -> Array:
 	return out
 
 
+## Worlds made before stations became models cannot be played: their benches
+## are eighth-blocks that no longer mean anything. Rather than half-load one,
+## every world from before that is cleared out once, and the shelf starts empty.
+const FORMAT := 2
+
+
+static func purge_old_worlds() -> int:
+	var gone := 0
+	for w in _read_index():
+		if int((w as Dictionary).get("fmt", 1)) < FORMAT:
+			forget_world(str((w as Dictionary).get("slot", "")))
+			gone += 1
+	# ...and the nameless save from before there was a shelf at all.
+	for legacy in [SAVE_PATH, SAVE_BAK]:
+		if FileAccess.file_exists(legacy):
+			DirAccess.remove_absolute(ProjectSettings.globalize_path(legacy))
+			gone += 1
+	_write_index(_read_index().filter(func(w): return int((w as Dictionary).get("fmt", 1)) >= FORMAT))
+	return gone
+
+
 ## The worlds you have, most recently played first. A world whose files have
 ## gone is dropped from what is shown, but see note_world: it is not dropped
 ## from what is WRITTEN, or a world made and not yet saved would vanish the
@@ -94,7 +115,8 @@ static func note_world(slot: String, wname: String) -> void:
 				(w as Dictionary)["name"] = wname
 			(w as Dictionary)["played"] = int(Time.get_unix_time_from_system())
 	if not found:
-		arr.append({"slot": slot, "name": wname, "played": int(Time.get_unix_time_from_system())})
+		arr.append({"slot": slot, "name": wname, "fmt": FORMAT,
+			"played": int(Time.get_unix_time_from_system())})
 	_write_index(arr)
 
 
@@ -655,6 +677,22 @@ func spawn_station_on_ship(kind: int, ship: Ship, local_v: Vector3i) -> Station:
 	ship.add_collision_exception_with(st)
 	_stations.append(st)
 	return st
+
+
+## Is this point inside a station that is already standing? Stations are models
+## rather than blocks, so nothing in the voxel world knows they are there; this
+## is what stops a second bench being built through the first one, or a block
+## being walled into one.
+func station_blocking(world_pos: Vector3, skip: Station = null) -> bool:
+	_stations = _stations.filter(func(s): return is_instance_valid(s))
+	for s in _stations:
+		if s == skip:
+			continue
+		var fp := StationModels.footprint(s.kind)
+		var local: Vector3 = s.global_transform.affine_inverse() * world_pos
+		if absf(local.x) <= float(fp.x) * 0.5 and absf(local.z) <= float(fp.z) * 0.5 				and local.y >= -0.5 and local.y <= float(fp.y) - 0.5:
+			return true
+	return false
 
 
 ## Nearest still-alive station within `max_dist` of a world point, or null.

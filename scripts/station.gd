@@ -122,27 +122,17 @@ func _build_visual() -> void:
 	if _col == null:
 		_col = CollisionShape3D.new()
 		add_child(_col)
-	var box := BoxMesh.new()
-	box.size = Vector3(0.96, 0.96, 0.96)
-	_mi.mesh = box
+	# The station's own model, standing on the ground its footprint covers.
+	var fp := StationModels.footprint(kind)
+	_mi.mesh = StationModels.mesh_for(kind)
+	_mi.position = Vector3(0, -0.5, 0)   # model space has y 0 at the floor
 	# the station's ORIGIN is the cell center (set on spawn), so the mesh/collision
 	# sit at local zero -- this keeps it centered regardless of the orientation basis
 	_mi.position = Vector3.ZERO
-	var mat := StandardMaterial3D.new()
-	var c := Blocks.color_of(kind)
-	mat.albedo_color = c
-	if kind == Blocks.CHEST:  # a chest is a crate, not a glowing machine
-		mat.roughness = 0.8
-		mat.metallic = 0.0
-	else:
-		mat.roughness = 0.5
-		mat.metallic = 0.4
-		mat.emission_enabled = true
-		mat.emission = c.lerp(Color(1, 0.7, 0.3), 0.5)
-		mat.emission_energy_multiplier = 0.35
-	_mi.material_override = mat
+	_mi.material_override = null   # the model carries its own material
 	var shape := BoxShape3D.new()
-	shape.size = Vector3.ONE
+	shape.size = Vector3(fp)
+	_col.position = Vector3(0, (float(fp.y) - 1.0) * 0.5, 0)
 	_col.shape = shape
 	_col.position = Vector3.ZERO
 
