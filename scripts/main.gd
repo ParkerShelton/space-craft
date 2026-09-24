@@ -1755,6 +1755,11 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	# few seconds, under the fade, so the first thing a world does is a slow
 	# look up at the inside of the ship you came down in.
 	player.begin_wake(5.0, -1.25)
+	# You did not walk away from that. How badly you came out of it is rolled
+	# with the rest of the wreck, so the world that kept both thrusters is not
+	# always the one that kept you whole either.
+	player.health = clampf(Player.MAX_HEALTH * rng.randf_range(0.28, 0.52),
+		1.0, Player.MAX_HEALTH)
 
 
 ## The mark a ship leaves when it arrives badly: a gouge dug out behind it

@@ -22,7 +22,8 @@ signal done
 
 const FALL_SPIN := Vector3(0.9, 0.35, 1.7)   # radians/sec of tumble, per axis
 const GROUND_Y := -260.0                     # how far below the ship the ground starts
-const IMPACT_TIME := 2.1                     # seconds from "world is ready" to black
+const IMPACT_TIME := 3.0                     # seconds from "world is ready" to black
+const CONTACT := 0.58                        # fraction of that at which she lands
 const SHIP_SCALE := 0.80
 
 var _vp: SubViewport
@@ -35,6 +36,14 @@ var _black: ColorRect
 var _t := 0.0
 var _ending := 0.0      # counts UP once the impact has started
 var _impacting := false
+var _boom: CPUParticles3D
+var _debris: CPUParticles3D
+var _smoke: CPUParticles3D
+var _blew := false
+var _shake := 0.0
+var _alarm: AudioStreamPlayer
+var _alarm_t := 0.0
+var _beep := 0
 var _rng := RandomNumberGenerator.new()
 
 
@@ -77,6 +86,8 @@ func _ready() -> void:
 	_black.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_black.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_black)
+	_build_blast()
+	_build_alarm()
 	_pose(0.0)
 
 
@@ -259,6 +270,99 @@ func _deck_spot(y: float) -> Vector3:
 	return Vector3(cos(a) * r, y, sin(a) * r)
 
 
+## The blast itself, held ready and fired once. Three bursts at the same spot:
+## the fireball, the pieces of her thrown out of it, and the smoke that stays.
+func _build_blast() -> void:
+	_boom = _burst(240, 1.6, 34.0, Vector3(2.6, 2.6, 2.6),
+		Color(1.0, 0.95, 0.6, 1.0), Color(0.9, 0.22, 0.05, 0.0), 80.0)
+	_debris = _burst(90, 2.6, 46.0, Vector3(1.1, 1.1, 1.1),
+		Color(0.32, 0.30, 0.28, 1.0), Color(0.22, 0.20, 0.19, 0.0), 30.0)
+	_smoke = _burst(120, 3.4, 12.0, Vector3(4.5, 4.5, 4.5),
+		Color(0.24, 0.22, 0.21, 0.85), Color(0.30, 0.29, 0.28, 0.0), -3.0)
+
+
+func _burst(n: int, life: float, speed: float, size: Vector3,
+		from: Color, to: Color, gravity: float) -> CPUParticles3D:
+	var p := CPUParticles3D.new()
+	p.emitting = false
+	p.one_shot = true
+	p.explosiveness = 1.0
+	p.amount = n
+	p.lifetime = life
+	p.local_coords = false
+	var m := BoxMesh.new()
+	m.size = size
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	m.material = mat
+	p.mesh = m
+	p.direction = Vector3(0, 1, 0)
+	p.spread = 80.0
+	p.initial_velocity_min = speed * 0.35
+	p.initial_velocity_max = speed
+	p.gravity = Vector3(0, -gravity, 0)
+	p.scale_amount_min = 0.6
+	p.scale_amount_max = 1.8
+	var ramp := Gradient.new()
+	ramp.set_color(0, from)
+	ramp.set_color(1, to)
+	p.color_ramp = ramp
+	_vp.add_child(p)
+	return p
+
+
+## A cockpit alarm, synthesised rather than recorded -- two short tones and a
+## gap, over and over, the way every warning that has ever mattered sounds. It
+## is built here so that deleting this file takes the sound with it.
+func _build_alarm() -> void:
+	_alarm = AudioStreamPlayer.new()
+	_alarm.stream = _beep_stream()
+	_alarm.volume_db = -13.0
+	if AudioServer.get_bus_index("Effects") >= 0:
+		_alarm.bus = "Effects"
+	add_child(_alarm)
+
+
+func _beep_stream() -> AudioStreamWAV:
+	const RATE := 22050
+	const SECS := 0.13
+	var n := int(RATE * SECS)
+	var data := PackedByteArray()
+	data.resize(n * 2)
+	for i in n:
+		var tt: float = float(i) / float(RATE)
+		# Two tones a fifth apart, so it reads as an instrument rather than a
+		# test tone, with a hard attack and a quick decay.
+		var v: float = sin(TAU * 740.0 * tt) * 0.6 + sin(TAU * 1110.0 * tt) * 0.25
+		var env: float = clampf(tt / 0.004, 0.0, 1.0) * exp(-tt * 16.0)
+		var sm: int = clampi(int(v * env * 26000.0), -32768, 32767)
+		if sm < 0:
+			sm += 65536
+		data[i * 2] = sm & 0xFF
+		data[i * 2 + 1] = (sm >> 8) & 0xFF
+	var w := AudioStreamWAV.new()
+	w.format = AudioStreamWAV.FORMAT_16_BITS
+	w.mix_rate = RATE
+	w.stereo = false
+	w.data = data
+	return w
+
+
+## Two beeps, a gap, repeat. Stops the moment she hits -- after that there is
+## nothing left to warn anybody about.
+func _tick_alarm(delta: float) -> void:
+	if _alarm == null or _blew:
+		return
+	_alarm_t -= delta
+	if _alarm_t > 0.0:
+		return
+	_alarm.play()
+	_beep += 1
+	_alarm_t = 0.22 if (_beep % 2) == 1 else 0.95
+
+
 ## Where everything is at time `t`. Written as a function of t rather than as
 ## accumulated state so the loop can run for four seconds or forty and look the
 ## same either way.
@@ -273,6 +377,9 @@ func _pose(t: float) -> void:
 		# height and the ground comes up to meet her -- which looks identical
 		# from the camera and keeps everything in frame.
 		y = 0.0
+		if _blew:
+			# Nothing tumbles after it lands.
+			_ship.rotation = _ship.rotation
 	_ship.position = Vector3(sin(t * 0.35) * 7.0, y, cos(t * 0.27) * 5.0)
 	# The ground is kept a fixed way below her while she is falling -- so it is
 	# a floor a long way down, not something she is approaching -- and then
@@ -280,7 +387,7 @@ func _pose(t: float) -> void:
 	# seconds read as ground rushing up rather than a ship shrinking into haze.
 	var gap: float = 260.0
 	if _impacting:
-		var kg: float = clampf(_ending / IMPACT_TIME, 0.0, 1.0)
+		var kg: float = clampf((_ending / IMPACT_TIME) / CONTACT, 0.0, 1.0)
 		gap = lerpf(260.0, 3.0, kg * kg)
 	_ground.position = Vector3(0, _ship.position.y - gap, 0)
 	# The decks rise past her at a fixed rate and wrap round underneath, so
@@ -308,28 +415,56 @@ func _pose(t: float) -> void:
 		cos(ang) * dist, high, sin(ang) * dist)
 	# Aimed a little BELOW her, so the horizon sits high in the frame and what
 	# is under the shot is the ground she is going to meet.
+	if _shake > 0.0:
+		# Thrown about, settling. The camera is the only thing here that was not
+		# aboard, so it is the only thing that can flinch on your behalf.
+		var a := _shake * _shake * 4.0
+		eye += Vector3(sin(t * 61.0) * a, sin(t * 47.0) * a, cos(t * 53.0) * a)
 	_cam.look_at_from_position(eye, _ship.position - Vector3(0, 3.0, 0), Vector3.UP)
 
 
 func _process(delta: float) -> void:
 	_t += delta
+	_tick_alarm(delta)
+	_shake = maxf(_shake - delta * 1.6, 0.0)
 	if _impacting:
 		_ending += delta
 	_pose(_t)
 	if not _impacting:
 		return
 	var k: float = clampf(_ending / IMPACT_TIME, 0.0, 1.0)
-	# White at the moment she lands, then straight to black.
-	if k > 0.82:
-		var f: float = (k - 0.82) / 0.18
-		_flash.color = Color(1, 1, 1, clampf(1.0 - f * 1.4, 0.0, 1.0) * 0.9)
-		_black.color = Color(0, 0, 0, clampf(f * 1.8 - 0.2, 0.0, 1.0))
-	elif k > 0.78:
-		_flash.color = Color(1, 1, 1, (k - 0.78) / 0.04)
+	if k >= CONTACT and not _blew:
+		_blow_up()
+	# She goes up, and THEN the screen does -- the blast is something you watch
+	# for a moment before the white takes it.
+	if k > 0.86:
+		var f: float = (k - 0.86) / 0.14
+		_flash.color = Color(1, 1, 1, clampf(1.0 - f * 1.6, 0.0, 1.0) * 0.85)
+		_black.color = Color(0, 0, 0, clampf(f * 1.9 - 0.15, 0.0, 1.0))
+	elif k > CONTACT:
+		_flash.color = Color(1, 1, 1, clampf((k - CONTACT) * 0.55, 0.0, 0.5))
 	if _ending >= IMPACT_TIME:
 		_black.color = Color(0, 0, 0, 1)
 		set_process(false)
 		done.emit()
+
+
+## She lands. The hull goes, three bursts go off where she was, the camera is
+## thrown about, and the alarm has nothing left to say.
+func _blow_up() -> void:
+	_blew = true
+	_shake = 1.0
+	var at: Vector3 = _ship.position
+	for b in [_boom, _debris, _smoke]:
+		var q: CPUParticles3D = b
+		q.position = at
+		q.emitting = true
+	for c in _ship.get_children():
+		var ch := c as Node3D
+		if ch != null:
+			ch.visible = false
+	if _alarm != null:
+		_alarm.stop()
 
 
 ## The world is ready: stop falling and land. Returns when the screen is black.
