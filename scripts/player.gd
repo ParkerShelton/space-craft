@@ -456,6 +456,8 @@ var _craft_row: Control            # holds per-station craft buttons
 var _craft_scroll: ScrollContainer # scrolls them when a bench has many
 var _craft_buttons: Array = []     # current station's craft buttons
 var _craft_multi: Array = []       # the x5 / All buttons beside each craft
+## See _craft_signature: what the list was showing when it was last built.
+var _craft_sig := ""
 var _char_preview: CharacterPreview   # you, in the inventory
 # Vanity: what you look like, and nothing else -- see Cosmetics. One slot per
 # Cosmetics.SLOTS entry, each shaped like an `inv` entry.
@@ -6704,21 +6706,47 @@ func _rebuild_craft_buttons(st) -> void:
 		# become. A new shape is then one entry in Blocks.shapes_for() and works
 		# for every material at once, instead of a recipe per material per shape.
 		crafts = _shaper_crafts(st)
+	# EVERYTHING this bench can make is listed, always -- a recipe you cannot
+	# afford is the one you most need to see, because it is the one telling you
+	# what to go and find. What changes is the order and the colour: the ones
+	# you can make now come first and read normally, the rest sit under them
+	# greyed. Nothing appears or disappears as you load material, so the list
+	# never moves under your cursor for a reason you did not cause.
+	var ready: Array = []
+	var later: Array = []
+	for craft in crafts:
+		if st.can_make(craft):
+			ready.append(craft)
+		else:
+			later.append(craft)
+	var ordered: Array = ready + later
 	var craft_top := 62.0 + (34.0 if is_smelter else 0.0)
 	_craft_scroll.position = Vector2(12, craft_top)
-	for b in _craft_multi:
-		b.queue_free()
+	for b2 in _craft_multi:
+		b2.queue_free()
 	_craft_multi.clear()
 	var by := 0.0
 	var main_w := _LEFT_W - 2 * (_MULTI_W + 4)
-	for craft in crafts:
+	var planet: Planet = world.nearest_planet(global_position) if world != null else null
+	for craft in ordered:
+		var can: bool = st.can_make(craft)
+		var out_id: int = int(craft.get("out", Blocks.AIR))
 		var b := Button.new()
-		b.text = craft["label"]
+		b.text = " " + str(craft["label"])
+		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		# A picture of the thing, taken of the real model (see ItemIcon), so the
+		# list reads as a shelf of what this bench makes rather than as prose.
+		var tex := ItemIcon.of(out_id, Blocks.color_of(out_id), planet)
+		if tex != null:
+			b.icon = tex
+			b.expand_icon = true
 		b.position = Vector2(0, by)
-		b.custom_minimum_size = Vector2(main_w, 30)
-		b.size = Vector2(main_w, 30)
+		b.custom_minimum_size = Vector2(main_w, 34)
+		b.size = Vector2(main_w, 34)
 		b.clip_text = true
-		b.tooltip_text = "Make one"
+		b.tooltip_text = _craft_tooltip(st, craft)
+		b.disabled = not can
+		b.modulate = Color(1, 1, 1, 1) if can else Color(1, 1, 1, 0.45)
 		b.pressed.connect(_on_station_craft.bind(craft, 1))
 		_craft_row.add_child(b)
 		_craft_buttons.append(b)
@@ -6729,14 +6757,87 @@ func _rebuild_craft_buttons(st) -> void:
 			mb.text = str(opt[1])
 			mb.tooltip_text = str(opt[2])
 			mb.position = Vector2(x, by)
-			mb.custom_minimum_size = Vector2(_MULTI_W, 30)
-			mb.size = Vector2(_MULTI_W, 30)
+			mb.custom_minimum_size = Vector2(_MULTI_W, 34)
+			mb.size = Vector2(_MULTI_W, 34)
+			mb.disabled = not can
+			mb.modulate = b.modulate
 			mb.pressed.connect(_on_station_craft.bind(craft, int(opt[0])))
 			_craft_row.add_child(mb)
 			_craft_multi.append(mb)
 			x += _MULTI_W + 4
-		by += 34.0
+		by += 38.0
 	_craft_row.custom_minimum_size = Vector2(_LEFT_W, by)
+	_craft_sig = _craft_signature(st)
+
+
+## What the craft list currently WOULD look like: every recipe and whether it
+## can be made. The list is rebuilt when this changes and at no other time --
+## so it re-sorts the moment you load the last rock you needed, and never
+## moves under your cursor when nothing has.
+func _craft_signature(st) -> String:
+	var parts: Array = []
+	var key: int = Blocks.SMELTER if Blocks.is_smelter_kind(st.kind) else st.kind
+	var list: Array = Blocks.STATION_CRAFTS.get(key, [])
+	if st.kind == Blocks.SHAPER:
+		list = _shaper_crafts(st)
+	for c in list:
+		parts.append("%s:%s" % [str(c.get("label", "")), "1" if st.can_make(c) else "0"])
+	return "|".join(PackedStringArray(parts))
+
+
+## What a recipe costs and how much of it is loaded, for the hover. Every line
+## reads "have / need" so the shortfall is the thing you see, not something you
+## work out.
+func _craft_tooltip(st, craft: Dictionary) -> String:
+	var lines: Array = [str(craft["label"])]
+	var n := int(craft.get("n", 1))
+	if bool(craft.get("yield_from_material", false)):
+		lines.append("Makes: depends on the material")
+	elif n > 1:
+		lines.append("Makes %d" % n)
+	lines.append("")
+	if craft.has("reqs"):
+		for r in craft["reqs"]:
+			var need := int(r["n"])
+			lines.append("%s  %d / %d" % [_req_name(r), st.req_have(r), need])
+	else:
+		var mtype := Blocks.primary_material_for(st.kind)
+		var cost := int(craft.get("cost", 1))
+		lines.append("%s  %d / %d" % [_material_name(mtype), st.primary_have(), cost])
+		if craft.has("extra"):
+			var ex: Dictionary = craft["extra"]
+			lines.append("%s  %d / %d" % [_req_name(ex), st.req_have(ex), int(ex["n"])])
+	if not st.can_make(craft):
+		lines.append("")
+		lines.append("Not enough loaded")
+	return "
+".join(PackedStringArray(lines))
+
+
+## What a requirement is called, in the words the recipe itself uses where it
+## gives them.
+func _req_name(r: Dictionary) -> String:
+	if r.has("label"):
+		return str(r["label"])
+	if r.has("refined"):
+		return "Refined material"
+	if r.has("any"):
+		var ids: Array = r["any"]
+		return Blocks.name_of(int(ids[0])) if not ids.is_empty() else "Material"
+	return Blocks.name_of(int(r.get("id", Blocks.AIR)))
+
+
+func _material_name(mtype: String) -> String:
+	match mtype:
+		"refined":
+			return "Refined material"
+		"circuit":
+			return Blocks.name_of(Blocks.CIRCUIT)
+		"alloy":
+			return Blocks.name_of(Blocks.ALLOY)
+		_:
+			return "Material"
+
 
 
 ## Labels currently shown, so a dynamic list is only torn down and rebuilt when
@@ -7158,6 +7259,11 @@ func _refresh_station_ui() -> void:
 			# one option and a scrollbar instead of all of them.
 			_open_station(_station_open)
 			return
+	# ...and every other bench re-sorts when what you can afford changes: the
+	# ones you can make now belong at the top, and "now" moves as you load.
+	if _station_open.kind != Blocks.SHAPER \
+			and _craft_signature(_station_open) != _craft_sig:
+		_rebuild_craft_buttons(_station_open)
 	var craft_key: int = Blocks.SMELTER if Blocks.is_smelter_kind(_station_open.kind) else _station_open.kind
 	var has_crafts: bool = Blocks.STATION_CRAFTS.has(craft_key) or _station_open.kind == Blocks.SHAPER
 	if has_crafts:

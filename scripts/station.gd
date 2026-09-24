@@ -215,6 +215,12 @@ func _count_req(req: Dictionary) -> int:
 			total += s["count"]
 		elif req.has("any") and s["id"] in req["any"]:
 			total += s["count"]
+		elif req.has("refined") and Blocks.is_refined(int(s["id"])):
+			# "refined: true" means any refined material will do. It was not
+			# understood here at all, so it counted as nothing you had -- which
+			# quietly made every Fabricator recipe asking for refined stock (Wire,
+			# Machine Core, Battery) impossible to make at the bench.
+			total += s["count"]
 	return total
 
 
@@ -229,6 +235,43 @@ func _yield_props() -> Dictionary:
 		if int(s2.get("count", 0)) > 0 				and not (s2.get("props", {}) as Dictionary).is_empty():
 			return s2.get("props", {})
 	return {}
+
+
+## Could this craft be started right now? The same tests start_craft makes,
+## without starting anything -- so the panel can show what is possible before
+## you click it.
+func can_make(craft: Dictionary) -> bool:
+	if craft.has("reqs"):
+		return _afford_reqs(craft["reqs"])
+	var mtype := Blocks.primary_material_for(kind)
+	var cost := int(craft.get("cost", 1))
+	var has_primary := false
+	for s in storage:
+		if s["count"] >= cost and Blocks.id_matches_material(s["id"], mtype):
+			has_primary = true
+			break
+	if not has_primary:
+		return false
+	if craft.has("extra") and _count_req(craft["extra"]) < int(craft["extra"]["n"]):
+		return false
+	return true
+
+
+## How much of what a requirement asks for is loaded, so the panel can say
+## "3 of 12" rather than only whether the whole recipe is possible.
+func req_have(req: Dictionary) -> int:
+	return _count_req(req)
+
+
+## How much of this station's primary material is loaded, for the crafts paid
+## in it rather than in a list of requirements.
+func primary_have() -> int:
+	var mtype := Blocks.primary_material_for(kind)
+	var total := 0
+	for s in storage:
+		if s["count"] > 0 and Blocks.id_matches_material(s["id"], mtype):
+			total += int(s["count"])
+	return total
 
 
 func _afford_reqs(reqs: Array) -> bool:
@@ -247,7 +290,8 @@ func _consume_reqs(reqs: Array) -> void:
 			if s["count"] <= 0:
 				continue
 			var matches: bool = (r.has("id") and s["id"] == int(r["id"])) \
-				or (r.has("any") and s["id"] in r["any"])
+				or (r.has("any") and s["id"] in r["any"]) \
+				or (r.has("refined") and Blocks.is_refined(int(s["id"])))
 			if not matches:
 				continue
 			var take: int = mini(need, s["count"])
