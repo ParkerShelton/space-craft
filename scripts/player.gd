@@ -6578,9 +6578,13 @@ func _recipe_text(recipe: Dictionary) -> String:
 
 const _LEFT_W := 250   # left column (blueprints/actions) width
 const _MULTI_W := 40   # each of the x5 / All buttons beside a craft
-## Height of the recipe column. Four rows: enough to read a bench at a glance,
-## short enough to leave the preview and progress lines below it alone.
-const CRAFT_LIST_H := 140
+## Height of the recipe column. Eight rows: the point of the list is that
+## everything a bench can make is ON it, including what you cannot afford
+## yet, so it is worth the height to see the lot without scrolling.
+## How tall one recipe row is. The buttons, the spacing between them and the
+## box they scroll in all have to agree, or the last row is clipped.
+const CRAFT_ROW_H := 38
+const CRAFT_LIST_H := 312
 const _STORE_COLS := 8 # storage cells per row
 func _build_station_ui(layer: CanvasLayer) -> void:
 	_rx = 12 + _LEFT_W + 12            # right column x
@@ -6741,8 +6745,8 @@ func _rebuild_craft_buttons(st) -> void:
 			b.icon = tex
 			b.expand_icon = true
 		b.position = Vector2(0, by)
-		b.custom_minimum_size = Vector2(main_w, 34)
-		b.size = Vector2(main_w, 34)
+		b.custom_minimum_size = Vector2(main_w, CRAFT_ROW_H - 4)
+		b.size = Vector2(main_w, CRAFT_ROW_H - 4)
 		b.clip_text = true
 		b.tooltip_text = _craft_tooltip(st, craft)
 		b.disabled = not can
@@ -6757,15 +6761,15 @@ func _rebuild_craft_buttons(st) -> void:
 			mb.text = str(opt[1])
 			mb.tooltip_text = str(opt[2])
 			mb.position = Vector2(x, by)
-			mb.custom_minimum_size = Vector2(_MULTI_W, 34)
-			mb.size = Vector2(_MULTI_W, 34)
+			mb.custom_minimum_size = Vector2(_MULTI_W, CRAFT_ROW_H - 4)
+			mb.size = Vector2(_MULTI_W, CRAFT_ROW_H - 4)
 			mb.disabled = not can
 			mb.modulate = b.modulate
 			mb.pressed.connect(_on_station_craft.bind(craft, int(opt[0])))
 			_craft_row.add_child(mb)
 			_craft_multi.append(mb)
 			x += _MULTI_W + 4
-		by += 38.0
+		by += float(CRAFT_ROW_H)
 	_craft_row.custom_minimum_size = Vector2(_LEFT_W, by)
 	_craft_sig = _craft_signature(st)
 
@@ -6810,8 +6814,7 @@ func _craft_tooltip(st, craft: Dictionary) -> String:
 	if not st.can_make(craft):
 		lines.append("")
 		lines.append("Not enough loaded")
-	return "
-".join(PackedStringArray(lines))
+	return "\n".join(PackedStringArray(lines))
 
 
 ## What a requirement is called, in the words the recipe itself uses where it
@@ -7000,7 +7003,7 @@ func _open_station(st: Station) -> void:
 	# Measured from the SCROLLER, which is what actually occupies the column now:
 	# the buttons inside it can be taller than the space they are shown in, and
 	# the labels below have to sit under the visible box, not under the list.
-	var col_h: int = mini(_craft_buttons.size() * 34, CRAFT_LIST_H) 		if not _craft_buttons.is_empty() else 34
+	var col_h: int = mini(_craft_buttons.size() * CRAFT_ROW_H, CRAFT_LIST_H) 		if not _craft_buttons.is_empty() else 34
 	_craft_scroll.custom_minimum_size = Vector2(_LEFT_W + 14, col_h)
 	_craft_scroll.size = Vector2(_LEFT_W + 14, col_h)
 	var left_bottom: int = int(_craft_scroll.position.y) + col_h
