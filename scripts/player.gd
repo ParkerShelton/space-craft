@@ -1571,8 +1571,9 @@ func _build_ship_close_button() -> void:
 	var close := Button.new()
 	close.text = "Close"
 	close.custom_minimum_size = Vector2(120, 34)
-	close.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	close.position = Vector2(22, _ship_panel.size.y - 50)
+	# Plain top-left offsets. With a BOTTOM_LEFT preset the position is measured
+	# from the bottom edge, which put it a whole panel's height below the panel.
+	close.position = Vector2(22, _ship_panel.custom_minimum_size.y - 50)
 	close.mouse_entered.connect(func(): Audio.ui("ui_hover"))
 	close.pressed.connect(func(): Audio.ui("ui_back"))
 	close.pressed.connect(_close_ship_computer)
