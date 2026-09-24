@@ -1020,6 +1020,7 @@ var _place_kind := Blocks.AIR      # what the ghost is showing, AIR for nothing
 var _place_rot := 0
 var _place_ghost: MeshInstance3D
 var _place_ok := false
+var _place_from_item := false      # holding one in your bag rather than building it
 
 
 func _open_ring() -> void:
@@ -1272,8 +1273,21 @@ func _refund(kind: int) -> void:
 
 # --- the ghost of what you are about to put down ---------------------------------
 
-func _begin_placing(kind: int) -> void:
+## A station picked up and carried shows its ghost the moment it is in your
+## hand: it is already paid for, so there is nothing to choose and no reason to
+## make you open the ring to put it back down.
+func _sync_held_station() -> void:
+	var sel := _selected_id()
+	var carried: bool = Blocks.is_station_build(sel) or Blocks.is_station(sel)
+	if carried and (_place_kind != sel or not _place_from_item):
+		_begin_placing(sel, true)
+	elif not carried and _place_from_item:
+		_cancel_placing()
+
+
+func _begin_placing(kind: int, from_item := false) -> void:
 	_place_kind = kind
+	_place_from_item = from_item
 	_place_rot = 0
 	_clear_ghost_model()
 	_place_ghost = MeshInstance3D.new()
@@ -1281,7 +1295,8 @@ func _begin_placing(kind: int) -> void:
 	_place_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	if world != null:
 		world.add_child(_place_ghost)
-	_toast("%s — right-click to place, R to turn, Esc to put it away" % Blocks.name_of(kind))
+	if not from_item:
+		_toast("%s — right-click to place, R to turn, Esc to put it away" % Blocks.name_of(kind))
 
 
 func _clear_ghost_model() -> void:
@@ -1292,6 +1307,7 @@ func _clear_ghost_model() -> void:
 
 func _cancel_placing() -> void:
 	_place_kind = Blocks.AIR
+	_place_from_item = false
 	_clear_ghost_model()
 
 
@@ -1361,7 +1377,8 @@ func _update_place_ghost(spot: Dictionary = {}) -> void:
 		return
 	if spot.is_empty():
 		spot = _place_spot()
-	_place_ok = bool(spot.get("ok", false)) and _can_afford(Blocks.station_cost(_place_kind))
+	_place_ok = bool(spot.get("ok", false)) and (_place_from_item
+		or _can_afford(Blocks.station_cost(_place_kind)))
 	_place_ghost.visible = not spot.is_empty()
 	if spot.is_empty():
 		return
@@ -1380,21 +1397,30 @@ func _do_place_station() -> void:
 	var spot := _place_spot()
 	var reqs := Blocks.station_cost(_place_kind)
 	if spot.is_empty() or not spot.get("ok", false):
+		# A station in hand can also go on a ship, which the ground check knows
+		# nothing about -- that path still handles it.
+		if _place_from_item:
+			_place_station(_place_kind)
+			return
 		_toast("No room for that here")
 		Audio.ui("ui_deny")
 		return
-	if not _can_afford(reqs):
+	if not _place_from_item and not _can_afford(reqs):
 		_toast("Not enough materials")
 		Audio.ui("ui_deny")
 		return
-	_pay(reqs)
+	if _place_from_item:
+		_consume_active()
+	else:
+		_pay(reqs)
 	var st := world.spawn_station(_place_kind, (spot["pos"] as Vector3) - Vector3(0.5, 0.5, 0.5),
 		spot["up"] as Vector3, spot["fwd"] as Vector3)
 	if st != null:
 		_toast("%s built" % Blocks.name_of(_place_kind))
 		Audio.at("place_rock", spot["pos"] as Vector3)
-	# Still holding the same thing, so a row of chests is a row of clicks.
-	if not _can_afford(reqs):
+	# Still holding the same thing, so a row of chests is a row of clicks --
+	# until the stack or the materials run out.
+	if not _place_from_item and not _can_afford(reqs):
 		_cancel_placing()
 
 
@@ -1881,6 +1907,7 @@ func _update_eye_clearance(delta: float) -> void:
 func _physics_process(delta: float) -> void:
 	if _ring != null:
 		_paint_ring()
+	_sync_held_station()
 	if _place_kind != Blocks.AIR:
 		_update_place_ghost()
 	_update_eye_clearance(delta)
@@ -4463,11 +4490,12 @@ func _process_station_mining(delta: float, st: Station) -> void:
 		_mine_key = ""
 		_mine_time = 0.0
 		return
-	_look_name = st.title() + "  (hold to pick up)"
+	_look_name = st.title() + "  (hold to take apart)"
 	var holding := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
 	if not holding:
 		_mine_key = ""
 		_mine_time = 0.0
+		st.set_dismantle(0.0)
 		if _crack != null:
 			_crack.visible = false
 		return
@@ -4477,6 +4505,12 @@ func _process_station_mining(delta: float, st: Station) -> void:
 		_mine_time = 0.0
 		_mine_total = 0.6
 	_mine_time += delta
+	# Coming apart in front of you: it shrinks and reddens as the seconds run,
+	# and says how far along it is.
+	var t := clampf(_mine_time / maxf(_mine_total, 0.001), 0.0, 1.0)
+	st.set_dismantle(t)
+	_look_name = "%s  (taking apart %d%%)" % [st.title(), int(t * 100.0)]
+	Audio.at("break_wood", st.global_position)
 	if _mine_time >= _mine_total:
 		_pick_up_station(st)
 		_mine_key = ""
@@ -4673,8 +4707,11 @@ func _update_swing(delta: float) -> void:
 
 
 func _pick_up_station(st: Station) -> void:
-	# Most of what it cost comes back; see _refund.
-	_refund(st.kind)
+	# The station itself comes back, not a pile of what it was made of, so it
+	# can simply be put down again somewhere better.
+	_add_item(st.kind, 1)
+	_break_burst(st.global_position, Blocks.color_of(st.kind))
+	Audio.at("break_wood", st.global_position)
 	# return whatever was inside to your inventory
 	for s in st.storage:
 		if int(s.get("count", 0)) > 0:
@@ -4687,7 +4724,7 @@ func _pick_up_station(st: Station) -> void:
 		world._stations.erase(st)
 	st.queue_free()
 	_refresh_slots()
-	_toast("Took apart the " + Blocks.name_of(st.kind))
+	_toast("Took apart the %s — put it down again from your bag" % Blocks.name_of(st.kind))
 
 
 ## Start a new ship where the player is looking, oriented to their current frame.

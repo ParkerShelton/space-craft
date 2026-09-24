@@ -185,6 +185,10 @@ func _still_loaded(p: Planet, v: Vector3i, rd: int) -> float:
 func _ready() -> void:
 	get_tree().set_auto_accept_quit(false)  # route window-close through _notification
 	_settings.load(settings_path)   # absent on a first run, which is not an error
+	_apply_ui_scale()
+	# A window dragged to another monitor, or maximised, is a different screen:
+	# on Auto the interface is sized again for it.
+	get_window().size_changed.connect(_apply_ui_scale)
 	var fps_layer := CanvasLayer.new()
 	fps_layer.layer = 8
 	add_child(fps_layer)
@@ -894,6 +898,8 @@ func _set_bus_volume(bus: String, linear: float) -> void:
 
 
 func _apply_settings() -> void:
+	# How big the interface is drawn, which is a window setting like the rest.
+	_apply_ui_scale()
 	# Window settings apply whether or not a world is loaded; the rest need a
 	# player to apply to, and are applied again when one is made.
 	# Windowed / borderless / exclusive, and the size only means anything in the
@@ -1279,6 +1285,32 @@ func _populate_settings_menu() -> void:
 ## The three ways a window can own the screen. Godot's "fullscreen" is the
 ## borderless one; the exclusive mode is its own thing and worth offering,
 ## because it is the one that can change refresh rate and skip the compositor.
+## How big the interface is drawn. The 3D view is unaffected either way -- the
+## window keeps rendering at its own size, and only the interface is laid out in
+## a smaller space and scaled up -- so this costs nothing but screen room.
+##
+## Auto reads the screen: a 1080p screen gets what it always got, a 1440p screen
+## a third more, a 4K screen twice. Without it a menu that fits a laptop is a
+## postage stamp on a big monitor, which is exactly what it was.
+const UI_SCALES := ["Auto", "100%", "125%", "150%", "175%", "200%"]
+const UI_SCALE_VALUES := [1.0, 1.25, 1.5, 1.75, 2.0]
+
+
+func ui_scale_factor() -> float:
+	var idx := int(setting("ui_scale", 0))
+	if idx > 0 and idx <= UI_SCALE_VALUES.size():
+		return float(UI_SCALE_VALUES[idx - 1])
+	var h := float(get_window().size.y)
+	return clampf(h / 1080.0, 1.0, 2.0)
+
+
+func _apply_ui_scale() -> void:
+	var win := get_window()
+	var f := ui_scale_factor()
+	if absf(win.content_scale_factor - f) > 0.001:
+		win.content_scale_factor = f
+
+
 const WINDOW_MODES := ["Windowed", "Windowed Fullscreen", "Fullscreen"]
 const RESOLUTIONS := [Vector2i(1280, 720), Vector2i(1366, 768), Vector2i(1600, 900),
 	Vector2i(1920, 1080), Vector2i(2560, 1440), Vector2i(3840, 2160)]
@@ -1287,6 +1319,7 @@ const RESOLUTIONS := [Vector2i(1280, 720), Vector2i(1366, 768), Vector2i(1600, 9
 func _populate_video_menu() -> void:
 	var vb := _menu_page("Video")
 	_game_menu_cycle(vb, "Window mode", "window_mode", WINDOW_MODES, 0)
+	_game_menu_cycle(vb, "Interface size", "ui_scale", UI_SCALES, 0)
 	var res_names: Array = []
 	for r in RESOLUTIONS:
 		res_names.append("%d x %d" % [r.x, r.y])
