@@ -161,8 +161,10 @@ static func _fitting_mesh(id: int) -> ArrayMesh:
 			body.append([Vector3(0.5 + sx * 0.40, 0.5, 0.46),
 				Vector3(0.10, 0.56, 0.30), PIPE])                          # feed lines
 		lit = [
-			[Vector3(0.5, 0.5, 1.02), Vector3(0.46, 0.46, 0.03), BURN],    # throat
-			[Vector3(0.5, 0.86, 0.22), Vector3(0.10, 0.06, 0.04), BURN],   # status lamp
+			# Proud of the lip, not behind it: the lip is a solid step, so a
+			# throat tucked inside it never saw daylight.
+			[Vector3(0.5, 0.5, 1.12), Vector3(0.52, 0.52, 0.03), BURN],    # throat
+			[Vector3(0.5, 0.97, 0.30), Vector3(0.10, 0.05, 0.06), BURN],   # status lamp
 		]
 	var m := ArrayMesh.new()
 	_add_boxes(m, body, false)
