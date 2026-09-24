@@ -46,7 +46,7 @@ static func build(world: WorldManager, pos: Vector3, up: Vector3, fwd: Vector3,
 	ship.rebuild()
 	# The seat is a model rather than blocks: a thing you sit in, not a cube.
 	# Block centre, standing ON the floor plate (its top is y = 1), facing the nose.
-	ship.seat_at = Vector3(0.5, 1.0, CABIN_FRONT + 1.5)
+	ship.seat_at = Vector3(0.5, 1.0, CABIN_FRONT + 2.5)
 	ship.build_props()
 	ship.landed = true
 	ship.flying = false
