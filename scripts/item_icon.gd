@@ -183,7 +183,9 @@ func _shoot(job: Array) -> void:
 	var tool := ToolModels.has_model(raw)
 	var built := Blocks.is_station_build(raw)
 	var worn := Cosmetics.is_cosmetic(raw) or tool or built
-	if built:
+	if raw == Blocks.BATTERY:
+		_mi.mesh = StationModels.battery_icon_mesh()
+	elif built:
 		_mi.mesh = StationModels.icon_mesh(raw)
 	elif tool:
 		_mi.mesh = ToolModels.icon_mesh(raw, col)

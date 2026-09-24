@@ -321,6 +321,10 @@ var _iv_y := 0.0                  # interior vertical velocity (ship-local)
 ## Coming round. You open your eyes looking at the floor and your head comes up
 ## on its own; look input is ignored until it has, because you are not in
 ## control yet and that is the whole point of the moment.
+## The seat you are in, if any. Sitting is not a mode with much in it: you stay
+## where the seat is, you can look around, and you cannot walk. Crouch gets you
+## out -- the same key that gets you out of everywhere else.
+var seated: Node3D = null
 var _rouse_t := 0.0
 var _rouse_len := 0.0
 var _rouse_from := 0.0
@@ -916,6 +920,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif _try_till(_raycast_voxel()):
 				pass
 			elif _try_bucket(_raycast_voxel()):
+				pass
+			elif _try_sit():
 				pass
 			elif _try_ship_computer():
 				pass
@@ -2202,6 +2208,11 @@ func _physics_process(delta: float) -> void:
 			_crack.visible = false
 		crouching = false
 		_pilot_physics(delta)
+		_update_ui()
+		return
+	if seated != null:
+		_sit_physics(delta)
+		_process_mining(delta)
 		_update_ui()
 		return
 	if aboard != null:
@@ -7352,3 +7363,59 @@ func begin_wake(seconds: float, from_pitch: float) -> void:
 	_pitch = from_pitch
 	if _camera != null:
 		_camera.rotation.x = _pitch
+
+
+## Right-clicking a seat. Anything in the "ship_seat" group will do; where you
+## end up is whatever it says in its `sit_at` metadata, in its own space, so a
+## different chair can seat you differently without touching this.
+func _try_sit() -> bool:
+	if seated != null or piloting != null or eva:
+		return false
+	_ray.force_raycast_update()
+	if not _ray.is_colliding():
+		return false
+	var c := _ray.get_collider()
+	if c == null or not (c as Node).is_in_group("ship_seat"):
+		return false
+	sit_in(c as Node3D)
+	return true
+
+
+func sit_in(seat: Node3D) -> void:
+	seated = seat
+	velocity = Vector3.ZERO
+	_body_shape.disabled = true
+	_toast("Seated -- %s to get up" % OS.get_keycode_string(
+		int(binds.get("crouch", DEFAULT_BINDS["crouch"]))))
+
+
+func stand_up() -> void:
+	if seated == null:
+		return
+	# Step clear of the chair rather than standing up inside its back.
+	var away: Vector3 = -seated.global_transform.basis.z
+	global_position = seated.global_position + away * 0.9 + seated.global_transform.basis.y * 0.9
+	seated = null
+	_body_shape.disabled = false
+	velocity = Vector3.ZERO
+
+
+## Sitting still, in the seat's own frame so the chair can be aboard a ship that
+## is moving. You keep your head: look works, walking does not.
+func _sit_physics(delta: float) -> void:
+	if not is_instance_valid(seated):
+		seated = null
+		_body_shape.disabled = false
+		return
+	if key_down("crouch"):
+		stand_up()
+		return
+	var up: Vector3 = seated.global_transform.basis.y
+	if _look.x != 0.0:
+		rotate(up, -_look.x * MOUSE_SENS * look_sensitivity)
+	_pitch = clampf(_pitch - _look.y * MOUSE_SENS * look_sensitivity * _look_sign(), -1.45, 1.45)
+	_camera.rotation.x = _pitch
+	_look = Vector2.ZERO
+	var at: Vector3 = seated.get_meta("sit_at", Vector3(0, 0.6, 0))
+	global_position = seated.to_global(at)
+	velocity = Vector3.ZERO

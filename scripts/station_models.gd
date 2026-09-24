@@ -198,9 +198,15 @@ static func _mesh_from(boxes: Array) -> ArrayMesh:
 
 ## The model shrunk into the unit cube ItemIcon photographs.
 static func icon_mesh(kind: int) -> ArrayMesh:
+	return _icon_from(boxes_for(kind))
+
+
+## Any box model, centred and scaled into the unit cube the icon camera frames,
+## with the face shading baked in -- an icon has no sun on it.
+static func _icon_from(boxes: Array) -> ArrayMesh:
 	var lo := Vector3(1e9, 1e9, 1e9)
 	var hi := -lo
-	for b in boxes_for(kind):
+	for b in boxes:
 		lo = lo.min((b[0] as Vector3) - (b[1] as Vector3) * 0.5)
 		hi = hi.max((b[0] as Vector3) + (b[1] as Vector3) * 0.5)
 	var ext := hi - lo
@@ -208,7 +214,7 @@ static func icon_mesh(kind: int) -> ArrayMesh:
 	var shift := -(lo + hi) * 0.5
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for b in boxes_for(kind):
+	for b in boxes:
 		var c: Color = b[2]
 		var p0: Vector3 = ((b[0] as Vector3) + shift - (b[1] as Vector3) * 0.5) * sc
 		var p1: Vector3 = ((b[0] as Vector3) + shift + (b[1] as Vector3) * 0.5) * sc
@@ -289,18 +295,38 @@ static func power_bay_boxes(has_battery: bool, _charge: float) -> Array:
 			Vector3(0.09 + across.x * 0.20, 0.07, 0.09 + across.z * 0.20), CONT])
 	if not has_battery:
 		return out
-	# The battery, seated: a block on the hub with a cap, a terminal and a gauge
-	# down its face.
-	var cy: float = (BATT_Y0 + BATT_Y1) * 0.5
-	out.append([Vector3(0, cy, 0), Vector3(0.42, BATT_Y1 - BATT_Y0, 0.42), CELL])
-	out.append([Vector3(0, BATT_Y1 - 0.03, 0), Vector3(0.36, 0.07, 0.36), DEEP])
-	out.append([Vector3(0, BATT_Y0 + 0.03, 0), Vector3(0.36, 0.07, 0.36), DEEP])
-	out.append([Vector3(0, BATT_Y1 + 0.04, 0), Vector3(0.12, 0.06, 0.12), CONT])  # terminal
-	# The gauge runs up the middle of the face, inset into the casing with a
-	# margin of cell either side -- the only thing on this machine you read, so
-	# nothing stands in front of it.
-	out.append([Vector3(0, (G0 + G1) * 0.5, GZ), Vector3(0.20, G1 - G0, 0.03), TRACK])
+	out.append_array(battery_boxes(BATT_Y0))
 	return out
+
+
+## The battery on its own, standing with its foot at `y0`: a cell with banded
+## ends, a terminal on top and the dark track of its gauge up the face. Shared
+## by the cradle, which seats one, and the inventory icon, which photographs
+## one -- so the thing in your bag is the thing you slot in.
+static func battery_boxes(y0: float) -> Array:
+	const DEEP := Color(0.15, 0.17, 0.20)
+	const CONT := Color(0.74, 0.62, 0.30)
+	const CELL := Color(0.34, 0.40, 0.30)
+	const TRACK := Color(0.09, 0.10, 0.12)
+	var h: float = BATT_Y1 - BATT_Y0
+	var cy: float = y0 + h * 0.5
+	return [
+		[Vector3(0, cy, 0), Vector3(0.42, h, 0.42), CELL],
+		[Vector3(0, y0 + h - 0.03, 0), Vector3(0.36, 0.07, 0.36), DEEP],
+		[Vector3(0, y0 + 0.03, 0), Vector3(0.36, 0.07, 0.36), DEEP],
+		[Vector3(0, y0 + h + 0.04, 0), Vector3(0.12, 0.06, 0.12), CONT],  # terminal
+		# The gauge runs up the middle of the face, inset into the casing with a
+		# margin of cell either side -- the only thing on this you read, so
+		# nothing stands in front of it.
+		[Vector3(0, y0 + (G0 + G1) * 0.5 - BATT_Y0, GZ), Vector3(0.20, G1 - G0, 0.03), TRACK],
+	]
+
+
+## The battery shrunk into the unit cube ItemIcon photographs. It is drawn with
+## its gauge EMPTY: the slot's own bar is what says how much is in this one, and
+## a picture that showed a level would contradict it.
+static func battery_icon_mesh() -> ArrayMesh:
+	return _icon_from(battery_boxes(0.0))
 
 
 ## A circle in axis-aligned boxes: bands across Z, each as wide as the chord at

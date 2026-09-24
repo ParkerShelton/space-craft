@@ -105,11 +105,31 @@ func build_props() -> void:
 		_props.add_child(con)
 	if seat_at == Vector3.ZERO:
 		return
-	var seat := MeshInstance3D.new()
-	seat.mesh = _seat_mesh()
+	# The seat is a body rather than a decoration: you can lean on its back, and
+	# right-clicking it puts you in it (see Player._try_sit). Its collision is
+	# three boxes -- the pan, the back and the head rest -- rather than one
+	# around the whole thing, so you can still stand right beside it.
+	var seat := StaticBody3D.new()
 	seat.position = seat_at
-	seat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	seat.add_to_group("ship_seat")
+	seat.set_meta("sit_at", Vector3(0, 0.62, -0.05))
 	_props.add_child(seat)
+	var smi := MeshInstance3D.new()
+	smi.mesh = _seat_mesh()
+	smi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	seat.add_child(smi)
+	for box in [[Vector3(0, 0.34, 0.0), Vector3(0.64, 0.30, 0.62)],
+			[Vector3(0, 0.88, 0.28), Vector3(0.66, 1.06, 0.20)],
+			[Vector3(0, 1.44, 0.30), Vector3(0.46, 0.30, 0.20)]]:
+		var cs := CollisionShape3D.new()
+		var bs := BoxShape3D.new()
+		bs.size = box[1]
+		cs.shape = bs
+		cs.position = box[0]
+		seat.add_child(cs)
+	# A body inside the ship's own volume would stop the ship moving, the same
+	# way a station mounted on one would.
+	add_collision_exception_with(seat)
 
 
 ## Blocks that are built as MODELS rather than drawn as cubes. They still sit
