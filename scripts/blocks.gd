@@ -2073,6 +2073,13 @@ static func flora_by_key(key: String) -> Dictionary:
 const SEED_DROP_CHANCE := 0.12
 ## How often clearing leaves gives a sapling of that tree.
 const SAPLING_DROP_CHANCE := 0.08
+## Felling a whole tree does NOT roll that chance against all eighty of its
+## leaves -- that handed over a fistful of saplings for one cut, when breaking
+## leaves by hand gives you one if you are lucky. A felled tree gives this many,
+## whatever size it was, and leaves that wither afterwards almost never give
+## anything at all.
+const FELL_SAPLING_WEIGHTS := [0, 1, 1, 1, 2]
+const WITHER_SAPLING_CHANCE := 0.01
 ## And how often what drops is some OTHER plant that lives on this world instead
 ## of the one you just broke. This is the whole reason you can find a plant
 ## without hunting for the one bush that has it: everything green is a slow

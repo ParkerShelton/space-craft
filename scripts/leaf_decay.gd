@@ -100,7 +100,8 @@ func _process(delta: float) -> void:
 		var at := Vector3(c) + Vector3(0.5, 0.5, 0.5)
 		TreeFall.burst(planet, up, at, cols[v], 6)
 		# The same chance a leaf broken by hand has, dropped where it was.
-		if randf() < Blocks.SAPLING_DROP_CHANCE and player != null and is_instance_valid(player):
+		# A canopy withering on its own is not a harvest: see WITHER_SAPLING_CHANCE.
+		if randf() < Blocks.WITHER_SAPLING_CHANCE and player != null and is_instance_valid(player):
 			var item: Dictionary = player.call("_roll_flora_seed", planet, "tree")
 			if not item.is_empty():
 				ItemDrop.spawn(planet, at, int(item["id"]), 1, item["props"],

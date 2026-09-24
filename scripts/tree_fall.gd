@@ -324,19 +324,31 @@ func _land() -> void:
 	queue_free()
 
 
+## How many saplings one felled tree is worth. A tree is a tree whether it had
+## forty leaves or a hundred, so this does not count them.
+static func roll_fell_saplings() -> int:
+	var w: Array = Blocks.FELL_SAPLING_WEIGHTS
+	return int(w[randi() % w.size()])
+
+
 ## Where each leaf would have landed, a burst of leaf-coloured bits -- and the
-## saplings those leaves would have given, dropped where they fell.
+## sapling or two the tree was worth, dropped where its leaves fell.
 func _burst_leaves(b: Basis) -> void:
 	var keys: Array = leaves.keys()
 	var step := maxi(1, keys.size() / MAX_BURSTS)
 	var upv := Vector3(up)
+	# How many the whole tree gives, decided once -- not once per leaf.
+	var want := roll_fell_saplings() if cutter and is_instance_valid(player) else 0
+	var drop_at := {}
+	for i in want:
+		if not keys.is_empty():
+			drop_at[keys[randi() % keys.size()]] = true
 	for i in keys.size():
 		var c: Vector3i = keys[i]
 		var p: Vector3 = pivot + b * (Vector3(c) + Vector3(0.5, 0.5, 0.5) - pivot)
 		if i % step == 0:
 			_burst(p, planet.color_of(Blocks.bottom_of(int(leaves[c]))))
-		# The same chance a leaf broken by hand has -- for whoever cut it.
-		if cutter and randf() < Blocks.SAPLING_DROP_CHANCE and is_instance_valid(player):
+		if drop_at.has(c):
 			var item: Dictionary = player.call("_roll_flora_seed", planet, "tree")
 			if item.is_empty():
 				continue

@@ -855,13 +855,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton and event.pressed:
 		if inv_open or book_open or _station_open != null or menu_open or ui_typing:
 			return  # a panel is open: clicks go to the UI
-		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
-			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-			return
-		if piloting:
-			return  # no building while flying
+		# The ring has the mouse OUT on purpose, so it has to be asked before the
+		# click that takes the mouse back -- that branch was eating every click
+		# aimed at a station and putting the pointer away again.
 		if _ring != null:
-			# The ring owns the mouse while it is up.
 			if event.button_index == MOUSE_BUTTON_LEFT and _ring_hover >= 0:
 				var it: Dictionary = _ring_items[_ring_hover]
 				if bool(it["ok"]):
@@ -871,6 +868,11 @@ func _unhandled_input(event: InputEvent) -> void:
 					Audio.ui("ui_deny")
 					_toast("Not enough for a %s" % Blocks.name_of(int(it["kind"])))
 			return
+		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			return
+		if piloting:
+			return  # no building while flying
 		if _place_kind != Blocks.AIR:
 			# A ghost in hand takes the click, whichever button it is.
 			if event.button_index == MOUSE_BUTTON_LEFT:
