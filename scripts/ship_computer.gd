@@ -33,33 +33,46 @@ static func checklist(ship: Ship) -> Array:
 	var st: Dictionary = ship.get_status()
 	var missing: Dictionary = ship.wreck_missing
 	# 1. The hull. A ship with holes in it holds no air, whatever else works.
-	var holes := 0
+	# Only the CABIN has to be airtight: a wing that went with the crash is not
+	# a hole in the room you breathe in, and counting it as one sent people off
+	# to make twenty plates they did not need.
+	var cabin: Dictionary = {}
+	for c in ship.cabin_cells:
+		cabin[c] = true
+	var plates := 0
+	var door_missing := false
 	for v in missing:
-		if int(missing[v]) == Blocks.METAL or int(missing[v]) == Blocks.GLASS:
-			holes += 1
-	out.append(Item.new("Hull sealed", holes == 0 and bool(st.get("sealed", false)),
-		"%d plate%s missing" % [holes, "" if holes == 1 else "s"] if holes > 0 else "airtight",
-		"Metal comes from rock: build a Campfire, then bank rock round it for a Smelter, and feed it rock."))
-	# 2. Power. Without it nothing else in here does anything.
+		if Blocks.is_door(int(missing[v])):
+			door_missing = true
+		elif cabin.has(v):
+			plates += 1
+	out.append(Item.new("Hull sealed", plates == 0 and bool(st.get("sealed", false)),
+		"%d metal plate%s needed" % [plates, "" if plates == 1 else "s"] if plates > 0 else "airtight",
+		"Put a metal plate in each hole in the cabin."))
+	# 2. A doorway with nothing in it is a hole like any other.
+	out.append(Item.new("Door", not door_missing,
+		"missing -- one needed" if door_missing else "fitted",
+		"A Door is made at a Carpenter's Bench."))
+	# 3. Power. Without it nothing else in here does anything.
 	var has_battery := _has(ship, Blocks.BATTERY)
 	out.append(Item.new("Power cell", has_battery,
 		"fitted" if has_battery else "torn out",
-		"A Battery is made at a Fabricator, or found in the wrecks and outposts scattered about."))
-	# 3. Air.
+		"Salvage one from a wreck or an outpost, or build one at a Fabricator."))
+	# 4. Air.
 	var has_ls := bool(st.get("life_support", false))
 	out.append(Item.new("Life support", has_ls,
 		"fitted" if has_ls else "missing",
-		"Life Support is built at a Shipworks -- or salvaged, which is faster."))
-	# 4. Thrust.
+		"Salvage one, or build it at a Shipworks."))
+	# 5. Thrust.
 	var thr := int(st.get("thrusters", 0))
 	out.append(Item.new("Thrusters", thr >= 2,
 		"%d of 2" % thr,
-		"A Thruster is built at a Shipworks from metal and a refined material."))
-	# 5. Everything above, and the tanks full.
+		"Salvage one, or build it at a Shipworks."))
+	# 6. Everything above, and the tanks full.
 	var pressurised: bool = bool(st.get("habitable", false)) and float(st.get("air", 0.0)) > 0.05
 	out.append(Item.new("Cabin pressurised", pressurised,
 		"%d%% air" % int(float(st.get("air", 0.0)) * 100.0),
-		"Seal the hull and fit life support, then power it: the cabin fills itself."))
+		"Seal her, fit life support and give her power: the cabin fills itself."))
 	return out
 
 

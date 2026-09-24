@@ -22,6 +22,13 @@ var wreck_missing := {}
 ## What has happened to this ship, in the order it happened. Shown by the
 ## computer once she flies.
 var ship_log: Array = []
+## The cells that have to be solid before the cabin holds air -- the wings and
+## the tail are not among them. Set on the wreck a world starts in.
+var cabin_cells: Array = []
+## Where the pilot's seat stands, in ship space, or ZERO for a ship without one.
+## Built as a model rather than out of blocks: a seat is a thing you sit in.
+var seat_at := Vector3.ZERO
+var _props: Node3D
 var world: WorldManager  # set on spawn; used for gravity while coasting
 var in_gravity := false  # true while in launch/landing-assist mode (HUD)
 var landed := false      # resting on the ground (HUD)
@@ -63,6 +70,62 @@ const FACES := [
 	{"n": Vector3i(0, 0, 1),  "d": 2, "s": 1,  "c": [Vector3(0,0,1), Vector3(1,0,1), Vector3(1,1,1), Vector3(0,1,1)]},
 	{"n": Vector3i(0, 0, -1), "d": 2, "s": -1, "c": [Vector3(0,0,0), Vector3(0,1,0), Vector3(1,1,0), Vector3(1,0,0)]},
 ]
+
+
+## The fittings that are models rather than blocks. Rebuilt rather than saved:
+## they are decided by what the ship IS, so a loaded ship grows its own back.
+func build_props() -> void:
+	if _props != null and is_instance_valid(_props):
+		_props.queue_free()
+	_props = null
+	if seat_at == Vector3.ZERO:
+		return
+	_props = Node3D.new()
+	add_child(_props)
+	var seat := MeshInstance3D.new()
+	seat.mesh = _seat_mesh()
+	seat.position = seat_at
+	seat.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_props.add_child(seat)
+
+
+## A pilot's seat: a pan to sit on, a back raked behind it, head rest, arms and
+## a pedestal -- the same box-model treatment the stations get.
+static func _seat_mesh() -> ArrayMesh:
+	const FRAME := Color(0.26, 0.27, 0.30)
+	const PAD := Color(0.42, 0.13, 0.15)
+	const TRIM := Color(0.55, 0.57, 0.6)
+	var boxes := [
+		[Vector3(0, -0.34, 0), Vector3(0.34, 0.12, 0.34), FRAME],      # pedestal
+		[Vector3(0, -0.22, 0), Vector3(0.52, 0.14, 0.5), FRAME],       # base
+		[Vector3(0, -0.12, 0), Vector3(0.62, 0.1, 0.58), PAD],         # the pan
+		[Vector3(0, 0.22, 0.28), Vector3(0.62, 0.78, 0.12), FRAME],    # back frame
+		[Vector3(0, 0.2, 0.2), Vector3(0.52, 0.66, 0.08), PAD],        # back pad
+		[Vector3(0, 0.62, 0.26), Vector3(0.36, 0.2, 0.14), PAD],       # head rest
+		[Vector3(0, 0.66, 0.34), Vector3(0.42, 0.26, 0.06), FRAME],
+	]
+	for sx in [-1.0, 1.0]:
+		boxes.append([Vector3(sx * 0.32, 0.02, 0.02), Vector3(0.07, 0.1, 0.42), TRIM])   # arm
+		boxes.append([Vector3(sx * 0.32, -0.06, -0.16), Vector3(0.07, 0.24, 0.07), TRIM]) # arm post
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for b in boxes:
+		var c: Color = b[2]
+		var p0: Vector3 = (b[0] as Vector3) - (b[1] as Vector3) * 0.5
+		var p1: Vector3 = (b[0] as Vector3) + (b[1] as Vector3) * 0.5
+		for fi in 6:
+			st.set_color(c)
+			st.set_normal(Vector3(Chunk._WFACE[fi]))
+			var q := Chunk._box_face(p0, p1, fi)
+			st.add_vertex(q[0]); st.add_vertex(q[1]); st.add_vertex(q[2])
+			st.add_vertex(q[0]); st.add_vertex(q[2]); st.add_vertex(q[3])
+	var m := st.commit()
+	if m.get_surface_count() > 0:
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.roughness = 0.75
+		m.surface_set_material(0, mat)
+	return m
 
 
 func _ready() -> void:

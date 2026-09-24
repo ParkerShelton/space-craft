@@ -459,7 +459,8 @@ func save_game() -> bool:
 			ship_index[s] = data["ships"].size()
 			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform,
 				"meta": s.block_meta, "air": s.air, "charge": s.charge,
-				"wreck": s.wreck_missing, "log": s.ship_log})
+				"wreck": s.wreck_missing, "log": s.ship_log,
+				"cabin": s.cabin_cells, "seat": s.seat_at})
 	for st in _stations:
 		if not is_instance_valid(st):
 			continue
@@ -550,7 +551,10 @@ func load_game() -> bool:
 		ship.charge = float(sd.get("charge", 1.0))
 		ship.wreck_missing = sd.get("wreck", {})
 		ship.ship_log = sd.get("log", [])
+		ship.cabin_cells = sd.get("cabin", [])
+		ship.seat_at = sd.get("seat", Vector3.ZERO)
 		ship.rebuild()
+		ship.build_props()
 		_ships.append(ship)
 
 	# stations: rebuild from scratch
