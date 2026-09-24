@@ -45,7 +45,8 @@ static func build(world: WorldManager, pos: Vector3, up: Vector3, fwd: Vector3,
 	_wreck(ship, plan, rng)
 	ship.rebuild()
 	# The seat is a model rather than blocks: a thing you sit in, not a cube.
-	ship.seat_at = Vector3(0, 1, CABIN_FRONT + 1.6)
+	# Block centre, standing ON the floor plate (its top is y = 1), facing the nose.
+	ship.seat_at = Vector3(0.5, 1.0, CABIN_FRONT + 1.5)
 	ship.build_props()
 	ship.landed = true
 	ship.flying = false
@@ -67,20 +68,24 @@ static func _half_width(z: int) -> int:
 ## The ship as it left the yard: cell -> block.
 static func _plan() -> Dictionary:
 	var out := {}
-	# The fuselage: a shell wrapped round a hollow cabin.
+	# The fuselage: a shell wrapped round a hollow cabin. The hollow runs right
+	# up into the nose, and the nose's skin is glazed -- so the windscreen looks
+	# out at the world instead of at the back of a metal snout.
 	for z in range(NOSE, TAIL + 1):
 		var hw := _half_width(z)
 		for x in range(-hw, hw + 1):
 			for y in range(0, H + 1):
-				var hollow := z > CABIN_FRONT and z < CABIN_BACK 					and absi(x) < hw and y > 0 and y < H
-				if not hollow:
-					out[Vector3i(x, y, z)] = Blocks.METAL
-	# The nose: the console at eye level with a windscreen over and beside it.
+				var hollow := z > NOSE + 1 and z < CABIN_BACK 					and absi(x) < hw and y > 0 and y < H
+				if hollow:
+					continue
+				# Glazed above the belly plate from the bulkhead forward: the
+				# canopy you sit behind.
+				var id := Blocks.METAL
+				if z <= CABIN_FRONT and y > 0:
+					id = Blocks.GLASS
+				out[Vector3i(x, y, z)] = id
+	# The console, standing at the front of the cockpit with the glass round it.
 	out[Vector3i(0, 1, CABIN_FRONT)] = Blocks.COCKPIT
-	for x2 in [-1, 1]:
-		out[Vector3i(x2, 1, CABIN_FRONT)] = Blocks.GLASS
-	for x3 in range(-1, 2):
-		out[Vector3i(x3, 2, CABIN_FRONT)] = Blocks.GLASS
 	# A door you can walk through: two blocks tall, in the starboard side.
 	out[DOOR_AT] = Blocks.door_with(false, 0, 0, false)
 	out[DOOR_AT + Vector3i(0, 1, 0)] = Blocks.door_with(false, 0, 0, true)

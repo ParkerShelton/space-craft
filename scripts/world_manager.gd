@@ -460,7 +460,7 @@ func save_game() -> bool:
 			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform,
 				"meta": s.block_meta, "air": s.air, "charge": s.charge,
 				"wreck": s.wreck_missing, "log": s.ship_log,
-				"cabin": s.cabin_cells, "seat": s.seat_at})
+				"cabin": s.cabin_cells, "seat": s.seat_at, "landed": s.landed})
 	for st in _stations:
 		if not is_instance_valid(st):
 			continue
@@ -553,6 +553,8 @@ func load_game() -> bool:
 		ship.ship_log = sd.get("log", [])
 		ship.cabin_cells = sd.get("cabin", [])
 		ship.seat_at = sd.get("seat", Vector3.ZERO)
+		# Every saved ship was parked when the world closed unless it says otherwise.
+		ship.landed = bool(sd.get("landed", true))
 		ship.rebuild()
 		ship.build_props()
 		_ships.append(ship)

@@ -89,24 +89,29 @@ func build_props() -> void:
 	_props.add_child(seat)
 
 
-## A pilot's seat: a pan to sit on, a back raked behind it, head rest, arms and
-## a pedestal -- the same box-model treatment the stations get.
+## A pilot's seat: a pan to sit on, a raked back, head rest, arms and a pedestal
+## -- the same box-model treatment the stations get. Y is measured from the FOOT
+## of the seat, so `seat_at` is a point on the floor and the chair stands on it
+## rather than sinking half a metre through the deck plate.
 static func _seat_mesh() -> ArrayMesh:
 	const FRAME := Color(0.26, 0.27, 0.30)
 	const PAD := Color(0.42, 0.13, 0.15)
 	const TRIM := Color(0.55, 0.57, 0.6)
 	var boxes := [
-		[Vector3(0, -0.34, 0), Vector3(0.34, 0.12, 0.34), FRAME],      # pedestal
-		[Vector3(0, -0.22, 0), Vector3(0.52, 0.14, 0.5), FRAME],       # base
-		[Vector3(0, -0.12, 0), Vector3(0.62, 0.1, 0.58), PAD],         # the pan
-		[Vector3(0, 0.22, 0.28), Vector3(0.62, 0.78, 0.12), FRAME],    # back frame
-		[Vector3(0, 0.2, 0.2), Vector3(0.52, 0.66, 0.08), PAD],        # back pad
-		[Vector3(0, 0.62, 0.26), Vector3(0.36, 0.2, 0.14), PAD],       # head rest
-		[Vector3(0, 0.66, 0.34), Vector3(0.42, 0.26, 0.06), FRAME],
+		[Vector3(0, 0.10, 0), Vector3(0.30, 0.20, 0.30), FRAME],        # pedestal
+		[Vector3(0, 0.24, 0), Vector3(0.50, 0.10, 0.48), FRAME],        # swivel plate
+		[Vector3(0, 0.36, 0.02), Vector3(0.64, 0.14, 0.60), PAD],       # the pan
+		[Vector3(0, 0.34, -0.30), Vector3(0.64, 0.10, 0.08), FRAME],    # front lip
+		[Vector3(0, 0.06, -0.34), Vector3(0.40, 0.08, 0.16), TRIM],     # foot rail
+		[Vector3(0, 0.85, 0.30), Vector3(0.66, 1.00, 0.12), FRAME],     # back frame
+		[Vector3(0, 0.80, 0.21), Vector3(0.54, 0.84, 0.10), PAD],       # back pad
+		[Vector3(0, 1.42, 0.28), Vector3(0.40, 0.22, 0.16), PAD],       # head rest
+		[Vector3(0, 1.45, 0.35), Vector3(0.46, 0.28, 0.06), FRAME],
 	]
 	for sx in [-1.0, 1.0]:
-		boxes.append([Vector3(sx * 0.32, 0.02, 0.02), Vector3(0.07, 0.1, 0.42), TRIM])   # arm
-		boxes.append([Vector3(sx * 0.32, -0.06, -0.16), Vector3(0.07, 0.24, 0.07), TRIM]) # arm post
+		boxes.append([Vector3(sx * 0.28, 0.78, 0.22), Vector3(0.08, 0.80, 0.12), FRAME]) # bolster
+		boxes.append([Vector3(sx * 0.34, 0.56, -0.02), Vector3(0.08, 0.10, 0.44), TRIM]) # arm
+		boxes.append([Vector3(sx * 0.34, 0.47, 0.14), Vector3(0.07, 0.22, 0.07), TRIM])  # post
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for b in boxes:

@@ -2337,12 +2337,24 @@ func _check_ship_transitions() -> void:
 	if piloting != null or eva:
 		return
 	if aboard != null:
-		if not is_instance_valid(aboard) or not aboard.contains(global_position):
+		if not is_instance_valid(aboard) or _parked(aboard) or not aboard.contains(global_position):
 			_unboard()
 	elif world != null:
 		var s := world.nearest_ship(global_position)
-		if s != null and s.contains(global_position):
+		if s != null and not _parked(s) and s.contains(global_position):
 			_board(s, false)
+
+
+## A ship sitting on the ground is just a building: you walk through it on the
+## planet's own gravity, colliding with its hull like any other wall. Interior
+## mode exists so a ship can move UNDER you without throwing you about, and its
+## frame change costs a camera snap -- so paying that while stood in a parked
+## wreck is all cost and no benefit. Worse, `contains` wants a ceiling overhead,
+## which a wreck with a hole in its roof does not have everywhere, so a walk
+## across the cabin used to board and unboard you a dozen times, snapping the
+## view on each one.
+func _parked(ship: Ship) -> bool:
+	return ship.landed and not ship.flying
 
 
 func _unboard() -> void:

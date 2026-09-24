@@ -1742,12 +1742,12 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	# would otherwise have half a tree through the cabin.
 	_clear_inside_ship(ground, ship)
 	# You come round standing at the controls, the seat at your back and the
-	# nose in front. Boarding first, because aboard a ship the facing lives in
-	# the player's LOCAL rotation, and local -Z is the way the ship points.
-	player.global_position = ship.to_global(Vector3(0, 1.45, -0.4))
+	# nose in front. On the planet's own gravity, walking the hull like any
+	# other floor -- a ship sitting in a crater is not a moving deck.
+	player.global_position = ship.to_global(Vector3(0.5, 1.95, -0.4))
 	player.velocity = Vector3.ZERO
-	player.call("_board", ship, false)
-	player.rotation = Vector3.ZERO
+	var nose: Vector3 = -ship.global_transform.basis.z
+	player.look_at(player.global_position + nose, up)
 
 
 ## The mark a ship leaves when it arrives badly: a gouge dug out behind it
