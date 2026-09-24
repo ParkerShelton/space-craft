@@ -36,10 +36,14 @@ static func build(world: WorldManager, pos: Vector3, up: Vector3, fwd: Vector3,
 		rng: RandomNumberGenerator) -> Ship:
 	var ship := world.spawn_ship(pos, up, fwd)
 	ship.blocks.clear()
+	# Straight into the block map and ONE rebuild at the end. set_block rebuilds
+	# the whole ship -- mesh, collision and the airtightness flood fill -- every
+	# time it is called, so laying two hundred cells that way took minutes.
 	var plan := _plan()
 	for v in plan:
-		ship.set_block(v, int(plan[v]))
+		ship.blocks[v] = int(plan[v])
 	_wreck(ship, plan, rng)
+	ship.rebuild()
 	# The seat is a model rather than blocks: a thing you sit in, not a cube.
 	ship.seat_at = Vector3(0, 1, CABIN_FRONT + 1.6)
 	ship.build_props()
@@ -143,15 +147,17 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 		if not by_section.has(s):
 			by_section[s] = []
 		(by_section[s] as Array).append(v)
-	for s2 in [S_WING_L, S_WING_R, S_TAIL, S_SPINE, S_BELLY]:
+	# Only the pieces that stand proud of the cabin can be torn off whole: a
+	# wing, or the tail. The roof and the floor take holes and no more -- they
+	# are what has to be made airtight again, and nobody should wake to a
+	# shopping list of thirty plates.
+	for s2 in [S_WING_L, S_WING_R, S_TAIL]:
 		var cells: Array = by_section.get(s2, [])
 		if cells.is_empty():
 			continue
 		cells.sort()
 		var roll := rng.randf()
-		# A wing is easily lost; the tail carries the thrusters and the belly is
-		# what you stand on, so those are damaged more often than taken.
-		var gone_odds: float = 0.35 if (s2 == S_WING_L or s2 == S_WING_R) else 0.12
+		var gone_odds: float = 0.35 if (s2 == S_WING_L or s2 == S_WING_R) else 0.15
 		if roll < gone_odds:
 			for v2 in cells:
 				missing[v2] = int(plan[v2])
@@ -159,11 +165,19 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 			for i in rng.randi_range(2, maxi(3, cells.size() / 3)):
 				var pick: Vector3i = cells[rng.randi() % cells.size()]
 				missing[pick] = int(plan[pick])
+	for s3 in [S_SPINE, S_BELLY]:
+		var shell: Array = by_section.get(s3, [])
+		if shell.is_empty():
+			continue
+		shell.sort()
+		for i2 in rng.randi_range(1, 4):
+			var pick3: Vector3i = shell[rng.randi() % shell.size()]
+			missing[pick3] = int(plan[pick3])
 	# The cabin always takes a few, so there is always something to seal.
 	var cabin: Array = by_section.get(S_CABIN, [])
 	cabin.sort()
 	if not cabin.is_empty():
-		for i2 in rng.randi_range(2, 5):
+		for i4 in rng.randi_range(2, 5):
 			var pick2: Vector3i = cabin[rng.randi() % cabin.size()]
 			missing[pick2] = int(plan[pick2])
 	# More often than not the door is simply gone.
@@ -184,7 +198,7 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 		if section_of(v3) == S_NOSE:
 			missing.erase(v3)
 	for v4 in missing:
-		ship.set_block(v4, Blocks.AIR)
+		ship.blocks.erase(v4)
 	ship.wreck_missing = missing
 	ship.cabin_cells = cabin_shell(plan)
 	ship.charge = 0.0
