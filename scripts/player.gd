@@ -49,19 +49,19 @@ const MOUSE_SENS := 0.0025
 const DEFAULT_BINDS := {
 	"forward": KEY_W, "back": KEY_S, "left": KEY_A, "right": KEY_D,
 	"jump": KEY_SPACE, "crouch": KEY_SHIFT,
-	"inventory": KEY_E, "recipes": KEY_B, "fine_place": KEY_C,
+	"inventory": KEY_E, "recipes": KEY_B, "stations": KEY_C,
 	"rotate": KEY_R, "pilot": KEY_F, "eva": KEY_T, "starmap": KEY_M,
 	"board": KEY_G,
 }
 ## What each one is called on the settings page, in the order they show there.
 const BIND_ORDER := ["forward", "back", "left", "right", "jump", "crouch",
-	"inventory", "recipes", "fine_place", "rotate", "pilot", "board", "eva",
+	"inventory", "recipes", "stations", "rotate", "pilot", "board", "eva",
 	"starmap"]
 const BIND_NAMES := {
 	"forward": "Walk forward", "back": "Walk back", "left": "Strafe left",
 	"right": "Strafe right", "jump": "Jump / ascend", "crouch": "Crouch / descend",
 	"inventory": "Inventory", "recipes": "Recipe book",
-	"fine_place": "Eighth-block placing", "rotate": "Rotate what you are placing",
+	"stations": "Station ring (hold)", "rotate": "Rotate what you are placing",
 	"pilot": "Take the controls", "board": "Build a ship", "eva": "EVA suit",
 	"starmap": "Star map",
 }
@@ -384,7 +384,10 @@ var _await_ground := 0.0           # seconds left waiting for chunks under a spa
 # Fine mode places an EIGHTH of a block instead of a whole one, into the corner
 # of the face you are looking at. Toggled rather than held: building a bench
 # out of eighths is a lot of clicks to do with a finger on a modifier.
-var fine_place := false
+## Eighth-block placing is parked: stations are set models you put down from
+## the station ring now, so there is nothing left that needed placing by the
+## eighth. Left as a constant so the ghost and the crosshair still read it.
+const fine_place := false
 var _base_panel: Panel             # power/oxygen/temp readout, only while indoors
 var _base_title: Label
 var _base_fills: Array[ColorRect] = []
@@ -857,6 +860,25 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if piloting:
 			return  # no building while flying
+		if _ring != null:
+			# The ring owns the mouse while it is up.
+			if event.button_index == MOUSE_BUTTON_LEFT and _ring_hover >= 0:
+				var it: Dictionary = _ring_items[_ring_hover]
+				if bool(it["ok"]):
+					_begin_placing(int(it["kind"]))
+					_close_ring()
+				else:
+					Audio.ui("ui_deny")
+					_toast("Not enough for a %s" % Blocks.name_of(int(it["kind"])))
+			return
+		if _place_kind != Blocks.AIR:
+			# A ghost in hand takes the click, whichever button it is.
+			if event.button_index == MOUSE_BUTTON_LEFT:
+				_do_place_station()
+			elif event.button_index == MOUSE_BUTTON_RIGHT:
+				_cancel_placing()
+				_toast("Cancelled")
+			return
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			# right-click: open a station, or open/close a door, otherwise place a block
 			#
@@ -897,6 +919,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_cycle_slot(-1)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_cycle_slot(1)
+	elif event is InputEventKey and not event.pressed and key_is(event, "stations"):
+		_close_ring()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
 			if in_bed:
@@ -944,6 +968,9 @@ func _unhandled_input(event: InputEvent) -> void:
 			_try_open_starmap()
 		elif piloting:
 			return  # while flying, only F/M/Esc/mouse-look do anything
+		elif key_is(event, "rotate") and _place_kind != Blocks.AIR:
+			# Turning what is about to be put down, a quarter at a time.
+			_place_rot = (_place_rot + 1) % 4
 		elif key_is(event, "rotate"):
 			# Step through EVERY stair state: the straight run turned through
 			# four quarters, then the corner through four. Facing is part of the
@@ -951,10 +978,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			# precisely what will be placed.
 			_stair_state = (_stair_state + 1) % Blocks.STAIR_STATES
 			_toast("Stairs: %s" % Blocks.stair_state_name(_stair_state))
-		elif key_is(event, "fine_place"):
-			fine_place = not fine_place
-			_apply_place_mode_ui()
-			_toast("Fine placing: %s" % ("ON — eighth blocks" if fine_place else "off"))
+		elif key_is(event, "stations"):
+			_open_ring()
 		elif key_is(event, "recipes"):
 			if not (_book_search != null and _book_search.has_focus()):
 				_toggle_book()
@@ -964,6 +989,407 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.keycode >= KEY_1 and event.keycode <= KEY_8:
 			active_slot = event.keycode - KEY_1
 			_refresh_slots()
+
+
+# --- the station ring -----------------------------------------------------------
+#
+# Hold the key and every station you can build comes up in a ring round the
+# crosshair. Mouse over one to see what it costs -- greyed out if you cannot
+# afford it -- and click it to take up a ghost of the thing itself, which you
+# turn with R and put down with a click.
+
+const RING_RADIUS := 300.0
+const RING_CELL := 84.0
+const RING_CARD_W := 300.0
+const RING_CARD_H := 300.0
+
+var _ring: Control
+var _ring_items: Array = []        # [{kind, node, reqs, ok}]
+var _ring_hover := -1
+var _ring_card_shown := -2         # which one the card in the middle is showing
+var _ring_card: Panel
+var _ring_card_icon: TextureRect
+var _ring_card_name: Label
+var _ring_card_reqs: VBoxContainer
+var _place_kind := Blocks.AIR      # what the ghost is showing, AIR for nothing
+var _place_rot := 0
+var _place_ghost: MeshInstance3D
+var _place_ok := false
+
+
+func _open_ring() -> void:
+	if _ring != null or menu_open or inv_open or book_open:
+		return
+	_place_kind = Blocks.AIR
+	_clear_ghost_model()
+	_ring = Control.new()
+	_ring.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ui_layer.add_child(_ring)
+	var shade := ColorRect.new()
+	shade.color = Color(0, 0, 0, 0.35)
+	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
+	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ring.add_child(shade)
+	_ring_items.clear()
+	_ring_hover = -1
+	_ring_card_shown = -2
+	var builds: Array = Blocks.STATION_BUILDS
+	var vp := get_viewport().get_visible_rect().size
+	var centre := vp * 0.5
+	for i in builds.size():
+		var b: Dictionary = builds[i]
+		var kind := int(b["kind"])
+		var ang := TAU * float(i) / float(builds.size()) - PI * 0.5
+		var at := centre + Vector2(cos(ang), sin(ang)) * RING_RADIUS
+		var cell := Panel.new()
+		cell.size = Vector2(RING_CELL, RING_CELL)
+		cell.position = at - Vector2(RING_CELL, RING_CELL) * 0.5
+		# Styled as an inventory slot, so it reads as something to pick up.
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = SLOT_BG
+		sb.border_color = SLOT_EDGE
+		sb.set_border_width_all(2)
+		sb.set_corner_radius_all(8)
+		cell.add_theme_stylebox_override("panel", sb)
+		cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_ring.add_child(cell)
+		var icon := TextureRect.new()
+		icon.texture = ItemIcon.of(kind, Blocks.color_of(kind),
+			world.nearest_planet(global_position) if world != null else null)
+		icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+		icon.offset_left = 8
+		icon.offset_top = 6
+		icon.offset_right = -8
+		icon.offset_bottom = -22
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cell.add_child(icon)
+		var nm := Label.new()
+		nm.text = Blocks.name_of(kind)
+		nm.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+		nm.offset_top = -20
+		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		nm.add_theme_font_size_override("font_size", 11)
+		nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cell.add_child(nm)
+		_ring_items.append({"kind": kind, "node": cell, "reqs": b["reqs"],
+			"ok": _can_afford(b["reqs"]), "at": at})
+	# The card in the middle: a big picture of whatever the mouse is over, what
+	# it takes line by line, and a tick or a cross against each.
+	_ring_card = Panel.new()
+	_ring_card.set_anchors_preset(Control.PRESET_CENTER)
+	_ring_card.size = Vector2(RING_CARD_W, RING_CARD_H)
+	_ring_card.position = -_ring_card.size * 0.5
+	var csb := StyleBoxFlat.new()
+	csb.bg_color = Color(0.05, 0.06, 0.09, 0.96)
+	csb.border_color = SLOT_EDGE
+	csb.set_border_width_all(2)
+	csb.set_corner_radius_all(10)
+	_ring_card.add_theme_stylebox_override("panel", csb)
+	_ring_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ring.add_child(_ring_card)
+	_ring_card_icon = TextureRect.new()
+	_ring_card_icon.position = Vector2(RING_CARD_W * 0.5 - 60.0, 12)
+	_ring_card_icon.size = Vector2(120, 120)
+	_ring_card_icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_ring_card_icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_ring_card_icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ring_card.add_child(_ring_card_icon)
+	_ring_card_name = Label.new()
+	_ring_card_name.position = Vector2(0, 134)
+	_ring_card_name.size = Vector2(RING_CARD_W, 30)
+	_ring_card_name.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_ring_card_name.add_theme_font_size_override("font_size", 22)
+	_ring_card_name.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ring_card.add_child(_ring_card_name)
+	_ring_card_reqs = VBoxContainer.new()
+	_ring_card_reqs.position = Vector2(22, 174)
+	_ring_card_reqs.custom_minimum_size = Vector2(RING_CARD_W - 44.0, 0)
+	_ring_card_reqs.add_theme_constant_override("separation", 6)
+	_ring_card_reqs.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_ring_card.add_child(_ring_card_reqs)
+	_paint_ring()
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	get_viewport().warp_mouse(get_viewport().get_visible_rect().size * 0.5)
+
+
+func _close_ring() -> void:
+	if _ring == null:
+		return
+	_ring.queue_free()
+	_ring = null
+	_ring_items.clear()
+	_ring_card = null
+	if not (menu_open or inv_open or book_open):
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## Which one the mouse is over, and what it costs.
+func _paint_ring() -> void:
+	if _ring == null:
+		return
+	var m := _ring.get_local_mouse_position()
+	_ring_hover = -1
+	var best := RING_CELL * 0.8
+	for i in _ring_items.size():
+		var it: Dictionary = _ring_items[i]
+		var d: float = (m - (it["at"] as Vector2)).length()
+		if d < best:
+			best = d
+			_ring_hover = i
+	for i in _ring_items.size():
+		var it2: Dictionary = _ring_items[i]
+		var cell: Panel = it2["node"]
+		var ok: bool = it2["ok"]
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.16, 0.14, 0.08, 0.9) if i == _ring_hover else SLOT_BG
+		sb.border_color = SLOT_SELECT if i == _ring_hover else (SLOT_EDGE if ok else Color(0.3, 0.2, 0.2, 0.7))
+		sb.set_border_width_all(3 if i == _ring_hover else 2)
+		sb.set_corner_radius_all(8)
+		cell.add_theme_stylebox_override("panel", sb)
+		# Greyed out is the whole of the message for one you cannot afford.
+		cell.modulate = Color(1, 1, 1, 1) if ok else Color(0.45, 0.45, 0.5, 0.75)
+	if _ring_card == null or _ring_hover == _ring_card_shown:
+		return       # the card only changes when what is under the mouse does
+	_ring_card_shown = _ring_hover
+	for c in _ring_card_reqs.get_children():
+		c.queue_free()
+	if _ring_hover < 0:
+		_ring_card_icon.texture = null
+		_ring_card_name.text = "Stations"
+		var hint := Label.new()
+		hint.text = "Point at one to see what it takes.\nClick it to pick it up and place it."
+		hint.custom_minimum_size = Vector2(RING_CARD_W - 44.0, 0)
+		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		hint.add_theme_font_size_override("font_size", 14)
+		hint.modulate = Color(1, 1, 1, 0.55)
+		_ring_card_reqs.add_child(hint)
+		return
+	var hov: Dictionary = _ring_items[_ring_hover]
+	var kind := int(hov["kind"])
+	_ring_card_icon.texture = ItemIcon.of(kind, Blocks.color_of(kind),
+		world.nearest_planet(global_position) if world != null else null)
+	_ring_card_name.text = Blocks.name_of(kind)
+	_ring_card_name.modulate = Color(1, 1, 1) if bool(hov["ok"]) else Color(1, 0.7, 0.68)
+	for r in (hov["reqs"] as Array):
+		var need := int(r["n"])
+		var have := _count_req(r)
+		var enough := have >= need
+		var line := HBoxContainer.new()
+		line.add_theme_constant_override("separation", 8)
+		_ring_card_reqs.add_child(line)
+		# A tick or a cross, so which line is the problem is plain at a glance.
+		var tick := Label.new()
+		tick.text = "✓" if enough else "✗"
+		tick.custom_minimum_size = Vector2(20, 0)
+		tick.add_theme_font_size_override("font_size", 17)
+		tick.modulate = Color(0.45, 0.95, 0.5) if enough else Color(1.0, 0.45, 0.42)
+		line.add_child(tick)
+		var what := Label.new()
+		what.text = _req_label(r)
+		what.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		what.add_theme_font_size_override("font_size", 17)
+		line.add_child(what)
+		var count := Label.new()
+		count.text = "%d / %d" % [have, need]
+		count.add_theme_font_size_override("font_size", 17)
+		count.modulate = Color(0.45, 0.95, 0.5) if enough else Color(1.0, 0.45, 0.42)
+		line.add_child(count)
+	var fp := StationModels.footprint(kind)
+	var size_line := Label.new()
+	size_line.text = ("stands on %d x %d blocks" % [fp.x, fp.z]) if fp.x * fp.z > 1 else "stands on one block"
+	size_line.add_theme_font_size_override("font_size", 13)
+	size_line.modulate = Color(1, 1, 1, 0.5)
+	_ring_card_reqs.add_child(size_line)
+
+
+func _req_label(r: Dictionary) -> String:
+	if r.has("label"):
+		return str(r["label"])
+	return Blocks.name_of(int(r["id"]))
+
+
+## How many of what this requirement asks for you are carrying.
+func _count_req(r: Dictionary) -> int:
+	var total := 0
+	for sl in inv:
+		if int(sl.get("count", 0)) <= 0:
+			continue
+		var id := int(sl["id"])
+		if r.has("any"):
+			if id in (r["any"] as Array):
+				total += int(sl["count"])
+		elif id == int(r["id"]):
+			total += int(sl["count"])
+	return total
+
+
+func _can_afford(reqs: Array) -> bool:
+	for r in reqs:
+		if _count_req(r) < int(r["n"]):
+			return false
+	return true
+
+
+## Take the cost out of your pockets. Only called once the placement is good.
+func _pay(reqs: Array) -> void:
+	for r in reqs:
+		var left := int(r["n"])
+		for sl in inv:
+			if left <= 0:
+				break
+			if int(sl.get("count", 0)) <= 0:
+				continue
+			var id := int(sl["id"])
+			var matches: bool = (id in (r["any"] as Array)) if r.has("any") else (id == int(r["id"]))
+			if not matches:
+				continue
+			var take: int = mini(left, int(sl["count"]))
+			sl["count"] = int(sl["count"]) - take
+			left -= take
+			if int(sl["count"]) <= 0:
+				_clear_slot(sl)
+	_refresh_slots()
+
+
+## Most of what it cost, back in your hands. Not all of it: taking a bench apart
+## and putting it up again should cost something, or placement is free anyway.
+func _refund(kind: int) -> void:
+	for r in Blocks.station_cost(kind):
+		var n := int(ceil(float(r["n"]) * 0.75))
+		var id: int = int((r["any"] as Array)[0]) if r.has("any") else int(r["id"])
+		if n > 0:
+			_add_item(id, n)
+
+
+# --- the ghost of what you are about to put down ---------------------------------
+
+func _begin_placing(kind: int) -> void:
+	_place_kind = kind
+	_place_rot = 0
+	_clear_ghost_model()
+	_place_ghost = MeshInstance3D.new()
+	_place_ghost.mesh = StationModels.mesh_for(kind, true)
+	_place_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if world != null:
+		world.add_child(_place_ghost)
+	_toast("%s — click to place, R to turn, right-click to cancel" % Blocks.name_of(kind))
+
+
+func _clear_ghost_model() -> void:
+	if _place_ghost != null and is_instance_valid(_place_ghost):
+		_place_ghost.queue_free()
+	_place_ghost = null
+
+
+func _cancel_placing() -> void:
+	_place_kind = Blocks.AIR
+	_clear_ghost_model()
+
+
+## Where the station would stand, given where you are looking: which cells it
+## would fill, and the transform to stand it in.
+func _place_spot(tgt: Dictionary = {}) -> Dictionary:
+	if _place_kind == Blocks.AIR or world == null:
+		return {}
+	if tgt.is_empty():
+		tgt = _raycast_voxel()
+	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "planet":
+		return {}
+	var planet := tgt["obj"] as Planet
+	var anchor: Vector3i = tgt["place"]
+	var g := world.gravity_at(planet.to_global(Vector3(anchor)))
+	var up: Vector3 = _snap_to_axis(-g) if g.length() > 0.01 else Vector3.UP
+	var upi := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
+	# Which way it faces: away from you, turned by however many times R was hit.
+	var face := -global_transform.basis.z
+	face -= up * face.dot(up)
+	var fwd: Vector3 = _snap_to_axis(face)
+	if fwd == Vector3.ZERO or absf(fwd.dot(up)) > 0.5:
+		fwd = up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
+	for i in _place_rot:
+		fwd = fwd.rotated(up, PI * 0.5)
+		fwd = _snap_to_axis(fwd)
+	var right: Vector3 = up.cross(-fwd)
+	var fi := Vector3i(roundi(fwd.x), roundi(fwd.y), roundi(fwd.z))
+	var ri := Vector3i(roundi(right.x), roundi(right.y), roundi(right.z))
+	var fp := StationModels.footprint(_place_kind)
+	var cells: Array = []
+	for a in fp.x:
+		for b in fp.y:
+			for c in fp.z:
+				cells.append(anchor + ri * a + upi * b + fi * c)
+	# Every cell it would fill has to be free, and it has to be standing on
+	# something rather than hanging in the air.
+	var ok := true
+	for cv in cells:
+		var id := Blocks.bottom_of(planet.get_id(cv))
+		if id != Blocks.AIR and id != Blocks.WATER:
+			ok = false
+		# ...and nothing already standing there, which no block would show.
+		elif world.station_blocking(planet.to_global(Vector3(cv) + Vector3(0.5, 0.5, 0.5))):
+			ok = false
+	var footed := false
+	for a2 in fp.x:
+		for c2 in fp.z:
+			var under := anchor + ri * a2 + fi * c2 - upi
+			var uid := Blocks.bottom_of(planet.get_id(under))
+			if uid != Blocks.AIR and uid != Blocks.WATER:
+				footed = true
+	if not footed:
+		ok = false
+	# The middle of the bottom layer, in world space, is where it stands.
+	var centre_local := Vector3(anchor) + Vector3(0.5, 0.5, 0.5) 		+ (Vector3(ri) * float(fp.x - 1) + Vector3(fi) * float(fp.z - 1)) * 0.5
+	var pos := planet.to_global(centre_local)
+	if pos.distance_to(global_position) < 1.2:
+		ok = false
+	return {"planet": planet, "cells": cells, "pos": pos, "up": up, "fwd": fwd, "ok": ok}
+
+
+## Follow the crosshair with the ghost, green where it would go, red where it
+## would not.
+func _update_place_ghost() -> void:
+	if _place_kind == Blocks.AIR or _place_ghost == null:
+		return
+	var spot := _place_spot()
+	_place_ok = bool(spot.get("ok", false)) and _can_afford(Blocks.station_cost(_place_kind))
+	_place_ghost.visible = not spot.is_empty()
+	if spot.is_empty():
+		return
+	var up: Vector3 = spot["up"]
+	var fwd: Vector3 = spot["fwd"]
+	var x := up.cross(-fwd).normalized()
+	_place_ghost.global_transform = Transform3D(Basis(x, up, -fwd), spot["pos"] as Vector3)
+	_place_ghost.position -= up * 0.5     # model space stands on y 0
+	var mat := _place_ghost.get_active_material(0)
+	if mat is StandardMaterial3D:
+		(mat as StandardMaterial3D).albedo_color = Color(0.6, 1.0, 0.6, 0.45) if _place_ok 			else Color(1.0, 0.4, 0.4, 0.4)
+
+
+## Put it down, if it fits and you can pay for it.
+func _do_place_station() -> void:
+	var spot := _place_spot()
+	var reqs := Blocks.station_cost(_place_kind)
+	if spot.is_empty() or not spot.get("ok", false):
+		_toast("No room for that here")
+		Audio.ui("ui_deny")
+		return
+	if not _can_afford(reqs):
+		_toast("Not enough materials")
+		Audio.ui("ui_deny")
+		return
+	_pay(reqs)
+	var st := world.spawn_station(_place_kind, (spot["pos"] as Vector3) - Vector3(0.5, 0.5, 0.5),
+		spot["up"] as Vector3, spot["fwd"] as Vector3)
+	if st != null:
+		_toast("%s built" % Blocks.name_of(_place_kind))
+		Audio.at("place_rock", spot["pos"] as Vector3)
+	# Still holding the same thing, so a row of chests is a row of clicks.
+	if not _can_afford(reqs):
+		_cancel_placing()
 
 
 func _cycle_slot(dir: int) -> void:
@@ -1447,6 +1873,10 @@ func _update_eye_clearance(delta: float) -> void:
 
 
 func _physics_process(delta: float) -> void:
+	if _ring != null:
+		_paint_ring()
+	if _place_kind != Blocks.AIR:
+		_update_place_ghost()
 	_update_eye_clearance(delta)
 	_tick_web(delta)
 	_tick_dread(delta)
@@ -3082,6 +3512,11 @@ func _edit_block(_break_it: bool) -> void:
 	var plan := _placement_plan(tgt, place_id)
 	if plan.is_empty():
 		return
+	# A station standing there owns that space even though no block says so.
+	if tgt["kind"] == "planet" and world != null and world.station_blocking(
+			(obj as Planet).to_global(Vector3(plan.get("voxel", pv)) + Vector3(0.5, 0.5, 0.5))):
+		_toast("Something is already standing there")
+		return
 	if plan.has("part") and tgt["kind"] == "planet":
 		world.edit_part(obj as Planet, plan["voxel"], int(plan["part"]), int(plan["value"]))
 		_consume_eighth()
@@ -3757,10 +4192,6 @@ func _try_assemble_machine() -> bool:
 	# Growing it comes FIRST, though: once there is rock banked around your fire,
 	# right-clicking it means "make this a smelter", and you can still open the
 	# fire from the confirmation or by cancelling it.
-	var prospect := station_prospect()
-	if not prospect.is_empty():
-		_open_commission(prospect)
-		return true
 	if existing != null and (is_core or planet.machine_online_at(v)):
 		if not planet.machine_online_at(v):
 			_toast("%s is damaged -- replace the missing block" % existing.title())
@@ -4236,7 +4667,8 @@ func _update_swing(delta: float) -> void:
 
 
 func _pick_up_station(st: Station) -> void:
-	_add_item(st.kind, 1)
+	# Most of what it cost comes back; see _refund.
+	_refund(st.kind)
 	# return whatever was inside to your inventory
 	for s in st.storage:
 		if int(s.get("count", 0)) > 0:
@@ -4249,7 +4681,7 @@ func _pick_up_station(st: Station) -> void:
 		world._stations.erase(st)
 	st.queue_free()
 	_refresh_slots()
-	_toast("Picked up " + Blocks.name_of(st.kind))
+	_toast("Took apart the " + Blocks.name_of(st.kind))
 
 
 ## Start a new ship where the player is looking, oriented to their current frame.

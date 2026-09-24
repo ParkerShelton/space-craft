@@ -887,6 +887,50 @@ const PART_CLASSES := {
 	"T": [CLOTH, LEATHER],               # textile: either soft stock will do
 }
 
+## What a station costs to put down, in the order they should be offered. This
+## is the whole of station building now: you hold the station ring open, pick
+## one, and these come out of your pockets when it lands.
+##
+## Early things ask for what you can pick up with your hands; the late ones ask
+## for everything the line before them made, which is what keeps the order of
+## the list the order you build in.
+const STATION_BUILDS := [
+	{"kind": CAMPFIRE, "reqs": [{"any": WOOD_IDS, "n": 4, "label": "Wood"},
+		{"any": STONE_IDS, "n": 4, "label": "Rock"}]},
+	{"kind": CARPENTER, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
+	{"kind": CHEST, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
+	{"kind": BED, "reqs": [{"any": WOOD_IDS, "n": 6, "label": "Wood"},
+		{"any": [CLOTH, LEATHER], "n": 4, "label": "Cloth or Leather"}]},
+	{"kind": SHAPER, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"},
+		{"any": STONE_IDS, "n": 6, "label": "Rock"}]},
+	{"kind": SMELTER, "reqs": [{"any": STONE_IDS, "n": 12, "label": "Rock"},
+		{"any": WOOD_IDS, "n": 4, "label": "Wood"}]},
+	{"kind": FORGE, "reqs": [{"any": STONE_IDS, "n": 16, "label": "Rock"},
+		{"id": METAL, "n": 6}]},
+	{"kind": GENERATOR, "reqs": [{"id": METAL, "n": 10}, {"id": WIRE, "n": 4}]},
+	{"kind": POWER_BAY, "reqs": [{"id": METAL, "n": 12}, {"id": BATTERY, "n": 1}]},
+	{"kind": HEATER, "reqs": [{"any": STONE_IDS, "n": 10, "label": "Rock"},
+		{"id": METAL, "n": 6}]},
+	{"kind": COOLER, "reqs": [{"id": GLASS, "n": 6}, {"id": METAL, "n": 10}]},
+	{"kind": OXYGEN_PLANT, "reqs": [{"id": GLASS, "n": 6}, {"id": METAL, "n": 8}]},
+	{"kind": CLIMATE_UNIT, "reqs": [{"id": METAL, "n": 8}, {"id": CIRCUIT, "n": 2}]},
+	{"kind": FABRICATOR, "reqs": [{"id": METAL, "n": 10}, {"id": CIRCUIT, "n": 4}]},
+	{"kind": SHIPWORKS, "reqs": [{"id": METAL, "n": 20}, {"id": ALLOY, "n": 6}]},
+]
+
+
+## What one station costs, or [] if it is not something you can put down.
+static func station_cost(kind: int) -> Array:
+	for b in STATION_BUILDS:
+		if int(b["kind"]) == kind:
+			return b["reqs"]
+	return []
+
+
+static func is_station_build(kind: int) -> bool:
+	return not station_cost(kind).is_empty()
+
+
 # Eighth-block patterns. These are the CORE stations -- the only ones with a
 # shape you have to copy. Everything else grows out of one of them.
 const PART_STRUCTURES := [
@@ -1178,19 +1222,13 @@ static func all_recipes() -> Array:
 				"n": int(r.get("n", 1)), "reqs": r.get("reqs", []),
 				"cost": int(r.get("cost", 0)), "extra": r.get("extra", {}),
 				"diagram": ""})
-	for d in PART_STRUCTURES:
-		out.append({"key": "part:%s" % str(d["name"]), "src": "Built from blocks",
-			"cat": "Machines", "out": int(d["result"]), "n": 1, "reqs": [],
-			"cost": 0, "extra": {}, "diagram": part_structure_diagram(d, false), "def": d})
-	# Upgrades: stations you do not build or craft at all, but GROW out of one
-	# you already have by packing blocks round it -- the Smelter, the Forge, the
-	# Fabricator and the rest. Drawn like the built ones, from an example of the
-	# packing (growth_example_def).
-	for g in STATION_GROWTH:
-		out.append({"key": "grow:%d" % int(g["to"]), "src": "Upgrades",
-			"cat": "Machines", "out": int(g["to"]), "n": 1, "reqs": g["needs"],
-			"cost": 0, "extra": {}, "diagram": "", "def": growth_example_def(g),
-			"grow_from": int(g["from"])})
+	# Stations: put down whole from the station ring (hold C), paid for out of
+	# your pockets. Listed here so the book still answers "what does a Smelter
+	# take", which is the only question anyone asked of the old patterns.
+	for b in STATION_BUILDS:
+		out.append({"key": "build:%d" % int(b["kind"]), "src": "Station ring (hold C)",
+			"cat": "Machines", "out": int(b["kind"]), "n": 1, "reqs": b["reqs"],
+			"cost": 0, "extra": {}, "diagram": ""})
 	for d in STRUCTURES:
 		out.append({"key": "struct:%s" % str(d["name"]), "src": "Built from blocks",
 			"cat": "Machines", "out": int(d["result"]), "n": 1, "reqs": [],
@@ -1458,10 +1496,6 @@ const STATION_CRAFTS := {
 			"reqs": [{"id": METAL, "n": 4}, {"refined": true, "n": 1}]},
 		{"label": "Battery", "out": BATTERY, "n": 1,
 			"reqs": [{"id": METAL, "n": 3}, {"refined": true, "n": 2}]},
-		{"label": "Power Bay", "out": POWER_BAY, "n": 1,
-			"reqs": [{"id": METAL, "n": 8}, {"refined": true, "n": 3}]},
-		{"label": "Shipworks", "out": SHIPWORKS, "n": 1,
-			"reqs": [{"id": METAL, "n": 20}, {"refined": true, "n": 6}]},
 		{"label": "Drill", "out": DRILL, "n": 1, "cost": 3},
 		{"label": "Melee Weapon", "out": WEAPON, "n": 1, "cost": 3},
 		{"label": "Pulse Pistol", "out": PULSE_PISTOL, "n": 1, "cost": 4},
@@ -1509,8 +1543,6 @@ const STATION_CRAFTS := {
 		# Combustion, so which ore you feed it actually matters.
 		{"label": "Ember Torch x6", "out": EMBER_TORCH, "n": 6, "carry_props": true,
 			"reqs": [{"refined": true, "n": 1}, {"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
-		{"label": "Chest", "out": CHEST, "n": 1,
-			"reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
 		# Three from one bone, because the point is to make a field worth
 		# tending rather than to ration it. Bone comes off the big creatures
 		# only, so the supply is already gated by what you can bring down.
@@ -1547,8 +1579,6 @@ const STATION_CRAFTS := {
 		{"label": "Door", "out": DOOR, "n": 1,
 			"reqs": [{"any": WOOD_IDS + PLANK_IDS, "n": 6, "label": "Wood or Planks"}]},
 		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": METAL, "n": 1}]},
-		{"label": "Climate Unit", "out": CLIMATE_UNIT, "n": 1,
-			"reqs": [{"any": WOOD_IDS, "n": 10, "label": "Wood"}, {"id": METAL, "n": 6}]},
 	],
 }
 

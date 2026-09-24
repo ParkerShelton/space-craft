@@ -43,7 +43,7 @@ var _lit := {}                   # planet id -> its material, held at noon
 ## everything with a shape or a lump. Tools are still a coloured square: a box
 ## is not a bucket, and pretending otherwise would be worse than the square.
 static func can_draw(raw: int) -> bool:
-	if Cosmetics.is_cosmetic(raw) or ToolModels.has_model(raw):
+	if Cosmetics.is_cosmetic(raw) or ToolModels.has_model(raw) or Blocks.is_station_build(raw):
 		return true
 	var id := Blocks.bottom_of(raw)
 	return Blocks.is_placeable_block(id) or Blocks.is_ore(id) 		or Blocks.is_refined(id) or Blocks.is_intermediate(id)
@@ -181,8 +181,11 @@ func _shoot(job: Array) -> void:
 	var col: Color = job[3]
 	var planet: Planet = job[4]
 	var tool := ToolModels.has_model(raw)
-	var worn := Cosmetics.is_cosmetic(raw) or tool
-	if tool:
+	var built := Blocks.is_station_build(raw)
+	var worn := Cosmetics.is_cosmetic(raw) or tool or built
+	if built:
+		_mi.mesh = StationModels.icon_mesh(raw)
+	elif tool:
 		_mi.mesh = ToolModels.icon_mesh(raw, col)
 	else:
 		_mi.mesh = Cosmetics.icon_mesh(raw) if Cosmetics.is_cosmetic(raw) else Chunk.icon_mesh(raw, col)

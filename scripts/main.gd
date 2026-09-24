@@ -225,7 +225,14 @@ func _ready() -> void:
 	if not ded.is_empty():
 		_start_dedicated(int(ded["port"]), int(ded["seed"]), str(ded["world"]))
 		return
+	# Stations changed shape; worlds from before that cannot be played (see
+	# WorldManager.purge_old_worlds), so they are cleared rather than broken.
+	var dropped := WorldManager.purge_old_worlds()
 	_build_menu()
+	if dropped > 0:
+		_menu_label(" ", 8)
+		_menu_label("%d world%s from an older build had to be cleared" % [
+			dropped, "" if dropped == 1 else "s"], 13, 0.55)
 	# --join=host[:port] goes straight into a server, skipping the menu. Handy for
 	# a shortcut that always joins the same one.
 	var auto := _join_arg()
