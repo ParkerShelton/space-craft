@@ -6449,6 +6449,12 @@ func _item_tooltip_base(slot: Dictionary) -> String:
 		var lines := ["Refined %s%s  (%s · Tier %d)" % [mname, suffix, Blocks.TIER_NAMES[tier], tier]]
 		for k in Blocks.PROP_KEYS:
 			lines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(props.get(k, 0))])
+		# What those two numbers MEAN, now that they decide different things. A
+		# list of scores is not a decision until something says which way round
+		# they cut.
+		lines.append(Blocks.ore_verdict(props))
+		lines.append("%d plate per unit, %d wire per unit" % [
+			Blocks.plate_yield(props), Blocks.wire_yield(props)])
 		return "\n".join(lines)
 	if Blocks.is_intermediate(id):
 		var itier: int = int(mat.get("tier", 0))
