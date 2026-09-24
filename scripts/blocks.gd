@@ -240,6 +240,72 @@ static func is_fuel(id: int, props: Dictionary) -> bool:
 	return is_ore(id) and combustion_of(props) > 0
 
 
+static func conductivity_of(props: Dictionary) -> int:
+	return int(props.get("r", 0))
+
+
+## How many hull plates a unit of refined ore casts.
+##
+## This is what makes a fuel ore and a metal ore different THINGS rather than
+## the same thing with different numbers on it. An ore that burns readily is a
+## poor casting: it wants to go up rather than set. A dull, inert one is the
+## best plate on the planet and no use at all in a generator. So you sort what
+## you dig into a pile to build with and a pile to burn, which is the decision
+## the property was always describing and never asked you to make.
+static func plate_yield(props: Dictionary) -> int:
+	return clampi(int(round(6.0 - float(combustion_of(props)) / 18.0)), 2, 5)
+
+
+## How much wire a unit of ore draws. Reactivity is how well the stuff carries a
+## current, so a conductive ore goes further -- the same lump gives you four
+## lengths or thirteen depending on what it is.
+static func wire_yield(props: Dictionary) -> int:
+	return clampi(int(round(2.0 + float(conductivity_of(props)) / 8.0)), 2, 14)
+
+
+## How much charge a battery built from this material holds. A cell is a thing
+## for moving current about, so what it is made of decides how much it will
+## take: a poor conductor is a small battery.
+static func battery_capacity(props: Dictionary) -> float:
+	if props.is_empty():
+		return 400.0     # anything from before materials were carried
+	return 200.0 + float(conductivity_of(props)) * 4.0
+
+
+## How many a craft actually yields, for the ones whose output depends on what
+## went into them. `base` is what the recipe says; the material has the last
+## word. Anything from before materials were carried keeps the base.
+static func yield_for(out: int, props: Dictionary, base: int) -> int:
+	if props.is_empty():
+		return base
+	match out:
+		METAL:
+			return plate_yield(props)
+		WIRE:
+			return wire_yield(props)
+		_:
+			return base
+
+
+## What an ore is FOR, in a few words, from the two properties that now decide
+## it. Shown under the numbers so the numbers mean something.
+static func ore_verdict(props: Dictionary) -> String:
+	var c := combustion_of(props)
+	var r := conductivity_of(props)
+	var parts: Array = []
+	if c >= 62:
+		parts.append("burns fiercely -- fuel, poor plate")
+	elif c >= 38:
+		parts.append("burns; middling plate")
+	else:
+		parts.append("inert -- casts the best plate, no use as fuel")
+	if r >= 62:
+		parts.append("conducts well")
+	elif r <= 25:
+		parts.append("barely conducts")
+	return " - ".join(PackedStringArray(parts))
+
+
 static func torch_tier_for(props: Dictionary) -> int:
 	return clampi(int(floor(float(combustion_of(props)) / 26.0)), 0, TORCH_TIERS - 1)
 
@@ -1498,7 +1564,9 @@ const STATION_CRAFTS := {
 	SMELTER: [
 		# Cast refined ingots into plain hull plate -- the step that turns what
 		# you dug up into something you can build with.
-		{"label": "Hull Plate x4", "out": METAL, "n": 4, "cost": 1},
+		# The count is a base: what you actually get comes from the ore, via
+		# Blocks.plate_yield. See "yield_from_material".
+		{"label": "Hull Plate", "out": METAL, "n": 4, "cost": 1, "yield_from_material": true},
 		{"label": "Alloy Plating x2", "out": ALLOY, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 3}},
 		{"label": "Circuitry x2", "out": CIRCUIT, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 2}},
 	],
@@ -1507,7 +1575,7 @@ const STATION_CRAFTS := {
 			"reqs": [{"id": CRYSTAL, "n": 1}, {"id": METAL, "n": 1}]},
 		# The base's nervous system: cheap, because a grid you cannot afford to
 		# run across your base is a grid you build around instead of with.
-		{"label": "Wire x8", "out": WIRE, "n": 8,
+		{"label": "Wire", "out": WIRE, "n": 8, "yield_from_material": true,
 			"reqs": [{"id": METAL, "n": 1}, {"refined": true, "n": 1}]},
 		{"label": "Machine Core", "out": MACHINE_CORE, "n": 1,
 			"reqs": [{"id": METAL, "n": 4}, {"refined": true, "n": 1}]},

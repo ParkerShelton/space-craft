@@ -298,6 +298,8 @@ static func _fit_systems(ship: Ship, world: WorldManager, rng: RandomNumberGener
 			if int(slot.get("id", Blocks.AIR)) == Blocks.AIR:
 				slot["id"] = Blocks.BATTERY
 				slot["count"] = 1
+				# The wreck's own cell has no material behind it, so it takes the
+				# default capacity -- and a fraction of that is what is left.
 				slot["props"] = {"charge": frac * Station.BATTERY_CAP}
 				break
 		bay._refresh_bay()

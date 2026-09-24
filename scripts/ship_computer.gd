@@ -142,6 +142,18 @@ static func battery_charge(bay: Station) -> float:
 	return total
 
 
+## How much the battery in the rack COULD hold -- its own capacity, which comes
+## from what it was made of.
+static func bay_capacity(bay: Station) -> float:
+	if bay == null:
+		return 0.0
+	var total := 0.0
+	for slot in bay.storage:
+		if int(slot.get("id", Blocks.AIR)) == Blocks.BATTERY:
+			total += Blocks.battery_capacity(slot.get("props", {}))
+	return total
+
+
 static func _bay_has_battery(bay: Station) -> bool:
 	if bay == null:
 		return false

@@ -218,6 +218,19 @@ func _count_req(req: Dictionary) -> int:
 	return total
 
 
+## The props of the stuff a craft is really made OF, for the crafts whose yield
+## depends on it: the refined material in the hopper if there is one, otherwise
+## whatever in there carries a material at all.
+func _yield_props() -> Dictionary:
+	for s in storage:
+		if int(s.get("count", 0)) > 0 and Blocks.is_refined(int(s["id"])):
+			return s.get("props", {})
+	for s2 in storage:
+		if int(s2.get("count", 0)) > 0 				and not (s2.get("props", {}) as Dictionary).is_empty():
+			return s2.get("props", {})
+	return {}
+
+
 func _afford_reqs(reqs: Array) -> bool:
 	for r in reqs:
 		if _count_req(r) < int(r["n"]):
@@ -382,7 +395,10 @@ func _tick_generator(delta: float) -> void:
 		return
 
 
-const BATTERY_CAP := 400.0   # power one Battery holds
+## What a battery holds if nothing says otherwise. A real one asks its own
+## material -- see Blocks.battery_capacity -- because how much charge a cell
+## takes is a question about what it is made of.
+const BATTERY_CAP := 400.0
 const CHARGE_RATE := 45.0    # power/sec a Generator pushes into batteries in it
 const BAY_RATE := 90.0       # power/sec a Power Bay pulls out of them
 const SHIP_POWER := 900.0    # power to fill a ship's charge tank from empty
@@ -398,7 +414,7 @@ func _tick_batteries(delta: float) -> void:
 	for slot in storage:
 		if int(slot.get("id", Blocks.AIR)) != Blocks.BATTERY:
 			continue
-		var cap: float = BATTERY_CAP * float(int(slot.get("count", 0)))
+		var cap: float = Blocks.battery_capacity(slot.get("props", {})) 			* float(int(slot.get("count", 0)))
 		var held: float = float((slot["props"] as Dictionary).get("charge", 0.0))
 		if held >= cap:
 			continue
@@ -439,7 +455,7 @@ func _bay_state() -> Vector2:
 	if int(slot.get("id", Blocks.AIR)) != Blocks.BATTERY:
 		return Vector2(0, 0)
 	var held: float = float((slot.get("props", {}) as Dictionary).get("charge", 0.0))
-	var f: float = clampf(held / BATTERY_CAP, 0.0, 1.0)
+	var f: float = clampf(held / Blocks.battery_capacity(slot.get("props", {})), 0.0, 1.0)
 	return Vector2(1, snappedf(f, 0.04))
 
 
@@ -506,8 +522,14 @@ func _do_craft(craft: Dictionary) -> bool:
 	if craft.has("reqs"):
 		if not _afford_reqs(craft["reqs"]):
 			return false
+		# Read the material BEFORE consuming it: a yield that depends on what a
+		# thing is made of has to look at the stuff while it is still there.
+		var mprops: Dictionary = _yield_props()
 		_consume_reqs(craft["reqs"])
-		store_add(int(craft["out"]), int(craft.get("n", 1)))
+		var many := int(craft.get("n", 1))
+		if bool(craft.get("yield_from_material", false)):
+			many = Blocks.yield_for(int(craft["out"]), mprops, many)
+		store_add(int(craft["out"]), many, mprops)
 		return true
 	var mtype := Blocks.primary_material_for(kind)
 	var m = null
@@ -546,5 +568,8 @@ func _do_craft(craft: Dictionary) -> bool:
 			cmat["damage"] = Blocks.weapon_damage(props)
 		Blocks.PULSE_PISTOL:
 			cmat["damage"] = Blocks.ranged_weapon_damage(props)
-	store_add(out, int(craft.get("n", 1)), props, src, cmat)
+	var count := int(craft.get("n", 1))
+	if bool(craft.get("yield_from_material", false)):
+		count = Blocks.yield_for(out, props, count)
+	store_add(out, count, props, src, cmat)
 	return true

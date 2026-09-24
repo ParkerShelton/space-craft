@@ -6373,7 +6373,7 @@ func _paint_cell(cell: Dictionary, slot: Dictionary, highlight: bool) -> void:
 			# ones are worth carrying.
 			count.text = ""
 			var held: float = float((slot.get("props", {}) as Dictionary).get("charge", 0.0))
-			_paint_wear(cell, int(Station.BATTERY_CAP), int(held))
+			_paint_wear(cell, int(Blocks.battery_capacity(slot.get("props", {}))), int(held))
 		else:
 			_paint_wear(cell, mx, int(slot.get("dur", mx)))
 	else:
@@ -7380,7 +7380,7 @@ func _swap_bay_battery(bay: Station) -> void:
 				_add_item(int(giving["id"]), 1, giving.get("props", {}))
 			_toast("No room for the battery you are holding")
 			return
-	var pct := int(round(ShipComputer.battery_charge(bay) / Station.BATTERY_CAP * 100.0))
+	var pct := int(round(ShipComputer.battery_charge(bay) / maxf(ShipComputer.bay_capacity(bay), 1.0) * 100.0))
 	if holding_battery and not came_out.is_empty():
 		_toast("Battery swapped -- %d%%" % pct)
 	elif holding_battery:
