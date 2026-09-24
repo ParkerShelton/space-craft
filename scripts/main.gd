@@ -2072,24 +2072,30 @@ func _show_loading_screen() -> void:
 	bg.color = Color(0.02, 0.03, 0.06, 1.0)
 	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
 	_loading_root.add_child(bg)
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_loading_root.add_child(center)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 10)
-	vb.alignment = BoxContainer.ALIGNMENT_CENTER
-	center.add_child(vb)
+	# Title at the top, progress at the bottom, and the middle left empty -- the
+	# crash plays there (see crash_reel.gd), and a name across the middle of it
+	# would be a name across the middle of a ship going down.
+	var text := Control.new()
+	text.set_anchors_preset(Control.PRESET_FULL_RECT)
+	text.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_loading_root.add_child(text)
+	_loading_text = text
 	var title := Label.new()
 	title.text = "SPACECRAFT"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 40)
-	vb.add_child(title)
-	_loading_text = vb
+	title.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	title.offset_top = 56
+	title.offset_bottom = 110
+	text.add_child(title)
 	_loading_label = Label.new()
 	_loading_label.text = "Generating world…"
 	_loading_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_loading_label.modulate = Color(1, 1, 1, 0.7)
-	vb.add_child(_loading_label)
+	_loading_label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	_loading_label.offset_top = -96
+	_loading_label.offset_bottom = -60
+	text.add_child(_loading_label)
 
 
 func _hide_loading_screen() -> void:
