@@ -1558,8 +1558,7 @@ const STATION_CRAFTS := {
 		# wall on your first afternoon, and a boat you cannot afford until you
 		# have a smelter would be a boat nobody ever builds.
 		{"label": "Wooden Boat", "out": BOAT, "n": 1,
-			"reqs": [{"any": PLANK_IDS, "n": 8, "label": "Planks"},
-				{"any": WOOD_IDS, "n": 2, "label": "Wood"}]},
+			"reqs": [{"any": WOOD_IDS, "n": 10, "label": "Wood"}]},
 		{"label": "Torch x4", "out": TORCH, "n": 4,
 			"reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
 		# Burns the ore itself: how bright and how far comes from that ore's

@@ -160,6 +160,12 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 	var missing := {}
 	var by_section := {}
 	for v in plan:
+		# The door is NOT a hole candidate. It is two cells and it has a roll of
+		# its own below, all or nothing; leaving it in here let the cabin roll
+		# pick out one half and leave the other, so she came down with a door
+		# that was only a bottom and a gap you could see daylight through.
+		if Blocks.is_door(int(plan[v])):
+			continue
 		var s := section_of(v)
 		if not by_section.has(s):
 			by_section[s] = []

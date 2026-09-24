@@ -64,9 +64,13 @@ func _build() -> void:
 ## A clinker-built dinghy in boxes: a floor, strakes lapped up either side, a
 ## stem and a transom, a thwart to sit on and an oar laid across it.
 static func hull_mesh() -> ArrayMesh:
-	var plank := Blocks.color_of(Blocks.PLANK)
-	var dark := Color(plank.r * 0.72, plank.g * 0.70, plank.b * 0.66)
-	var trim := Color(plank.r * 0.86, plank.g * 0.80, plank.b * 0.62)
+	# Wood, not planks: she is made of ten logs at a bench and she should look
+	# like it. The three tones are the same timber worked differently -- sawn
+	# strakes, the darker heartwood of floor and keel, and the pale rubbed rail.
+	var plank := Blocks.color_of(Blocks.WOOD)
+	var dark := Color(plank.r * 0.70, plank.g * 0.66, plank.b * 0.60)
+	var trim := Color(minf(plank.r * 1.18, 1.0), minf(plank.g * 1.12, 1.0),
+		minf(plank.b * 1.02, 1.0))
 	var boxes: Array = [
 		[Vector3(0, 0.10, 0), Vector3(1.34, 0.16, 2.74), dark],        # floor
 		[Vector3(0, 0.06, 0), Vector3(0.26, 0.12, 2.86), dark],        # keel
