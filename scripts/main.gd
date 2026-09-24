@@ -328,26 +328,25 @@ func _menu_entry(title: String, sub: String, go: Callable, extra := "", extra_cb
 	row.add_theme_constant_override("separation", 6)
 	_menu_vb.add_child(row)
 	var b := Button.new()
-	b.custom_minimum_size = Vector2(420 if extra != "" else 470, 52)
-	b.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	b.text = "  " + title
+	b.custom_minimum_size = Vector2(420 if extra != "" else 470, 72)
 	b.tooltip_text = sub
 	_wire_button(b)
 	b.pressed.connect(go)
 	row.add_child(b)
-	# The second line, laid over the button rather than inside it: a Button draws
-	# one line of text and nothing else.
-	var l := Label.new()
-	l.text = sub
-	l.add_theme_font_size_override("font_size", 12)
-	l.modulate = Color(1, 1, 1, 0.5)
-	l.position = Vector2(12, 28)
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	b.add_child(l)
+	# BOTH lines are laid over the button rather than being its text: a Button
+	# draws one line, centred, and these are two ranged left with air between.
+	for spec in [[title, 13.0, 18, 1.0], [sub, 42.0, 13, 0.5]]:
+		var l := Label.new()
+		l.text = str(spec[0])
+		l.position = Vector2(14, float(spec[1]))
+		l.add_theme_font_size_override("font_size", int(spec[2]))
+		l.modulate = Color(1, 1, 1, float(spec[3]))
+		l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		b.add_child(l)
 	if extra != "":
 		var x := Button.new()
 		x.text = extra
-		x.custom_minimum_size = Vector2(44, 52)
+		x.custom_minimum_size = Vector2(44, 72)
 		_wire_button(x)
 		x.pressed.connect(extra_cb)
 		row.add_child(x)

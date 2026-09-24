@@ -57,16 +57,17 @@ static func boxes_for(kind: int) -> Array:
 				[Vector3(0, 0.3, 0), Vector3(0.4, 0.22, 0.4), EMBER]]
 		Blocks.CARPENTER:
 			var out: Array = []
-			for sx in [-0.78, 0.78]:
-				out.append([Vector3(sx, 0.32, 0.0), Vector3(0.16, 0.64, 0.16), DARK_WOOD])
-				out.append([Vector3(sx, 0.32, -0.32), Vector3(0.14, 0.5, 0.14), DARK_WOOD])
+			# Four legs of the same length, all standing on the floor.
+			for sx in [-0.8, 0.8]:
+				for sz in [-0.3, 0.3]:
+					out.append([Vector3(sx, 0.31, sz), Vector3(0.16, 0.62, 0.16), DARK_WOOD])
 			out.append([Vector3(0, 0.7, 0), Vector3(1.94, 0.16, 0.9), WOOD])
 			out.append([Vector3(0, 0.82, 0.3), Vector3(1.2, 0.08, 0.22), DARK_WOOD])
 			out.append([Vector3(-0.5, 0.86, -0.2), Vector3(0.3, 0.1, 0.12), METAL])
 			return out
 		Blocks.BED:
 			return [
-				[Vector3(0, 0.18, 0), Vector3(0.84, 0.16, 1.9), DARK_WOOD],
+				[Vector3(0, 0.12, 0), Vector3(0.84, 0.24, 1.9), DARK_WOOD],
 				[Vector3(0, 0.34, 0.1), Vector3(0.9, 0.2, 1.7), CLOTH],
 				[Vector3(0, 0.46, -0.72), Vector3(0.7, 0.16, 0.3), Color(0.9, 0.9, 0.88)],
 				[Vector3(0, 0.3, -0.95), Vector3(0.9, 0.6, 0.12), WOOD]]
@@ -171,8 +172,10 @@ static func mesh_for(kind: int, ghost := false) -> ArrayMesh:
 		var p0: Vector3 = (b[0] as Vector3) - (b[1] as Vector3) * 0.5
 		var p1: Vector3 = (b[0] as Vector3) + (b[1] as Vector3) * 0.5
 		for fi in 6:
-			var shade := Chunk._face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
-			st.set_color(Color(c.r * shade, c.g * shade, c.b * shade, c.a))
+			# Flat colour: this model is lit by the sun like anything else in the
+			# world, and face shading baked in on top of that shaded it twice --
+			# which is what made the faces look wrong rather than merely dark.
+			st.set_color(c)
 			st.set_normal(Vector3(Chunk._WFACE[fi]))
 			var q := Chunk._box_face(p0, p1, fi)
 			st.add_vertex(q[0]); st.add_vertex(q[1]); st.add_vertex(q[2])
@@ -227,7 +230,9 @@ static func material(ghost := false) -> StandardMaterial3D:
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	else:
+		# A machine has its own small glow so it reads as running after dark,
+		# but not enough to flatten the daylight shading.
 		mat.emission_enabled = true
 		mat.emission = Color(1, 0.8, 0.5)
-		mat.emission_energy_multiplier = 0.12
+		mat.emission_energy_multiplier = 0.06
 	return mat
