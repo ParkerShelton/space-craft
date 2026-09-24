@@ -1738,6 +1738,9 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 		return
 	ship.ship_log.append("Came down hard. Ship's log resumes.")
 	_scar_the_ground(ground, ship, up, fwd, rng)
+	# ...and the pieces that came off her, crushed into the ground where they
+	# stopped. They are the nearest metal there is, which is the point.
+	_strew_wreckage(ground, ship, up, rng)
 	# Nothing of the world inside the hull: a wreck that came down in a wood
 	# would otherwise have half a tree through the cabin.
 	_clear_inside_ship(ground, ship)
@@ -1783,6 +1786,65 @@ func _scar_the_ground(ground: Planet, ship: Ship, up: Vector3, fwd: Vector3,
 			junk[v2] = Blocks.METAL
 	if not junk.is_empty():
 		ground.set_blocks(junk)
+
+
+## The wing or the tail that came off, lying out on the ground: flattened into
+## the dirt, half buried, bent out of shape, but still plainly a piece of the
+## ship. Everything in it is plate -- a thruster that went through a hillside at
+## speed is not a thruster any more -- so what a piece is good for is being cut
+## up for hull, which is exactly what the computer is about to ask you for.
+func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
+		rng: RandomNumberGenerator) -> void:
+	if ship.wreck_debris.is_empty():
+		return
+	var space := get_world_3d().direct_space_state
+	var bx: Basis = ship.global_transform.basis
+	var cells := {}
+	for piece in ship.wreck_debris:
+		var list: Array = piece
+		if list.is_empty():
+			continue
+		# Where it sat on the airframe decides which way it went: a port wing
+		# ends up off the port side, the tail out behind her.
+		var mid := Vector3.ZERO
+		for c in list:
+			mid += Vector3(c as Vector3i)
+		mid /= float(list.size())
+		var away := Vector3(mid.x, 0.0, mid.z)
+		if away.length() < 0.5:
+			away = Vector3(0, 0, 1)
+		away = away.normalized()
+		var throw: Vector3 = bx * away * rng.randf_range(6.0, 13.0)
+		var spin := rng.randf_range(-PI, PI)
+		var anchor: Vector3 = ship.global_position + throw
+		for c2 in list:
+			# Crushed: the height it had is gone, and it is squashed along its
+			# length as well, so what lands is a flattened, buckled version of
+			# the shape rather than a tidy copy of it.
+			var off: Vector3 = Vector3(c2 as Vector3i) - mid
+			var fx: float = off.x * cos(spin) - off.z * sin(spin)
+			var fz: float = off.x * sin(spin) + off.z * cos(spin)
+			fx *= 0.8
+			fz *= 0.8
+			var at: Vector3 = anchor + bx * Vector3(fx, 0.0, fz)
+			at += bx * Vector3(rng.randf_range(-0.4, 0.4), 0.0, rng.randf_range(-0.4, 0.4))
+			var g = _drop_to_ground(space, at, up)
+			if g == null:
+				continue
+			var top: Vector3 = g as Vector3
+			# Most of it is driven into the dirt; a little of it stands proud.
+			var v := ground.world_to_voxel(top + up * 0.5)
+			if Blocks.bottom_of(ground.get_id(v)) == Blocks.AIR:
+				cells[v] = Blocks.METAL
+			if rng.randf() < 0.45:
+				cells[ground.world_to_voxel(top - up * 0.5)] = Blocks.METAL
+			elif rng.randf() < 0.2:
+				var up2 := ground.world_to_voxel(top + up * 1.5)
+				if Blocks.bottom_of(ground.get_id(up2)) == Blocks.AIR:
+					cells[up2] = Blocks.METAL
+	if not cells.is_empty():
+		ground.set_blocks(cells)
+	ship.wreck_debris = []
 
 
 ## Empty every world block the hull touches, and the shell around it, so the

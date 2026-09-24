@@ -156,6 +156,7 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 	# wing, or the tail. The roof and the floor take holes and no more -- they
 	# are what has to be made airtight again, and nobody should wake to a
 	# shopping list of thirty plates.
+	var torn: Array = []
 	for s2 in [S_WING_L, S_WING_R, S_TAIL]:
 		var cells: Array = by_section.get(s2, [])
 		if cells.is_empty():
@@ -166,6 +167,8 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 		if roll < gone_odds:
 			for v2 in cells:
 				missing[v2] = int(plan[v2])
+			# It did not evaporate: it is lying out there somewhere.
+			torn.append(cells.duplicate())
 		elif roll < 0.8:
 			for i in rng.randi_range(2, maxi(3, cells.size() / 3)):
 				var pick: Vector3i = cells[rng.randi() % cells.size()]
@@ -204,7 +207,50 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 			missing.erase(v3)
 	for v4 in missing:
 		ship.blocks.erase(v4)
+	_ensure_way_out(ship, plan, missing)
+	ship.wreck_debris = torn
 	ship.wreck_missing = missing
 	ship.cabin_cells = cabin_shell(plan)
 	ship.charge = 0.0
 	ship.air = 0.0
+
+
+## Nobody is sealed in. The doorway is a way out whether the door went with the
+## crash (a two-block hole) or survived (you open it) -- but a door can be
+## painted over by a later roll, and a wreck you cannot leave is the one bug
+## this opening must never have. So it is checked rather than assumed, and if
+## the check fails the port wall loses two stacked cells and that is the way
+## out instead.
+static func _ensure_way_out(ship: Ship, plan: Dictionary, missing: Dictionary) -> void:
+	if _way_out_exists(ship):
+		return
+	var y := 1
+	while y <= H - 1:
+		var hole := Vector3i(-2, y, 0)
+		if plan.has(hole):
+			missing[hole] = int(plan[hole])
+			ship.blocks.erase(hole)
+		y += 1
+
+
+## Is there a standing-height gap in the cabin wall, or a door in it? Two cells
+## stacked, because a one-block slot is not a way out for someone your size.
+static func _way_out_exists(ship: Ship) -> bool:
+	for z in range(CABIN_FRONT, CABIN_BACK + 1):
+		for x in [-2, 2]:
+			if _open_pair(ship, Vector3i(x, 1, z)):
+				return true
+	for x2 in range(-2, 3):
+		if _open_pair(ship, Vector3i(x2, 1, CABIN_BACK)):
+			return true
+	return false
+
+
+static func _open_pair(ship: Ship, v: Vector3i) -> bool:
+	return _passable(ship, v) and _passable(ship, v + Vector3i(0, 1, 0))
+
+
+static func _passable(ship: Ship, v: Vector3i) -> bool:
+	if not ship.blocks.has(v):
+		return true
+	return Blocks.is_door(int(ship.blocks[v]))

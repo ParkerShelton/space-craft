@@ -25,6 +25,11 @@ var ship_log: Array = []
 ## The cells that have to be solid before the cabin holds air -- the wings and
 ## the tail are not among them. Set on the wreck a world starts in.
 var cabin_cells: Array = []
+## The sections that came off in the crash, one entry per piece, each a list of
+## the cells it was made of. Used once, when the world places the wreck, to lay
+## the pieces out on the ground nearby -- after that they are terrain, so this
+## is never saved.
+var wreck_debris: Array = []
 ## Where the pilot's seat stands, in ship space, or ZERO for a ship without one.
 ## Built as a model rather than out of blocks: a seat is a thing you sit in.
 var seat_at := Vector3.ZERO
@@ -122,8 +127,15 @@ static func _seat_mesh() -> ArrayMesh:
 			st.set_color(c)
 			st.set_normal(Vector3(Chunk._WFACE[fi]))
 			var q := Chunk._box_face(p0, p1, fi)
-			st.add_vertex(q[0]); st.add_vertex(q[1]); st.add_vertex(q[2])
-			st.add_vertex(q[0]); st.add_vertex(q[2]); st.add_vertex(q[3])
+			# Reversed on purpose. Chunk._box_face lists each quad in the order
+			# the voxel mesher wants, and that mesher only gets away with it
+			# because voxel_block.gdshader sets cull_disabled (see the note at
+			# the top of it). A model lit by an ordinary material culls its back
+			# faces, so laid out that way you see the INSIDE of every box and
+			# the shading comes out inverted -- the top of a seat darker than
+			# its sides. Wound the other way round, it culls correctly.
+			st.add_vertex(q[0]); st.add_vertex(q[2]); st.add_vertex(q[1])
+			st.add_vertex(q[0]); st.add_vertex(q[3]); st.add_vertex(q[2])
 	var m := st.commit()
 	if m.get_surface_count() > 0:
 		var mat := StandardMaterial3D.new()
