@@ -45,6 +45,11 @@ var _lit := {}                   # planet id -> its material, held at noon
 static func can_draw(raw: int) -> bool:
 	if Cosmetics.is_cosmetic(raw) or ToolModels.has_model(raw) or Blocks.is_station_build(raw):
 		return true
+	# A battery is not a block you place, so it fell through every test below
+	# and came back as a flat green square. It has a model -- the one the cradle
+	# seats -- so it can be photographed like anything else.
+	if raw == Blocks.BATTERY:
+		return true
 	var id := Blocks.bottom_of(raw)
 	return Blocks.is_placeable_block(id) or Blocks.is_ore(id) 		or Blocks.is_refined(id) or Blocks.is_intermediate(id)
 

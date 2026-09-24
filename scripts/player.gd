@@ -7385,6 +7385,16 @@ func sit_in(seat: Node3D) -> void:
 	seated = seat
 	velocity = Vector3.ZERO
 	_body_shape.disabled = true
+	# Sitting down turns you to face the way the chair faces. You reached it by
+	# looking AT it, so without this you would sit down staring into its own
+	# back -- and a pilot's seat points at the controls for a reason.
+	var up: Vector3 = seat.global_transform.basis.y
+	var fwd: Vector3 = -seat.global_transform.basis.z
+	global_position = seat.to_global(seat.get_meta("sit_at", Vector3(0, 0.6, 0)))
+	look_at(global_position + fwd, up)
+	_pitch = 0.0
+	if _camera != null:
+		_camera.rotation.x = 0.0
 	_toast("Seated -- %s to get up" % OS.get_keycode_string(
 		int(binds.get("crouch", DEFAULT_BINDS["crouch"]))))
 
