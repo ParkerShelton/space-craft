@@ -1449,6 +1449,8 @@ func _do_place_station() -> void:
 
 var _ship_panel: Control
 var _ship_panel_ship: Ship
+var _ship_panel_body: Control = null
+var _ship_panel_sig := ""
 var _ship_panel_t := 0.0
 
 
@@ -1472,7 +1474,7 @@ func _open_ship_computer(ship: Ship) -> void:
 	_ship_panel_ship = ship
 	_ship_panel = Panel.new()
 	_ship_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_ship_panel.custom_minimum_size = Vector2(560, 470)
+	_ship_panel.custom_minimum_size = Vector2(560, 520)
 	_ship_panel.size = _ship_panel.custom_minimum_size
 	_ship_panel.position = -_ship_panel.size * 0.5
 	var sb := StyleBoxFlat.new()
@@ -1484,6 +1486,9 @@ func _open_ship_computer(ship: Ship) -> void:
 	_ui_layer.add_child(_ship_panel)
 	menu_open = true
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_ship_panel_sig = ""
+	_ship_panel_body = null
+	_build_ship_close_button()
 	_refresh_ship_computer()
 	_fit_panel(_ship_panel)
 
@@ -1493,6 +1498,8 @@ func _close_ship_computer() -> void:
 		_ship_panel.queue_free()
 		_ship_panel = null
 	_ship_panel_ship = null
+	_ship_panel_body = null
+	_ship_panel_sig = ""
 	menu_open = false
 	if not (inv_open or book_open or _station_open != null):
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -1504,11 +1511,23 @@ func _refresh_ship_computer() -> void:
 	if _ship_panel == null or _ship_panel_ship == null or not is_instance_valid(_ship_panel_ship):
 		_close_ship_computer()
 		return
-	for c in _ship_panel.get_children():
-		c.queue_free()
 	var ship := _ship_panel_ship
 	var flies := ShipComputer.flightworthy(ship)
+	# Only redraw when there is something different to say. This screen is
+	# refreshed every three quarters of a second so it keeps up with repairs,
+	# and it used to rebuild itself every time -- including the Close button.
+	# Pressing a button that is freed between your press and your release does
+	# nothing, and a freshly built button under a cursor that has not moved is
+	# not hovered, so the click had to land in the gap between rebuilds. That is
+	# the "it only works if I move the mouse first" you were hitting.
+	var sig := _ship_screen_signature(ship, flies)
+	if _ship_panel_body != null and is_instance_valid(_ship_panel_body) and sig == _ship_panel_sig:
+		return
+	_ship_panel_sig = sig
+	if _ship_panel_body != null and is_instance_valid(_ship_panel_body):
+		_ship_panel_body.queue_free()
 	var vb := VBoxContainer.new()
+	_ship_panel_body = vb
 	vb.position = Vector2(22, 18)
 	vb.custom_minimum_size = Vector2(516, 0)
 	vb.add_theme_constant_override("separation", 8)
@@ -1528,14 +1547,36 @@ func _refresh_ship_computer() -> void:
 		_draw_repair_screen(vb, ship)
 	else:
 		_draw_flight_screen(vb, ship)
+
+
+## What the screen currently SAYS, as one string. Two refreshes that would draw
+## the same thing do not redraw it.
+func _ship_screen_signature(ship: Ship, flies: bool) -> String:
+	var parts: Array = ["1" if flies else "0"]
+	if flies:
+		parts.append_array(ShipComputer.status_lines(ship))
+		parts.append(str(ship.ship_log.size()))
+	else:
+		for it in ShipComputer.checklist(ship):
+			var item: ShipComputer.Item = it
+			parts.append("%s|%s|%s" % [item.name, "1" if item.done else "0", item.detail])
+	return "
+".join(PackedStringArray(parts))
+
+
+## The Close button is built ONCE, with the panel, and lives outside everything
+## the refresh throws away. Whatever the screen is saying, the way out of it is
+## always the same button that was there a moment ago.
+func _build_ship_close_button() -> void:
 	var close := Button.new()
 	close.text = "Close"
 	close.custom_minimum_size = Vector2(120, 34)
+	close.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	close.position = Vector2(22, _ship_panel.size.y - 50)
 	close.mouse_entered.connect(func(): Audio.ui("ui_hover"))
 	close.pressed.connect(func(): Audio.ui("ui_back"))
 	close.pressed.connect(_close_ship_computer)
-	vb.add_child(_gap(4))
-	vb.add_child(close)
+	_ship_panel.add_child(close)
 
 
 func _gap(h: int) -> Control:
