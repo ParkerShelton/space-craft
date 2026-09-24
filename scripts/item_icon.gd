@@ -48,7 +48,7 @@ static func can_draw(raw: int) -> bool:
 	# A battery is not a block you place, so it fell through every test below
 	# and came back as a flat green square. It has a model -- the one the cradle
 	# seats -- so it can be photographed like anything else.
-	if raw == Blocks.BATTERY:
+	if raw == Blocks.BATTERY or raw == Blocks.BOAT:
 		return true
 	var id := Blocks.bottom_of(raw)
 	return Blocks.is_placeable_block(id) or Blocks.is_ore(id) 		or Blocks.is_refined(id) or Blocks.is_intermediate(id)
@@ -188,7 +188,9 @@ func _shoot(job: Array) -> void:
 	var tool := ToolModels.has_model(raw)
 	var built := Blocks.is_station_build(raw)
 	var worn := Cosmetics.is_cosmetic(raw) or tool or built
-	if raw == Blocks.BATTERY:
+	if raw == Blocks.BOAT:
+		_mi.mesh = Boat.icon_mesh()
+	elif raw == Blocks.BATTERY:
 		_mi.mesh = StationModels.battery_icon_mesh()
 	elif built:
 		_mi.mesh = StationModels.icon_mesh(raw)

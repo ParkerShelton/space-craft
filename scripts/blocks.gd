@@ -697,6 +697,11 @@ const SPADE := 129
 ## Rock on a wooden grip: the first thing you can fight with that beats a fist,
 ## made at the same bench as the tools and from the same two materials.
 const SWORD := 140
+
+## A small wooden boat. Not a block: you set it down on water and it becomes a
+## thing that floats (see boat.gd). Well clear of the cosmetics, which run from
+## Cosmetics.FIRST_ID upward, and well under ID_MASK.
+const BOAT := 200
 const SWORD_DAMAGE := 6.0
 
 ## How many uses each tool has in it before it breaks: a block broken, a patch
@@ -1542,6 +1547,12 @@ const STATION_CRAFTS := {
 		# a bucket is what stops that meaning "on a beach".
 		{"label": "Bucket", "out": BUCKET, "n": 1,
 			"reqs": [{"id": METAL, "n": 3}]},
+		# Cheap and early on purpose. It exists so that a lake stops being a
+		# wall on your first afternoon, and a boat you cannot afford until you
+		# have a smelter would be a boat nobody ever builds.
+		{"label": "Wooden Boat", "out": BOAT, "n": 1,
+			"reqs": [{"any": PLANK_IDS, "n": 8, "label": "Planks"},
+				{"any": WOOD_IDS, "n": 2, "label": "Wood"}]},
 		{"label": "Torch x4", "out": TORCH, "n": 4,
 			"reqs": [{"any": WOOD_IDS, "n": 1, "label": "Wood"}]},
 		# Burns the ore itself: how bright and how far comes from that ore's
@@ -1671,6 +1682,7 @@ const NAMES := {
 	CARPENTER: "Carpenter's Bench",
 	SHAPER: "Block Shaper",
 	MACHINE_CORE: "Machine Core",
+	BOAT: "Wooden Boat",
 	GENERATOR: "Generator",
 	OXYGEN_PLANT: "Oxygen Plant",
 	HEATER: "Heater",
@@ -1824,6 +1836,7 @@ const COLORS := {
 	CARPENTER: Color(0.48, 0.34, 0.20),
 	SHAPER: Color(0.52, 0.52, 0.56),
 	MACHINE_CORE: Color(0.86, 0.52, 0.18),
+	BOAT: Color(0.58, 0.42, 0.26),
 	GENERATOR: Color(0.62, 0.45, 0.28),
 	OXYGEN_PLANT: Color(0.42, 0.68, 0.78),
 	HEATER: Color(0.74, 0.40, 0.26),

@@ -26,6 +26,8 @@ var player: Node3D
 var net: Net
 var _ships: Array[Ship] = []
 var _stations: Array[Station] = []
+## Boats set down on water. They move, so they are their own nodes.
+var _boats: Array[Boat] = []
 
 ## Every world you have, newest played first. One line per world: which slot's
 ## files it lives in, what you called it, and when you were last in it. The save
@@ -461,6 +463,10 @@ func save_game() -> bool:
 				"meta": s.block_meta, "air": s.air, "charge": s.charge,
 				"wreck": s.wreck_missing, "log": s.ship_log,
 				"cabin": s.cabin_cells, "seat": s.seat_at, "landed": s.landed})
+	data["boats"] = []
+	for bt in _boats:
+		if is_instance_valid(bt):
+			data["boats"].append({"xform": bt.global_transform})
 	for st in _stations:
 		if not is_instance_valid(st):
 			continue
@@ -558,6 +564,18 @@ func load_game() -> bool:
 		ship.rebuild()
 		ship.build_props()
 		_ships.append(ship)
+
+	# boats: rebuilt from scratch, like the stations below
+	for bt2 in _boats:
+		if is_instance_valid(bt2):
+			bt2.queue_free()
+	_boats.clear()
+	for bd in data.get("boats", []):
+		var bo := Boat.new()
+		bo.world = self
+		add_child(bo)
+		bo.global_transform = bd.get("xform", Transform3D.IDENTITY)
+		_boats.append(bo)
 
 	# stations: rebuild from scratch
 	for st in _stations:
@@ -676,6 +694,22 @@ func spawn_station(kind: int, pos: Vector3, up: Vector3, fwd: Vector3) -> Statio
 
 
 ## Mount a station on a ship at a local grid cell; it rides along with the ship.
+## Set a boat down. It is its own node rather than a block or a station: it
+## moves, and nothing else in the world does that except a ship.
+func spawn_boat(pos: Vector3, up: Vector3, fwd: Vector3) -> Boat:
+	var b := Boat.new()
+	b.world = self
+	add_child(b)
+	var y: Vector3 = up.normalized()
+	var f: Vector3 = fwd - y * fwd.dot(y)
+	if f.length() < 0.01:
+		f = y.cross(Vector3.RIGHT if absf(y.x) < 0.9 else Vector3.FORWARD)
+	f = f.normalized()
+	b.global_transform = Transform3D(Basis(y.cross(-f).normalized(), y, -f), pos)
+	_boats.append(b)
+	return b
+
+
 func spawn_station_on_ship(kind: int, ship: Ship, local_v: Vector3i) -> Station:
 	var st := Station.new()
 	ship.add_child(st)

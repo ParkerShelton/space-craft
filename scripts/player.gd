@@ -921,6 +921,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				pass
 			elif _try_bucket(_raycast_voxel()):
 				pass
+			elif _try_launch_boat():
+				pass
 			elif _try_sit():
 				pass
 			elif _try_ship_computer():
@@ -7470,6 +7472,60 @@ func _sit_physics(delta: float) -> void:
 	_pitch = clampf(_pitch - _look.y * MOUSE_SENS * look_sensitivity * _look_sign(), -1.45, 1.45)
 	_camera.rotation.x = _pitch
 	_look = Vector2.ZERO
+	# Some seats go somewhere. A chair ignores this; a boat is steered by it.
+	if seated.has_method("drive"):
+		var wish := _move_input()
+		seated.call("drive", Vector2(wish.x, wish.y))
 	var at: Vector3 = seated.get_meta("sit_at", Vector3(0, 0.6, 0))
 	global_position = seated.to_global(at)
 	velocity = Vector3.ZERO
+
+
+## Right-click with a boat in hand, looking at water: she goes in. On land she
+## does not -- a boat on a hillside is a crate, and the refusal is the lesson.
+func _try_launch_boat() -> bool:
+	if active_slot < 0 or active_slot >= inv.size():
+		return false
+	var held: Dictionary = inv[active_slot]
+	if int(held.get("id", Blocks.AIR)) != Blocks.BOAT or int(held.get("count", 0)) <= 0:
+		return false
+	var tgt := _raycast_voxel()
+	if tgt.is_empty() or not tgt.get("hit", false):
+		_toast("Aim at some water")
+		return true
+	var at: Vector3 = tgt.get("point", global_position)
+	var p := world.nearest_planet(at) if world != null else null
+	if p == null or p.water_style != p.WATER_LIQUID:
+		_toast("There is no water here")
+		return true
+	var g := world.gravity_at(at)
+	var up: Vector3 = (-g).normalized() if g.length() > 0.01 else Vector3.UP
+	# Find the surface at the spot you picked, searching a little either way --
+	# what the crosshair lands on is usually the bed under the water, not the
+	# water, so "where you pointed" has to mean "the surface above that".
+	var surface = _water_surface_near(p, at, up)
+	if surface == null:
+		_toast("She needs water to float in")
+		return true
+	var fwd: Vector3 = -global_transform.basis.z
+	var boat := world.spawn_boat((surface as Vector3) + up * 0.1, up, fwd)
+	if boat == null:
+		return true
+	_take_one_from_active()
+	_refresh_slots()
+	_toast("Boat launched -- right-click to get in")
+	return true
+
+
+## The top of the water at a point, as a world position, or null if there is
+## none within reach of it.
+func _water_surface_near(p: Planet, at: Vector3, up: Vector3):
+	for step in range(-2, 5):
+		var probe: Vector3 = at + up * (float(step) * 1.0)
+		var v := p.world_to_voxel(probe)
+		if p.get_id(v) != Blocks.WATER:
+			continue
+		var fill: float = p.water_fill(v)
+		var centre: Vector3 = p.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+		return centre - up * 0.5 + up * fill
+	return null
