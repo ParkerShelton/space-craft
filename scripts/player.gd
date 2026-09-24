@@ -2609,11 +2609,13 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 
 	if _rouse_t > 0.0:
 		_rouse_t = maxf(_rouse_t - delta, 0.0)
-		# Eased out: it lifts quickly at first and settles level, the way a head
-		# does, rather than sweeping up at a constant rate like a camera rig.
-		var k: float = 1.0 - _rouse_t / _rouse_len
-		var inv: float = 1.0 - k
-		_pitch = _rouse_from * (inv * inv * inv)
+		# Smoothstep, not ease-out. Eased out, four fifths of the lift happened
+		# in the first two seconds -- while the screen is still black, so you
+		# never saw it. This is gentle at both ends with the travel in the
+		# middle, which is exactly when the fade is clearing.
+		var k: float = clampf(1.0 - _rouse_t / _rouse_len, 0.0, 1.0)
+		var e: float = k * k * (3.0 - 2.0 * k)
+		_pitch = _rouse_from * (1.0 - e)
 		_camera.rotation.x = _pitch
 		_look = Vector2.ZERO
 

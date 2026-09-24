@@ -254,12 +254,11 @@ static func material(ghost := false) -> StandardMaterial3D:
 ## close over the battery when one is seated and stand open when it is not. The
 ## contact hub in the middle is exposed either way, so an empty cradle reads as
 ## a thing waiting for something rather than as a broken thing.
-const BATT_Y0 := 0.20     # where the battery sits on the hub
-const BATT_Y1 := 0.76
-const G0 := 0.30          # the gauge's track, up the battery's face
-const G1 := 0.66
-const GX := -0.13         # off to one side, so the battery still reads as a battery
-const GZ := -0.23
+const BATT_Y0 := 0.22     # where the battery sits on the hub
+const BATT_Y1 := 0.80
+const G0 := 0.34          # the gauge's track, up the battery's face
+const G1 := 0.72
+const GZ := -0.21
 
 
 static func power_bay_boxes(has_battery: bool, _charge: float) -> Array:
@@ -273,32 +272,34 @@ static func power_bay_boxes(has_battery: bool, _charge: float) -> Array:
 	out.append_array(_disc(0.13, 0.08, 0.42, CASE))     # pad
 	out.append_array(_disc(0.19, 0.06, 0.24, DEEP))     # hub the battery stands on
 	out.append([Vector3(0, 0.22, 0), Vector3(0.20, 0.04, 0.20), CONT])  # contact plate
-	# Four arms round the rim. Each is a post with a finger at the top that
-	# reaches in over the battery -- open when there is nothing to hold, closed
-	# over it when there is.
-	var reach: float = 0.06 if has_battery else 0.0
-	var lean: float = 0.0 if has_battery else 0.05
+	# Four arms round the rim, holding the battery near its foot. They are low
+	# on purpose: an arm tall enough to reach the top of the cell is a pillar,
+	# and four pillars hide the one thing on this machine worth reading.
+	# Seated, they close in and grip; empty, they stand back and open.
+	var grip: float = 0.05 if has_battery else 0.0
+	var lean: float = 0.0 if has_battery else 0.06
 	for dir in [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)]:
 		var d: Vector3 = dir
 		var across := Vector3(absf(d.z), 0, absf(d.x))   # the arm's width axis
-		var post: Vector3 = d * (0.34 + lean)
-		out.append([Vector3(post.x, 0.42, post.z),
-			Vector3(0.11 + across.x * 0.11, 0.52, 0.11 + across.z * 0.11), CASE])
-		var tip: Vector3 = d * (0.34 + lean - reach)
-		out.append([Vector3(tip.x, 0.70, tip.z),
-			Vector3(0.13 + across.x * 0.09, 0.09, 0.13 + across.z * 0.09), DEEP])
+		var post: Vector3 = d * (0.35 + lean)
+		out.append([Vector3(post.x, 0.28, post.z),
+			Vector3(0.08 + across.x * 0.16, 0.24, 0.08 + across.z * 0.16), CASE])
+		var tip: Vector3 = d * (0.32 + lean - grip)
+		out.append([Vector3(tip.x, 0.40, tip.z),
+			Vector3(0.09 + across.x * 0.20, 0.07, 0.09 + across.z * 0.20), CONT])
 	if not has_battery:
 		return out
 	# The battery, seated: a block on the hub with a cap, a terminal and a gauge
 	# down its face.
 	var cy: float = (BATT_Y0 + BATT_Y1) * 0.5
-	out.append([Vector3(0, cy, 0), Vector3(0.44, BATT_Y1 - BATT_Y0, 0.44), CELL])
-	out.append([Vector3(0, BATT_Y1 - 0.03, 0), Vector3(0.38, 0.06, 0.38), DEEP])
-	out.append([Vector3(0, BATT_Y1 + 0.03, 0.08), Vector3(0.12, 0.05, 0.10), CONT])
-	out.append([Vector3(GX, (G0 + G1) * 0.5, GZ), Vector3(0.16, G1 - G0, 0.03), TRACK])
-	# A label plate on the other side of the face, so the gauge is plainly a
-	# gauge ON something rather than the whole front of it.
-	out.append([Vector3(0.10, (G0 + G1) * 0.5, GZ), Vector3(0.16, 0.26, 0.03), DEEP])
+	out.append([Vector3(0, cy, 0), Vector3(0.42, BATT_Y1 - BATT_Y0, 0.42), CELL])
+	out.append([Vector3(0, BATT_Y1 - 0.03, 0), Vector3(0.36, 0.07, 0.36), DEEP])
+	out.append([Vector3(0, BATT_Y0 + 0.03, 0), Vector3(0.36, 0.07, 0.36), DEEP])
+	out.append([Vector3(0, BATT_Y1 + 0.04, 0), Vector3(0.12, 0.06, 0.12), CONT])  # terminal
+	# The gauge runs up the middle of the face, inset into the casing with a
+	# margin of cell either side -- the only thing on this machine you read, so
+	# nothing stands in front of it.
+	out.append([Vector3(0, (G0 + G1) * 0.5, GZ), Vector3(0.20, G1 - G0, 0.03), TRACK])
 	return out
 
 
@@ -327,7 +328,7 @@ static func power_bay_lit(has_battery: bool, charge: float) -> Array:
 	if f <= 0.001:
 		return []
 	var h: float = (G1 - G0) * f
-	return [[Vector3(GX, G0 + h * 0.5, GZ - 0.015), Vector3(0.12, h, 0.03), gauge_colour(f)]]
+	return [[Vector3(0, G0 + h * 0.5, GZ - 0.015), Vector3(0.15, h, 0.03), gauge_colour(f)]]
 
 
 ## Green when it is full, amber in the middle, red when it is nearly out -- the
