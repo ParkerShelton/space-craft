@@ -1735,16 +1735,34 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	if ship == null:
 		return
 	ship.ship_log.append("Came down hard. Ship's log resumes.")
-	# You wake in the seat, facing the controls: the floor of the cabin is the
-	# top of the hull's bottom plate, and the player stands on it.
-	player.global_position = ship.to_global(Vector3(0, 1.9, -CrashSite.L + 2.6))
-	var nose: Vector3 = -ship.global_transform.basis.z
-	var flat := nose - up * nose.dot(up)
-	if flat.length() > 0.01:
-		var z := -flat.normalized()
-		var x := up.cross(z).normalized()
-		player.global_transform.basis = Basis(x, up, x.cross(up).normalized()).orthonormalized()
+	# Nothing of the world inside the hull: a wreck that came down in a wood
+	# would otherwise have half a tree through the cabin.
+	_clear_inside_ship(ground, ship)
+	# You come round standing at the controls, the seat at your back and the
+	# nose in front. Boarding first, because aboard a ship the facing lives in
+	# the player's LOCAL rotation, and local -Z is the way the ship points.
+	player.global_position = ship.to_global(Vector3(0, 1.45, -1.2))
 	player.velocity = Vector3.ZERO
+	player.call("_board", ship, false)
+	player.rotation = Vector3.ZERO
+
+
+## Empty every world block the hull touches, and the shell around it, so the
+## ship is a ship rather than a ship packed with dirt and leaves. One bulk edit:
+## a wreck is a hundred-odd cells and they all change at once.
+func _clear_inside_ship(ground: Planet, ship: Ship) -> void:
+	var cells := {}
+	for v in ship.blocks:
+		var lv: Vector3i = v
+		for dx in [-1, 0, 1]:
+			for dy in [-1, 0, 1]:
+				for dz in [-1, 0, 1]:
+					var at := ship.to_global(Vector3(lv) + Vector3(dx, dy, dz))
+					var wv := ground.world_to_voxel(at)
+					if Blocks.bottom_of(ground.get_id(wv)) != Blocks.AIR:
+						cells[wv] = Blocks.AIR
+	if not cells.is_empty():
+		ground.set_blocks(cells)
 
 
 ## Coming to after the crash. Black over everything, lifting slowly -- the one
