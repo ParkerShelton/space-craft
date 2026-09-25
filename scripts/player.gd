@@ -7772,7 +7772,7 @@ func _try_read_journal() -> bool:
 func _open_journal() -> void:
 	_close_journal()
 	_journal_panel = Panel.new()
-	_journal_panel.custom_minimum_size = Vector2(560, 560)
+	_journal_panel.custom_minimum_size = Vector2(560, 500)
 	_journal_panel.size = _journal_panel.custom_minimum_size
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.13, 0.11, 0.08, 0.97)
@@ -7787,6 +7787,14 @@ func _open_journal() -> void:
 	head.add_theme_font_size_override("font_size", 20)
 	head.modulate = Color(0.85, 0.74, 0.52)
 	_journal_panel.add_child(head)
+	# The page scrolls. It is written per world and a wordy planet ran off the
+	# bottom of the panel and off the screen with it.
+	var scroll := ScrollContainer.new()
+	scroll.position = Vector2(24, 60)
+	scroll.custom_minimum_size = Vector2(512, 380)
+	scroll.size = Vector2(512, 380)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_journal_panel.add_child(scroll)
 	var body := Label.new()
 	# The page the journal is actually carrying -- written about the planet the
 	# wreck came down on (see CrashSite.journal_text) and kept with the item, so
@@ -7797,16 +7805,16 @@ func _open_journal() -> void:
 	if page == "":
 		page = "The pages are water-damaged past reading."
 	body.text = page
-	body.position = Vector2(24, 60)
-	body.custom_minimum_size = Vector2(512, 0)
-	body.size = Vector2(512, 420)
+
+	body.custom_minimum_size = Vector2(496, 0)
+	body.size = Vector2(496, 0)
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.modulate = Color(0.92, 0.88, 0.80)
-	_journal_panel.add_child(body)
+	scroll.add_child(body)
 	var close := Button.new()
 	close.text = "Close"
 	close.custom_minimum_size = Vector2(120, 34)
-	close.position = Vector2(24, 500)
+	close.position = Vector2(24, 452)
 	close.pressed.connect(func(): Audio.ui("ui_back"))
 	close.pressed.connect(_close_journal)
 	_journal_panel.add_child(close)

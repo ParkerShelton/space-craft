@@ -71,9 +71,12 @@ var block_material: ShaderMaterial
 ## vast. Only planets WITH an atmosphere run a visible cycle; an airless rock
 ## has no sky to redden, so it just gets hard light and hard shadow.
 ## How long one whole turn of the clock takes, and how much of it is daylight.
-## Two thirds, because what anybody means by "the days are too short" is the
-## LIT part: an even split spends half of every world in the dark.
-const DAY_SHARE := 0.66
+## Three quarters. Measured over a whole cycle the old two thirds really did
+## give twice as much light as dark -- 328 seconds against 169 -- but it did
+## not PLAY that way, because night is the part you spend hiding and it is the
+## part you notice. When the clock and the feeling disagree about a thing this
+## subjective, the feeling is the one worth fixing.
+const DAY_SHARE := 0.75
 var day_length := 600.0
 ## How far through the current day, 0..1. Advanced by main's environment update
 ## rather than by the planet, so it keeps ticking for planets you aren't on.
@@ -585,7 +588,10 @@ func configure(cfg: Dictionary) -> void:
 	# 3 to 9 minutes per day, per planet.
 	var dr := RandomNumberGenerator.new()
 	dr.seed = _seed + 4242
-	day_length = dr.randf_range(420.0, 900.0)
+	# Floor raised from 420: a short roll used to give barely five minutes of
+	# light, and the whole of a day is meant to be enough to get something done
+	# in rather than a dash between nights.
+	day_length = dr.randf_range(660.0, 1020.0)
 	day_phase = dr.randf()   # so planets aren't all sunrise at world start
 	surface_noise.seed = _seed
 	# Several rolling hills across the surface, regardless of planet size.

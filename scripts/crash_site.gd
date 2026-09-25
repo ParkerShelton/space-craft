@@ -344,28 +344,70 @@ static func journal_text(planet: Planet) -> String:
 	lines.append("THE GROUND")
 	var day_min: float = planet.day_length * planet.DAY_SHARE / 60.0
 	var night_min: float = planet.day_length * (1.0 - planet.DAY_SHARE) / 60.0
-	lines.append("  Light for about %d minutes, dark for about %d. Do not be out"
+	lines.append("Light for about %d minutes, then dark for %d."
 		% [int(round(day_min)), int(round(night_min))])
-	lines.append("  in the dark without a light. Things are awake in it.")
+	lines.append("Do not be out in the dark without a light.")
+	lines.append("Things are awake in it.")
 	if planet.water_style == planet.WATER_LIQUID:
-		lines.append("  Liquid water. Wood floats here, which is worth knowing.")
+		lines.append("Liquid water. Wood floats here, which is worth knowing.")
 	else:
-		lines.append("  No standing water anywhere I could see.")
+		lines.append("No standing water anywhere I could see.")
 	lines.append("")
+	# Counts and what they are FOR, not an inventory. Which seam is which is
+	# something to find out on the ground; how many there are and whether this
+	# world can power anything is what you want to know before you land.
 	if not planet.ore_defs.is_empty():
-		lines.append("WHAT IS IN THE ROCK")
+		lines.append("THE ROCK")
+		var metal := 0
+		var spark := 0
+		var burn := 0
 		for od in planet.ore_defs:
-			var pr: Dictionary = od["props"]
-			lines.append("  %s -- %s." % [str(od["name"]), Blocks.ore_verdict(pr)])
-		lines.append("  Refine it at a smelter first. Ore is not metal yet.")
+			match _ore_use(od["props"]):
+				"power":
+					burn += 1
+				"electrical":
+					spark += 1
+				_:
+					metal += 1
+		lines.append("%s down there." % _count_word(planet.ore_defs.size()))
+		if metal > 0:
+			lines.append("  %s for metalwork." % _count_word(metal))
+		if spark > 0:
+			lines.append("  %s for electrical work." % _count_word(spark))
+		if burn > 0:
+			lines.append("  %s worth burning for power." % _count_word(burn))
+		if burn == 0:
+			lines.append("  Nothing here burns well. Power will be the hard part.")
+		lines.append("Refine it at a smelter first. Ore is not metal yet.")
 		lines.append("")
 	lines.append("IF IT GOES BADLY")
-	lines.append("  Seal her before anything else. A plate in every hole and a")
-	lines.append("  door in the doorway; nothing aboard works until she holds air.")
-	lines.append("  Whatever comes off her on the way down is still plate. Cut up")
-	lines.append("  the wings before you dig for ore -- it is lying there already.")
-	lines.append("  The cell in the rack is the power. A flat one is not a broken")
-	lines.append("  one: fill it at a generator and put it back.")
-	lines.append("  You cannot get ore or plate out with your hands. Wood you can,")
-	lines.append("  and wood makes the bench, and the bench makes the pick.")
+	lines.append("Seal her before anything else. A plate in every hole and a door")
+	lines.append("in the doorway. Nothing aboard works until she holds air.")
+	lines.append("")
+	lines.append("Whatever comes off her on the way down is still plate. Cut up")
+	lines.append("the wings before you dig -- it is lying there already.")
+	lines.append("")
+	lines.append("The cell in the rack is the power. A flat one is not a broken")
+	lines.append("one: fill it at a generator and put it back.")
+	lines.append("")
+	lines.append("You cannot get ore or plate out with your hands. Wood you can,")
+	lines.append("and wood makes the bench, and the bench makes the pick.")
 	return "\n".join(PackedStringArray(lines))
+
+
+## What a seam is mostly good for. One answer each -- the survey is a summary,
+## not a table.
+static func _ore_use(props: Dictionary) -> String:
+	if Blocks.combustion_of(props) >= 62:
+		return "power"
+	if Blocks.conductivity_of(props) >= 55:
+		return "electrical"
+	return "metalwork"
+
+
+static func _count_word(n: int) -> String:
+	const WORDS := ["No seams", "One seam", "Two seams", "Three seams",
+		"Four seams", "Five seams", "Six seams"]
+	if n >= 0 and n < WORDS.size():
+		return WORDS[n]
+	return "%d seams" % n
