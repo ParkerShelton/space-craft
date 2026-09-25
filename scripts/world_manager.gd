@@ -563,6 +563,11 @@ func load_game() -> bool:
 		ship.landed = bool(sd.get("landed", true))
 		ship.rebuild()
 		ship.build_props()
+		# A loaded wreck still shows what it is missing (see repair_ghosts.gd).
+		if not ship.wreck_missing.is_empty() and player != null:
+			var g := RepairGhosts.new()
+			ship.add_child(g)
+			g.setup(ship, player)
 		_ships.append(ship)
 
 	# boats: rebuilt from scratch, like the stations below

@@ -1737,6 +1737,11 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	if ship == null:
 		return
 	ship.ship_log.append("Came down hard. Ship's log resumes.")
+	# She shows you what she is missing (see repair_ghosts.gd). Delete that file
+	# and this line and nothing else changes.
+	var ghosts := RepairGhosts.new()
+	ship.add_child(ghosts)
+	ghosts.setup(ship, player)
 	_scar_the_ground(ground, ship, up, fwd, rng)
 	# ...and the pieces that came off her, crushed into the ground where they
 	# stopped. They are the nearest metal there is, which is the point.

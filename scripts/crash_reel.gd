@@ -374,23 +374,25 @@ func _build_bang() -> void:
 
 func _beep_stream() -> AudioStreamWAV:
 	const RATE := 22050
-	const SECS := 0.15
+	const SECS := 0.20
 	var n := int(RATE * SECS)
 	var data := PackedByteArray()
 	data.resize(n * 2)
-	var phase := 0.0
 	for i in n:
 		var tt: float = float(i) / float(RATE)
-		# A falling warble rather than a steady tone. A note that holds is a
-		# doorbell; a note that slides down is a warning, and it is the slide
-		# that makes it read as urgent rather than merely loud.
-		var f: float = lerpf(1240.0, 820.0, clampf(tt / SECS, 0.0, 1.0))
-		phase += TAU * f / float(RATE)
-		var v: float = sin(phase) * 0.62 + sin(phase * 1.5) * 0.28 + sin(phase * 2.0) * 0.12
-		# Hard on, hard off: no decay tail, so two of them land as two hits
-		# instead of smearing into one.
-		var env: float = clampf(tt / 0.003, 0.0, 1.0) 			* clampf((SECS - tt) / 0.012, 0.0, 1.0)
-		var sm: int = clampi(int(v * env * 27000.0), -32768, 32767)
+		# A SQUARE wave, held flat. That is the whole difference between a
+		# klaxon and a musical note: an alarm is a buzzer, and a buzzer is full
+		# of odd harmonics. A sine -- however you slide it about -- comes out
+		# sounding like a doorbell, which is what the last one did.
+		var ph: float = fposmod(tt * 620.0, 1.0)
+		var sq: float = 1.0 if ph < 0.5 else -1.0
+		# A second square a fifth up, quieter, so it has some edge to it rather
+		# than being a pure tone.
+		var ph2: float = fposmod(tt * 930.0, 1.0)
+		sq += (0.35 if ph2 < 0.5 else -0.35)
+		# Flat through the middle with just enough ramp not to click.
+		var env: float = clampf(tt / 0.006, 0.0, 1.0) 			* clampf((SECS - tt) / 0.010, 0.0, 1.0)
+		var sm: int = clampi(int(sq * env * 15000.0), -32768, 32767)
 		if sm < 0:
 			sm += 65536
 		data[i * 2] = sm & 0xFF
@@ -411,9 +413,12 @@ func _tick_alarm(delta: float) -> void:
 	_alarm_t -= delta
 	if _alarm_t > 0.0:
 		return
+	# Hi-lo, alternating. One pitch repeated is a smoke detector; two pitches
+	# swapping is an alarm on a ship, and it costs one line to say so.
+	_alarm.pitch_scale = 1.0 if (_beep % 2) == 0 else 0.78
 	_alarm.play()
 	_beep += 1
-	_alarm_t = 0.17 if (_beep % 2) == 1 else 0.46
+	_alarm_t = 0.21
 
 
 ## Where everything is at time `t`. Written as a function of t rather than as

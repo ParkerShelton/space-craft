@@ -27,6 +27,16 @@ const H := 3             # shell roof; the cabin inside is two blocks tall
 const DOOR_AT := Vector3i(2, 1, 1)
 ## Where the battery rack stands, on the deck at the back of the cabin.
 const POWER_BAY_AT := Vector3i(0, 1, CABIN_BACK - 1)
+## Where the scrubber is bolted, and where the engines hang. Named so that
+## anything that wants to point at a missing part -- the repair holograms, for
+## one -- knows where it would go rather than guessing.
+const LIFE_SUPPORT_AT := Vector3i(-1, 1, CABIN_BACK - 1)
+
+
+static func thruster_at(side: int) -> Vector3i:
+	return Vector3i(side, 1, TAIL)
+
+
 ## Where the supply locker is bolted: beside the console, at the front of the
 ## cabin. It began next to the battery rack, which put it directly inboard of
 ## the door -- you could not get out past it -- and up here it is the second
@@ -301,10 +311,10 @@ static func _fit_systems(ship: Ship, world: WorldManager, planet: Planet,
 		# wreck is placed, so it stays true wherever it is carried afterwards.
 		locker.store_add(Blocks.JOURNAL, 1, {"text": journal_text(planet)})
 	if rng.randf() < 0.55:
-		ship.blocks[Vector3i(-1, 1, CABIN_BACK - 1)] = Blocks.LIFE_SUPPORT
+		ship.blocks[LIFE_SUPPORT_AT] = Blocks.LIFE_SUPPORT
 	for side in [-1, 1]:
 		if rng.randf() < 0.45:
-			ship.blocks[Vector3i(side, 1, TAIL)] = Blocks.THRUSTER
+			ship.blocks[thruster_at(side)] = Blocks.THRUSTER
 	# The cradle and a battery in it, always. Leaving without one meant building
 	# a Generator before you could build anything else, and the first hour of a
 	# world should not be a list of prerequisites. What VARIES is how much is
