@@ -233,8 +233,6 @@ func _ready() -> void:
 	# WorldManager.purge_old_worlds), so they are cleared rather than broken.
 	var dropped := WorldManager.purge_old_worlds()
 	_build_menu()
-	if OS.get_environment("SPACECRAFT_WS") != "":
-		call_deferred("_wakeseat")
 	if dropped > 0:
 		_menu_label(" ", 8)
 		_menu_label("%d world%s from an older build had to be cleared" % [
@@ -1766,14 +1764,6 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	# ...with your eyes on the floor. The head comes up on its own over the next
 	# few seconds, under the fade, so the first thing a world does is a slow
 	# look up at the inside of the ship you came down in.
-	player.begin_wake(5.0, -1.25)
-	# ...and once your head is up, one line saying the thing in front of you can
-	# be talked to. It is the only prompt this game has, it appears once in the
-	# life of a world, and it goes away on its own.
-	var hint := get_tree().create_timer(5.6)
-	hint.timeout.connect(func():
-		if is_instance_valid(player):
-			player.hold_toast("Right-click the console to see what she needs", 9.0))
 	# You did not walk away from that. How badly you came out of it is rolled
 	# with the rest of the wreck, so the world that kept both thrusters is not
 	# always the one that kept you whole either.
@@ -2049,6 +2039,21 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 			_reel = null
 		_wake_from_black()
 		_hide_loading_screen()
+		# The head lift starts on the first frame that is actually DRAWN, not
+		# when the wreck was placed. Between those two there is a real stall --
+		# a couple of seconds on this machine while the first frames are put
+		# together -- and a tilt started before it was three quarters over by
+		# the time anyone could see it, however it was timed.
+		for _warm in 2:
+			await RenderingServer.frame_post_draw
+		if is_instance_valid(player):
+			player.begin_wake(5.0, -1.25)
+			# ...and once the head is up, one line saying the thing in front of
+			# you can be talked to. It appears once in the life of a world.
+			var hint := get_tree().create_timer(5.6)
+			hint.timeout.connect(func():
+				if is_instance_valid(player):
+					player.hold_toast("Right-click the console to see what she needs", 9.0))
 	else:
 		_hide_loading_screen()
 	# Combat testing: don't leave the guaranteed home-planet enemy (see
@@ -2650,42 +2655,3 @@ func _process(delta: float) -> void:
 	for pl in _world.planets:
 		if pl.lod_sphere != null:
 			pl.lod_sphere.visible = _underground < 0.6 and pl.altitude(ppos) > 260.0
-
-
-func _wakeseat() -> void:
-	var dir := OS.get_environment("SPACECRAFT_WS")
-	_world.save_slot = "_wakeseat"
-	_start_world(false)
-	while _world.player == null or not _world.player.is_inside_tree() or _loading_layer != null:
-		await get_tree().process_frame
-	var pl = _world.player
-	var ship: Ship = _world._ships[0]
-	for i in 10:
-		await get_tree().process_frame
-	print("SEATED at start: %s (pitch %.2f)" % [str(pl.seated != null), pl._pitch])
-	var marks := [30, 150, 330, 420]
-	var shot := 0
-	for f in 640:
-		await get_tree().process_frame
-		if shot < marks.size() and f == int(marks[shot]):
-			await RenderingServer.frame_post_draw
-			get_viewport().get_texture().get_image().save_png(dir + "/w_%03d.png" % f)
-			print("  f%d seated=%s pitch=%.2f" % [f, str(pl.seated != null), pl._pitch])
-			shot += 1
-	# The locker: where is it, and is the doorway clear of it?
-	var locker: Station = null
-	for c in ship.get_children():
-		var st := c as Station
-		if st != null and st.kind == Blocks.CHEST:
-			locker = st
-	print("LOCKER local=%s  door at %s" % [
-		str(locker.position) if locker != null else "-", str(CrashSite.DOOR_AT)])
-	# The journal, as written for this world.
-	var page := ""
-	for sl in locker.storage:
-		if int(sl.get("id", Blocks.AIR)) == Blocks.JOURNAL:
-			page = str((sl.get("props", {}) as Dictionary).get("text", ""))
-	print("=== JOURNAL ===")
-	print(page)
-	print("=== END ===")
-	get_tree().quit()
