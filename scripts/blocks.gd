@@ -853,6 +853,18 @@ const SCRAP := 207
 ## How many plates one ingot gives is the ore's Density (plate_yield).
 const PLATE := 208
 
+# The Warp Drive's four parts, one from each planet family's signature ore (see
+# FAMILY_SIGNATURE). Each asks for stock of an ore good enough at ONE property
+# that no ordinary ore reaches it -- so each part is a trip to its own world.
+const WARP_COIL := 209          # bars of a conductor (Energy) wound round with wire
+const IGNITION_CHARGE := 210    # ingots of a fierce fuel (Combustion) in a sheet casing
+const COOLANT_JACKET := 211     # a reactive sheet (Reactivity), glass and ice
+const CONTAINMENT_SHELL := 212  # plates of a very dense metal (Density)
+## How good the ore has to be. Signature ores roll 88-100; ordinary ores stop
+## at ORDINARY_PROP_CAP.
+const WARP_GRADE := {"e": 80, "c": 85, "r": 80, "d": 85}
+const WARP_PARTS := [WARP_COIL, IGNITION_CHARGE, COOLANT_JACKET, CONTAINMENT_SHELL]
+
 const SWORD_DAMAGE := 6.0
 
 ## How many uses each tool has in it before it breaks: a block broken, a patch
@@ -1054,7 +1066,7 @@ static func all_recipes() -> Array:
 			"cost": 0, "extra": {}, "diagram": ""})
 	for st in STATION_CRAFTS:
 		for r in STATION_CRAFTS[st]:
-			out.append({"key": "%d:%d" % [int(st), int(r["out"])],
+			out.append({"key": "%d:%d" % [int(st), int(r["out"])], "station": int(st),
 				"src": name_of(int(st)), "cat": "Stations", "out": int(r["out"]),
 				"n": int(r.get("n", 1)), "reqs": r.get("reqs", []),
 				"cost": int(r.get("cost", 0)), "extra": r.get("extra", {}),
@@ -1092,7 +1104,23 @@ static func all_recipes() -> Array:
 ## -- which the `extra` reader used to assume meant a plain id, so the first
 ## recipe whose extra offered a CHOICE of materials crashed the Recipe Book on
 ## open. Anything that formats a requirement goes through here now.
+## Does one stack of `id` (with these ore properties) count towards requirement
+## `r`? The one test every station, the ring and the book share, so a recipe
+## that asks for "a sheet of Reactivity 80" means the same thing everywhere.
+static func req_matches(r: Dictionary, id: int, props: Dictionary) -> bool:
+	var kind_ok: bool = (r.has("id") and id == int(r["id"])) \
+		or (r.has("any") and id in (r["any"] as Array)) \
+		or (r.has("refined") and is_refined(id))
+	if not kind_ok:
+		return false
+	if r.has("prop"):
+		return int(props.get(str(r["prop"]), 0)) >= int(r["min"])
+	return true
+
+
 static func req_text(r: Dictionary) -> String:
+	if r.has("label") and r.has("prop"):
+		return "%d %s" % [int(r["n"]), r["label"]]
 	if r.has("refined"):
 		return "%d Ingot%s" % [int(r["n"]), "" if int(r["n"]) == 1 else "s"]
 	if r.has("any"):
@@ -1105,12 +1133,20 @@ static func recipe_needs(rec: Dictionary) -> String:
 	for r in rec.get("reqs", []):
 		parts.append(req_text(r))
 	if int(rec.get("cost", 0)) > 0:
-		parts.append("%d Ingot%s" % [int(rec["cost"]), "" if int(rec["cost"]) == 1 else "s"])
+		# Paid in the station's own stock, which is not always ingots.
+		var c := int(rec["cost"])
+		match primary_material_for(int(rec.get("station", SMELTER))):
+			"alloy":
+				parts.append("%d %s" % [c, name_of(ALLOY)])
+			"circuit":
+				parts.append("%d %s" % [c, name_of(CIRCUIT)])
+			_:
+				parts.append("%d Ingot%s" % [c, "" if c == 1 else "s"])
 	var ex: Dictionary = rec.get("extra", {})
 	if not ex.is_empty():
 		parts.append(req_text(ex))
 	if parts.is_empty():
-		return "no materials — assembled from placed blocks"
+		return "nothing"
 	return ",  ".join(parts)
 
 
@@ -1324,11 +1360,40 @@ const STATION_CRAFTS := {
 	],
 	# The Fabricator is the Press now, and presses rather than crafts: see
 	# PRESS_RECIPES. It has no buttons.
+	# Ship systems. None of these is "so much alloy": each is built from the
+	# things it is actually made of, gathered along different lines -- the
+	# press, the anvil, the smelter, the ground -- so each one is a small
+	# project of its own. The Warp Drive is the big one: its four parts each
+	# need a signature ore that only one family of world holds.
 	SHIPWORKS: [
-		{"label": "Thruster", "out": THRUSTER, "n": 1, "cost": 3},
-		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "cost": 4},
-		{"label": "Warp Drive", "out": WARP_DRIVE, "n": 1, "cost": 10},
-		{"label": "Metal Hull x4", "out": METAL, "n": 4, "reqs": [{"id": ALLOY, "n": 2}]},
+		# A burn chamber: it wants an ore that burns.
+		{"label": "Thruster", "out": THRUSTER, "n": 1, "reqs": [
+			{"id": MACHINE_CORE, "n": 1}, {"id": ALLOY, "n": 2}, {"id": WIRE, "n": 2},
+			{"refined": true, "prop": "c", "min": FUEL_GRADE, "n": 1,
+				"label": "Fuel-grade ingot (Combustion %d+)" % FUEL_GRADE}]},
+		# Tanks of glass, and ice to split into air.
+		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "reqs": [
+			{"id": MACHINE_CORE, "n": 1}, {"id": GLASS, "n": 4}, {"id": CIRCUIT, "n": 2},
+			{"id": ICE, "n": 4}]},
+		{"label": "Warp Coil", "out": WARP_COIL, "n": 1, "reqs": [
+			{"id": BAR, "prop": "e", "min": WARP_GRADE["e"], "n": 2,
+				"label": "Bar (Energy %d+, living worlds)" % WARP_GRADE["e"]},
+			{"id": WIRE, "n": 4}]},
+		{"label": "Ignition Charge", "out": IGNITION_CHARGE, "n": 1, "reqs": [
+			{"refined": true, "prop": "c", "min": WARP_GRADE["c"], "n": 2,
+				"label": "Ingot (Combustion %d+, dust worlds)" % WARP_GRADE["c"]},
+			{"id": SHEET, "n": 1}]},
+		{"label": "Coolant Jacket", "out": COOLANT_JACKET, "n": 1, "reqs": [
+			{"id": SHEET, "prop": "r", "min": WARP_GRADE["r"], "n": 1,
+				"label": "Sheet (Reactivity %d+, frozen worlds)" % WARP_GRADE["r"]},
+			{"id": GLASS, "n": 2}, {"id": ICE, "n": 4}]},
+		{"label": "Containment Shell", "out": CONTAINMENT_SHELL, "n": 1, "reqs": [
+			{"id": PLATE, "prop": "d", "min": WARP_GRADE["d"], "n": 4,
+				"label": "Plate (Density %d+, scorched worlds)" % WARP_GRADE["d"]}]},
+		{"label": "Warp Drive", "out": WARP_DRIVE, "n": 1, "reqs": [
+			{"id": WARP_COIL, "n": 1}, {"id": IGNITION_CHARGE, "n": 1},
+			{"id": COOLANT_JACKET, "n": 1}, {"id": CONTAINMENT_SHELL, "n": 1},
+			{"id": MACHINE_CORE, "n": 2}, {"id": CIRCUIT, "n": 6}, {"id": CRYSTAL, "n": 4}]},
 	],
 	# The bootstrap bench. Everything on it asks for plain gathered material:
 	# this is the bench you reach with nothing but what you picked up off the
@@ -1501,6 +1566,8 @@ const NAMES := {
 	CARPENTER: "Carpenter's Bench",
 	SHAPER: "Block Shaper",
 	MACHINE_CORE: "Machine Core",
+	WARP_COIL: "Warp Coil", IGNITION_CHARGE: "Ignition Charge",
+	COOLANT_JACKET: "Coolant Jacket", CONTAINMENT_SHELL: "Containment Shell",
 	BOAT: "Wooden Boat",
 	JOURNAL: "Salvaged Journal",
 	GENERATOR: "Generator",
@@ -1550,6 +1617,10 @@ const USES := {
 	SHEET: "A part: casings -- batteries, circuitry, lamps, buckets",
 	PLATE: "A part: machines are built from it; four pressed together make hull",
 	SCRAP: "Overworked. Remelt it at a smelter into an ingot",
+	WARP_COIL: "A Warp Drive part. Wound from bars of a living world's best conductor",
+	IGNITION_CHARGE: "A Warp Drive part. Packed with a dust world's fiercest fuel",
+	COOLANT_JACKET: "A Warp Drive part. A frozen world's reactive metal, glass and ice",
+	CONTAINMENT_SHELL: "A Warp Drive part. Plates of a scorched world's densest metal",
 	CRACKED_METAL: "Crumbles if you work at it -- nothing worth keeping",
 	IRON_ORE: "Hulls & tools",
 	COPPER_ORE: "Wiring & thrusters",
@@ -1675,6 +1746,8 @@ const COLORS := {
 	CARPENTER: Color(0.48, 0.34, 0.20),
 	SHAPER: Color(0.52, 0.52, 0.56),
 	MACHINE_CORE: Color(0.86, 0.52, 0.18),
+	WARP_COIL: Color(0.35, 0.85, 1.0), IGNITION_CHARGE: Color(0.95, 0.42, 0.12),
+	COOLANT_JACKET: Color(0.7, 0.9, 1.0), CONTAINMENT_SHELL: Color(0.45, 0.38, 0.34),
 	BOAT: Color(0.58, 0.42, 0.26),
 	JOURNAL: Color(0.52, 0.40, 0.30),
 	GENERATOR: Color(0.62, 0.45, 0.28),

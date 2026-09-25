@@ -120,6 +120,45 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 				shut.append([c, b[1], b[2]])
 				shut.append([Vector3(c.x, -c.y + COVER_T + PAGE_T, c.z), b[1], b[2]])
 			return shut
+		Blocks.WARP_COIL:
+			# An iron core wound thick with glowing wire, capped at both ends.
+			var coil: Array = [
+				[Vector3(0, 0, 0), Vector3(0.16, 0.66, 0.16), Color(0.3, 0.31, 0.34)],
+				[Vector3(0, 0.3, 0), Vector3(0.36, 0.06, 0.36), Color(0.5, 0.52, 0.56)],
+				[Vector3(0, -0.3, 0), Vector3(0.36, 0.06, 0.36), Color(0.5, 0.52, 0.56)],
+			]
+			for i in 5:
+				coil.append([Vector3(0, -0.2 + float(i) * 0.1, 0), Vector3(0.3, 0.06, 0.3),
+					Color(0.35, 0.85, 1.0) if i % 2 == 0 else Color(0.22, 0.6, 0.8)])
+			return coil
+		Blocks.IGNITION_CHARGE:
+			# A squat canister, a hot band round its middle and a fuse on top.
+			return [
+				[Vector3(0, -0.02, 0), Vector3(0.36, 0.46, 0.36), Color(0.28, 0.27, 0.27)],
+				[Vector3(0, 0.02, 0), Vector3(0.38, 0.1, 0.38), Color(0.95, 0.42, 0.12)],
+				[Vector3(0, 0.24, 0), Vector3(0.26, 0.04, 0.26), Color(0.5, 0.48, 0.46)],
+				[Vector3(0, 0.3, 0), Vector3(0.06, 0.1, 0.06), Color(0.95, 0.75, 0.3)],
+			]
+		Blocks.COOLANT_JACKET:
+			# A sleeve of frosted glass in a metal frame, rimed at the ends.
+			var jack: Array = []
+			for sx in [-1, 1]:
+				jack.append([Vector3(sx * 0.17, 0, 0), Vector3(0.04, 0.5, 0.38), Color(0.75, 0.9, 1.0, 0.85)])
+				jack.append([Vector3(0, 0, sx * 0.17), Vector3(0.38, 0.5, 0.04), Color(0.65, 0.85, 1.0, 0.85)])
+			for sy in [-1, 1]:
+				jack.append([Vector3(0, sy * 0.26, 0), Vector3(0.42, 0.06, 0.42), Color(0.92, 0.96, 1.0)])
+			jack.append([Vector3(0, 0, 0), Vector3(0.14, 0.44, 0.14), Color(0.4, 0.55, 0.7)])
+			return jack
+		Blocks.CONTAINMENT_SHELL:
+			# A heavy round shell in three courses, banded and bolted.
+			var dark := Color(0.34, 0.3, 0.28)
+			return [
+				[Vector3(0, 0, 0), Vector3(0.5, 0.3, 0.5), dark],
+				[Vector3(0, 0.2, 0), Vector3(0.36, 0.12, 0.36), dark.lightened(0.08)],
+				[Vector3(0, -0.2, 0), Vector3(0.36, 0.12, 0.36), dark.lightened(0.08)],
+				[Vector3(0, 0, 0), Vector3(0.54, 0.06, 0.54), Color(0.55, 0.5, 0.45)],
+				[Vector3(0, 0.28, 0), Vector3(0.12, 0.04, 0.12), Color(0.2, 0.18, 0.17)],
+			]
 		_:
 			return []
 

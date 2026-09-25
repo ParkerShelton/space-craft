@@ -691,7 +691,8 @@ func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 		return n
 	var cap := Blocks.stack_cap(id, STACK_MAX)
 	for s in inv:
-		if s["id"] == id and s.get("src", "") == src and s["count"] > 0 and s["count"] < cap:
+		if s["id"] == id and s.get("src", "") == src and s["count"] > 0 and s["count"] < cap \
+				and str((s.get("mat", {}) as Dictionary).get("name", "")) == str(mat.get("name", "")):
 			var add: int = mini(n, cap - s["count"])
 			s["count"] += add
 			n -= add
@@ -1308,11 +1309,7 @@ func _count_req(r: Dictionary) -> int:
 	for sl in inv:
 		if int(sl.get("count", 0)) <= 0:
 			continue
-		var id := int(sl["id"])
-		if r.has("any"):
-			if id in (r["any"] as Array):
-				total += int(sl["count"])
-		elif id == int(r["id"]):
+		if Blocks.req_matches(r, int(sl["id"]), sl.get("props", {})):
 			total += int(sl["count"])
 	return total
 

@@ -86,6 +86,10 @@ static func capacity_of(k: int) -> int:
 		return 2   # spare filters / elements: no recipes, just somewhere to stash parts
 	if k == Blocks.BED:
 		return 0   # you sleep in it; there is nowhere to put anything
+	if k == Blocks.SHIPWORKS:
+		# A Warp Drive is seven kinds of thing at once, and its parts each
+		# want their own stock beside them.
+		return 16
 	if k == Blocks.SHAPER:
 		# One INPUT slot -- you feed it a single block and pick a shape -- plus
 		# one for the result to land in. A literal single slot leaves the
@@ -291,7 +295,10 @@ func store_add(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 			n -= 1
 		return 0
 	for s in storage:
-		if s["count"] > 0 and s["id"] == id and s.get("src", "") == src:
+		# Two ores' worth of the same shape are two stacks: what a piece is made
+		# of decides what it is good for.
+		if s["count"] > 0 and s["id"] == id and s.get("src", "") == src \
+				and str((s.get("mat", {}) as Dictionary).get("name", "")) == str(mat.get("name", "")):
 			s["count"] += n
 			return 0
 	for s in storage:
@@ -318,15 +325,7 @@ func _count_req(req: Dictionary) -> int:
 	for s in storage:
 		if s["count"] <= 0:
 			continue
-		if req.has("id") and s["id"] == int(req["id"]):
-			total += s["count"]
-		elif req.has("any") and s["id"] in req["any"]:
-			total += s["count"]
-		elif req.has("refined") and Blocks.is_refined(int(s["id"])):
-			# "refined: true" means any refined material will do. It was not
-			# understood here at all, so it counted as nothing you had -- which
-			# quietly made every Fabricator recipe asking for refined stock (Wire,
-			# Machine Core, Battery) impossible to make at the bench.
+		if Blocks.req_matches(req, int(s["id"]), s.get("props", {})):
 			total += s["count"]
 	return total
 
@@ -403,14 +402,16 @@ func _afford_reqs(reqs: Array) -> bool:
 func _consume_reqs(reqs: Array) -> void:
 	for r in reqs:
 		var need := int(r["n"])
-		for s in storage:
+		# Plainest stock first. A recipe that asks for "a sheet" should not use
+		# up the one sheet of rare metal that another recipe needs by name.
+		var order: Array = storage.duplicate()
+		order.sort_custom(func(a, b): return _best_prop(a) < _best_prop(b))
+		for s in order:
 			if need <= 0:
 				break
 			if s["count"] <= 0:
 				continue
-			var matches: bool = (r.has("id") and s["id"] == int(r["id"])) \
-				or (r.has("any") and s["id"] in r["any"]) \
-				or (r.has("refined") and Blocks.is_refined(int(s["id"])))
+			var matches: bool = Blocks.req_matches(r, int(s["id"]), s.get("props", {}))
 			if not matches:
 				continue
 			var take: int = mini(need, s["count"])
@@ -422,6 +423,14 @@ func _consume_reqs(reqs: Array) -> void:
 				s["props"] = {}
 				s["src"] = ""
 				s["mat"] = {}
+
+
+static func _best_prop(s: Dictionary) -> int:
+	var best := 0
+	var pr: Dictionary = s.get("props", {})
+	for k in pr:
+		best = maxi(best, int(pr[k]))
+	return best
 
 
 ## Smelt every raw-ore slot into its refined material, keeping its identity/props
