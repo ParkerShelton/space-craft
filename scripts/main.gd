@@ -1839,6 +1839,9 @@ func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
 		return
 	var space := get_world_3d().direct_space_state
 	var bx: Basis = ship.global_transform.basis
+	# She came down through whatever was standing here: no tree is left with
+	# its crown through the cabin roof or its trunk through the deck.
+	_fell_trees(ground, ship.global_position, up, 11.0)
 	var cells := {}
 	var lockers: Array = []     # [cell, facing] for each chest, placed last
 	for piece in ship.wreck_debris:
@@ -1858,20 +1861,26 @@ func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
 		var throw: Vector3 = bx * away * rng.randf_range(6.0, 13.0)
 		var spin := rng.randf_range(-PI, PI)
 		var anchor: Vector3 = ship.global_position + throw
+		# ...and so did each piece of her.
+		_fell_trees(ground, anchor, up, 5.0)
 		# What it came down on. Every wing has something under it; the tail
 		# about half the time.
 		var is_wing: bool = absf(mid.x) > 2.5
 		var cache := ""
 		if is_wing or rng.randf() < 0.5:
 			cache = "thruster" if rng.randf() < CACHE_THRUSTER_ODDS else "chest"
+		# Hidden, not advertised: it is driven down into the ground where the
+		# piece hit, flush with the surface, with one split plate lying flat
+		# over the hole. From a few steps off it is just another bit of wreck.
 		var cache_v = null
+		var cover_v = null
 		if cache != "":
 			var cg = _drop_to_ground(space, anchor, up)
 			if cg == null:
 				cache = ""
 			else:
-				cache_v = ground.world_to_voxel((cg as Vector3) + up * 0.5)
-				_tent_over(ground, space, cells, cg as Vector3, bx, up, rng)
+				cache_v = ground.world_to_voxel((cg as Vector3) - up * 0.5)
+				cover_v = ground.world_to_voxel((cg as Vector3) + up * 0.5)
 		for c2 in list:
 			# Crushed: the height it had is gone, and it is squashed along its
 			# length as well, so what lands is a flattened, buckled version of
@@ -1887,10 +1896,6 @@ func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
 			if g == null:
 				continue
 			var top: Vector3 = g as Vector3
-			# The middle of the piece is the tent (see _tent_over); the rest of
-			# it lies about round the edges.
-			if cache != "" and Vector2(fx, fz).length() < 1.6:
-				continue
 			# Most of it is driven into the dirt; a little of it stands proud.
 			var cracked: bool = rng.randf() < 0.3
 			_lay_plate(ground, cells, top + up * 0.5, cracked)
@@ -1900,7 +1905,8 @@ func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
 				_lay_plate(ground, cells, top + up * 1.5, rng.randf() < 0.5)
 		if cache_v == null:
 			continue
-		# Nothing but the cache in its own cell.
+		# The cache in its hole, the lid over it, and nothing else in either.
+		cells[cover_v] = Blocks.CRACKED_METAL
 		if cache == "thruster":
 			cells[cache_v] = Blocks.THRUSTER
 		else:
@@ -1916,32 +1922,60 @@ func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
 	ship.wreck_debris = []
 
 
-## The middle of a fallen wing, propped up over what it landed on: a three by
-## three roof of split plate one block up, and a skirt of it down to the ground
-## all round -- bar one gap, so there is a glimpse of something under there to
-## make you pull it apart. All of it cracked: the lid you lift, not the metal
-## you take.
-func _tent_over(ground: Planet, space: PhysicsDirectSpaceState3D, cells: Dictionary,
-		centre: Vector3, bx: Basis, up: Vector3, rng: RandomNumberGenerator) -> void:
-	# Two directions along the ground, square to each other and to `up`.
-	var t1: Vector3 = (bx.x - up * bx.x.dot(up)).normalized()
-	var t2: Vector3 = up.cross(t1).normalized()
-	var gap := Vector2i([-1, 1][rng.randi() % 2], 0) if rng.randf() < 0.5 \
-		else Vector2i(0, [-1, 1][rng.randi() % 2])
-	for dx in range(-1, 2):
-		for dz in range(-1, 2):
-			var side: Vector3 = t1 * float(dx) + t2 * float(dz)
-			# The roof is level with the middle, one block over the cache...
-			_lay_plate(ground, cells, centre + side + up * 1.5, true)
-			if dx == 0 and dz == 0:
+## Knock down every tree with any part of it within `radius` of `at` -- the
+## whole tree, trunk and crown, not just the part inside the circle, or the
+## wreck would sit under a crown with no trunk. Everything goes in one edit, and
+## the chunks are rebuilt now, before anything else is dropped on to the ground
+## here: the drops ask the physics, and the physics has to be looking at the
+## world without those trees in it.
+const FELL_LIMIT := 6000
+
+
+func _fell_trees(ground: Planet, at: Vector3, up: Vector3, radius: float) -> void:
+	var c := ground.world_to_voxel(at)
+	var half: int = maxi(int(radius) + 2, 16)
+	var seeds: Array = []
+	for dx in range(-half, half + 1):
+		for dy in range(-half, half + 1):
+			for dz in range(-half, half + 1):
+				var v := c + Vector3i(dx, dy, dz)
+				if not _is_tree(ground.get_id(v)):
+					continue
+				var rel: Vector3 = ground.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)) - at
+				var h: float = rel.dot(up)
+				if h < -3.0 or h > 22.0 or (rel - up * h).length() > radius:
+					continue
+				seeds.append(v)
+	if seeds.is_empty():
+		return
+	# Out from those along the rest of each tree.
+	var gone := {}
+	var q: Array = seeds
+	for sv in seeds:
+		gone[sv] = true
+	while not q.is_empty() and gone.size() < FELL_LIMIT:
+		var v2: Vector3i = q.pop_back()
+		for n in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+				Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+			var w: Vector3i = v2 + n
+			if gone.has(w) or (w - c).length() > radius + 14.0:
 				continue
-			if Vector2i(dx, dz) == gap:
-				continue
-			# ...and the skirt follows the ground under each edge, so on a
-			# slope it still meets the dirt instead of hanging in the air.
-			var g = _drop_to_ground(space, centre + side, up)
-			var foot: Vector3 = (g as Vector3) if g != null else centre + side
-			_lay_plate(ground, cells, foot + up * 0.5, true)
+			if _is_tree(ground.get_id(w)):
+				gone[w] = true
+				q.append(w)
+	var cells := {}
+	var touched := {}
+	for gv in gone:
+		cells[gv] = Blocks.AIR
+		touched[ground.chunk_of(gv as Vector3i)] = true
+	ground.set_blocks(cells)
+	for cc in touched:
+		ground.rebuild_chunk_sync(cc as Vector3i)
+
+
+func _is_tree(raw: int) -> bool:
+	var b := Blocks.bottom_of(raw)
+	return Blocks.is_wood(b) or Blocks.is_leaf(b) or b == Blocks.YOUNG_TREE
 
 
 ## One piece of plate where the wreckage lands, if the cell is free to take it.

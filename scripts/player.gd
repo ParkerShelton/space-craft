@@ -898,14 +898,22 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		if piloting:
 			return  # no building while flying
-		if _place_kind != Blocks.AIR:
-			# A ghost in hand takes the click: right to put it down, the way
-			# everything else in this game is placed.
+		if _place_kind != Blocks.AIR and (event.button_index == MOUSE_BUTTON_RIGHT
+				or event.button_index == MOUSE_BUTTON_LEFT):
+			# A ghost in hand takes the CLICKS: right to put it down, the way
+			# everything else in this game is placed. Not the wheel -- that
+			# still moves along the hotbar, or a station in your hand was a
+			# slot you could never scroll past.
 			if event.button_index == MOUSE_BUTTON_RIGHT:
 				_do_place_station()
-			elif event.button_index == MOUSE_BUTTON_LEFT:
+			else:
 				_toast("Right-click to place it, Esc to put it away")
 			return
+		if _place_kind != Blocks.AIR and not _place_from_item and (
+				event.button_index == MOUSE_BUTTON_WHEEL_UP
+				or event.button_index == MOUSE_BUTTON_WHEEL_DOWN):
+			# Scrolling away from a station picked off the ring puts it away.
+			_cancel_placing()
 		if event.button_index == MOUSE_BUTTON_RIGHT:
 			# right-click: open a station, or open/close a door, otherwise place a block
 			#
@@ -1371,8 +1379,12 @@ func _place_spot(tgt: Dictionary = {}) -> Dictionary:
 	var g := world.gravity_at(planet.to_global(Vector3(anchor)))
 	var up: Vector3 = _snap_to_axis(-g) if g.length() > 0.01 else Vector3.UP
 	var upi := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
-	# Which way it faces: away from you, turned by however many times R was hit.
-	var face := -global_transform.basis.z
+	# Which way it faces: its FRONT toward you, turned by however many times R
+	# was hit. Every station's model has its front on its -Z side, and the
+	# station's -Z is `fwd`, so fwd points back at whoever is placing it. It
+	# used to point the way you were looking, which put the back of every
+	# bench in your face and had you turning each one round by hand.
+	var face := global_transform.basis.z
 	face -= up * face.dot(up)
 	var fwd: Vector3 = _snap_to_axis(face)
 	if fwd == Vector3.ZERO or absf(fwd.dot(up)) > 0.5:
@@ -1434,7 +1446,7 @@ func _place_spot_on_ship(tgt: Dictionary) -> Dictionary:
 	var upi := Vector3i(0, 1, 0)
 	# Facing: the ship-local axis nearest the way you are looking, turned by
 	# however many times R was pressed.
-	var look: Vector3 = sb.inverse() * (-global_transform.basis.z)
+	var look: Vector3 = sb.inverse() * global_transform.basis.z   # front toward you
 	look.y = 0.0
 	var fi := Vector3i(0, 0, -1)
 	if absf(look.x) > absf(look.z):
@@ -1528,9 +1540,11 @@ func _do_place_station() -> void:
 	if st != null:
 		_toast("%s built" % Blocks.name_of(_place_kind))
 		Audio.at("place_rock", spot["pos"] as Vector3)
-	# Still holding the same thing, so a row of chests is a row of clicks --
-	# until the stack or the materials run out.
-	if not _place_from_item and not _can_afford(reqs):
+	# One station per pick. Staying in placing mode while you could still
+	# afford another put a second ghost straight back in front of you, as if
+	# you had chosen it again. (A carried one is different: while there is
+	# another in your hand, _sync_held_station shows its ghost.)
+	if not _place_from_item:
 		_cancel_placing()
 
 
@@ -4805,7 +4819,7 @@ func _place_station(id: int) -> void:
 			return
 		var g := world.gravity_at(corner)
 		var up := (-g).normalized() if g.length() > 0.01 else Vector3.UP
-		world.spawn_station(id, corner, up, -global_transform.basis.z)
+		world.spawn_station(id, corner, up, global_transform.basis.z)   # front toward you
 		_consume_active()
 		_toast(Blocks.name_of(id) + " placed")
 	elif tgt["kind"] == "ship":

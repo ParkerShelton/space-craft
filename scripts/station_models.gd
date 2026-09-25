@@ -592,7 +592,7 @@ static func anvil_piece_boxes(shape: String, col: Color, t: float = 0.0,
 	return []
 
 
-## What is waiting its turn, stacked on the floor at the front of the anvil:
+## What is waiting its turn, stacked on the floor at the front (-Z) of the anvil:
 ## small cold ingots (or bars, or sheets -- they are drawn the same), four to a
 ## row and a second row on top. Past eight the heap does not get any bigger;
 ## the look line says how many.
@@ -604,7 +604,7 @@ static func anvil_pile_boxes(n: int, col: Color) -> Array:
 	for i in mini(n, 8):
 		var row: int = i / 4
 		var x: float = -0.27 + float(i % 4) * 0.15 + (0.075 if row == 1 else 0.0)
-		out.append([Vector3(x, 0.028 + float(row) * 0.056, 0.38), Vector3(0.12, 0.052, 0.08),
+		out.append([Vector3(x, 0.028 + float(row) * 0.056, -0.38), Vector3(0.12, 0.052, 0.08),
 			cold if i % 2 == 0 else cold.darkened(0.08)])
 	return out
 
@@ -644,7 +644,7 @@ const PRESS_BED_Y := 0.42          # the top of the bed, where parts rest
 const PRESS_BED_X := -0.25         # the middle of the bed
 const PRESS_RAM_UP := 1.22         # the ram's head, raised
 const PRESS_RAM_DOWN := 0.56       # ...and come down onto the parts
-const PRESS_LEVER := Vector3(0.72, 0.6, 0.31)   # the lever's hinge
+const PRESS_LEVER := Vector3(0.72, 0.6, -0.31)  # the lever's hinge, on the front
 const PRESS_STEEL := Color(0.40, 0.42, 0.46)
 
 
@@ -663,7 +663,7 @@ static func press_boxes() -> Array:
 		[Vector3(0.43, 0.95, 0), Vector3(0.14, 1.3, 0.22), PRESS_STEEL],
 		[Vector3(PRESS_BED_X, 1.66, 0), Vector3(1.52, 0.2, 0.34), DARK],         # crown
 		[Vector3(0.72, 0.45, 0), Vector3(0.42, 0.42, 0.6), METAL],              # housing
-		[Vector3(0.72, 0.36, 0.305), Vector3(0.12, 0.05, 0.01), RED],           # a warning stripe
+		[Vector3(0.72, 0.36, -0.305), Vector3(0.12, 0.05, 0.01), RED],          # a warning stripe
 	]
 
 
@@ -682,7 +682,7 @@ static func press_ram_boxes() -> Array:
 ## The lever, from its hinge: upright at rest, pulled toward you to press.
 static func press_lever_boxes() -> Array:
 	return [
-		[Vector3(0, 0.02, -0.02), Vector3(0.1, 0.1, 0.06), DARK],
+		[Vector3(0, 0.02, 0.02), Vector3(0.1, 0.1, 0.06), DARK],
 		[Vector3(0, 0.21, 0), Vector3(0.05, 0.42, 0.05), METAL],
 		[Vector3(0, 0.44, 0), Vector3(0.1, 0.1, 0.1), Color(0.72, 0.24, 0.20)],
 	]

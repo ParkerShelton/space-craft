@@ -562,6 +562,14 @@ func set_fast_loading(enabled: bool) -> void:
 	APPLY_PER_FRAME = APPLY_PER_FRAME_FAST_LOAD if enabled else APPLY_PER_FRAME_NORMAL
 var _inflight := {}          # cc -> WorkerThreadPool task id
 var _ready_data := {}        # cc -> mesh data dict (filled by workers)
+## How many times each chunk's contents have changed. Every mesh job records the
+## version it was built from, and a result built from OLDER data than the
+## chunk now holds is thrown away and rebuilt rather than shown -- see
+## _is_stale. Without it, a chunk that was already meshing when an edit landed
+## could finish after the edit's own redraw and put the old picture back: the
+## trees left standing inside the wreck, the wreckage that only appeared once
+## you broke the "leaves" drawn over it.
+var _chunk_ver := {}
 var _ready_mutex := Mutex.new()
 var _dirty := {}             # loaded chunks needing an (async) re-mesh
 var _edit_priority := {}     # dirty chunks caused by a player edit -- applied first
@@ -4991,6 +4999,8 @@ func process_load_queue(_budget: int) -> int:
 			WorkerThreadPool.wait_for_task_completion(_inflight[cc])
 			_inflight.erase(cc)
 		_keep_generated(cc, data)
+		if _is_stale(cc, data):
+			continue
 		var node = loaded_chunks.get(cc)
 		if node != null and is_instance_valid(node):
 			node.apply_mesh_data(data)
@@ -5022,7 +5032,7 @@ func process_load_queue(_budget: int) -> int:
 		if not loaded_chunks.has(cc):
 			continue
 		var s := _edits_snapshot(cc)
-		var t := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, s, _wlev_snapshot(s)))
+		var t := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, s, _wlev_snapshot(s), _ver_of(cc)))
 		_inflight[cc] = t
 
 	# 3) dispatch new chunk loads with whatever capacity remains
@@ -5033,7 +5043,7 @@ func process_load_queue(_budget: int) -> int:
 			continue
 		_spawn_chunk_node(cc)
 		var snap := _edits_snapshot(cc)
-		var tid := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, snap, _wlev_snapshot(snap)))
+		var tid := WorkerThreadPool.add_task(Callable(self, "_build_task").bind(cc, snap, _wlev_snapshot(snap), _ver_of(cc)))
 		_inflight[cc] = tid
 	return applied
 
@@ -5074,8 +5084,9 @@ func _keep_generated(cc: Vector3i, data: Dictionary) -> void:
 		_depth_cache[cc] = data[Chunk.DEPTH_OUT]
 
 
-func _build_task(cc: Vector3i, snap: Dictionary, wsnap: Dictionary) -> void:
+func _build_task(cc: Vector3i, snap: Dictionary, wsnap: Dictionary, ver: int = 0) -> void:
 	var data := Chunk.build_mesh_data(self, cc, snap, wsnap)
+	data["_ver"] = ver
 	# Carried back to the main thread with the mesh, and stored there -- the
 	# caches are read while taking snapshots, which happens on the main thread.
 	if snap.has(Chunk.GEN_OUT):
@@ -5240,6 +5251,7 @@ func _chunk_possibly_solid(cc: Vector3i) -> bool:
 func load_edits(e: Dictionary) -> void:
 	_edits_by_chunk = e if e != null else {}
 	for cc in loaded_chunks.keys():
+		_chunk_ver[cc] = _ver_of(cc) + 1
 		_dirty[cc] = true
 
 
@@ -5267,7 +5279,23 @@ func _light_reaches(cc: Vector3i, v: Vector3i, lvl: int) -> bool:
 	return d <= lvl - 1
 
 
+func _ver_of(cc: Vector3i) -> int:
+	return int(_chunk_ver.get(cc, 0))
+
+
+## Was this finished mesh built from data older than the chunk holds now? If
+## so it is not shown, and the chunk is queued to mesh again.
+func _is_stale(cc: Vector3i, data: Dictionary) -> bool:
+	if int(data.get("_ver", 0)) >= _ver_of(cc):
+		return false
+	_dirty[cc] = true
+	return true
+
+
 func _edit_remesh(cc: Vector3i) -> void:
+	# Counted whether or not it is loaded: a chunk whose build is already out
+	# on a worker is loaded, and must not have that build shown.
+	_chunk_ver[cc] = _ver_of(cc) + 1
 	if not loaded_chunks.has(cc):
 		return
 	_edit_priority[cc] = true
@@ -5289,7 +5317,7 @@ func _edit_remesh(cc: Vector3i) -> void:
 	# a normal-priority edit task queues behind them -- which is what made
 	# building while walking feel so much worse than building standing still.
 	_inflight[cc] = WorkerThreadPool.add_task(
-		Callable(self, "_build_task").bind(cc, snap, _wlev_snapshot(snap)), true)
+		Callable(self, "_build_task").bind(cc, snap, _wlev_snapshot(snap), _ver_of(cc)), true)
 
 
 ## Turn finished EDIT meshes into geometry as soon as they are ready, rather than
@@ -5310,6 +5338,9 @@ func _apply_ready_edits() -> void:
 			WorkerThreadPool.wait_for_task_completion(_inflight[cc])
 			_inflight.erase(cc)
 		_keep_generated(cc, data)
+		if _is_stale(cc, data):
+			_edit_remesh(cc)
+			continue
 		var node = loaded_chunks.get(cc)
 		if node != null and is_instance_valid(node):
 			node.apply_mesh_data(data)

@@ -969,7 +969,7 @@ func _animate_press(good: bool) -> void:
 	var down: float = -0.5 + (StationModels.PRESS_RAM_DOWN if good else
 		lerpf(StationModels.PRESS_RAM_UP, StationModels.PRESS_RAM_DOWN, 0.55))
 	var tw := create_tween()
-	tw.tween_property(_press_lever, "rotation:x", 1.05, 0.12)
+	tw.tween_property(_press_lever, "rotation:x", -1.05, 0.12)
 	tw.tween_property(_ram, "position:y", down, 0.09).set_ease(Tween.EASE_IN)
 	tw.tween_interval(0.18 if good else 0.08)
 	tw.tween_property(_ram, "position:y", top, 0.35).set_ease(Tween.EASE_OUT)
