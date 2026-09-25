@@ -57,11 +57,18 @@ static func checklist(ship: Ship) -> Array:
 	# block you bolt in -- it is a battery you carry, charged somewhere else and
 	# dropped into the rack. Saying so here is the only place the game ever
 	# explains it, so it says it plainly.
+	#
+	# The rack pours its battery into her own store within a few seconds, so
+	# "is there charge in the battery" alone read "battery flat" on a ship
+	# that had just been handed all of it. Power is either.
 	var bay := power_bay(ship)
 	var held := battery_charge(bay)
-	out.append(Item.new("Power", bay != null and held > 0.0,
+	var stored: float = ship.charge
+	out.append(Item.new("Power", bay != null and (held > 0.0 or stored > 0.0),
 		("no battery rack aboard" if bay == null
-			else ("charged" if held > 0.0 else "rack empty" if not _bay_has_battery(bay)
+			else ("%d%% stored" % maxi(1, int(round(stored * 100.0))) if stored > 0.0
+				else "charging" if held > 0.0
+				else "rack empty" if not _bay_has_battery(bay)
 				else "battery flat")),
 		("A Power Bay is built at a Shipworks and mounts inside the hull."
 			if bay == null

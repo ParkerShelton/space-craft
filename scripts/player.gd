@@ -484,6 +484,8 @@ var _trail_id := 0
 var _preview_label: Label          # live craft-stat preview (Fabricator/Shipworks)
 var _job_label: Label              # "Refining… 60%" / "Crafting… 30%" while a job runs
 var _markers: Array[Label] = []   # one navigation marker per planet
+## Where this world began, once she has flown (see WorldManager.crash_site).
+var _crash_marker: Label
 
 
 func _ready() -> void:
@@ -5308,6 +5310,8 @@ func _update_markers() -> void:
 	if underground or menu:
 		for m in _markers:
 			m.visible = false
+		if _crash_marker != null:
+			_crash_marker.visible = false
 		return
 	while _markers.size() < world.planets.size():
 		var l := Label.new()
@@ -5346,6 +5350,54 @@ func _update_markers() -> void:
 			lbl.text = "%s  %s" % [planet.planet_name, _fmt_dist(dist)]
 		lbl.position = pos
 		lbl.visible = true
+	_update_crash_marker(cam, inv, vp, center, margin)
+
+
+## The wreck site, marked the way a planet is: a label over it on screen, or
+## pinned to the edge pointing at it when it is behind you or out of view.
+## Only once she has flown (there is no point marking where you are standing),
+## and only near enough to go back to.
+func _update_crash_marker(cam: Camera3D, inv: Transform3D, vp: Vector2, center: Vector2,
+		margin: float) -> void:
+	var cs: Dictionary = world.crash_site
+	var planet: Planet = null
+	if not cs.is_empty() and bool(cs.get("shown", false)):
+		for p in world.planets:
+			if (p as Planet).planet_name == str(cs.get("planet", "")):
+				planet = p
+				break
+	if planet == null:
+		if _crash_marker != null:
+			_crash_marker.visible = false
+		return
+	if _crash_marker == null:
+		_crash_marker = Label.new()
+		_crash_marker.add_theme_font_size_override("font_size", 14)
+		_crash_marker.modulate = Color(1.0, 0.72, 0.35)
+		_ui_layer.add_child(_crash_marker)
+	var wp: Vector3 = planet.to_global(cs["local"] as Vector3)
+	var dist := wp.distance_to(cam.global_position)
+	if dist < 30.0 or dist > 30000.0:
+		_crash_marker.visible = false
+		return
+	var localp := inv * wp
+	var pos: Vector2
+	var offscreen := true
+	if localp.z < 0.0:
+		pos = cam.unproject_position(wp)
+		offscreen = pos.x < margin or pos.x > vp.x - margin or pos.y < margin or pos.y > vp.y - margin
+	if offscreen:
+		var d2 := Vector2(localp.x, -localp.y)
+		if localp.z > 0.0:
+			d2 = -d2
+		if d2.length() < 0.001:
+			d2 = Vector2(0, 1)
+		pos = _clamp_to_edge(center, d2.normalized(), vp, margin)
+		_crash_marker.text = ">> Crash site  %s" % _fmt_dist(dist)
+	else:
+		_crash_marker.text = "Crash site  %s" % _fmt_dist(dist)
+	_crash_marker.position = pos
+	_crash_marker.visible = true
 
 
 func _clamp_to_edge(center: Vector2, dir: Vector2, vp: Vector2, margin: float) -> Vector2:

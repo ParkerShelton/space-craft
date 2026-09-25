@@ -109,6 +109,7 @@ static func _get_material(p: Planet) -> ShaderMaterial:
 	m.set_shader_parameter("rock_contrast", p.rock_contrast)
 	m.set_shader_parameter("light_lo", float(Blocks.LIGHT_IDS.min()))
 	m.set_shader_parameter("light_hi", float(Blocks.LIGHT_IDS.max()))
+	m.set_shader_parameter("glow_lamp_id", float(Blocks.GLOW_LAMP))
 	m.set_shader_parameter("rock_id", float(Blocks.ROCK))
 	# Worked metal gets panels and a sheen rather than stone speckle.
 	m.set_shader_parameter("metal_id", float(Blocks.METAL))

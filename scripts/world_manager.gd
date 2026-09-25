@@ -160,6 +160,11 @@ var world_seed := 0   # master seed the planets were generated from (persisted)
 # so it's rebuilt on load rather than saved; only WHICH system is current needs
 # persisting. `planets` above are always just the current system's planets.
 var galaxy: Galaxy
+## Where this world began: {"planet": name, "local": planet-local position,
+## "shown": whether it is on the HUD yet}. Recorded when the wreck is placed,
+## shown once she first leaves the ground -- while you are standing in the
+## wreck there is nothing to point at.
+var crash_site := {}
 var current_system_index := 0
 # main.gd points this at its own _generate_planets so WorldManager can rebuild
 # a system's planets without needing to know anything about Main's type.
@@ -464,7 +469,9 @@ func save_game() -> bool:
 				"air_made": s.air_made, "air_used": s.air_used,
 				"air_runtime": s.air_runtime,
 				"wreck": s.wreck_missing, "log": s.ship_log,
-				"cabin": s.cabin_cells, "seat": s.seat_at, "landed": s.landed})
+				"cabin": s.cabin_cells, "seat": s.seat_at, "landed": s.landed,
+				"flown": s.has_flown})
+	data["crash_site"] = crash_site
 	data["boats"] = []
 	for bt in _boats:
 		if is_instance_valid(bt):
@@ -572,6 +579,7 @@ func load_game() -> bool:
 		ship.seat_at = sd.get("seat", Vector3.ZERO)
 		# Every saved ship was parked when the world closed unless it says otherwise.
 		ship.landed = bool(sd.get("landed", true))
+		ship.has_flown = bool(sd.get("flown", false))
 		ship.rebuild()
 		ship.build_props()
 		# A loaded wreck still shows what it is missing (see repair_ghosts.gd).
@@ -579,6 +587,10 @@ func load_game() -> bool:
 			var g := RepairGhosts.new()
 			ship.add_child(g)
 			g.setup(ship, player)
+		# Power, air and engines, shown as they come and go (see ship_wake.gd).
+		var wk := ShipWake.new()
+		ship.add_child(wk)
+		wk.setup(ship, player, self)
 		_ships.append(ship)
 
 	# boats: rebuilt from scratch, like the stations below
@@ -624,6 +636,7 @@ func load_game() -> bool:
 		_stations.append(station)
 
 	# player
+	crash_site = data.get("crash_site", {})
 	var pd: Dictionary = data.get("player", {})
 	if player != null and not pd.is_empty():
 		var pl = player  # untyped: reach Player-specific members off the Node3D ref
@@ -670,6 +683,10 @@ func spawn_ship(pos: Vector3, up: Vector3, fwd: Vector3) -> Ship:
 
 	ship.set_block(Vector3i.ZERO, Blocks.COCKPIT)
 	_ships.append(ship)
+	# Power, air and engines, shown as they come and go (see ship_wake.gd).
+	var wk := ShipWake.new()
+	ship.add_child(wk)
+	wk.setup(ship, player, self)
 	return ship
 
 

@@ -1742,6 +1742,9 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	var ghosts := RepairGhosts.new()
 	ship.add_child(ghosts)
 	ghosts.setup(ship, player)
+	# Where this world began, for the map once she has flown.
+	_world.crash_site = {"planet": ground.planet_name,
+		"local": ground.to_local(ship.global_position), "shown": false}
 	_scar_the_ground(ground, ship, up, fwd, rng)
 	# ...and the pieces that came off her, crushed into the ground where they
 	# stopped. They are the nearest metal there is, which is the point.

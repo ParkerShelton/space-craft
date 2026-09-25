@@ -89,6 +89,13 @@ uniform float ore_chunk_id = 63.0;
 // they read as a painted cube and in a dark cave they vanish into the wall.
 uniform float light_lo = 91.0;
 uniform float light_hi = 93.0;
+// How lit a SHIP's lamps are, 0..1. A ship draws with its own copy of this
+// material (see Ship._hull_material), so a wreck with no power can go dark --
+// lamp and the light it throws on the walls both -- without touching the
+// planet. Terrain always leaves it at 1. Torches are fire, not wiring, and
+// stay lit whatever it says.
+uniform float lamp_power = 1.0;
+uniform float glow_lamp_id = -1.0;
 // A campfire's flames are their own geometry (see Chunk.build_mesh_data), drawn
 // with the campfire's id so they can burn rather than sit there as orange boxes.
 uniform float flame_id = 111.0;
@@ -309,7 +316,7 @@ void fragment() {
 		// scene: it makes its own light. Kept flat and emissive so it stays
 		// legible in a black cave and still reads as burning in full daylight.
 		shade = 1.0;
-		emit = 1.0;
+		emit = abs(id - glow_lamp_id) < 0.5 ? lamp_power : 1.0;
 
 	} else if (abs(id - thruster_id) < 0.5) {
 		// Measured from the planet's centre rather than the world origin, so
@@ -459,7 +466,7 @@ void fragment() {
 	// it lights the surface regardless of the renderer's own light handling,
 	// and warmed toward flame colour so a torch-lit room reads as firelight
 	// rather than just a brighter version of daylight.
-	float bl = v_block_light;
+	float bl = v_block_light * lamp_power;
 	// Warm at BOTH ends. Fading toward white as the light gets stronger put the
 	// coldest colour right where the flame is, so a torch sat in a pale grey
 	// pool -- the opposite of firelight, which is most orange at its source.

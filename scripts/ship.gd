@@ -38,6 +38,23 @@ var world: WorldManager  # set on spawn; used for gravity while coasting
 var in_gravity := false  # true while in launch/landing-assist mode (HUD)
 var landed := false      # resting on the ground (HUD)
 
+# --- liftoff ---
+## Lifting off the ground is not instant: holding climb while she sits on the
+## ground winds the engines up first, the camera shaking harder as they build,
+## and she goes when they are there. The very first time is the long one --
+## that is the moment the whole wreck was for -- and after that it is a beat.
+const SPOOL_FIRST := 2.3
+const SPOOL_TIME := 0.8
+const LIFT_KICK := 7.0       # m/s straight up the moment she lets go
+var spool := 0.0             # 0..1 how wound up the engines are
+## How hard the engines are visibly burning, 0..1, for ShipWake's flames.
+var engine_glow := 0.0
+## Has she ever left the ground? Saved: it is what makes the first liftoff the
+## long one, and what reveals the crash site on the map.
+var has_flown := false
+var _shake := 0.0
+signal lifted_off(first: bool)
+
 # --- flight tuning ---
 const THRUST_UNIT := 350.0    # base thrust per thruster; scaled by its material's Energy
 ## What a ship ought to manage, in m/s^2. Set from what the starting wreck
@@ -753,6 +770,9 @@ func fly(delta: float, world: WorldManager, input: Dictionary) -> void:
 		_fly_assisted(delta, input, g)
 	else:
 		landed = false
+		spool = 0.0
+		engine_glow = move_toward(engine_glow, 0.6, delta * 2.0)
+		_apply_shake(delta)
 		_fly_free(delta, input, g)
 
 
@@ -857,6 +877,7 @@ func _fly_assisted(delta: float, input: Dictionary, g: Vector3) -> void:
 
 	var target_h := wish * LAND_SPEED * _assist_mult
 	var target_v := float(input["ascend"]) * LAND_VSPEED * _assist_mult  # Space up, Shift down; hover at 0
+	target_v = _spool_up(delta, float(input["ascend"]), target_v, up)
 
 	var v_up := velocity.dot(up)
 	var v_h := velocity - up * v_up
@@ -872,8 +893,63 @@ func _fly_assisted(delta: float, input: Dictionary, g: Vector3) -> void:
 			landed = true
 	if landed and target_v <= 0.0 and move.length() < 0.01:
 		velocity = velocity.lerp(Vector3.ZERO, clampf(10.0 * delta, 0.0, 1.0))
+	# Flames: whatever the spool says on the ground, and in the air a steady
+	# burn that opens up when she is climbing.
+	var glow_to: float = spool * 0.8 if landed else 0.35 + 0.65 * maxf(float(input["ascend"]), 0.0)
+	engine_glow = move_toward(engine_glow, glow_to, delta * 3.0)
+	_apply_shake(delta)
 
 	_update_reticle(up)
+
+
+## Hold her on the ground while the engines wind up, and let her go when they
+## get there. Returns the climb speed to use this frame.
+func _spool_up(delta: float, ascend: float, target_v: float, up: Vector3) -> float:
+	# Sitting on the ground, whether or not this frame happened to bump it: a
+	# parked ship in landing assist has no velocity to collide with anything,
+	# so `landed` alone misses the one case this is for. A wreck also sits in
+	# a pocket cleared round her hull, so "near" is generous.
+	var grounded := landed or (velocity.length() < 0.6
+		and test_move(global_transform, -up * 1.2))
+	if not grounded:
+		spool = 0.0
+		return target_v
+	if ascend <= 0.0:
+		# Let go before she was ready: it winds back down.
+		spool = move_toward(spool, 0.0, delta * 1.5)
+		_shake = spool * 0.6
+		return target_v
+	if spool <= 0.0:
+		Audio.at("ship_spool", global_position)
+	var need: float = SPOOL_TIME if has_flown else SPOOL_FIRST
+	spool = minf(spool + delta / need, 1.0)
+	# Building, and building faster toward the end, the way a thing about to
+	# give does.
+	_shake = spool * spool * 0.8
+	if spool < 1.0:
+		return 0.0
+	# She goes.
+	var first := not has_flown
+	has_flown = true
+	spool = 0.0
+	landed = false
+	_shake = 1.2 if first else 0.7
+	engine_glow = 1.0
+	velocity += up * LIFT_KICK
+	Audio.at("ship_burn", global_position)
+	lifted_off.emit(first)
+	return target_v
+
+
+## Shake the chase camera by `_shake`, easing off on its own.
+func _apply_shake(delta: float) -> void:
+	if _chase_cam == null:
+		return
+	if spool <= 0.0:
+		_shake = move_toward(_shake, 0.0, delta * 1.4)
+	var s: float = _shake * 0.22
+	_chase_cam.h_offset = randf_range(-s, s)
+	_chase_cam.v_offset = randf_range(-s, s)
 
 
 # Project a ring onto the ground directly below the ship (the landing spot).
@@ -1082,7 +1158,28 @@ func _face_attrs(id: int, shade: float, uvs: PackedVector2Array,
 func _hull_material() -> Material:
 	var p: Planet = world.nearest_planet(global_position) if world != null else null
 	var m := Chunk._get_material(p)
-	return m if m != null else Chunk._get_plain_material()
+	if m == null:
+		return Chunk._get_plain_material()
+	# Her own copy of the planet's material, so her lamps can go dark without
+	# darkening every lamp on the planet (see set_lamp_power). Copied again
+	# only when she comes under a different planet.
+	if _mat_src != m or _mat == null:
+		_mat_src = m
+		_mat = m.duplicate() as ShaderMaterial
+	_mat.set_shader_parameter("lamp_power", lamp_power)
+	return _mat
+
+
+## How lit her lamps are, 0 (dark) to 1. Driven by ShipWake from her power.
+var lamp_power := 1.0
+var _mat: ShaderMaterial
+var _mat_src: ShaderMaterial
+
+
+func set_lamp_power(v: float) -> void:
+	lamp_power = clampf(v, 0.0, 1.0)
+	if _mat != null:
+		_mat.set_shader_parameter("lamp_power", lamp_power)
 
 
 ## The sub-boxes a block is really made of, in its own cell, or [] when it is
