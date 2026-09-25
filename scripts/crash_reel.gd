@@ -42,6 +42,8 @@ var _smoke: CPUParticles3D
 var _blew := false
 var _shake := 0.0
 var _alarm: AudioStreamPlayer
+var _bang: AudioStreamPlayer
+var _red: TextureRect
 var _alarm_t := 0.0
 var _beep := 0
 var _rng := RandomNumberGenerator.new()
@@ -76,6 +78,16 @@ func _ready() -> void:
 	_cam.current = true
 	# The flash and the black are Controls over the viewport rather than
 	# anything in the 3D scene: a white-out is a screen effect, not an object.
+	# Red round the edges, pulsing with the alarm. Under the flash and the black,
+	# so the white-out still swallows everything at the end.
+	_red = TextureRect.new()
+	_red.texture = _vignette_texture()
+	_red.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_red.stretch_mode = TextureRect.STRETCH_SCALE
+	_red.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_red.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_red.modulate = Color(1.0, 0.12, 0.08, 0.0)
+	add_child(_red)
 	_flash = ColorRect.new()
 	_flash.color = Color(1, 1, 1, 0)
 	_flash.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -88,7 +100,25 @@ func _ready() -> void:
 	add_child(_black)
 	_build_blast()
 	_build_alarm()
+	_build_bang()
 	_pose(0.0)
+
+
+## A soft frame: clear in the middle, solid at the edges. Tinted and pulsed by
+## _process, which is what turns it into a warning light rather than a filter.
+func _vignette_texture() -> ImageTexture:
+	const N := 96
+	var img := Image.create(N, N, false, Image.FORMAT_RGBA8)
+	for y in N:
+		for x in N:
+			var u := (float(x) / float(N - 1)) * 2.0 - 1.0
+			var v := (float(y) / float(N - 1)) * 2.0 - 1.0
+			# Distance to the nearest edge rather than to the centre: a frame,
+			# not a circle, so the corners do not go darker than the sides.
+			var d: float = maxf(absf(u), absf(v))
+			var a: float = clampf((d - 0.45) / 0.55, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1, 1, 1, a * a))
+	return ImageTexture.create_from_image(img)
 
 
 ## A sky to fall through: thin and cold up top, hazy where the ground is.
@@ -319,25 +349,45 @@ func _burst(n: int, life: float, speed: float, size: Vector3,
 func _build_alarm() -> void:
 	_alarm = AudioStreamPlayer.new()
 	_alarm.stream = _beep_stream()
-	_alarm.volume_db = -13.0
+	_alarm.volume_db = -9.0
 	if AudioServer.get_bus_index("Effects") >= 0:
 		_alarm.bus = "Effects"
 	add_child(_alarm)
 
 
+## The impact itself. A recording rather than anything synthesised here -- some
+## sounds you cannot fake with two sine waves.
+func _build_bang() -> void:
+	var stream = load("res://sounds/intro-explosion.wav")
+	if stream == null:
+		return
+	_bang = AudioStreamPlayer.new()
+	_bang.stream = stream
+	_bang.volume_db = -1.0
+	if AudioServer.get_bus_index("Effects") >= 0:
+		_bang.bus = "Effects"
+	add_child(_bang)
+
+
 func _beep_stream() -> AudioStreamWAV:
 	const RATE := 22050
-	const SECS := 0.13
+	const SECS := 0.15
 	var n := int(RATE * SECS)
 	var data := PackedByteArray()
 	data.resize(n * 2)
+	var phase := 0.0
 	for i in n:
 		var tt: float = float(i) / float(RATE)
-		# Two tones a fifth apart, so it reads as an instrument rather than a
-		# test tone, with a hard attack and a quick decay.
-		var v: float = sin(TAU * 740.0 * tt) * 0.6 + sin(TAU * 1110.0 * tt) * 0.25
-		var env: float = clampf(tt / 0.004, 0.0, 1.0) * exp(-tt * 16.0)
-		var sm: int = clampi(int(v * env * 26000.0), -32768, 32767)
+		# A falling warble rather than a steady tone. A note that holds is a
+		# doorbell; a note that slides down is a warning, and it is the slide
+		# that makes it read as urgent rather than merely loud.
+		var f: float = lerpf(1240.0, 820.0, clampf(tt / SECS, 0.0, 1.0))
+		phase += TAU * f / float(RATE)
+		var v: float = sin(phase) * 0.62 + sin(phase * 1.5) * 0.28 + sin(phase * 2.0) * 0.12
+		# Hard on, hard off: no decay tail, so two of them land as two hits
+		# instead of smearing into one.
+		var env: float = clampf(tt / 0.003, 0.0, 1.0) 			* clampf((SECS - tt) / 0.012, 0.0, 1.0)
+		var sm: int = clampi(int(v * env * 27000.0), -32768, 32767)
 		if sm < 0:
 			sm += 65536
 		data[i * 2] = sm & 0xFF
@@ -350,8 +400,8 @@ func _beep_stream() -> AudioStreamWAV:
 	return w
 
 
-## Two beeps, a gap, repeat. Stops the moment she hits -- after that there is
-## nothing left to warn anybody about.
+## Two beeps, a short gap, repeat, and faster than is comfortable. Stops the
+## moment she hits -- after that there is nothing left to warn anybody about.
 func _tick_alarm(delta: float) -> void:
 	if _alarm == null or _blew:
 		return
@@ -360,7 +410,7 @@ func _tick_alarm(delta: float) -> void:
 		return
 	_alarm.play()
 	_beep += 1
-	_alarm_t = 0.22 if (_beep % 2) == 1 else 0.95
+	_alarm_t = 0.17 if (_beep % 2) == 1 else 0.46
 
 
 ## Where everything is at time `t`. Written as a function of t rather than as
@@ -415,6 +465,12 @@ func _pose(t: float) -> void:
 		cos(ang) * dist, high, sin(ang) * dist)
 	# Aimed a little BELOW her, so the horizon sits high in the frame and what
 	# is under the shot is the ground she is going to meet.
+	# Buffeting all the way down: she is coming apart in atmosphere, and a
+	# camera that holds perfectly still says none of that. Small, constant, and
+	# on three different frequencies so it never settles into a rhythm.
+	var buffet: float = 0.10 + 0.05 * sin(t * 0.7)
+	eye += Vector3(sin(t * 23.0) * buffet, sin(t * 31.0) * buffet * 0.8,
+		cos(t * 19.0) * buffet)
 	if _shake > 0.0:
 		# Thrown about, settling. The camera is the only thing here that was not
 		# aboard, so it is the only thing that can flinch on your behalf.
@@ -427,6 +483,14 @@ func _process(delta: float) -> void:
 	_t += delta
 	_tick_alarm(delta)
 	_shake = maxf(_shake - delta * 1.6, 0.0)
+	if _red != null:
+		# In time with the beeps, and harder the longer she has been falling --
+		# then held at full while she goes in.
+		var beat: float = 0.5 + 0.5 * sin(_t * 9.5)
+		var lvl: float = lerpf(0.18, 0.42, beat)
+		if _impacting:
+			lvl = 0.55
+		_red.modulate = Color(1.0, 0.12, 0.08, lvl)
 	if _impacting:
 		_ending += delta
 	_pose(_t)
@@ -465,6 +529,8 @@ func _blow_up() -> void:
 			ch.visible = false
 	if _alarm != null:
 		_alarm.stop()
+	if _bang != null:
+		_bang.play()
 
 
 ## The world is ready: stop falling and land. Returns when the screen is black.
