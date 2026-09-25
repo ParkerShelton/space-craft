@@ -250,7 +250,11 @@ var _held_root: Node3D        # current item mesh, child of _hand_pivot
 ## The model inside it, when what you are holding has one (food, the journal).
 ## Kept so the eating and reading animations have something to move.
 var _held_item: MeshInstance3D
-var _eat_t := 0.0             # counts DOWN through a bite
+var _held_book: Node3D        # the journal, which has a hinge
+var _eating := false          # right mouse held with food in hand
+var _eating_id := 0
+var _eat_t := 0.0             # how long you have been at it
+var _eat_bites := -1          # how much of the model has been bitten away
 var _read_t := 0.0            # 0 shut, 1 open -- the journal in your hands
 var _held_key := ""           # cache key; only rebuild the model when this changes
 var _swing_t := 999.0         # counts up from 0 during a swing; >=SWING_DURATION = idle
@@ -1672,28 +1676,27 @@ func _gap(h: int) -> Control:
 
 ## The checklist, and under it the one thing worth doing next.
 func _draw_repair_screen(vb: VBoxContainer, ship: Ship) -> void:
+	var ghosts := _ghosts_for(ship)
 	for it in ShipComputer.checklist(ship):
 		var item: ShipComputer.Item = it
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", 10)
+		# The whole row is a button. Clicking it marks that job on the hull --
+		# blue outlines in the holes for the plating, a turning hologram over
+		# the mount for a part -- and clicking it again takes them away. Nothing
+		# is shown on the ship until you ask for it here.
+		var row := Button.new()
+		row.flat = true
+		row.custom_minimum_size = Vector2(500, 30)
+		row.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		var on: bool = ghosts != null and ghosts.is_showing(item.name)
+		row.text = "%s  %-18s %s%s" % ["OK " if item.done else "-- ", item.name,
+			item.detail, "      [showing on the ship]" if on else ""]
+		row.modulate = Color(0.55, 0.9, 1.0) if item.done else Color(1, 0.84, 0.66)
+		if on:
+			row.modulate = Color(0.45, 0.85, 1.0)
+		row.tooltip_text = "Click to mark this on the ship" if not on 			else "Click to stop marking this"
+		row.pressed.connect(_toggle_repair_ghost.bind(item.name))
 		vb.add_child(row)
-		var tick := Label.new()
-		tick.text = "✓" if item.done else "✗"
-		tick.custom_minimum_size = Vector2(22, 0)
-		tick.add_theme_font_size_override("font_size", 18)
-		tick.modulate = Color(0.45, 0.95, 0.5) if item.done else Color(1.0, 0.45, 0.42)
-		row.add_child(tick)
-		var nm := Label.new()
-		nm.text = item.name
-		nm.custom_minimum_size = Vector2(180, 0)
-		nm.add_theme_font_size_override("font_size", 17)
-		nm.modulate = Color(1, 1, 1, 0.9) if item.done else Color(1, 1, 1)
-		row.add_child(nm)
-		var det := Label.new()
-		det.text = item.detail
-		det.add_theme_font_size_override("font_size", 15)
-		det.modulate = Color(0.55, 0.9, 1.0) if item.done else Color(1, 0.8, 0.6)
-		row.add_child(det)
+
 	vb.add_child(_gap(8))
 	var next := Label.new()
 	next.text = ShipComputer.next_step(ship)
@@ -1794,9 +1797,9 @@ func _watch_repairs(delta: float) -> void:
 			if not seen.has(line):
 				ship.ship_log.append(line)
 				_toast("Ship's computer — %s restored" % str(name).to_lower())
-		if ShipComputer.flightworthy(ship) and not seen.has("She flies."):
-			ship.ship_log.append("She flies.")
-			_toast("Ship's computer: all systems nominal. She will fly.")
+		if ShipComputer.flightworthy(ship) and not seen.has("The ship flies."):
+			ship.ship_log.append("The ship flies.")
+			_toast("Ship's computer: all systems nominal. The ship will fly.")
 
 
 func _cycle_slot(dir: int) -> void:
@@ -4466,16 +4469,12 @@ func _try_eat() -> bool:
 	if hunger >= MAX_HUNGER - 0.5:
 		_toast("Not hungry")
 		return true
-	var gain := Blocks.food_value(id)
-	hunger = minf(hunger + gain, MAX_HUNGER)
-	# A bite: the model comes up to the mouth, turns, and drops away. Started
-	# BEFORE the item is removed, so there is something in hand to animate --
-	# and if that was the last one the hand empties as the bite finishes.
-	_eat_t = EAT_TIME
-	_remove_item(id, 1)
-	_toast("Ate %s  (+%d food)" % [Blocks.name_of(id), int(round(gain))])
-	_update_survival_ui()
-	_refresh_slots()
+	# Right-click STARTS eating; the rest happens in _tick_eating while you keep
+	# holding it. Nothing is consumed and nothing is gained until you finish.
+	_eating = true
+	_eating_id = id
+	_eat_t = 0.0
+	_eat_bites = -1
 	return true
 
 
@@ -6188,6 +6187,7 @@ func _update_held_item(active: Dictionary) -> void:
 		_held_root.queue_free()
 		_held_root = null
 	_held_item = null
+	_held_book = null
 	if id == Blocks.AIR or _hand_pivot == null:
 		return
 	_held_root = Node3D.new()
@@ -6207,10 +6207,18 @@ func _update_held_item(active: Dictionary) -> void:
 			mi.scale = Vector3.ONE * 0.6
 			mi.position = Vector3(0, -0.04, 0)
 		_held_root.add_child(mi)
+	elif id == Blocks.JOURNAL:
+		# The book is a rig rather than a mesh: it has a hinge, and a hinge is
+		# the only thing that makes opening one look like opening one.
+		_held_book = ItemModels.make_book()
+		_held_book.scale = Vector3.ONE * 0.55
+		_held_book.position = Vector3(0.04, -0.06, 0)
+		_held_book.rotation = Vector3(-0.25, 0.6, 0.0)
+		_held_root.add_child(_held_book)
+		ItemModels.set_book_open(_held_book, 0.0)
 	elif ItemModels.has_model(id):
-		# Food and the journal: a model rather than a tinted cube. Held a little
-		# larger than a tool, because a loaf in the corner of the eye at tool
-		# scale is a crumb.
+		# Food: a model rather than a tinted cube. Held a little larger than a
+		# tool, because a loaf in the corner of the eye at tool scale is a crumb.
 		_held_item = MeshInstance3D.new()
 		_held_item.mesh = ItemModels.mesh(id)
 		_held_item.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -6223,42 +6231,93 @@ func _update_held_item(active: Dictionary) -> void:
 	# other gear (the Suit) is worn, not wielded -- nothing shown in hand
 
 
-## How long a bite takes, and how far the food travels to your mouth.
-const EAT_TIME := 0.45
+## How long you have to keep eating before it does you any good, and how long
+## one chew of the animation takes.
+const EAT_TIME := 1.6
+const CHEW_TIME := 0.45
 
 
-## The held model's own little animations: eating and reading. Driven from
-## _process so they run whatever else is happening.
+## The held model's own animations: eating and reading.
 func _tick_held_anim(delta: float) -> void:
-	if _held_item == null or not is_instance_valid(_held_item):
-		_eat_t = maxf(_eat_t - delta, 0.0)
+	_tick_eating(delta)
+	_tick_reading(delta)
+
+
+## Eating is HELD, not clicked. You bring the food up and keep at it, and the
+## food only does you good once you have finished it -- so a meal is a moment
+## you have to stand still for rather than a keypress.
+func _tick_eating(delta: float) -> void:
+	if not _eating:
 		return
-	if _eat_t > 0.0:
-		_eat_t = maxf(_eat_t - delta, 0.0)
-		var k: float = 1.0 - _eat_t / EAT_TIME          # 0 -> 1 through the bite
-		# Up and in on the way, back down on the way out, with a turn of the
-		# wrist at the top -- which is the part that reads as biting rather
-		# than as the food merely moving.
-		var arc: float = sin(k * PI)
+	var held := _active_item()
+	var id := int(held.get("id", Blocks.AIR))
+	var still_down: bool = Input.mouse_mode == Input.MOUSE_MODE_CAPTURED 		and Input.is_mouse_button_pressed(MOUSE_BUTTON_RIGHT)
+	if not still_down or id != _eating_id or int(held.get("count", 0)) <= 0 or menu_open:
+		_eating = false
+		_eat_t = 0.0
+		_reset_held_pose()
+		_eat_bites = -1
+		return
+	_eat_t += delta
+	if _held_item != null and is_instance_valid(_held_item):
+		# Chewing: the same arc over and over while you hold, so it is obvious it
+		# is still going and roughly how fast.
+		var arc: float = sin(fposmod(_eat_t, CHEW_TIME) / CHEW_TIME * PI)
 		_held_item.position = Vector3(-0.10 * arc, -0.05 + 0.16 * arc, 0.16 * arc)
 		_held_item.rotation = Vector3(-0.2 - 0.9 * arc, 0.5 + 0.7 * arc, 0.15)
 		_held_item.scale = Vector3.ONE * (0.55 - 0.06 * arc)
+		# And it actually goes: a bite comes out of the model at the top of each
+		# arc, so by the end there is nearly nothing left in your hand.
+		var bites: int = mini(int(_eat_t / EAT_TIME * float(ItemModels.BITES)),
+			ItemModels.BITES - 1)
+		if bites != _eat_bites:
+			_eat_bites = bites
+			_held_item.mesh = ItemModels.mesh_bitten(id,
+				float(bites) / float(ItemModels.BITES))
+	if _eat_t < EAT_TIME:
 		return
-	# Reading: the book opens in your hands while the page is up and shuts when
-	# you put it away. The mesh is rebuilt as it swings, which is cheap -- it is
-	# six boxes -- and gives a real hinge rather than a fade between two props.
-	if int(_active_item().get("id", Blocks.AIR)) != Blocks.JOURNAL:
+	# Finished it.
+	_eating = false
+	_eat_t = 0.0
+	var gain := Blocks.food_value(id)
+	hunger = minf(hunger + gain, MAX_HUNGER)
+	_remove_item(id, 1)
+	_toast("Ate %s  (+%d food)" % [Blocks.name_of(id), int(round(gain))])
+	_update_survival_ui()
+	_refresh_slots()
+	_reset_held_pose()
+	_eat_bites = -1
+
+
+
+## Back to a whole item held normally -- either because you finished one and the
+## next one is a fresh one, or because you let go part way and did not eat it.
+func _reset_held_pose() -> void:
+	if _held_item != null and is_instance_valid(_held_item):
+		var id := int(_active_item().get("id", Blocks.AIR))
+		if _eat_bites >= 0 and ItemModels.has_model(id):
+			_held_item.mesh = ItemModels.mesh(id)
+		_held_item.position = Vector3(0, -0.05, 0)
+		_held_item.rotation = Vector3(-0.2, 0.5, 0.15)
+		_held_item.scale = Vector3.ONE * 0.55
+
+
+## The book opens in your hands while the page is up, and shuts when you put it
+## away. A real hinge, so the covers swing rather than slide.
+func _tick_reading(delta: float) -> void:
+	if _held_book == null or not is_instance_valid(_held_book):
 		return
-	var want_open: float = 1.0 if _journal_panel != null else 0.0
-	if not is_equal_approx(_read_t, want_open):
-		_read_t = move_toward(_read_t, want_open, delta * 3.2)
-		var e: float = _read_t * _read_t * (3.0 - 2.0 * _read_t)
-		_held_item.mesh = ItemModels.book_mesh(e)
-		# Brought up and turned square to you as it opens, so you are reading it
-		# rather than holding it out at your side.
-		_held_item.position = Vector3(0.0, -0.05 + 0.07 * e, 0.10 * e)
-		_held_item.rotation = Vector3(-0.2 - 0.5 * e, 0.5 - 0.5 * e, 0.15 - 0.15 * e)
-		_held_item.scale = Vector3.ONE * (0.55 + 0.20 * e)
+	var want: float = 1.0 if _journal_panel != null else 0.0
+	if is_equal_approx(_read_t, want):
+		return
+	_read_t = move_toward(_read_t, want, delta * 2.6)
+	var e: float = _read_t * _read_t * (3.0 - 2.0 * _read_t)
+	ItemModels.set_book_open(_held_book, e)
+	# Brought up and turned square to you as it opens, so you are reading it
+	# rather than holding it out at your side.
+	_held_book.position = Vector3(0.04 - 0.04 * e, -0.06 + 0.05 * e, 0.10 * e)
+	_held_book.rotation = Vector3(-0.25 - 0.35 * e, 0.6 - 0.6 * e, 0.0)
+	_held_book.scale = Vector3.ONE * (0.55 + 0.18 * e)
 
 
 func _mk_view_box(size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
@@ -7791,7 +7850,7 @@ func _try_launch_boat() -> bool:
 	# water, so "where you pointed" has to mean "the surface above that".
 	var surface = _water_surface_near(p, at, up)
 	if surface == null:
-		_toast("She needs water to float in")
+		_toast("The boat needs water to float in")
 		return true
 	var fwd: Vector3 = -global_transform.basis.z
 	var boat := world.spawn_boat((surface as Vector3) + up * 0.1, up, fwd)
@@ -7892,3 +7951,26 @@ func _close_journal() -> void:
 	menu_open = false
 	if not (inv_open or book_open or _station_open != null):
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## The marker node living on a ship, if it has one.
+func _ghosts_for(ship: Ship) -> RepairGhosts:
+	if ship == null or not is_instance_valid(ship):
+		return null
+	for c in ship.get_children():
+		var g := c as RepairGhosts
+		if g != null:
+			return g
+	return null
+
+
+## Clicking a line of the systems check: show that job on the hull, or stop.
+func _toggle_repair_ghost(item_name: String) -> void:
+	var ship := _ship_panel_ship
+	var g := _ghosts_for(ship)
+	if g == null:
+		return
+	var on := g.toggle(item_name)
+	Audio.ui("ui_toggle_on" if on else "ui_toggle_off")
+	_ship_panel_sig = ""        # redraw so the row shows its new state
+	_refresh_ship_computer()

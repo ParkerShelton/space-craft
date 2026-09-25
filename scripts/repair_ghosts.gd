@@ -38,9 +38,29 @@ var ship: Ship
 var _player: Node3D
 var _holes: MeshInstance3D
 var _parts: Node3D
+## Which checklist lines you have asked to SEE. Empty by default: the ship does
+## not decorate itself unless you ask it to. Keyed by the checklist item's name,
+## which is what the computer's rows are labelled with.
+var shown := {}
 var _sig := ""
 var _t := 0.0
 var _check_t := 0.0
+
+
+## Turn one line's ghosts on or off. Called by the ship's computer when you
+## click that row, and nothing else turns them on.
+func toggle(item_name: String) -> bool:
+	if shown.has(item_name):
+		shown.erase(item_name)
+	else:
+		shown[item_name] = true
+	_sig = ""        # force a rebuild on the next look
+	_check_t = 0.0
+	return shown.has(item_name)
+
+
+func is_showing(item_name: String) -> bool:
+	return shown.has(item_name)
 
 
 func setup(for_ship: Ship, player: Node3D) -> void:
@@ -67,7 +87,7 @@ func _process(delta: float) -> void:
 	if not near:
 		return
 	# Once she flies there is nothing left to point at.
-	if ShipComputer.flightworthy(ship):
+	if ShipComputer.flightworthy(ship) or shown.is_empty():
 		visible = false
 		return
 	_check_t -= delta
@@ -105,6 +125,8 @@ func _process(delta: float) -> void:
 ## answer changes rather than every time they are looked at.
 func _signature() -> String:
 	var parts: Array = []
+	for k in shown:
+		parts.append("+" + str(k))
 	for v in _hole_cells():
 		parts.append(str(v))
 	for it in ShipComputer.checklist(ship):
@@ -135,7 +157,7 @@ func _hole_cells() -> Array:
 
 
 func _rebuild() -> void:
-	_holes.mesh = _hole_mesh(_hole_cells())
+	_holes.mesh = _hole_mesh(_hole_cells()) if shown.has("Hull sealed") else null
 	if _holes.material_override == null:
 		_holes.material_override = _ghost_material()
 	for c in _parts.get_children():
@@ -217,17 +239,17 @@ func _missing_parts() -> Array:
 	for v in ship.wreck_missing:
 		if Blocks.is_door(int(ship.wreck_missing[v])) and not ship.blocks.has(v):
 			door_gone = true
-	if door_gone:
+	if door_gone and shown.has("Door"):
 		out.append({"at": Vector3(CrashSite.DOOR_AT) + Vector3(0.5, 0.5, 0.5),
 			"mesh": _boxes_mesh(Chunk.shape_boxes(
 				Blocks.door_with(false, 0, 0, false), Vector3.UP)),
 			"scale": 0.55, "pivot": Vector3.ZERO, "text": "Door\nCarpenter's Bench"})
-	if not bool(st.get("life_support", false)):
+	if not bool(st.get("life_support", false)) and shown.has("Life support"):
 		out.append({"at": Vector3(CrashSite.LIFE_SUPPORT_AT) + Vector3(0.5, 0.5, 0.5),
 			"mesh": Ship._fitting_mesh(Blocks.LIFE_SUPPORT),
 			"scale": 0.5, "pivot": Vector3(-0.5, -0.5, -0.5), "text": "Life Support\nShipworks, or salvage one"})
 	var thrusters := int(st.get("thrusters", 0))
-	if thrusters < 2:
+	if thrusters < 2 and shown.has("Thrusters"):
 		for side in [-1, 1]:
 			var cell := CrashSite.thruster_at(side)
 			if ship.blocks.has(cell):
@@ -237,6 +259,8 @@ func _missing_parts() -> Array:
 				"scale": 0.5, "pivot": Vector3(-0.5, -0.5, -0.5), "text": "Thruster\nShipworks, or salvage one"})
 	# Power: either there is no rack, or nothing charged in it.
 	var bay := ShipComputer.power_bay(ship)
+	if not shown.has("Power"):
+		return out
 	if bay == null:
 		out.append({"at": Vector3(CrashSite.POWER_BAY_AT) + Vector3(0.5, 0.5, 0.5),
 			"mesh": StationModels.mesh_from_boxes(

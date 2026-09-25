@@ -349,7 +349,6 @@ static func _fit_systems(ship: Ship, world: WorldManager, planet: Planet,
 static func journal_text(planet: Planet) -> String:
 	var lines: Array = []
 	lines.append("APPROACH SURVEY -- %s" % planet.planet_name)
-	lines.append("Written before descent. Reading it after, apparently.")
 	lines.append("")
 	lines.append("THE GROUND")
 	var day_min: float = planet.day_length * planet.DAY_SHARE / 60.0
@@ -363,11 +362,11 @@ static func journal_text(planet: Planet) -> String:
 	else:
 		lines.append("No standing water anywhere I could see.")
 	lines.append("")
-	# Counts and what they are FOR, not an inventory. Which seam is which is
+	# Counts and what they are FOR, not an inventory. Which ore is which is
 	# something to find out on the ground; how many there are and whether this
-	# world can power anything is what you want to know before you land.
+	# world can power anything is what you want to know before landing.
 	if not planet.ore_defs.is_empty():
-		lines.append("THE ROCK")
+		lines.append("THE ORES")
 		var metal := 0
 		var spark := 0
 		var burn := 0
@@ -379,33 +378,38 @@ static func journal_text(planet: Planet) -> String:
 					spark += 1
 				_:
 					metal += 1
-		lines.append("%s down there." % _count_word(planet.ore_defs.size()))
+		lines.append("%s of ore down there." % _count_word(planet.ore_defs.size()))
 		if metal > 0:
-			lines.append("  %s for metalwork." % _count_word(metal))
+			lines.append("  %s best for metalwork." % _count_word(metal))
 		if spark > 0:
-			lines.append("  %s for electrical work." % _count_word(spark))
+			lines.append("  %s best for electrical work." % _count_word(spark))
 		if burn > 0:
 			lines.append("  %s worth burning for power." % _count_word(burn))
 		if burn == 0:
-			lines.append("  Nothing here burns well. Power will be the hard part.")
-		lines.append("Refine it at a smelter first. Ore is not metal yet.")
+			lines.append("  None of it burns well. Power will be the hard part.")
+		lines.append("Refine ore at a smelter before you can build with it.")
 		lines.append("")
-	lines.append("IF IT GOES BADLY")
-	lines.append("Seal her before anything else. A plate in every hole and a door")
-	lines.append("in the doorway. Nothing aboard works until she holds air.")
+	lines.append("IF THE LANDING GOES BADLY")
+	lines.append("Seal the ship before anything else: a metal plate in every")
+	lines.append("hole, and a door in the doorway. Nothing aboard the ship")
+	lines.append("works until it holds air.")
 	lines.append("")
-	lines.append("Whatever comes off her on the way down is still plate. Cut up")
-	lines.append("the wings before you dig -- it is lying there already.")
+	lines.append("Anything that breaks off the ship on the way down is still")
+	lines.append("metal plate. Cut up the wings before you dig for ore -- that")
+	lines.append("metal is already lying on the ground.")
 	lines.append("")
-	lines.append("The cell in the rack is the power. A flat one is not a broken")
-	lines.append("one: fill it at a generator and put it back.")
+	lines.append("The battery in the rack is what powers the ship. A flat")
+	lines.append("battery is not a broken one: charge it at a generator and")
+	lines.append("put it back.")
 	lines.append("")
-	lines.append("You cannot get ore or plate out with your hands. Wood you can,")
-	lines.append("and wood makes the bench, and the bench makes the pick.")
-	return "\n".join(PackedStringArray(lines))
+	lines.append("Bare hands will not get ore or metal out of anything. They")
+	lines.append("will get wood, and wood makes the bench, and the bench makes")
+	lines.append("the pick.")
+	return "
+".join(PackedStringArray(lines))
 
 
-## What a seam is mostly good for. One answer each -- the survey is a summary,
+## What an ore is mostly good for. One answer each -- the survey is a summary,
 ## not a table.
 static func _ore_use(props: Dictionary) -> String:
 	if Blocks.combustion_of(props) >= 62:
@@ -416,8 +420,8 @@ static func _ore_use(props: Dictionary) -> String:
 
 
 static func _count_word(n: int) -> String:
-	const WORDS := ["No seams", "One seam", "Two seams", "Three seams",
-		"Four seams", "Five seams", "Six seams"]
+	const WORDS := ["No kinds", "One kind", "Two kinds", "Three kinds",
+		"Four kinds", "Five kinds", "Six kinds"]
 	if n >= 0 and n < WORDS.size():
 		return WORDS[n]
-	return "%d seams" % n
+	return "%d kinds" % n

@@ -2068,7 +2068,7 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 			var hint := get_tree().create_timer(5.6)
 			hint.timeout.connect(func():
 				if is_instance_valid(player):
-					player.hold_toast("Right-click the console to see what she needs", 9.0))
+					player.hold_toast("Right-click the console to see what the ship needs", 9.0))
 	else:
 		_hide_loading_screen()
 	# Combat testing: don't leave the guaranteed home-planet enemy (see

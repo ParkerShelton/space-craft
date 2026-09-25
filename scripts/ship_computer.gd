@@ -80,7 +80,7 @@ static func checklist(ship: Ship) -> Array:
 	var pressurised: bool = bool(st.get("habitable", false)) and float(st.get("air", 0.0)) > 0.05
 	out.append(Item.new("Cabin pressurised", pressurised,
 		"%d%% air" % int(float(st.get("air", 0.0)) * 100.0),
-		"Seal her, fit life support and give her power: the cabin fills itself."))
+		"Seal the ship, fit life support and give it power: the cabin fills itself."))
 	return out
 
 
@@ -106,7 +106,7 @@ static func next_step(ship: Ship) -> String:
 		var item: Item = it
 		if not item.done:
 			return "%s: %s. %s" % [item.name, item.detail, item.hint]
-	return "All systems nominal. She will fly."
+	return "All systems nominal. The ship will fly."
 
 
 ## What the computer says when the ship is whole -- how it is doing, in lines.
@@ -165,7 +165,7 @@ static func _trim_word(ship: Ship, err: float) -> String:
 	else:
 		side = "high" if t.y > 0.0 else "low"
 	var how := "slightly" if err < 1.0 else ("noticeably" if err < 2.5 else "badly")
-	return "%s heavy to %s -- she will wander under power" % [how, side]
+	return "%s heavy to %s -- the ship will wander under power" % [how, side]
 
 
 ## The battery rack mounted in this ship, if it has one. Stations are children

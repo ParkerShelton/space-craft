@@ -90,7 +90,16 @@ static func boxes_for(id: int) -> Array:
 				[Vector3(0.28, 0.05, 0), Vector3(0.12, 0.20, 0.16), BONE_C],
 			]
 		Blocks.JOURNAL:
-			return book_boxes(0.0)
+			# Shut, for the icon: the back half, and the front half folded over
+			# onto it, written out as plain boxes.
+			var shut: Array = [
+				[Vector3(0, 0, 0), Vector3(0.05, PAGE_T + COVER_T * 2.0, BOOK_L), SPINE],
+			]
+			for b in book_half_boxes():
+				var c: Vector3 = b[0]
+				shut.append([c, b[1], b[2]])
+				shut.append([Vector3(c.x, -c.y + COVER_T + PAGE_T, c.z), b[1], b[2]])
+			return shut
 		_:
 			return []
 
@@ -101,36 +110,67 @@ static func boxes_for(id: int) -> Array:
 ## The halves come back already placed, so anything that wants a book at a
 ## given openness -- the icon, the hand, the reading animation -- asks for one
 ## rather than working out its own hinge.
-const BOOK_W := 0.46      # across, shut
-const BOOK_L := 0.36      # along the spine
+const BOOK_W := 0.30      # how far a cover reaches from the spine
+const BOOK_L := 0.38      # along the spine
+const COVER_T := 0.035
+const PAGE_T := 0.055
 
 
-## Two layouts, lerped between: shut is a slab, open is two leaves lying out to
-## either side of the spine with the pages fanned between them. Everything here
-## is boxes, so it is placement rather than rotation -- but a book only really
-## has those two poses, and moving cleanly between them reads as a hinge.
-static func book_boxes(open: float) -> Array:
-	var k := clampf(open, 0.0, 1.0)
-	var half: float = BOOK_W * 0.5
-	var out: Array = [
-		# The spine, and the only part that never moves.
-		[Vector3(-half, 0, 0), Vector3(0.06, lerpf(0.20, 0.09, k), BOOK_L), SPINE],
+## One half of a book -- a cover with its block of pages -- reaching out from a
+## hinge at the origin along +X. Two of these, one turned over onto the other,
+## make a shut book; swung apart they make an open one.
+static func book_half_boxes() -> Array:
+	return [
+		[Vector3(BOOK_W * 0.5, 0, 0), Vector3(BOOK_W, COVER_T, BOOK_L), COVER],
+		[Vector3(BOOK_W * 0.52, COVER_T * 0.5 + PAGE_T * 0.5, 0),
+			Vector3(BOOK_W * 0.92, PAGE_T, BOOK_L - 0.05), PAGES],
 	]
+
+
+## A book as a real object with a real hinge: a spine, and two halves that turn
+## on it. Shut, one half is folded over onto the other; open, they lie out to
+## either side. Boxes cannot rotate, so the halves are NODES -- which is what
+## makes the opening read as a book opening rather than as parts sliding about.
+##
+## `set_book_open` moves it. Nothing else has to know how it is put together.
+static func make_book() -> Node3D:
+	var root := Node3D.new()
+	var spine := MeshInstance3D.new()
+	spine.mesh = _mesh([[Vector3.ZERO, Vector3(0.05, PAGE_T + COVER_T * 2.0, BOOK_L),
+		SPINE]], false)
+	spine.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	root.add_child(spine)
 	for i in 2:
-		var side: float = -1.0 if i == 0 else 1.0     # -1 is the bottom cover shut
-		# Shut: stacked, both at x = 0. Open: laid out either side of the spine.
-		var cx: float = lerpf(0.0, -half + half * (0.5 + 0.5 * (side + 1.0) * 0.5) * 2.0 * 0.0, 0.0)
-		cx = lerpf(0.0, (half * 0.55) * side, k)
-		var cy: float = lerpf(side * 0.075, -0.035, k)
-		out.append([Vector3(cx, cy, 0), Vector3(BOOK_W * lerpf(1.0, 0.62, k), 0.05, BOOK_L),
-			COVER])
-		# The block of paper on that cover: inset, so the cover shows as a
-		# border round it, which is what makes a slab read as a book.
-		out.append([Vector3(cx + 0.015 * side, cy + side * lerpf(0.055, 0.0, k) + 0.045 * k,
-				0),
-			Vector3(BOOK_W * lerpf(0.86, 0.54, k), lerpf(0.075, 0.04, k), BOOK_L - 0.06),
-			PAGES])
-	return out
+		var hinge := Node3D.new()
+		hinge.name = "half%d" % i
+		root.add_child(hinge)
+		var mi := MeshInstance3D.new()
+		mi.mesh = _mesh(book_half_boxes(), false)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		hinge.add_child(mi)
+	return root
+
+
+## 0 shut, 1 open flat.
+static func set_book_open(book: Node3D, open: float) -> void:
+	if book == null or not is_instance_valid(book):
+		return
+	var k := clampf(open, 0.0, 1.0)
+	var back := book.get_node_or_null("half0") as Node3D
+	var front := book.get_node_or_null("half1") as Node3D
+	if back == null or front == null:
+		return
+	# The back half never moves. The front one starts folded over onto it and
+	# swings a half turn about the spine until it lies out the other side.
+	back.rotation = Vector3.ZERO
+	back.position = Vector3.ZERO
+	front.rotation = Vector3(0, 0, lerpf(PI, 0.0, 0.0) * 0.0)
+	front.rotation.z = lerpf(PI, 0.0, 0.0)
+	# Rotation about the spine (Z here, since the spine runs along Z).
+	front.rotation = Vector3(0, 0, PI * (1.0 - k))
+	# Shut, the front cover sits a hair above the back one rather than through
+	# it; open, they are level.
+	front.position = Vector3(0, (COVER_T + PAGE_T) * (1.0 - k), 0)
 
 
 ## The model shrunk into the unit cube ItemIcon photographs, with the face
@@ -144,9 +184,45 @@ static func mesh(id: int) -> ArrayMesh:
 	return _mesh(boxes_for(id), false)
 
 
-## A book at a given openness, for the reading animation.
-static func book_mesh(open: float) -> ArrayMesh:
-	return _mesh(book_boxes(open), false)
+## How many bites it takes to finish something.
+const BITES := 4
+
+
+## The model with `eaten` of it gone: the same boxes, clipped back from the end
+## you are biting, so the thing in your hand visibly shrinks as you work at it
+## instead of sitting there whole until it vanishes.
+##
+## It eats from -X, which on the two meats is the flesh end -- so a chop is
+## chewed down to the bone rather than the bone being chewed off the chop.
+static func mesh_bitten(id: int, eaten: float) -> ArrayMesh:
+	var boxes := boxes_for(id)
+	var e := clampf(eaten, 0.0, 1.0)
+	if boxes.is_empty() or e <= 0.0:
+		return _mesh(boxes, false)
+	var lo := 1e9
+	var hi := -1e9
+	for b in boxes:
+		lo = minf(lo, (b[0] as Vector3).x - (b[1] as Vector3).x * 0.5)
+		hi = maxf(hi, (b[0] as Vector3).x + (b[1] as Vector3).x * 0.5)
+	var kept: Array = []
+	for i in boxes.size():
+		var b2: Array = boxes[i]
+		var c: Vector3 = b2[0]
+		var sz: Vector3 = b2[1]
+		# A little per-box wobble in where the bite lands, so the edge is ragged
+		# rather than a clean saw cut through the middle of a sandwich.
+		var jit: float = (fmod(float(i) * 0.6180339887, 1.0) - 0.5) * 0.09
+		var cut: float = lerpf(lo, hi + 0.02, e) + jit * (hi - lo)
+		var x0: float = c.x - sz.x * 0.5
+		var x1: float = c.x + sz.x * 0.5
+		if x1 <= cut:
+			continue
+		if x0 < cut:
+			var w: float = x1 - cut
+			kept.append([Vector3(cut + w * 0.5, c.y, c.z), Vector3(w, sz.y, sz.z), b2[2]])
+		else:
+			kept.append(b2)
+	return _mesh(kept, false)
 
 
 static func _mesh(boxes: Array, for_icon: bool) -> ArrayMesh:
