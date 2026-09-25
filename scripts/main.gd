@@ -3017,11 +3017,22 @@ func _process(delta: float) -> void:
 	# what is actually streamed, then closes the gap to the edge.
 	_env.fog_mode = Environment.FOG_MODE_DEPTH
 	var reach := float(_world.render_distance * Blocks.CHUNK_SIZE)
-	# Underground the same fog closes right in, which is what makes a cave wall
-	# beyond the streamed chunks dissolve into black rather than end at an edge.
-	_env.fog_depth_begin = lerpf(reach * 0.58, 7.0, _underground)
-	_env.fog_depth_end = lerpf(reach * 1.02, 32.0, _underground)
-	_env.fog_depth_curve = 1.0
+	# Underground the same fog still has to hide the streamed edge -- a cavern
+	# can be wider than the loaded chunks, and without fog it ends at a hard
+	# line against the void. But it was closing in to 7..32 blocks, collapsing a
+	# hundred-and-sixty-block ramp into a twenty-five-block one, so everything
+	# past about thirty blocks was saturated to the same flat colour. With that
+	# colour black, as it should be, the result is a wall: rock, then a line,
+	# then nothing.
+	#
+	# So the underground ramp stays LONG. It starts well out, ends near the edge
+	# of what is actually streamed, and eases in on a curve rather than a
+	# straight line, which keeps the near end of it imperceptible. Darkness you
+	# walk into should arrive gradually enough that you cannot point at where it
+	# began.
+	_env.fog_depth_begin = lerpf(reach * 0.58, maxf(reach * 0.30, 24.0), _underground)
+	_env.fog_depth_end = lerpf(reach * 1.02, maxf(reach * 0.85, 72.0), _underground)
+	_env.fog_depth_curve = lerpf(1.0, 2.2, _underground)
 	_env.fog_density = lerpf(_atmo, 1.0, _underground)
 	# Weather closes the distance in: a fog bank to under forty blocks, rain
 	# about half that far. Its colour is the overcast sky's, not the clear one.
