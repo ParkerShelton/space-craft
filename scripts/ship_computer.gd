@@ -158,16 +158,14 @@ static func _trim_word(ship: Ship, err: float) -> String:
 		return "nothing fitted"
 	if err <= 0.0:
 		return "balanced"
-	var t: Vector3 = ship.flight_stats()["trim"]
+	var t: Vector3 = ship.lateral_trim()
 	var side := ""
-	if absf(t.x) >= absf(t.y) and absf(t.x) >= absf(t.z):
+	if absf(t.x) >= absf(t.y):
 		side = "starboard" if t.x > 0.0 else "port"
-	elif absf(t.y) >= absf(t.z):
-		side = "high" if t.y > 0.0 else "low"
 	else:
-		side = "aft" if t.z > 0.0 else "forward"
+		side = "high" if t.y > 0.0 else "low"
 	var how := "slightly" if err < 1.0 else ("noticeably" if err < 2.5 else "badly")
-	return "%s %s to %s -- she will wander under power" % [how, "off", side]
+	return "%s heavy to %s -- she will wander under power" % [how, side]
 
 
 ## The battery rack mounted in this ship, if it has one. Stations are children

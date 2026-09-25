@@ -645,9 +645,17 @@ func _recompute_flight() -> void:
 	_trim = _thrust_centre - _com
 
 
+## The part of the offset that is a PROBLEM: sideways and up-down, not fore and
+## aft. Engines belong at the back of a ship -- that is the whole idea of a
+## ship -- so a long lever along her own axis is normal and pushes her straight.
+## Counting it made every sane hull report itself badly out of trim.
+func lateral_trim() -> Vector3:
+	return Vector3(_trim.x, _trim.y, 0.0)
+
+
 ## How far out of trim she is, in blocks, past the slop that is forgiven.
 func trim_error() -> float:
-	return maxf(_trim.length() - TRIM_DEADZONE, 0.0)
+	return maxf(lateral_trim().length() - TRIM_DEADZONE, 0.0)
 
 
 ## Everything the computer needs to say about how she flies.
@@ -656,10 +664,10 @@ func flight_stats() -> Dictionary:
 	var per: float = _thrust_total / float(maxi(_thrusters, 1))
 	var want: int = 0
 	if per > 0.0:
-		want = int(ceil(_mass * GOOD_ACCEL / per))
+		want = int(round(_mass * GOOD_ACCEL / per))
 	else:
 		# Nothing fitted yet, so price it against a plain one.
-		want = int(ceil(_mass * GOOD_ACCEL / (THRUST_UNIT * 0.9)))
+		want = int(round(_mass * GOOD_ACCEL / (THRUST_UNIT * 0.9)))
 	return {
 		"mass": _mass,
 		"thrusters": _thrusters,
@@ -758,12 +766,17 @@ func _fly_free(delta: float, input: Dictionary, g: Vector3) -> void:
 func _apply_trim_torque(wish_local: Vector3, delta: float) -> void:
 	if wish_local.length() < 0.01:
 		return
-	var err := trim_error()
+	var dir := wish_local.normalized()
+	# Only the part of the offset ACROSS the push turns her. Pushing straight
+	# along the lever does nothing, which is why engines behind the centre of
+	# mass drive a ship forward instead of tumbling it.
+	var r_perp: Vector3 = _trim - dir * _trim.dot(dir)
+	var err: float = maxf(r_perp.length() - TRIM_DEADZONE, 0.0)
 	if err <= 0.0:
 		return
-	var axis := _trim.normalized().cross(wish_local.normalized())
+	var axis := r_perp.normalized().cross(dir)
 	if axis.length() < 0.001:
-		return   # pushing straight along the offset turns nothing
+		return
 	var amount: float = minf(err * TRIM_TORQUE, TRIM_TORQUE_MAX) * delta
 	rotate_object_local(axis.normalized(), amount)
 
