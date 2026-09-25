@@ -35,6 +35,10 @@ var _col: CollisionShape3D
 var headless := false
 ## Set from the machine registry: false while the structure is missing a block.
 var active := true
+## The switch on the front of a generator. `active` is whether the machine is
+## WHOLE -- a hole knocked in it stops it -- and this is whether you have asked
+## it to run, which is a different question and wants a different answer.
+var switched_on := true
 
 # --- power ---
 const POWER_MAX := 1000.0
@@ -53,6 +57,10 @@ var warmth := 15.0            # degrees C it is holding its room at
 ## visibly change, so a bay draining over minutes remeshes a few dozen times
 ## rather than sixty times a second.
 var _bay_shown := Vector2(-1, -1)
+## The same, for a generator: battery seated, its charge, burning, power level.
+var _gen_shown := Color(-1, -1, -1, -1)
+var _lever: MeshInstance3D
+var _lever_t := 0.0
 ## A chest's lid, and how far open it is (0 shut, 1 wide). Set lid_open and it
 ## swings; nothing else has to be told.
 var _lid: MeshInstance3D
@@ -62,7 +70,10 @@ var _lid_t := 0.0
 
 static func capacity_of(k: int) -> int:
 	if k == Blocks.GENERATOR:
-		return 6   # a fuel bunker: feed it ore and let it run
+		# Two bays with a job each, not a bunker: slot 0 is the battery cradle
+		# on top, slot 1 is the fuel hopper beside it. Both are on the outside
+		# of the model where you can see what is in them.
+		return 2
 	if k == Blocks.CHEST:
 		return CHEST_SLOTS
 	if k == Blocks.POWER_BAY:
@@ -160,6 +171,20 @@ func _build_visual() -> void:
 	elif kind == Blocks.POWER_BAY:
 		_bay_shown = _bay_state()
 		_mi.mesh = StationModels.power_bay_mesh(_bay_shown.x > 0.5, _bay_shown.y)
+	elif kind == Blocks.GENERATOR:
+		_gen_shown = gen_state()
+		_mi.mesh = StationModels.generator_mesh(_gen_shown.r > 0.5, _gen_shown.g,
+			_gen_shown.b > 0.5, _gen_shown.a)
+		if _lever == null:
+			# A node of its own, hinged where it meets the case, so throwing it
+			# is a thing that happens rather than two pictures.
+			_lever = MeshInstance3D.new()
+			_lever.mesh = StationModels.mesh_from_boxes(
+				StationModels.generator_lever_boxes())
+			_lever.position = StationModels.GEN_LEVER + Vector3(0, -0.5, 0)
+			_lever_t = 1.0 if switched_on else 0.0
+			_lever.rotation.x = lerpf(1.15, -0.5, _lever_t)
+			add_child(_lever)
 	else:
 		_mi.mesh = StationModels.mesh_for(kind)
 	# The station's ORIGIN is the centre of the cell it was put down in, so the
@@ -425,9 +450,10 @@ func _affordable(reqs: Array) -> int:
 func _tick_generator(delta: float) -> void:
 	if kind != Blocks.GENERATOR:
 		return
-	if not active:
-		burn_t = 0.0
-		burn_rate = 0.0
+	if not active or not switched_on:
+		# Thrown off mid-burn, what is in the firebox stays in it. Coming back
+		# to a generator you switched off and finding its fuel gone would be a
+		# punishment for tidiness.
 		return
 	if burn_t > 0.0:
 		burn_t -= delta
@@ -462,6 +488,85 @@ const CHARGE_RATE := 45.0    # power/sec a Generator pushes into batteries in it
 const BAY_RATE := 90.0       # power/sec a Power Bay pulls out of them
 const SHIP_POWER := 900.0    # power to fill a ship's charge tank from empty
 const SHIP_AIR_POWER := 700.0  # power to fill its air tank from empty
+
+
+## The generator's two bays by name, so nothing has to remember which index is
+## which. Slot 0 is the cradle, slot 1 is the hopper.
+func gen_battery() -> Dictionary:
+	return storage[0] if storage.size() > 0 else {}
+
+
+func gen_fuel() -> Dictionary:
+	return storage[1] if storage.size() > 1 else {}
+
+
+func gen_has_battery() -> bool:
+	var s0 := gen_battery()
+	return int(s0.get("id", Blocks.AIR)) == Blocks.BATTERY and int(s0.get("count", 0)) > 0
+
+
+## What the model is currently showing: battery seated, its charge, burning,
+## how full the machine's own store is.
+func gen_state() -> Color:
+	var seated := gen_has_battery()
+	var f := 0.0
+	if seated:
+		var props: Dictionary = gen_battery().get("props", {})
+		f = clampf(float(props.get("charge", 0.0)) / Blocks.battery_capacity(props),
+			0.0, 1.0)
+	return Color(1.0 if seated else 0.0, snappedf(f, 0.04),
+		1.0 if burn_t > 0.0 else 0.0, snappedf(power / POWER_MAX, 0.04))
+
+
+## Keep the model looking like what is in it and what it is doing.
+func _refresh_gen() -> void:
+	if kind != Blocks.GENERATOR or headless or _mi == null:
+		return
+	var want := gen_state()
+	if want.is_equal_approx(_gen_shown):
+		return
+	_gen_shown = want
+	_mi.mesh = StationModels.generator_mesh(want.r > 0.5, want.g, want.b > 0.5, want.a)
+
+
+## Swap what is in the cradle for what you are holding. Either side may be
+## empty, so this is taking one out and putting one in as well.
+func gen_swap_battery(incoming: Dictionary) -> Dictionary:
+	_ensure_storage()
+	var was: Dictionary = storage[0].duplicate(true)
+	storage[0] = incoming.duplicate(true)
+	_refresh_gen()
+	if int(was.get("id", Blocks.AIR)) == Blocks.AIR or int(was.get("count", 0)) <= 0:
+		return {}
+	return was
+
+
+## The same for the hopper.
+func gen_swap_fuel(incoming: Dictionary) -> Dictionary:
+	_ensure_storage()
+	var was: Dictionary = storage[1].duplicate(true)
+	storage[1] = incoming.duplicate(true)
+	_refresh_gen()
+	if int(was.get("id", Blocks.AIR)) == Blocks.AIR or int(was.get("count", 0)) <= 0:
+		return {}
+	return was
+
+
+## Throw the switch. Returns what it is now.
+func gen_toggle() -> bool:
+	switched_on = not switched_on
+	return switched_on
+
+
+## Swing the lever toward where the switch is set.
+func _tick_lever(delta: float) -> void:
+	if _lever == null or not is_instance_valid(_lever):
+		return
+	var want: float = 1.0 if switched_on else 0.0
+	if is_equal_approx(_lever_t, want):
+		return
+	_lever_t = move_toward(_lever_t, want, delta * 5.0)
+	_lever.rotation.x = lerpf(1.15, -0.5, _lever_t)
 
 
 ## Batteries sitting in a Generator soak up its output. This is the only way to
@@ -570,9 +675,11 @@ func bay_swap(incoming: Dictionary) -> Dictionary:
 
 func _process(delta: float) -> void:
 	_tick_lid(delta)
+	_tick_lever(delta)
 	_tick_generator(delta)
 	_tick_batteries(delta)
 	_tick_power_bay(delta)
+	_refresh_gen()
 	if _job == "":
 		return
 	_job_t += delta

@@ -96,11 +96,7 @@ static func boxes_for(kind: int) -> Array:
 				[Vector3(0.62, 0.95, 0), Vector3(0.7, 0.24, 0.7), DARK],
 				[Vector3(0.62, 1.2, 0.2), Vector3(0.18, 0.3, 0.18), METAL]]
 		Blocks.GENERATOR:
-			return [
-				[Vector3(0, 0.35, 0), Vector3(0.9, 0.7, 0.9), METAL],
-				[Vector3(0, 0.78, 0), Vector3(0.6, 0.22, 0.6), DARK],
-				[Vector3(0, 0.5, -0.47), Vector3(0.4, 0.2, 0.08), GLOW],
-				[Vector3(0.3, 0.92, 0), Vector3(0.14, 0.18, 0.14), METAL]]
+			return generator_boxes(false, 0.0, false, 0.0)
 		Blocks.POWER_BAY:
 			return power_bay_boxes(false, 0.0)
 		Blocks.OXYGEN_PLANT:
@@ -366,6 +362,124 @@ static func gauge_colour(f: float) -> Color:
 static func power_bay_mesh(has_battery: bool, charge: float) -> ArrayMesh:
 	var m := _mesh_from(power_bay_boxes(has_battery, charge))
 	var lit := power_bay_lit(has_battery, charge)
+	if lit.is_empty():
+		return m
+	var sub := _mesh_from(lit)
+	if sub.get_surface_count() == 0:
+		return m
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sub.surface_get_arrays(0))
+	m.surface_set_material(m.get_surface_count() - 1, mat)
+	return m
+
+
+# --- the generator -------------------------------------------------------------
+#
+# Two places to put things and a switch to throw, all on the outside where you
+# can see them: a cradle on the left that holds a battery, a hopper on the right
+# that you shovel ore into, and a lever on the front face. Everything the
+# machine is doing is readable from across the room without opening anything.
+
+## The cradle's centre, on top of the case, and the top of the case itself.
+const GEN_TOP := 0.72
+const GEN_CRADLE := Vector3(-0.24, GEN_TOP, 0)
+const GEN_HOPPER := Vector3(0.24, GEN_TOP, 0)
+## Where the lever turns: low on the front face, on the right-hand side.
+const GEN_LEVER := Vector3(0.36, 0.30, -0.47)
+
+
+## The case, the two bays and the gauge. The lever is NOT here -- it is a node
+## of its own so it can actually swing (see `generator_lever_boxes`).
+static func generator_boxes(has_battery: bool, charge: float, burning: bool,
+		power: float) -> Array:
+	const CASE := Color(0.44, 0.40, 0.33)
+	const DEEP := Color(0.17, 0.16, 0.15)
+	const CONT := Color(0.74, 0.62, 0.30)
+	const TRACK := Color(0.09, 0.10, 0.12)
+	var out: Array = [
+		[Vector3(0, 0.34, 0), Vector3(0.92, 0.68, 0.92), CASE],
+		[Vector3(0, GEN_TOP - 0.02, 0), Vector3(0.94, 0.08, 0.94), DEEP],
+		# A stack, because a thing that burns has to put it somewhere.
+		[Vector3(0.30, 0.95, 0.30), Vector3(0.20, 0.42, 0.20), DEEP],
+	]
+	# The battery cradle: a hub with four short arms, the same shape as the
+	# ship's power bay, so a cradle is a cradle wherever you meet one.
+	out.append([GEN_CRADLE + Vector3(0, 0.03, 0), Vector3(0.44, 0.06, 0.44), DEEP])
+	out.append([GEN_CRADLE + Vector3(0, 0.07, 0), Vector3(0.20, 0.04, 0.20), CONT])
+	var grip: float = 0.04 if has_battery else 0.0
+	var lean: float = 0.0 if has_battery else 0.05
+	for d in [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)]:
+		var dir: Vector3 = d
+		var across := Vector3(absf(dir.z), 0, absf(dir.x))
+		var post: Vector3 = dir * (0.19 + lean)
+		out.append([GEN_CRADLE + Vector3(post.x, 0.13, post.z),
+			Vector3(0.07 + across.x * 0.13, 0.18, 0.07 + across.z * 0.13), CASE])
+		var tip: Vector3 = dir * (0.17 + lean - grip)
+		out.append([GEN_CRADLE + Vector3(tip.x, 0.23, tip.z),
+			Vector3(0.08 + across.x * 0.16, 0.06, 0.08 + across.z * 0.16), CONT])
+	if has_battery:
+		for b in battery_boxes(0.0):
+			var bb: Array = b
+			var c: Vector3 = bb[0]
+			var sz: Vector3 = bb[1]
+			# Two thirds the size of a bay's: this one shares its roof with a
+			# fuel hopper, and a full-height cell would stand over the lot.
+			out.append([GEN_CRADLE + Vector3(c.x * 0.66, 0.08 + c.y * 0.66, c.z * 0.66),
+				sz * 0.66, bb[2]])
+	# The hopper: a mouth in the roof you drop ore into, with a lip round it.
+	out.append([GEN_HOPPER, Vector3(0.40, 0.10, 0.40), DEEP])
+	out.append([GEN_HOPPER + Vector3(0, 0.05, 0), Vector3(0.30, 0.06, 0.30),
+		Color(0.06, 0.05, 0.05)])
+	for d2 in [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)]:
+		var dir2: Vector3 = d2
+		var across2 := Vector3(absf(dir2.z), 0, absf(dir2.x))
+		out.append([GEN_HOPPER + Vector3(dir2.x * 0.19, 0.06, dir2.z * 0.19),
+			Vector3(0.05 + across2.x * 0.38, 0.10, 0.05 + across2.z * 0.38), CASE])
+	# The window in the firebox, and the power gauge's track beside it.
+	out.append([Vector3(-0.18, 0.30, -0.47), Vector3(0.34, 0.24, 0.05), DEEP])
+	out.append([Vector3(-0.18, 0.58, -0.47), Vector3(0.44, 0.07, 0.04), TRACK])
+	return out
+
+
+## What is lit on it: the fire behind the window while it burns, and the filled
+## part of the power gauge.
+static func generator_lit(burning: bool, power: float) -> Array:
+	var out: Array = []
+	if burning:
+		out.append([Vector3(-0.18, 0.30, -0.495), Vector3(0.30, 0.20, 0.03), EMBER])
+	var f := clampf(power, 0.0, 1.0)
+	if f > 0.001:
+		var w: float = 0.42 * f
+		out.append([Vector3(-0.39 + w * 0.5, 0.58, -0.495), Vector3(w, 0.05, 0.03),
+			gauge_colour(f)])
+	return out
+
+
+## The lever, in the hinge's own space, so the node it lives on can turn it.
+## Thrown up is on and down is off, which is the way round every switch in a
+## machine shop works.
+static func generator_lever_boxes() -> Array:
+	const CASE := Color(0.44, 0.40, 0.33)
+	const HANDLE := Color(0.72, 0.24, 0.20)
+	return [
+		[Vector3(0, 0.13, -0.02), Vector3(0.06, 0.26, 0.06), CASE],
+		[Vector3(0, 0.27, -0.02), Vector3(0.11, 0.11, 0.11), HANDLE],
+	]
+
+
+## The plate the lever turns against, drawn on the case so there is something
+## for it to point at.
+static func generator_mesh(has_battery: bool, charge: float, burning: bool,
+		power: float) -> ArrayMesh:
+	var m := _mesh_from(generator_boxes(has_battery, charge, burning, power))
+	var lit := generator_lit(burning, power)
+	if has_battery and charge > 0.001:
+		# The seated battery's own gauge, shrunk with it.
+		var h: float = (G1 - G0) * 0.66 * clampf(charge, 0.0, 1.0)
+		lit.append([GEN_CRADLE + Vector3(0, 0.08 + (G0 - BATT_Y0) * 0.66 + h * 0.5,
+			GZ * 0.66 - 0.012), Vector3(0.10, h, 0.03), gauge_colour(charge)])
 	if lit.is_empty():
 		return m
 	var sub := _mesh_from(lit)
