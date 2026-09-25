@@ -116,8 +116,11 @@ func _vignette_texture() -> ImageTexture:
 			# Distance to the nearest edge rather than to the centre: a frame,
 			# not a circle, so the corners do not go darker than the sides.
 			var d: float = maxf(absf(u), absf(v))
-			var a: float = clampf((d - 0.45) / 0.55, 0.0, 1.0)
-			img.set_pixel(x, y, Color(1, 1, 1, a * a))
+			# Kept hard against the edge. A gentle falloff from halfway out
+			# reads as a red filter over the whole shot rather than as a warning
+			# light at the rim.
+			var a: float = clampf((d - 0.74) / 0.26, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1, 1, 1, a * a * a))
 	return ImageTexture.create_from_image(img)
 
 
@@ -487,9 +490,9 @@ func _process(delta: float) -> void:
 		# In time with the beeps, and harder the longer she has been falling --
 		# then held at full while she goes in.
 		var beat: float = 0.5 + 0.5 * sin(_t * 9.5)
-		var lvl: float = lerpf(0.18, 0.42, beat)
+		var lvl: float = lerpf(0.30, 0.75, beat)
 		if _impacting:
-			lvl = 0.55
+			lvl = 0.85
 		_red.modulate = Color(1.0, 0.12, 0.08, lvl)
 	if _impacting:
 		_ending += delta
