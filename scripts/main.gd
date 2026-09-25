@@ -2993,7 +2993,23 @@ func _process(delta: float) -> void:
 	# as the blocks behind it being a different colour.
 	var fog_lum: float = acol.r * 0.299 + acol.g * 0.587 + acol.b * 0.114
 	var fog_col: Color = acol.lerp(Color(fog_lum, fog_lum, fog_lum), 0.7 * dusk)
-	_env.fog_light_color = fog_col.lerp(Color(0, 0, 0), _underground)
+	# ...and underground it gives up its hue ENTIRELY, well before it gives up
+	# its distance.
+	#
+	# This is the cave tint. The fog closes right in as you go under -- it has
+	# to, or the streamed world ends at a hard edge -- and `fog_density` goes to
+	# 1.0 on the same number. But the COLOUR was blackening linearly on that
+	# same number, so a third of the way under the surface you had thick, near
+	# fog still carrying two thirds of the sky's colour, laid over every wall
+	# within twenty blocks. That is a haze that darkens AND repaints, and it
+	# gets worse the deeper you go, which is exactly the "it dims correctly and
+	# then starts changing the block colour" of a cave.
+	#
+	# So the colour goes black about three times faster than the fog arrives.
+	# By the time you are properly under rock there is no colour left in it at
+	# all, and what a cave wall does as it recedes is go black -- not go brown.
+	var fog_dark: float = clampf(_underground * 3.0, 0.0, 1.0)
+	_env.fog_light_color = fog_col.lerp(Color(0, 0, 0), fog_dark)
 	# DEPTH fog, not exponential. Exponential fog starts thickening the moment
 	# you look away from your own feet, which was tuned to hide a render edge 80
 	# blocks out; at twice that distance the same setting reads as thick haze on
