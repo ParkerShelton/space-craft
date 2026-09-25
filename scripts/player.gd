@@ -325,7 +325,8 @@ var _iv_y := 0.0                  # interior vertical velocity (ship-local)
 ## where the seat is, you can look around, and you cannot walk. Crouch gets you
 ## out -- the same key that gets you out of everywhere else.
 var seated: Node3D = null
-var _rouse_t := 0.0
+var _rousing := false
+var _rouse_end_ms := 0
 var _rouse_len := 0.0
 var _rouse_from := 0.0
 var _interior_floor := false
@@ -2740,17 +2741,9 @@ func _ground_ahead(step: Vector3, up: Vector3) -> bool:
 func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	_align_up(up, delta)
 
-	if _rouse_t > 0.0:
-		_rouse_t = maxf(_rouse_t - delta, 0.0)
-		# Smoothstep, not ease-out. Eased out, four fifths of the lift happened
-		# in the first two seconds -- while the screen is still black, so you
-		# never saw it. This is gentle at both ends with the travel in the
-		# middle, which is exactly when the fade is clearing.
-		var k: float = clampf(1.0 - _rouse_t / _rouse_len, 0.0, 1.0)
-		var e: float = k * k * (3.0 - 2.0 * k)
-		_pitch = _rouse_from * (1.0 - e)
-		_camera.rotation.x = _pitch
-		_look = Vector2.ZERO
+	# Coming round: the head lift, which also ignores look input while it runs.
+	if _tick_rouse():
+		pass
 
 	# Yaw around local up; pitch the camera.
 	if _look.x != 0.0:
@@ -7069,6 +7062,7 @@ func _open_station(st: Station) -> void:
 		_swap_bay_battery(st)
 		return
 	_station_open = st
+	st.lid_open = true
 	if inv_open:
 		_toggle_inventory()
 	_station_title.text = st.title()
@@ -7142,6 +7136,8 @@ func _refit_panels() -> void:
 
 
 func _close_station() -> void:
+	if _station_open != null and is_instance_valid(_station_open):
+		_station_open.lid_open = false
 	_station_open = null
 	if _station_panel != null:
 		_station_panel.visible = false
@@ -7607,11 +7603,35 @@ func _take_one_from_active() -> void:
 ## `seconds`. Called when a world opens in the wreck it began in.
 func begin_wake(seconds: float, from_pitch: float) -> void:
 	_rouse_len = maxf(seconds, 0.01)
-	_rouse_t = _rouse_len
 	_rouse_from = from_pitch
+	# Timed off the CLOCK, not off accumulated delta. The first second of a new
+	# world is heavy, and physics catches up by running several steps in one
+	# frame -- so a lift measured in deltas was three quarters spent before the
+	# first drawn frame and nobody ever saw it.
+	_rouse_end_ms = Time.get_ticks_msec() + int(_rouse_len * 1000.0)
+	_rousing = true
 	_pitch = from_pitch
 	if _camera != null:
 		_camera.rotation.x = _pitch
+
+
+## Advance the coming-round tilt. True while it is still running, and while it
+## is, look input is ignored: you are not in control yet.
+func _tick_rouse() -> bool:
+	if not _rousing:
+		return false
+	var left: float = maxf(float(_rouse_end_ms - Time.get_ticks_msec()) / 1000.0, 0.0)
+	# Smoothstep, not ease-out: gentle at both ends with the travel in the
+	# middle, which is exactly when the fade is clearing.
+	var k: float = clampf(1.0 - left / _rouse_len, 0.0, 1.0)
+	var e: float = k * k * (3.0 - 2.0 * k)
+	_pitch = _rouse_from * (1.0 - e)
+	if _camera != null:
+		_camera.rotation.x = _pitch
+	_look = Vector2.ZERO
+	if left <= 0.0:
+		_rousing = false
+	return true
 
 
 ## Right-clicking a seat. Anything in the "ship_seat" group will do; where you
@@ -7669,15 +7689,9 @@ func _sit_physics(delta: float) -> void:
 	if key_down("crouch"):
 		stand_up()
 		return
-	if _rouse_t > 0.0:
-		# Coming round happens in the chair too. Without this the head lift only
-		# ran while walking, so waking up seated skipped it entirely.
-		_rouse_t = maxf(_rouse_t - delta, 0.0)
-		var k: float = clampf(1.0 - _rouse_t / _rouse_len, 0.0, 1.0)
-		var e: float = k * k * (3.0 - 2.0 * k)
-		_pitch = _rouse_from * (1.0 - e)
-		_camera.rotation.x = _pitch
-		_look = Vector2.ZERO
+	# Coming round: the head lift, which also ignores look input while it runs.
+	if _tick_rouse():
+		pass
 	var up: Vector3 = seated.global_transform.basis.y
 	if _look.x != 0.0:
 		rotate(up, -_look.x * MOUSE_SENS * look_sensitivity)

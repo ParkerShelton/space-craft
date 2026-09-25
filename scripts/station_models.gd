@@ -72,10 +72,7 @@ static func boxes_for(kind: int) -> Array:
 				[Vector3(0, 0.46, -0.72), Vector3(0.7, 0.16, 0.3), Color(0.9, 0.9, 0.88)],
 				[Vector3(0, 0.3, -0.95), Vector3(0.9, 0.6, 0.12), WOOD]]
 		Blocks.CHEST:
-			return [
-				[Vector3(0, 0.28, 0), Vector3(0.84, 0.56, 0.7), WOOD],
-				[Vector3(0, 0.62, 0), Vector3(0.88, 0.16, 0.74), DARK_WOOD],
-				[Vector3(0, 0.44, -0.37), Vector3(0.18, 0.18, 0.06), METAL]]
+			return chest_body_boxes() + chest_lid_boxes(Vector3.ZERO)
 		Blocks.SHAPER:
 			var out2: Array = []
 			for sx2 in [-0.78, 0.78]:
@@ -379,4 +376,35 @@ static func power_bay_mesh(has_battery: bool, charge: float) -> ArrayMesh:
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sub.surface_get_arrays(0))
 	m.surface_set_material(m.get_surface_count() - 1, mat)
+	return m
+
+
+## Where a chest's lid is hinged: the top of the back edge, so it swings up and
+## back the way a lid does.
+const CHEST_HINGE := Vector3(0, 0.54, 0.37)
+
+
+## The chest without its lid. Split out because the lid is a separate node that
+## turns on a hinge -- a lid that opens is worth more than a lid drawn open.
+static func chest_body_boxes() -> Array:
+	return [
+		[Vector3(0, 0.28, 0), Vector3(0.84, 0.56, 0.7), WOOD],
+	]
+
+
+## The lid and its clasp, given where the hinge sits. Pass CHEST_HINGE to get
+## them in the lid node's own space (hinge at the origin), or ZERO to get the
+## whole chest in one piece, shut, for the icon and the placement ghost.
+static func chest_lid_boxes(origin: Vector3) -> Array:
+	return [
+		[Vector3(0, 0.62, 0) - origin, Vector3(0.88, 0.16, 0.74), DARK_WOOD],
+		[Vector3(0, 0.44, -0.37) - origin, Vector3(0.18, 0.18, 0.06), METAL],
+	]
+
+
+## A mesh from an arbitrary box list, for the parts of a station that move.
+static func mesh_from_boxes(boxes: Array) -> ArrayMesh:
+	var m := _mesh_from(boxes)
+	if m.get_surface_count() > 0:
+		m.surface_set_material(0, material(false))
 	return m

@@ -233,6 +233,8 @@ func _ready() -> void:
 	# WorldManager.purge_old_worlds), so they are cleared rather than broken.
 	var dropped := WorldManager.purge_old_worlds()
 	_build_menu()
+	if OS.get_environment("SPACECRAFT_WS") != "":
+		call_deferred("_wakeseat")
 	if dropped > 0:
 		_menu_label(" ", 8)
 		_menu_label("%d world%s from an older build had to be cleared" % [
@@ -2648,3 +2650,42 @@ func _process(delta: float) -> void:
 	for pl in _world.planets:
 		if pl.lod_sphere != null:
 			pl.lod_sphere.visible = _underground < 0.6 and pl.altitude(ppos) > 260.0
+
+
+func _wakeseat() -> void:
+	var dir := OS.get_environment("SPACECRAFT_WS")
+	_world.save_slot = "_wakeseat"
+	_start_world(false)
+	while _world.player == null or not _world.player.is_inside_tree() or _loading_layer != null:
+		await get_tree().process_frame
+	var pl = _world.player
+	var ship: Ship = _world._ships[0]
+	for i in 10:
+		await get_tree().process_frame
+	print("SEATED at start: %s (pitch %.2f)" % [str(pl.seated != null), pl._pitch])
+	var marks := [30, 150, 330, 420]
+	var shot := 0
+	for f in 640:
+		await get_tree().process_frame
+		if shot < marks.size() and f == int(marks[shot]):
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png(dir + "/w_%03d.png" % f)
+			print("  f%d seated=%s pitch=%.2f" % [f, str(pl.seated != null), pl._pitch])
+			shot += 1
+	# The locker: where is it, and is the doorway clear of it?
+	var locker: Station = null
+	for c in ship.get_children():
+		var st := c as Station
+		if st != null and st.kind == Blocks.CHEST:
+			locker = st
+	print("LOCKER local=%s  door at %s" % [
+		str(locker.position) if locker != null else "-", str(CrashSite.DOOR_AT)])
+	# The journal, as written for this world.
+	var page := ""
+	for sl in locker.storage:
+		if int(sl.get("id", Blocks.AIR)) == Blocks.JOURNAL:
+			page = str((sl.get("props", {}) as Dictionary).get("text", ""))
+	print("=== JOURNAL ===")
+	print(page)
+	print("=== END ===")
+	get_tree().quit()

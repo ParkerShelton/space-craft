@@ -288,7 +288,10 @@ static func _fit_systems(ship: Ship, world: WorldManager, planet: Planet,
 	# bench down without having to find a tree first. It is the one thing in the
 	# wreck that is not damaged: you are meant to open it, find it stocked, and
 	# understand from that that somebody packed it.
-	var locker := world.spawn_station_on_ship(Blocks.CHEST, ship, LOCKER_AT)
+	# Facing AFT, into the cabin: a locker whose clasp is against the nose is a
+	# locker you cannot open without walking through the windscreen.
+	var locker := world.spawn_station_on_ship(Blocks.CHEST, ship, LOCKER_AT,
+		Vector3i(0, 0, 1))
 	if locker != null:
 		locker.store_add(Blocks.COOKED_MEAT, 4, {})
 		locker.store_add(Blocks.TORCH, 3, {})

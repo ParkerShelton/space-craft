@@ -53,6 +53,11 @@ var warmth := 15.0            # degrees C it is holding its room at
 ## visibly change, so a bay draining over minutes remeshes a few dozen times
 ## rather than sixty times a second.
 var _bay_shown := Vector2(-1, -1)
+## A chest's lid, and how far open it is (0 shut, 1 wide). Set lid_open and it
+## swings; nothing else has to be told.
+var _lid: MeshInstance3D
+var lid_open := false
+var _lid_t := 0.0
 
 
 static func capacity_of(k: int) -> int:
@@ -142,7 +147,17 @@ func _build_visual() -> void:
 		add_child(_col)
 	# The station's own model, standing on the ground its footprint covers.
 	var fp := StationModels.footprint(kind)
-	if kind == Blocks.POWER_BAY:
+	if kind == Blocks.CHEST:
+		# The lid is a node of its own, hinged at the back, so it can actually
+		# swing rather than be drawn in two states.
+		_mi.mesh = StationModels.mesh_from_boxes(StationModels.chest_body_boxes())
+		if _lid == null:
+			_lid = MeshInstance3D.new()
+			_lid.mesh = StationModels.mesh_from_boxes(
+				StationModels.chest_lid_boxes(StationModels.CHEST_HINGE))
+			_lid.position = StationModels.CHEST_HINGE + Vector3(0, -0.5, 0)
+			add_child(_lid)
+	elif kind == Blocks.POWER_BAY:
 		_bay_shown = _bay_state()
 		_mi.mesh = StationModels.power_bay_mesh(_bay_shown.x > 0.5, _bay_shown.y)
 	else:
@@ -492,6 +507,24 @@ func _tick_power_bay(delta: float) -> void:
 		return
 
 
+## Swing the lid toward whatever it is meant to be doing. Eased rather than
+## snapped, and left alone entirely once it has got there.
+const LID_ANGLE := 1.55       # radians, near enough straight up
+const LID_SPEED := 4.5
+
+
+func _tick_lid(delta: float) -> void:
+	if _lid == null or not is_instance_valid(_lid):
+		return
+	var want: float = 1.0 if lid_open else 0.0
+	if is_equal_approx(_lid_t, want):
+		return
+	_lid_t = move_toward(_lid_t, want, delta * LID_SPEED)
+	# Ease it, so it lifts away and settles rather than running at one rate.
+	var e: float = _lid_t * _lid_t * (3.0 - 2.0 * _lid_t)
+	_lid.rotation.x = LID_ANGLE * e
+
+
 ## What the cradle SHOULD be showing: whether a battery is seated, and its
 ## charge rounded to the nearest step the gauge can actually draw.
 func _bay_state() -> Vector2:
@@ -536,6 +569,7 @@ func bay_swap(incoming: Dictionary) -> Dictionary:
 
 
 func _process(delta: float) -> void:
+	_tick_lid(delta)
 	_tick_generator(delta)
 	_tick_batteries(delta)
 	_tick_power_bay(delta)
