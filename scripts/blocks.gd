@@ -968,6 +968,43 @@ const STATION_BUILDS := [
 ]
 
 
+## The station ring's first level. Each category is a family of stations, so
+## the ring stays readable however many there are: better smelters, bigger
+## benches and the like join their family rather than crowding the ring.
+## "icon" is the station whose picture stands for the whole family.
+const STATION_CATEGORIES := [
+	{"name": "Camp", "icon": CAMPFIRE, "kinds": [CAMPFIRE, BED, CHEST]},
+	{"name": "Crafters", "icon": CARPENTER, "kinds": [CARPENTER, SHAPER, FABRICATOR, SHIPWORKS]},
+	{"name": "Smelters", "icon": SMELTER, "kinds": [SMELTER]},
+	{"name": "Power", "icon": GENERATOR, "kinds": [GENERATOR, POWER_BAY]},
+	{"name": "Climate", "icon": OXYGEN_PLANT, "kinds": [OXYGEN_PLANT, HEATER, COOLER, CLIMATE_UNIT]},
+]
+
+
+## The ring's categories with each station's build entry filled in. A station
+## that was added to STATION_BUILDS but never given a family still shows up,
+## under "Other", rather than silently becoming unbuildable.
+static func station_categories() -> Array:
+	var out: Array = []
+	var placed := {}
+	for c in STATION_CATEGORIES:
+		var builds: Array = []
+		for k in c["kinds"]:
+			for b in STATION_BUILDS:
+				if int(b["kind"]) == int(k):
+					builds.append(b)
+					placed[int(k)] = true
+		if not builds.is_empty():
+			out.append({"name": c["name"], "icon": int(c["icon"]), "builds": builds})
+	var rest: Array = []
+	for b in STATION_BUILDS:
+		if not placed.has(int(b["kind"])):
+			rest.append(b)
+	if not rest.is_empty():
+		out.append({"name": "Other", "icon": int(rest[0]["kind"]), "builds": rest})
+	return out
+
+
 ## What one station costs, or [] if it is not something you can put down.
 static func station_cost(kind: int) -> Array:
 	for b in STATION_BUILDS:
@@ -980,8 +1017,6 @@ static func is_station_build(kind: int) -> bool:
 	return not station_cost(kind).is_empty()
 
 
-# Eighth-block patterns. These are the CORE stations -- the only ones with a
-# shape you have to copy. Everything else grows out of one of them.
 ## Every recipe in the game, flattened into one list the Recipe Book can show.
 ##
 ## Each entry carries a STABLE key, so unlocking recipes as you progress is a

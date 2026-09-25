@@ -868,9 +868,18 @@ func _unhandled_input(event: InputEvent) -> void:
 		# click that takes the mouse back -- that branch was eating every click
 		# aimed at a station and putting the pointer away again.
 		if _ring != null:
-			if event.button_index == MOUSE_BUTTON_LEFT and _ring_hover >= 0:
+			if event.button_index == MOUSE_BUTTON_RIGHT and _ring_cat >= 0:
+				Audio.ui("ui_click")
+				_fill_ring(-1)  # back out to the categories
+			elif event.button_index == MOUSE_BUTTON_LEFT and _ring_hover < 0 and _ring_cat >= 0:
+				Audio.ui("ui_click")
+				_fill_ring(-1)  # the card in the middle is the way back too
+			elif event.button_index == MOUSE_BUTTON_LEFT and _ring_hover >= 0:
 				var it: Dictionary = _ring_items[_ring_hover]
-				if bool(it["ok"]):
+				if int(it.get("cat", -1)) >= 0:
+					Audio.ui("ui_click")
+					_fill_ring(int(it["cat"]))
+				elif bool(it["ok"]):
 					_begin_placing(int(it["kind"]))
 					_close_ring()
 				else:
@@ -1028,10 +1037,12 @@ func _unhandled_input(event: InputEvent) -> void:
 
 # --- the station ring -----------------------------------------------------------
 #
-# Hold the key and every station you can build comes up in a ring round the
-# crosshair. Mouse over one to see what it costs -- greyed out if you cannot
-# afford it -- and click it to take up a ghost of the thing itself, which you
-# turn with R and put down with a click.
+# Hold the key and the station FAMILIES come up in a ring round the crosshair
+# (camp, crafters, smelters...). Click one and the ring turns into the stations
+# in that family. Mouse over one to see what it costs -- greyed out if you
+# cannot afford it -- and click it to take up a ghost of the thing itself,
+# which you turn with R and put down with a click. Right-click, or click the
+# card in the middle, to go back to the families.
 
 const RING_RADIUS := 300.0
 const RING_CELL := 84.0
@@ -1039,7 +1050,9 @@ const RING_CARD_W := 300.0
 const RING_CARD_H := 300.0
 
 var _ring: Control
-var _ring_items: Array = []        # [{kind, node, reqs, ok}]
+var _ring_items: Array = []        # [{kind, cat, node, reqs, ok, at}]; cat >= 0 is a family
+var _ring_cat := -1                # the family open in the ring, -1 for the families themselves
+var _ring_cats: Array = []         # Blocks.station_categories(), taken when the ring opens
 var _ring_hover := -1
 var _ring_card_shown := -2         # which one the card in the middle is showing
 var _ring_card: Panel
@@ -1067,51 +1080,7 @@ func _open_ring() -> void:
 	shade.set_anchors_preset(Control.PRESET_FULL_RECT)
 	shade.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ring.add_child(shade)
-	_ring_items.clear()
-	_ring_hover = -1
-	_ring_card_shown = -2
-	var builds: Array = Blocks.STATION_BUILDS
-	var vp := get_viewport().get_visible_rect().size
-	var centre := vp * 0.5
-	for i in builds.size():
-		var b: Dictionary = builds[i]
-		var kind := int(b["kind"])
-		var ang := TAU * float(i) / float(builds.size()) - PI * 0.5
-		var at := centre + Vector2(cos(ang), sin(ang)) * RING_RADIUS
-		var cell := Panel.new()
-		cell.size = Vector2(RING_CELL, RING_CELL)
-		cell.position = at - Vector2(RING_CELL, RING_CELL) * 0.5
-		# Styled as an inventory slot, so it reads as something to pick up.
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = SLOT_BG
-		sb.border_color = SLOT_EDGE
-		sb.set_border_width_all(2)
-		sb.set_corner_radius_all(8)
-		cell.add_theme_stylebox_override("panel", sb)
-		cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_ring.add_child(cell)
-		var icon := TextureRect.new()
-		icon.texture = ItemIcon.of(kind, Blocks.color_of(kind),
-			world.nearest_planet(global_position) if world != null else null)
-		icon.set_anchors_preset(Control.PRESET_FULL_RECT)
-		icon.offset_left = 8
-		icon.offset_top = 6
-		icon.offset_right = -8
-		icon.offset_bottom = -22
-		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cell.add_child(icon)
-		var nm := Label.new()
-		nm.text = Blocks.name_of(kind)
-		nm.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
-		nm.offset_top = -20
-		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		nm.add_theme_font_size_override("font_size", 11)
-		nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		cell.add_child(nm)
-		_ring_items.append({"kind": kind, "node": cell, "reqs": b["reqs"],
-			"ok": _can_afford(b["reqs"]), "at": at})
+	_ring_cats = Blocks.station_categories()
 	# The card in the middle: a big picture of whatever the mouse is over, what
 	# it takes line by line, and a tick or a cross against each.
 	_ring_card = Panel.new()
@@ -1146,9 +1115,70 @@ func _open_ring() -> void:
 	_ring_card_reqs.add_theme_constant_override("separation", 6)
 	_ring_card_reqs.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_ring_card.add_child(_ring_card_reqs)
-	_paint_ring()
+	_fill_ring(-1)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	get_viewport().warp_mouse(get_viewport().get_visible_rect().size * 0.5)
+
+
+## Lay the ring out again: the families when `cat` is -1, otherwise the
+## stations of family `cat`.
+func _fill_ring(cat: int) -> void:
+	if _ring == null:
+		return
+	for it in _ring_items:
+		(it["node"] as Node).queue_free()
+	_ring_items.clear()
+	_ring_cat = cat
+	_ring_hover = -1
+	_ring_card_shown = -2
+	var entries: Array = []   # [{kind (picture), label, cat, reqs, ok}]
+	if cat < 0:
+		for ci in _ring_cats.size():
+			var c: Dictionary = _ring_cats[ci]
+			var any_ok := false
+			for bd in c["builds"]:
+				any_ok = any_ok or _can_afford(bd["reqs"])
+			entries.append({"kind": int(c["icon"]), "label": str(c["name"]), "cat": ci,
+				"reqs": [], "ok": any_ok})
+	else:
+		for bd in _ring_cats[cat]["builds"]:
+			entries.append({"kind": int(bd["kind"]), "label": Blocks.name_of(int(bd["kind"])),
+				"cat": -1, "reqs": bd["reqs"], "ok": _can_afford(bd["reqs"])})
+	var vp := get_viewport().get_visible_rect().size
+	var centre := vp * 0.5
+	for i in entries.size():
+		var e: Dictionary = entries[i]
+		var kind := int(e["kind"])
+		var ang := TAU * float(i) / float(entries.size()) - PI * 0.5
+		var at := centre + Vector2(cos(ang), sin(ang)) * RING_RADIUS
+		var cell := Panel.new()
+		cell.size = Vector2(RING_CELL, RING_CELL)
+		cell.position = at - Vector2(RING_CELL, RING_CELL) * 0.5
+		cell.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_ring.add_child(cell)
+		var icon := TextureRect.new()
+		icon.texture = ItemIcon.of(kind, Blocks.color_of(kind),
+			world.nearest_planet(global_position) if world != null else null)
+		icon.set_anchors_preset(Control.PRESET_FULL_RECT)
+		icon.offset_left = 8
+		icon.offset_top = 6
+		icon.offset_right = -8
+		icon.offset_bottom = -22
+		icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cell.add_child(icon)
+		var nm := Label.new()
+		nm.text = str(e["label"])
+		nm.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+		nm.offset_top = -20
+		nm.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		nm.add_theme_font_size_override("font_size", 13 if cat < 0 else 11)
+		nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cell.add_child(nm)
+		_ring_items.append({"kind": kind, "cat": int(e["cat"]), "node": cell,
+			"reqs": e["reqs"], "ok": bool(e["ok"]), "at": at})
+	_paint_ring()
 
 
 func _close_ring() -> void:
@@ -1157,6 +1187,7 @@ func _close_ring() -> void:
 	_ring.queue_free()
 	_ring = null
 	_ring_items.clear()
+	_ring_cat = -1
 	_ring_card = null
 	if not (menu_open or inv_open or book_open):
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
@@ -1194,9 +1225,11 @@ func _paint_ring() -> void:
 		c.queue_free()
 	if _ring_hover < 0:
 		_ring_card_icon.texture = null
-		_ring_card_name.text = "Stations"
+		_ring_card_name.modulate = Color(1, 1, 1)
+		_ring_card_name.text = "Stations" if _ring_cat < 0 else str(_ring_cats[_ring_cat]["name"])
 		var hint := Label.new()
-		hint.text = "Point at one to see what it takes.\nClick it to pick it up and place it."
+		hint.text = ("Pick a kind of station." if _ring_cat < 0 else
+			"Point at one to see what it takes.\nClick it to pick it up and place it.\n\nRight-click or click here to go back.")
 		hint.custom_minimum_size = Vector2(RING_CARD_W - 44.0, 0)
 		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -1208,8 +1241,29 @@ func _paint_ring() -> void:
 	var kind := int(hov["kind"])
 	_ring_card_icon.texture = ItemIcon.of(kind, Blocks.color_of(kind),
 		world.nearest_planet(global_position) if world != null else null)
-	_ring_card_name.text = Blocks.name_of(kind)
 	_ring_card_name.modulate = Color(1, 1, 1) if bool(hov["ok"]) else Color(1, 0.7, 0.68)
+	if int(hov["cat"]) >= 0:
+		# A family: what is in it, and which of those you could build right now.
+		var fam: Dictionary = _ring_cats[int(hov["cat"])]
+		_ring_card_name.text = str(fam["name"])
+		for bd in fam["builds"]:
+			var can := _can_afford(bd["reqs"])
+			var row := HBoxContainer.new()
+			row.add_theme_constant_override("separation", 8)
+			_ring_card_reqs.add_child(row)
+			var mark := Label.new()
+			mark.text = "✓" if can else "·"
+			mark.custom_minimum_size = Vector2(20, 0)
+			mark.add_theme_font_size_override("font_size", 17)
+			mark.modulate = Color(0.45, 0.95, 0.5) if can else Color(1, 1, 1, 0.4)
+			row.add_child(mark)
+			var nm := Label.new()
+			nm.text = Blocks.name_of(int(bd["kind"]))
+			nm.add_theme_font_size_override("font_size", 17)
+			nm.modulate = Color(1, 1, 1) if can else Color(1, 1, 1, 0.55)
+			row.add_child(nm)
+		return
+	_ring_card_name.text = Blocks.name_of(kind)
 	for r in (hov["reqs"] as Array):
 		var need := int(r["n"])
 		var have := _count_req(r)
