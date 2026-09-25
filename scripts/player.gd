@@ -7179,6 +7179,23 @@ func _open_station(st: Station) -> void:
 	if st.kind == Blocks.FABRICATOR:
 		_use_press(st)
 		return
+	# A smelter fed straight from the hand: right-click it holding ore (or
+	# scrap, or sand) and the whole stack goes in and starts cooking.
+	if st.kind == Blocks.SMELTER:
+		var held: Dictionary = _active_item()
+		var hid := int(held.get("id", Blocks.AIR))
+		if int(held.get("count", 0)) > 0 and Station.smelts(hid):
+			var what := str((held.get("mat", {}) as Dictionary).get("name", Blocks.name_of(hid)))
+			var put := st.smelt_load(held, int(held["count"]))
+			if put <= 0:
+				Audio.ui("ui_deny")
+				_toast("The smelter is full")
+				return
+			_take_from_active(put)
+			Audio.at("place_rock", st.global_position)
+			_toast("Into the smelter: %d %s" % [put, what])
+			_refresh_slots()
+			return
 	_station_open = st
 	st.lid_open = true
 	if inv_open:

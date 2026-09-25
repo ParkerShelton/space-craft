@@ -81,11 +81,7 @@ static func boxes_for(kind: int) -> Array:
 			out2.append([Vector3(-0.5, 0.78, 0.1), Vector3(0.3, 0.1, 0.3), DARK])
 			return out2
 		Blocks.SMELTER:
-			return [
-				[Vector3(0, 0.5, 0), Vector3(0.92, 1.0, 0.92), STONE],
-				[Vector3(0, 1.15, 0), Vector3(0.5, 0.3, 0.5), STONE],
-				[Vector3(0, 1.45, 0), Vector3(0.34, 0.3, 0.34), DARK],
-				[Vector3(0, 0.35, -0.44), Vector3(0.46, 0.44, 0.12), EMBER]]
+			return smelter_boxes(true)
 		Blocks.GENERATOR:
 			return generator_boxes(false, 0.0, false, 0.0)
 		Blocks.POWER_BAY:
@@ -622,6 +618,108 @@ static func anvil_mesh(shape: String, col: Color, t: float = 0.0, hits: int = 0,
 	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sub.surface_get_arrays(0))
 	m.surface_set_material(m.get_surface_count() - 1, mat)
 	return m
+
+
+# --- the smelter ------------------------------------------------------------------
+#
+# A stone furnace laid in courses. At the bottom a firebox behind a grate; above
+# it the smelting chamber, hollow, with its mouth at the front so you can see
+# what is in it; above that the stack narrowing to a chimney. The chamber's
+# contents are a model of their own (smelter_content_mesh) laid on the hearth.
+
+## Where the chamber floor is: things being smelted sit on this.
+const SMELT_HEARTH := Vector3(0, 0.47, -0.06)
+const SMELT_MOUTH_W := 0.5
+const SMELT_MOUTH_H := 0.4
+const SOOT := Color(0.08, 0.07, 0.07)
+const COAL := Color(0.16, 0.13, 0.12)
+
+
+## The furnace itself. `lit` is whether the firebox is burning.
+static func smelter_boxes(lit: bool) -> Array:
+	var out: Array = []
+	var stone_a := Color(0.50, 0.48, 0.46)
+	var stone_b := Color(0.42, 0.40, 0.39)
+	var mortar := Color(0.30, 0.29, 0.28)
+	# Plinth, a hand wider than the furnace.
+	out.append([Vector3(0, 0.05, 0), Vector3(0.98, 0.1, 0.98), mortar])
+	# The FIREBOX course: solid but for a grate at the front.
+	out.append([Vector3(0, 0.25, 0.06), Vector3(0.9, 0.3, 0.78), stone_b])
+	out.append([Vector3(-0.33, 0.25, -0.39), Vector3(0.24, 0.3, 0.12), stone_b])
+	out.append([Vector3(0.33, 0.25, -0.39), Vector3(0.24, 0.3, 0.12), stone_b])
+	out.append([Vector3(0, 0.25, -0.33), Vector3(0.42, 0.26, 0.06), EMBER if lit else COAL])
+	for gx in [-0.14, 0.0, 0.14]:
+		out.append([Vector3(gx, 0.25, -0.44), Vector3(0.035, 0.26, 0.035), SOOT])
+	# The CHAMBER: two side walls, a back wall and a hearth, leaving the mouth
+	# open and the inside empty. Laid in two courses per wall for the look of
+	# stonework rather than one poured block.
+	out.append([Vector3(0, SMELT_HEARTH.y - 0.035, 0), Vector3(0.9, 0.07, 0.9), COAL])
+	for i in 2:
+		var y := 0.55 + i * 0.2
+		var c: Color = stone_a if i == 0 else stone_b
+		var w := 0.2 + (0.01 if i == 1 else 0.0)
+		out.append([Vector3(-0.35, y, 0), Vector3(w, 0.2, 0.9), c])
+		out.append([Vector3(0.35, y, 0), Vector3(w, 0.2, 0.9), c])
+		out.append([Vector3(0, y, 0.33), Vector3(0.5, 0.2, 0.24), stone_b if i == 0 else stone_a])
+	# The lintel over the mouth, one stone proud of the face, soot above it
+	# where the heat has licked out for years.
+	out.append([Vector3(0, SMELT_HEARTH.y + SMELT_MOUTH_H + 0.05, -0.02), Vector3(0.94, 0.1, 0.94), stone_a])
+	out.append([Vector3(0, 0.99, -0.475), Vector3(0.36, 0.1, 0.02), SOOT])
+	# A lip to rest things on before they go in.
+	out.append([Vector3(0, SMELT_HEARTH.y - 0.03, -0.5), Vector3(0.56, 0.05, 0.1), Color(0.36, 0.37, 0.4)])
+	# The STACK: three courses stepping in, then the chimney and its cap.
+	var courses := [[1.07, 0.86, stone_b], [1.21, 0.76, stone_a], [1.33, 0.6, stone_b]]
+	for cs in courses:
+		out.append([Vector3(0, cs[0], 0.02), Vector3(cs[1], 0.13, cs[1]), cs[2]])
+	out.append([Vector3(0, 1.62, 0.08), Vector3(0.3, 0.46, 0.3), stone_a])
+	out.append([Vector3(0, 1.87, 0.08), Vector3(0.38, 0.06, 0.38), mortar])
+	out.append([Vector3(0, 1.905, 0.08), Vector3(0.2, 0.02, 0.2), SOOT])
+	return out
+
+
+## What is in the chamber, as pieces on the hearth. `pieces` are
+## {"shape": "ore" | "ingot" | "sand" | "glass", "col": Color}, at most three.
+## `heat` 0..1 is how far through the smelt they are: they glow up to it.
+static func smelter_content_boxes(pieces: Array, heat: float) -> Array:
+	var out: Array = []
+	var n := mini(pieces.size(), 3)
+	for i in n:
+		var pc: Dictionary = pieces[i]
+		var col: Color = pc["col"]
+		col = col.lerp(EMBER.lightened(0.15), clampf(heat, 0.0, 1.0) * 0.8)
+		var x := (float(i) - float(n - 1) * 0.5) * 0.14
+		var z := SMELT_HEARTH.z + (0.04 if i % 2 == 1 else -0.03)
+		var y := SMELT_HEARTH.y
+		match str(pc["shape"]):
+			"ore":
+				# A lump, not a cube: a body with a smaller knob off it.
+				out.append([Vector3(x, y + 0.05, z), Vector3(0.12, 0.1, 0.11), col])
+				out.append([Vector3(x + 0.03, y + 0.11, z - 0.02), Vector3(0.07, 0.05, 0.07), col.darkened(0.12)])
+			"ingot":
+				out.append([Vector3(x, y + 0.03, z), Vector3(0.1, 0.06, 0.2), col])
+				out.append([Vector3(x, y + 0.07, z), Vector3(0.08, 0.02, 0.16), col.lightened(0.08)])
+			"sand":
+				out.append([Vector3(x, y + 0.025, z), Vector3(0.14, 0.05, 0.14), col])
+				out.append([Vector3(x, y + 0.06, z), Vector3(0.08, 0.03, 0.08), col])
+			"glass":
+				out.append([Vector3(x, y + 0.02, z), Vector3(0.13, 0.04, 0.13), col])
+	return out
+
+
+static func smelter_content_mesh(pieces: Array, heat: float) -> ArrayMesh:
+	var m := _mesh_from(smelter_content_boxes(pieces, heat))
+	if m.get_surface_count() > 0 and heat > 0.05:
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.emission_enabled = true
+		mat.emission = EMBER
+		mat.emission_energy_multiplier = heat * 1.6
+		m.surface_set_material(0, mat)
+	return m
+
+
+static func smelter_mesh(lit: bool) -> ArrayMesh:
+	return _mesh_from(smelter_boxes(lit))
 
 
 # --- the press --------------------------------------------------------------------

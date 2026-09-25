@@ -218,6 +218,22 @@ func _build_visual() -> void:
 			_press_lever.position = StationModels.PRESS_LEVER + Vector3(0, -0.5, 0)
 			add_child(_press_lever)
 		_refresh_press.call_deferred()
+	elif kind == Blocks.SMELTER:
+		_smelt_shown = "-"
+		_mi.mesh = StationModels.smelter_mesh(false)
+		if _smelt_mi == null:
+			# What is cooking, on the hearth, as a model of its own so it can
+			# change without rebuilding the furnace.
+			_smelt_mi = MeshInstance3D.new()
+			_smelt_mi.position = Vector3(0, -0.5, 0)
+			add_child(_smelt_mi)
+			_smelt_light = OmniLight3D.new()
+			_smelt_light.light_color = Color(1.0, 0.55, 0.22)
+			_smelt_light.omni_range = 3.2
+			_smelt_light.position = StationModels.SMELT_HEARTH + Vector3(0, -0.5 + 0.12, -0.2)
+			_smelt_light.visible = false
+			add_child(_smelt_light)
+		_refresh_smelter.call_deferred()
 	elif kind == Blocks.ANVIL:
 		_anvil_shown = "-"
 		_mi.mesh = StationModels.anvil_mesh("", Color.WHITE)
@@ -853,6 +869,114 @@ func _refresh_anvil() -> void:
 		anvil_pile_count(), pile_col)
 
 
+# --- the smelter ------------------------------------------------------------------
+#
+# A smelter keeps working while it has something to work on: put ore in (by
+# hand with a right-click, or through its window) and it smelts, and when that
+# is done it moves on to any sand, then stops. What is in it sits on the hearth
+# where you can see it, glowing up as it heats.
+
+var _smelt_mi: MeshInstance3D
+var _smelt_light: OmniLight3D
+var _smelt_shown := "-"
+
+
+## Whether a smelter takes this by the handful: ore, scrap to remelt, sand.
+static func smelts(id: int) -> bool:
+	return Blocks.is_ore(id) or id == Blocks.SCRAP or id == Blocks.REGOLITH
+
+
+## Load `n` of `item` and get it cooking. Returns how many went in.
+func smelt_load(item: Dictionary, n: int) -> int:
+	var id := int(item.get("id", Blocks.AIR))
+	if n <= 0 or not smelts(id):
+		return 0
+	var left := store_add(id, n, item.get("props", {}), str(item.get("src", "")),
+		item.get("mat", {}))
+	var put := n - left
+	if put <= 0:
+		return 0
+	if _job == "refine" and id != Blocks.REGOLITH:
+		# Already smelting: this batch just makes the job that much longer,
+		# and comes out with the rest of it.
+		_job_total += put * REFINE_TIME_PER
+	elif _job == "":
+		smelt_continue()
+	return put
+
+
+## Start on whatever is waiting: ore and scrap first, then sand into glass.
+func smelt_continue() -> void:
+	if _job != "":
+		return
+	if start_refine() > 0:
+		return
+	for r in Blocks.STATION_CRAFTS.get(Blocks.SMELTER, []):
+		if int(r["out"]) == Blocks.GLASS:
+			start_craft(r, 0)
+			return
+
+
+## Up to three things to draw on the hearth, the ones being worked first.
+func _smelt_pieces() -> Array:
+	var out: Array = []
+	var p: Planet = null
+	if world != null:
+		p = world.nearest_planet(global_position)
+	for pass_i in 2:
+		for sl in storage:
+			if out.size() >= 3:
+				return out
+			var id := int(sl.get("id", Blocks.AIR))
+			if int(sl.get("count", 0)) <= 0:
+				continue
+			var raw := smelts(id)
+			if (pass_i == 0) != raw:
+				continue
+			var mat: Dictionary = sl.get("mat", {})
+			var col: Color = mat.get("color", Color(0.6, 0.58, 0.55))
+			var shape := "ingot"
+			if id == Blocks.REGOLITH:
+				shape = "sand"
+				col = p.color_of(id) if p != null else Blocks.color_of(id)
+			elif id == Blocks.GLASS:
+				shape = "glass"
+				col = Blocks.color_of(id)
+			elif Blocks.is_ore(id):
+				shape = "ore"
+				if not mat.has("color") and p != null:
+					col = p.ore_color(id)
+			elif not Blocks.is_refined(id) and id != Blocks.SCRAP:
+				continue   # a plate or the like: nothing to show on a hearth
+			# A stack shows as a few pieces, not one: six lumps of ore in
+			# the chamber should look like a load.
+			for k in mini(int(sl["count"]), 3):
+				if out.size() < 3:
+					out.append({"shape": shape, "col": col})
+	return out
+
+
+func _refresh_smelter() -> void:
+	if kind != Blocks.SMELTER or headless or _smelt_mi == null:
+		return
+	var pieces := _smelt_pieces()
+	var heat := job_progress() if _job != "" else 0.0
+	var key := "%s|%s|%d" % [_job, str(pieces), int(heat * 12.0)]
+	if key != _smelt_shown:
+		var was_lit := _smelt_shown.begins_with("refine") or _smelt_shown.begins_with("craft")
+		_smelt_shown = key
+		var lit := _job != ""
+		if lit != was_lit or _mi.mesh == null:
+			_mi.mesh = StationModels.smelter_mesh(lit)
+		_smelt_mi.mesh = StationModels.smelter_content_mesh(pieces, heat if lit else 0.0)
+	if _smelt_light != null:
+		_smelt_light.visible = _job != ""
+		if _smelt_light.visible:
+			# A fire, not a bulb: it breathes.
+			var t := Time.get_ticks_msec() * 0.001
+			_smelt_light.light_energy = 1.1 + 0.25 * sin(t * 7.3) + 0.15 * sin(t * 13.1)
+
+
 # --- the press -------------------------------------------------------------------
 #
 # storage[0..3] are the four spots on the bed, filled left to right, one part
@@ -1213,6 +1337,7 @@ func bay_swap(incoming: Dictionary) -> Dictionary:
 
 
 func _process(delta: float) -> void:
+	_refresh_smelter()
 	_tick_lid(delta)
 	_tick_lever(delta)
 	_tick_generator(delta)
@@ -1235,6 +1360,8 @@ func _process(delta: float) -> void:
 	_job_t = 0.0
 	_job_total = 0.0
 	_job_craft = {}
+	if kind == Blocks.SMELTER:
+		smelt_continue()
 
 
 # Consume either a plain `reqs` list or the primary material (+ optional `extra`
