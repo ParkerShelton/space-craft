@@ -1016,6 +1016,11 @@ func _fills_cell(id: int) -> bool:
 	var base := Blocks.bottom_of(id)
 	if base == Blocks.WIRE or Blocks.is_door(id) or Blocks.is_stair(base) or Blocks.is_slab(base):
 		return false
+	# Machinery is a MODEL and the model is smaller than its cell, so the hull
+	# beside it has to draw the face that looks at it. Without this you could
+	# see straight through the wall behind the scrubber.
+	if FITTINGS.has(base):
+		return false
 	return true
 
 

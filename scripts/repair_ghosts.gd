@@ -221,11 +221,11 @@ func _missing_parts() -> Array:
 		out.append({"at": Vector3(CrashSite.DOOR_AT) + Vector3(0.5, 0.5, 0.5),
 			"mesh": _boxes_mesh(Chunk.shape_boxes(
 				Blocks.door_with(false, 0, 0, false), Vector3.UP)),
-			"scale": 0.55, "text": "Door\nCarpenter's Bench"})
+			"scale": 0.55, "pivot": Vector3.ZERO, "text": "Door\nCarpenter's Bench"})
 	if not bool(st.get("life_support", false)):
 		out.append({"at": Vector3(CrashSite.LIFE_SUPPORT_AT) + Vector3(0.5, 0.5, 0.5),
 			"mesh": Ship._fitting_mesh(Blocks.LIFE_SUPPORT),
-			"scale": 0.5, "text": "Life Support\nShipworks, or salvage one"})
+			"scale": 0.5, "pivot": Vector3(-0.5, -0.5, -0.5), "text": "Life Support\nShipworks, or salvage one"})
 	var thrusters := int(st.get("thrusters", 0))
 	if thrusters < 2:
 		for side in [-1, 1]:
@@ -234,18 +234,18 @@ func _missing_parts() -> Array:
 				continue
 			out.append({"at": Vector3(cell) + Vector3(0.5, 0.5, 0.5),
 				"mesh": Ship._fitting_mesh(Blocks.THRUSTER),
-				"scale": 0.5, "text": "Thruster\nShipworks, or salvage one"})
+				"scale": 0.5, "pivot": Vector3(-0.5, -0.5, -0.5), "text": "Thruster\nShipworks, or salvage one"})
 	# Power: either there is no rack, or nothing charged in it.
 	var bay := ShipComputer.power_bay(ship)
 	if bay == null:
 		out.append({"at": Vector3(CrashSite.POWER_BAY_AT) + Vector3(0.5, 0.5, 0.5),
 			"mesh": StationModels.mesh_from_boxes(
 				StationModels.power_bay_boxes(false, 0.0)),
-			"scale": 0.5, "text": "Power Bay\nShipworks"})
+			"scale": 0.5, "pivot": Vector3(0, -0.4, 0), "text": "Power Bay\nShipworks"})
 	elif ShipComputer.battery_charge(bay) <= 0.0:
 		out.append({"at": Vector3(CrashSite.POWER_BAY_AT) + Vector3(0.5, 0.55, 0.5),
 			"mesh": StationModels.battery_icon_mesh(),
-			"scale": 0.8, "text": "Battery, charged\nFill one at a Generator"})
+			"scale": 0.8, "pivot": Vector3.ZERO, "text": "Battery, charged\nFill one at a Generator"})
 	return out
 
 
@@ -256,7 +256,12 @@ func _add_part(spec: Dictionary) -> void:
 	_parts.add_child(holder)
 	var mi := MeshInstance3D.new()
 	mi.mesh = spec["mesh"]
-	mi.scale = Vector3.ONE * float(spec.get("scale", 1.0))
+	var sc: float = float(spec.get("scale", 1.0))
+	mi.scale = Vector3.ONE * sc
+	# Shifted so the MODEL's middle sits on the holder, not its corner. A mesh
+	# authored in cell space runs 0..1, so turning the holder swung it round the
+	# corner of the cell and it orbited instead of spinning.
+	mi.position = (spec.get("pivot", Vector3.ZERO) as Vector3) * sc
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.material_override = _ghost_material()
 	holder.add_child(mi)

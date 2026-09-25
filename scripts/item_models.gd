@@ -95,27 +95,41 @@ static func boxes_for(id: int) -> Array:
 			return []
 
 
-## A book, `open` from 0 (shut) to 1 (open flat). Shut it is a slab with a
-## spine; open it is two leaves hinged along the middle with the block of pages
-## showing between them.
+## A book. Shut it is a slab: two covers with a block of pages between them and
+## a spine down one edge. Open, the covers swing off that spine.
 ##
-## The halves are returned already placed, so anything that wants a book at a
+## The halves come back already placed, so anything that wants a book at a
 ## given openness -- the icon, the hand, the reading animation -- asks for one
 ## rather than working out its own hinge.
+const BOOK_W := 0.46      # across, shut
+const BOOK_L := 0.36      # along the spine
+
+
+## Two layouts, lerped between: shut is a slab, open is two leaves lying out to
+## either side of the spine with the pages fanned between them. Everything here
+## is boxes, so it is placement rather than rotation -- but a book only really
+## has those two poses, and moving cleanly between them reads as a hinge.
 static func book_boxes(open: float) -> Array:
 	var k := clampf(open, 0.0, 1.0)
-	var lift: float = k * 0.30        # how far each cover has swung up and out
-	var tilt: float = k * 0.10        # and how far the pages fan
+	var half: float = BOOK_W * 0.5
 	var out: Array = [
-		# Spine, which stays put whatever the covers do.
-		[Vector3(0, -0.02 - k * 0.04, 0), Vector3(0.10, 0.34, 0.44), SPINE],
+		# The spine, and the only part that never moves.
+		[Vector3(-half, 0, 0), Vector3(0.06, lerpf(0.20, 0.09, k), BOOK_L), SPINE],
 	]
-	for sx in [-1.0, 1.0]:
-		var x: float = sx * (0.16 + lift)
-		var y: float = -0.02 + k * 0.10
-		out.append([Vector3(x, y, 0), Vector3(0.24 + lift * 0.5, 0.05, 0.42), COVER])
-		out.append([Vector3(x, y + 0.045 + tilt, 0),
-			Vector3(0.21 + lift * 0.5, 0.04, 0.38), PAGES])
+	for i in 2:
+		var side: float = -1.0 if i == 0 else 1.0     # -1 is the bottom cover shut
+		# Shut: stacked, both at x = 0. Open: laid out either side of the spine.
+		var cx: float = lerpf(0.0, -half + half * (0.5 + 0.5 * (side + 1.0) * 0.5) * 2.0 * 0.0, 0.0)
+		cx = lerpf(0.0, (half * 0.55) * side, k)
+		var cy: float = lerpf(side * 0.075, -0.035, k)
+		out.append([Vector3(cx, cy, 0), Vector3(BOOK_W * lerpf(1.0, 0.62, k), 0.05, BOOK_L),
+			COVER])
+		# The block of paper on that cover: inset, so the cover shows as a
+		# border round it, which is what makes a slab read as a book.
+		out.append([Vector3(cx + 0.015 * side, cy + side * lerpf(0.055, 0.0, k) + 0.045 * k,
+				0),
+			Vector3(BOOK_W * lerpf(0.86, 0.54, k), lerpf(0.075, 0.04, k), BOOK_L - 0.06),
+			PAGES])
 	return out
 
 
