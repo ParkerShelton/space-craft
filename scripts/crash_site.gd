@@ -27,8 +27,11 @@ const H := 3             # shell roof; the cabin inside is two blocks tall
 const DOOR_AT := Vector3i(2, 1, 1)
 ## Where the battery rack stands, on the deck at the back of the cabin.
 const POWER_BAY_AT := Vector3i(0, 1, CABIN_BACK - 1)
-## Where the supply locker is bolted, beside the battery rack.
-const LOCKER_AT := Vector3i(1, 1, CABIN_BACK - 1)
+## Where the supply locker is bolted: beside the console, at the front of the
+## cabin. It began next to the battery rack, which put it directly inboard of
+## the door -- you could not get out past it -- and up here it is the second
+## thing you see when your head comes up, which is where it belongs.
+const LOCKER_AT := Vector3i(1, 1, CABIN_FRONT)
 
 ## Which piece of the airframe a cell belongs to. Everything but the nose can be
 ## torn off; only the cabin's own shell has to be airtight to fly.
@@ -37,7 +40,7 @@ enum { S_NOSE, S_CABIN, S_SPINE, S_BELLY, S_WING_L, S_WING_R, S_TAIL }
 
 ## Build the wreck and set it on the ground at `pos`, facing `fwd`.
 static func build(world: WorldManager, pos: Vector3, up: Vector3, fwd: Vector3,
-		rng: RandomNumberGenerator) -> Ship:
+		planet: Planet, rng: RandomNumberGenerator) -> Ship:
 	var ship := world.spawn_ship(pos, up, fwd)
 	ship.blocks.clear()
 	# Straight into the block map and ONE rebuild at the end. set_block rebuilds
@@ -47,7 +50,7 @@ static func build(world: WorldManager, pos: Vector3, up: Vector3, fwd: Vector3,
 	for v in plan:
 		ship.blocks[v] = int(plan[v])
 	_wreck(ship, plan, rng)
-	_fit_systems(ship, world, rng)
+	_fit_systems(ship, world, planet, rng)
 	ship.rebuild()
 	# The seat is a model rather than blocks: a thing you sit in, not a cube.
 	# Block centre, standing ON the floor plate (its top is y = 1), facing the nose.
@@ -279,7 +282,8 @@ static func _passable(ship: Ship, v: Vector3i) -> bool:
 ## wall, because that is how power actually works in this game: a battery is a
 ## thing you carry. You fill one at a Generator, drop it in the bay, and the bay
 ## feeds the ship -- so a spare in a chest is a ship that never goes dark.
-static func _fit_systems(ship: Ship, world: WorldManager, rng: RandomNumberGenerator) -> void:
+static func _fit_systems(ship: Ship, world: WorldManager, planet: Planet,
+		rng: RandomNumberGenerator) -> void:
 	# A locker, always, with enough in it to last the first night and to put a
 	# bench down without having to find a tree first. It is the one thing in the
 	# wreck that is not damaged: you are meant to open it, find it stocked, and
@@ -290,7 +294,9 @@ static func _fit_systems(ship: Ship, world: WorldManager, rng: RandomNumberGener
 		locker.store_add(Blocks.TORCH, 3, {})
 		locker.store_add(Blocks.WOOD, 6, {})
 		locker.store_add(Blocks.ROCK, 6, {})
-		locker.store_add(Blocks.JOURNAL, 1, {})
+		# The journal carries its own page, written from THIS planet when the
+		# wreck is placed, so it stays true wherever it is carried afterwards.
+		locker.store_add(Blocks.JOURNAL, 1, {"text": journal_text(planet)})
 	if rng.randf() < 0.55:
 		ship.blocks[Vector3i(-1, 1, CABIN_BACK - 1)] = Blocks.LIFE_SUPPORT
 	for side in [-1, 1]:
@@ -316,3 +322,47 @@ static func _fit_systems(ship: Ship, world: WorldManager, rng: RandomNumberGener
 				slot["props"] = {"charge": frac * Station.BATTERY_CAP}
 				break
 		bay._refresh_bay()
+
+
+## The survey you wrote on the way in.
+##
+## Not a random page of flavour: it is written FROM this planet -- its real day
+## length, whether it has water, the ores it actually has and what each of them
+## is good for -- plus what to do if the landing goes badly, in the order that
+## works. So it reads as a thing you wrote about somewhere you were about to
+## land, and every line of it is true of the world you are standing in.
+##
+## It is the whole tutorial, and it never once says "press" anything.
+static func journal_text(planet: Planet) -> String:
+	var lines: Array = []
+	lines.append("APPROACH SURVEY -- %s" % planet.planet_name)
+	lines.append("Written before descent. Reading it after, apparently.")
+	lines.append("")
+	lines.append("THE GROUND")
+	var day_min: float = planet.day_length * planet.DAY_SHARE / 60.0
+	var night_min: float = planet.day_length * (1.0 - planet.DAY_SHARE) / 60.0
+	lines.append("  Light for about %d minutes, dark for about %d. Do not be out"
+		% [int(round(day_min)), int(round(night_min))])
+	lines.append("  in the dark without a light. Things are awake in it.")
+	if planet.water_style == planet.WATER_LIQUID:
+		lines.append("  Liquid water. Wood floats here, which is worth knowing.")
+	else:
+		lines.append("  No standing water anywhere I could see.")
+	lines.append("")
+	if not planet.ore_defs.is_empty():
+		lines.append("WHAT IS IN THE ROCK")
+		for od in planet.ore_defs:
+			var pr: Dictionary = od["props"]
+			lines.append("  %s -- %s." % [str(od["name"]), Blocks.ore_verdict(pr)])
+		lines.append("  Refine it at a smelter first. Ore is not metal yet.")
+		lines.append("")
+	lines.append("IF IT GOES BADLY")
+	lines.append("  Seal her before anything else. A plate in every hole and a")
+	lines.append("  door in the doorway; nothing aboard works until she holds air.")
+	lines.append("  Whatever comes off her on the way down is still plate. Cut up")
+	lines.append("  the wings before you dig for ore -- it is lying there already.")
+	lines.append("  The cell in the rack is the power. A flat one is not a broken")
+	lines.append("  one: fill it at a generator and put it back.")
+	lines.append("  You cannot get ore or plate out with your hands. Wood you can,")
+	lines.append("  and wood makes the bench, and the bench makes the pick.")
+	return "\n".join(PackedStringArray(lines))

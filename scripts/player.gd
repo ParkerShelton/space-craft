@@ -5458,6 +5458,17 @@ func _toast(msg: String) -> void:
 	_toast_time = 2.0
 
 
+## A toast that stays up. Used once, when a world opens, to say that the thing
+## in front of you can be talked to -- long enough to read while your head is
+## still coming up, and gone before it becomes furniture.
+func hold_toast(msg: String, seconds: float) -> void:
+	if _toast_label == null:
+		return
+	_toast_label.text = msg
+	_toast_label.visible = true
+	_toast_time = seconds
+
+
 # Build the always-visible hotbar strip and the toggleable full-inventory grid.
 func _build_inventory_ui(layer: CanvasLayer) -> void:
 	# hotbar strip, bottom-center, on a backing strip of its own
@@ -7658,6 +7669,15 @@ func _sit_physics(delta: float) -> void:
 	if key_down("crouch"):
 		stand_up()
 		return
+	if _rouse_t > 0.0:
+		# Coming round happens in the chair too. Without this the head lift only
+		# ran while walking, so waking up seated skipped it entirely.
+		_rouse_t = maxf(_rouse_t - delta, 0.0)
+		var k: float = clampf(1.0 - _rouse_t / _rouse_len, 0.0, 1.0)
+		var e: float = k * k * (3.0 - 2.0 * k)
+		_pitch = _rouse_from * (1.0 - e)
+		_camera.rotation.x = _pitch
+		_look = Vector2.ZERO
 	var up: Vector3 = seated.global_transform.basis.y
 	if _look.x != 0.0:
 		rotate(up, -_look.x * MOUSE_SENS * look_sensitivity)
@@ -7738,7 +7758,7 @@ func _try_read_journal() -> bool:
 func _open_journal() -> void:
 	_close_journal()
 	_journal_panel = Panel.new()
-	_journal_panel.custom_minimum_size = Vector2(520, 360)
+	_journal_panel.custom_minimum_size = Vector2(560, 560)
 	_journal_panel.size = _journal_panel.custom_minimum_size
 	var sb := StyleBoxFlat.new()
 	sb.bg_color = Color(0.13, 0.11, 0.08, 0.97)
@@ -7754,17 +7774,25 @@ func _open_journal() -> void:
 	head.modulate = Color(0.85, 0.74, 0.52)
 	_journal_panel.add_child(head)
 	var body := Label.new()
-	body.text = Blocks.journal_page(world.world_seed if world != null else 0)
+	# The page the journal is actually carrying -- written about the planet the
+	# wreck came down on (see CrashSite.journal_text) and kept with the item, so
+	# it stays true wherever you take it.
+	var page := ""
+	if active_slot >= 0 and active_slot < inv.size():
+		page = str((inv[active_slot].get("props", {}) as Dictionary).get("text", ""))
+	if page == "":
+		page = "The pages are water-damaged past reading."
+	body.text = page
 	body.position = Vector2(24, 60)
-	body.custom_minimum_size = Vector2(472, 0)
-	body.size = Vector2(472, 220)
+	body.custom_minimum_size = Vector2(512, 0)
+	body.size = Vector2(512, 420)
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	body.modulate = Color(0.92, 0.88, 0.80)
 	_journal_panel.add_child(body)
 	var close := Button.new()
 	close.text = "Close"
 	close.custom_minimum_size = Vector2(120, 34)
-	close.position = Vector2(24, 300)
+	close.position = Vector2(24, 500)
 	close.pressed.connect(func(): Audio.ui("ui_back"))
 	close.pressed.connect(_close_journal)
 	_journal_panel.add_child(close)

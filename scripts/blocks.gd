@@ -783,57 +783,6 @@ const BOAT := 200
 ## the only place this game ever says anything about who was here before you.
 const JOURNAL := 201
 
-## What the journal says. One page is picked per world from its seed, so a
-## world has ONE of these and it is always the same one in that world -- it is
-## a thing that happened there, not a random line.
-##
-## None of them explain anything. They are the sound of somebody who knew what
-## was going on talking to themselves about it, which is the most a player can
-## be given without being told.
-const JOURNAL_PAGES := [
-	"...third day on the ground. The scrubber is the thing to watch. It will
-"
-	+ "run dry long before you are hungry and you will not notice until you
-"
-	+ "are already slow.
-
-Whatever you do, do not go out without a light.",
-	"Left the seat running and it held. Do not trust the gauge on the cell --
-"
-	+ "it reads full for a while after it is not. Swap it out and carry the
-"
-	+ "spare. Two is one and one is none.
-
-The quiet ones are the worst.",
-	"If you are reading this then it went the way I thought it would.
-
-"
-	+ "The plate is the easy part. Anything with a wing on it is scrap you can
-"
-	+ "cut up. The rest you make, and you make it in that order or you waste a
-"
-	+ "day. I am sorry about the door.",
-	"Counted eleven of them at the treeline and stopped counting.
-
-"
-	+ "They do not come near a fire. That is the whole of what I know and it
-"
-	+ "has been enough for six nights.",
-	"She flew once. She will fly again, and it is not as much work as it
-"
-	+ "looks from in here.
-
-Seal her first. Everything else is easier once
-"
-	+ "she holds air, including thinking.",
-]
-
-
-## The page this world got.
-static func journal_page(seed_value: int) -> String:
-	if JOURNAL_PAGES.is_empty():
-		return ""
-	return str(JOURNAL_PAGES[absi(seed_value) % JOURNAL_PAGES.size()])
 const SWORD_DAMAGE := 6.0
 
 ## How many uses each tool has in it before it breaks: a block broken, a patch

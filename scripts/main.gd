@@ -1733,7 +1733,7 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 		at = (floor_at as Vector3) + up * 0.15
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _world.world_seed ^ 0x57A1
-	var ship := CrashSite.build(_world, at, up, fwd, rng)
+	var ship := CrashSite.build(_world, at, up, fwd, ground, rng)
 	if ship == null:
 		return
 	ship.ship_log.append("Came down hard. Ship's log resumes.")
@@ -1749,12 +1749,29 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	# other floor -- a ship sitting in a crater is not a moving deck.
 	player.global_position = ship.to_global(Vector3(0.5, 1.95, -1.5))
 	player.velocity = Vector3.ZERO
-	var nose: Vector3 = -ship.global_transform.basis.z
-	player.look_at(player.global_position + nose, up)
+	# You come round IN the chair, not standing at the controls: you were strapped
+	# in for the landing, which is the only reason you are alive to read anything.
+	var seat: Node3D = null
+	for c in ship.get_children():
+		for cc in c.get_children():
+			if (cc as Node).is_in_group("ship_seat"):
+				seat = cc as Node3D
+	if seat != null:
+		player.sit_in(seat)
+	else:
+		var nose: Vector3 = -ship.global_transform.basis.z
+		player.look_at(player.global_position + nose, up)
 	# ...with your eyes on the floor. The head comes up on its own over the next
 	# few seconds, under the fade, so the first thing a world does is a slow
 	# look up at the inside of the ship you came down in.
 	player.begin_wake(5.0, -1.25)
+	# ...and once your head is up, one line saying the thing in front of you can
+	# be talked to. It is the only prompt this game has, it appears once in the
+	# life of a world, and it goes away on its own.
+	var hint := get_tree().create_timer(5.6)
+	hint.timeout.connect(func():
+		if is_instance_valid(player):
+			player.hold_toast("Right-click the console to see what she needs", 9.0))
 	# You did not walk away from that. How badly you came out of it is rolled
 	# with the rest of the wreck, so the world that kept both thrusters is not
 	# always the one that kept you whole either.
