@@ -1884,8 +1884,18 @@ func _clear_inside_ship(ground: Planet, ship: Ship) -> void:
 					var wv := ground.world_to_voxel(at)
 					if Blocks.bottom_of(ground.get_id(wv)) != Blocks.AIR:
 						cells[wv] = Blocks.AIR
-	if not cells.is_empty():
-		ground.set_blocks(cells)
+	if cells.is_empty():
+		return
+	ground.set_blocks(cells)
+	# ...and put those chunks back on screen NOW, on this thread. The edit is
+	# instant but the re-mesh is queued, so behind a loading screen the data
+	# changed before the world was visible and the mesh landed after it -- you
+	# watched the trees inside the wreck wink out a second into the game.
+	var touched := {}
+	for wv in cells:
+		touched[ground.chunk_of(wv as Vector3i)] = true
+	for cc in touched:
+		ground.rebuild_chunk_sync(cc as Vector3i)
 
 
 ## Coming to after the crash. Black over everything, lifting slowly -- the one

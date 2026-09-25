@@ -352,7 +352,7 @@ func _burst(n: int, life: float, speed: float, size: Vector3,
 func _build_alarm() -> void:
 	_alarm = AudioStreamPlayer.new()
 	_alarm.stream = _beep_stream()
-	_alarm.volume_db = -9.0
+	_alarm.volume_db = -14.0
 	if AudioServer.get_bus_index("Effects") >= 0:
 		_alarm.bus = "Effects"
 	add_child(_alarm)
@@ -418,7 +418,7 @@ func _tick_alarm(delta: float) -> void:
 	_alarm.pitch_scale = 1.0 if (_beep % 2) == 0 else 0.78
 	_alarm.play()
 	_beep += 1
-	_alarm_t = 0.21
+	_alarm_t = 0.36
 
 
 ## Where everything is at time `t`. Written as a function of t rather than as

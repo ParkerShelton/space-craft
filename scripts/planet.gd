@@ -5175,6 +5175,25 @@ func wake_water_boundary(cells: PackedVector3Array) -> void:
 
 ## Build one chunk synchronously on the main thread (used at spawn so there's
 ## ground under the player immediately).
+## Rebuild a chunk that is ALREADY standing, right now, on this thread.
+##
+## The ordinary path marks a chunk dirty and a worker gets to it a frame or two
+## later, which is right for anything the player is watching. It is wrong for
+## edits made behind a loading screen: the data changed before the world was
+## visible, but the mesh landed after, so you watched the blocks inside the
+## wreck wink out a second into the game.
+func rebuild_chunk_sync(cc: Vector3i) -> void:
+	if not loaded_chunks.has(cc):
+		build_chunk_sync(cc)
+		return
+	var node = loaded_chunks[cc]
+	if node == null or not is_instance_valid(node):
+		return
+	var snap := _edits_snapshot(cc)
+	node.apply_mesh_data(Chunk.build_mesh_data(self, cc, snap, _wlev_snapshot(snap)))
+	_dirty.erase(cc)
+
+
 func build_chunk_sync(cc: Vector3i) -> void:
 	if loaded_chunks.has(cc):
 		return

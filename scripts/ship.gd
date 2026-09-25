@@ -899,6 +899,13 @@ func rebuild() -> void:
 	var verts := PackedVector3Array()   # opaque hull (surface 0)
 	var normals := PackedVector3Array()
 	var colors := PackedColorArray()
+	# The same two attributes a chunk feeds the voxel shader: UV.x is the block
+	# id (normalised) and UV.y the baked face shade, UV2 carries a log's trunk
+	# axis and the block light. Without them a hull can only be drawn flat, and
+	# a wood block on a ship came out a grey box while the identical block on
+	# the ground had grain on it.
+	var uvs := PackedVector2Array()
+	var uv2s := PackedVector2Array()
 	var gverts := PackedVector3Array()  # glass (surface 1, transparent)
 	var gnormals := PackedVector3Array()
 	var gcolors := PackedColorArray()
@@ -913,7 +920,7 @@ func rebuild() -> void:
 		# look like somebody had left a crate there.
 		var shape := _shape_of(v, id)
 		if not shape.is_empty():
-			_emit_shape(v, id, shape, verts, normals, colors)
+			_emit_shape(v, id, shape, verts, normals, colors, uvs, uv2s)
 			continue
 		# Machinery is a model, built in build_props, not a painted cube. Its
 		# cell is still OCCUPIED -- the hull round it draws no faces toward it,
@@ -963,6 +970,7 @@ func rebuild() -> void:
 			else:
 				verts.append(p0); verts.append(p1); verts.append(p2)
 				verts.append(p0); verts.append(p2); verts.append(p3)
+				_face_attrs(id, s, uvs, uv2s)
 				for _k in 6:
 					normals.append(nrm)
 					colors.append(col)
@@ -977,8 +985,10 @@ func rebuild() -> void:
 			arr[Mesh.ARRAY_VERTEX] = verts
 			arr[Mesh.ARRAY_NORMAL] = normals
 			arr[Mesh.ARRAY_COLOR] = colors
+			arr[Mesh.ARRAY_TEX_UV] = uvs
+			arr[Mesh.ARRAY_TEX_UV2] = uv2s
 			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arr)
-			m.surface_set_material(m.get_surface_count() - 1, Chunk._get_plain_material())
+			m.surface_set_material(m.get_surface_count() - 1, _hull_material())
 		if not gverts.is_empty():
 			var garr := []
 			garr.resize(Mesh.ARRAY_MAX)
@@ -1009,6 +1019,28 @@ func _fills_cell(id: int) -> bool:
 	return true
 
 
+## The two shader attributes, six times -- once per vertex of the quad.
+func _face_attrs(id: int, shade: float, uvs: PackedVector2Array,
+		uv2s: PackedVector2Array) -> void:
+	var base := Blocks.bottom_of(id)
+	var la: int = Blocks.log_axis_of(id) if Blocks.is_wood(base) else -1
+	var a := Vector2(float(base) / Chunk.ID_SCALE, shade)
+	var b := Vector2(float(la) if la >= 0 else 3.0, 0.0)
+	for _k in 6:
+		uvs.append(a)
+		uv2s.append(b)
+
+
+## What the hull is drawn with. The planet's own voxel material where there is
+## a planet, so a block looks the same bolted to a ship as it does lying in the
+## ground -- which is the whole point. Out in deep space there is no planet to
+## ask, and the flat material is the honest fallback.
+func _hull_material() -> Material:
+	var p: Planet = world.nearest_planet(global_position) if world != null else null
+	var m := Chunk._get_material(p)
+	return m if m != null else Chunk._get_plain_material()
+
+
 ## The sub-boxes a block is really made of, in its own cell, or [] when it is
 ## an honest cube. Chunk.shape_boxes knows every shape the game has; all this
 ## has to work out is which neighbours a cable should reach toward.
@@ -1037,7 +1069,8 @@ func _shape_of(v: Vector3i, id: int) -> Array:
 ## Every face of every sub-box. Nothing is culled against the neighbours here:
 ## these shapes do not fill their cell, so the cell next door cannot hide them.
 func _emit_shape(v: Vector3i, id: int, boxes: Array, verts: PackedVector3Array,
-		normals: PackedVector3Array, colors: PackedColorArray) -> void:
+		normals: PackedVector3Array, colors: PackedColorArray,
+		uvs: PackedVector2Array, uv2s: PackedVector2Array) -> void:
 	var base := Blocks.color_of(id)
 	var origin := Vector3(v)
 	for b in boxes:
@@ -1050,6 +1083,7 @@ func _emit_shape(v: Vector3i, id: int, boxes: Array, verts: PackedVector3Array,
 			var q := Chunk._box_face(lo, hi, fi)
 			verts.append(q[0]); verts.append(q[1]); verts.append(q[2])
 			verts.append(q[0]); verts.append(q[2]); verts.append(q[3])
+			_face_attrs(id, sh, uvs, uv2s)
 			for _k in 6:
 				normals.append(nrm)
 				colors.append(col)

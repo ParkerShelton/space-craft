@@ -83,14 +83,14 @@ func _process(delta: float) -> void:
 	var fade: float = clampf((FADE_RANGE - d) / (FADE_RANGE - SHOW_RANGE), 0.0, 1.0)
 	if _holes.material_override is StandardMaterial3D:
 		var m := _holes.material_override as StandardMaterial3D
-		m.albedo_color = Color(BLUE.r, BLUE.g, BLUE.b, lerpf(0.16, 0.34, pulse) * fade)
+		m.albedo_color = Color(BLUE.r, BLUE.g, BLUE.b, lerpf(0.34, 0.62, pulse) * fade)
 	for c in _parts.get_children():
 		var h := c as Node3D
-		if h == null:
-			continue
+		if h == null or not h.has_meta("base_y"):
+			continue   # the labels are siblings here; they neither turn nor bob
 		# Turning, the way a thing being shown to you turns.
 		h.rotation.y = _t * 0.9
-		h.position.y = h.get_meta("base_y", 0.0) + sin(_t * 1.4) * 0.09
+		h.position.y = h.get_meta("base_y", 0.0) + sin(_t * 1.4) * 0.07
 
 
 ## What is missing, as one string, so the ghosts are only rebuilt when the
@@ -136,23 +136,46 @@ func _rebuild() -> void:
 		_add_part(spec)
 
 
-## A block standing in each gap, drawn a little inside the cell so two ghosts
-## side by side still read as two.
+## A blueprint outline standing in each gap: twelve thin bars along the edges
+## of the cell, not a solid block.
+##
+## Solid was the obvious thing and it was wrong. Four holes in a cabin two
+## blocks tall put a wall of bright blue across half the view, and a marker you
+## cannot see past is worse than no marker. An outline says exactly the same
+## thing -- this cell, this size, this shape -- and leaves the room visible.
 func _hole_mesh(cells: Array) -> ArrayMesh:
 	if cells.is_empty():
 		return null
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	const INSET := 0.06
+	const T := 0.055     # how thick a bar is
+	const INSET := 0.04  # held off the cell edge so two side by side still read
 	for v in cells:
-		var lo: Vector3 = Vector3(v as Vector3i) + Vector3.ONE * INSET
-		var hi: Vector3 = Vector3(v as Vector3i) + Vector3.ONE * (1.0 - INSET)
-		for fi in 6:
-			st.set_color(Color(1, 1, 1, 1))
-			st.set_normal(Vector3(Chunk._WFACE[fi]))
-			var q := Chunk._box_face(lo, hi, fi)
-			st.add_vertex(q[0]); st.add_vertex(q[2]); st.add_vertex(q[1])
-			st.add_vertex(q[0]); st.add_vertex(q[3]); st.add_vertex(q[2])
+		var o: Vector3 = Vector3(v as Vector3i) + Vector3.ONE * INSET
+		var e: float = 1.0 - INSET * 2.0
+		for axis in 3:
+			for a in 2:
+				for b in 2:
+					var lo := o
+					var hi := o
+					# The bar runs the length of `axis` and is thin on the
+					# other two, placed at one of that face's four corners.
+					var other := 0
+					for k in 3:
+						if k == axis:
+							lo[k] = o[k]
+							hi[k] = o[k] + e
+							continue
+						var pick: int = a if other == 0 else b
+						lo[k] = o[k] + (e - T) * float(pick)
+						hi[k] = lo[k] + T
+						other += 1
+					for fi in 6:
+						st.set_color(Color(1, 1, 1, 1))
+						st.set_normal(Vector3(Chunk._WFACE[fi]))
+						var q := Chunk._box_face(lo, hi, fi)
+						st.add_vertex(q[0]); st.add_vertex(q[2]); st.add_vertex(q[1])
+						st.add_vertex(q[0]); st.add_vertex(q[3]); st.add_vertex(q[2])
 	return st.commit()
 
 
@@ -161,14 +184,21 @@ func _ghost_material() -> StandardMaterial3D:
 	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	m.albedo_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.25)
-	# Drawn over whatever is in front of it. A hologram you cannot see through
-	# the hull is a hologram you have to go and look for.
-	m.no_depth_test = true
+	m.albedo_color = Color(BLUE.r, BLUE.g, BLUE.b, 0.45)
+	# Depth-tested like anything else. Drawing it over the world sounded good --
+	# you could see what the far side needed without walking round -- but a
+	# ghost you are standing next to then fills the entire screen, and half the
+	# cabin is within arm's reach of a hole. The text still draws through, so
+	# you can read a label from behind the thing it names.
 	m.render_priority = 2
 	return m
 
 
+## Each part that is still missing. They sit ON their mount at half size rather
+## than floating at head height: in a cabin two blocks tall, anything hovering
+## where a person stands is something the camera ends up inside, and a hologram
+## you are standing in the middle of is a blue screen.
+##
 ## Each part that is still missing: what it looks like, where it belongs, and
 ## the one line that says how to get one.
 func _missing_parts() -> Array:
@@ -180,34 +210,34 @@ func _missing_parts() -> Array:
 		if Blocks.is_door(int(ship.wreck_missing[v])) and not ship.blocks.has(v):
 			door_gone = true
 	if door_gone:
-		out.append({"at": Vector3(CrashSite.DOOR_AT) + Vector3(0.5, 1.6, 0.5),
+		out.append({"at": Vector3(CrashSite.DOOR_AT) + Vector3(0.5, 0.5, 0.5),
 			"mesh": _boxes_mesh(Chunk.shape_boxes(
 				Blocks.door_with(false, 0, 0, false), Vector3.UP)),
-			"scale": 1.0, "text": "Door\nCarpenter's Bench"})
+			"scale": 0.55, "text": "Door\nCarpenter's Bench"})
 	if not bool(st.get("life_support", false)):
-		out.append({"at": Vector3(CrashSite.LIFE_SUPPORT_AT) + Vector3(0.5, 1.7, 0.5),
+		out.append({"at": Vector3(CrashSite.LIFE_SUPPORT_AT) + Vector3(0.5, 0.5, 0.5),
 			"mesh": Ship._fitting_mesh(Blocks.LIFE_SUPPORT),
-			"scale": 0.9, "text": "Life Support\nShipworks, or salvage one"})
+			"scale": 0.5, "text": "Life Support\nShipworks, or salvage one"})
 	var thrusters := int(st.get("thrusters", 0))
 	if thrusters < 2:
 		for side in [-1, 1]:
 			var cell := CrashSite.thruster_at(side)
 			if ship.blocks.has(cell):
 				continue
-			out.append({"at": Vector3(cell) + Vector3(0.5, 1.7, 0.5),
+			out.append({"at": Vector3(cell) + Vector3(0.5, 0.5, 0.5),
 				"mesh": Ship._fitting_mesh(Blocks.THRUSTER),
-				"scale": 0.9, "text": "Thruster\nShipworks, or salvage one"})
+				"scale": 0.5, "text": "Thruster\nShipworks, or salvage one"})
 	# Power: either there is no rack, or nothing charged in it.
 	var bay := ShipComputer.power_bay(ship)
 	if bay == null:
-		out.append({"at": Vector3(CrashSite.POWER_BAY_AT) + Vector3(0.5, 1.7, 0.5),
+		out.append({"at": Vector3(CrashSite.POWER_BAY_AT) + Vector3(0.5, 0.5, 0.5),
 			"mesh": StationModels.mesh_from_boxes(
 				StationModels.power_bay_boxes(false, 0.0)),
-			"scale": 0.8, "text": "Power Bay\nShipworks"})
+			"scale": 0.5, "text": "Power Bay\nShipworks"})
 	elif ShipComputer.battery_charge(bay) <= 0.0:
-		out.append({"at": Vector3(CrashSite.POWER_BAY_AT) + Vector3(0.5, 1.9, 0.5),
+		out.append({"at": Vector3(CrashSite.POWER_BAY_AT) + Vector3(0.5, 0.55, 0.5),
 			"mesh": StationModels.battery_icon_mesh(),
-			"scale": 1.3, "text": "Battery, charged\nFill one at a Generator"})
+			"scale": 0.8, "text": "Battery, charged\nFill one at a Generator"})
 	return out
 
 
@@ -222,22 +252,22 @@ func _add_part(spec: Dictionary) -> void:
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	mi.material_override = _ghost_material()
 	holder.add_child(mi)
+	# The text is a SIBLING of the turning part, not a child of it: a label that
+	# spins with the thing it names is a label you cannot read. Being a sibling
+	# also keeps it attached to the ship, which a top-level node would not.
 	var label := Label3D.new()
 	label.text = str(spec["text"])
 	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	label.no_depth_test = true
 	label.render_priority = 3
 	label.outline_render_priority = 2
-	label.font_size = 48
-	label.pixel_size = 0.006
+	label.font_size = 44
+	label.pixel_size = 0.0032
 	label.modulate = Color(BLUE.r, BLUE.g, BLUE.b, 0.95)
-	label.outline_modulate = Color(0, 0, 0, 0.6)
-	label.position = Vector3(0, 0.75, 0)
-	# The text does NOT turn with the part: a label that spins is a label you
-	# cannot read.
-	label.set_as_top_level(true)
-	label.global_position = holder.global_position + Vector3(0, 0.75, 0)
-	holder.add_child(label)
+	label.outline_modulate = Color(0, 0, 0, 0.7)
+	label.outline_size = 10
+	_parts.add_child(label)
+	label.position = (spec["at"] as Vector3) + Vector3(0, 0.4, 0)
 
 
 ## A box list to a plain mesh, for the shapes that come as boxes rather than as
