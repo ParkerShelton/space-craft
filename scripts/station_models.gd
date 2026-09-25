@@ -125,12 +125,14 @@ static func boxes_for(kind: int) -> Array:
 				[Vector3(0, 1.58, 0), Vector3(0.5, 0.16, 0.5), METAL],
 				[Vector3(0, 0.9, -0.44), Vector3(0.5, 0.16, 0.06), GLOW]]
 		Blocks.FABRICATOR:
-			return [
-				[Vector3(0, 0.15, 0), Vector3(1.94, 0.3, 0.9), DARK],
-				[Vector3(-0.5, 0.55, 0), Vector3(0.8, 0.5, 0.8), METAL],
-				[Vector3(0.6, 0.7, 0), Vector3(0.9, 0.8, 0.8), METAL],
-				[Vector3(0.6, 1.14, 0), Vector3(0.6, 0.1, 0.6), GLOW],
-				[Vector3(-0.5, 0.86, 0), Vector3(0.5, 0.12, 0.5), GLASS]]
+			# The Press. For the icon and the placing ghost the ram and lever
+			# are drawn in, at rest; the placed one moves them (see Station).
+			var pr: Array = press_boxes()
+			for rb in press_ram_boxes():
+				pr.append([(rb[0] as Vector3) + Vector3(0, PRESS_RAM_UP, 0), rb[1], rb[2]])
+			for lb in press_lever_boxes():
+				pr.append([(lb[0] as Vector3) + PRESS_LEVER, lb[1], lb[2]])
+			return pr
 		Blocks.SHIPWORKS:
 			var out5: Array = []
 			# A shed: a floor, a gantry over it, and a frame to build in.
@@ -629,6 +631,110 @@ static func anvil_mesh(shape: String, col: Color, t: float = 0.0, hits: int = 0,
 	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sub.surface_get_arrays(0))
 	m.surface_set_material(m.get_surface_count() - 1, mat)
 	return m
+
+
+# --- the press --------------------------------------------------------------------
+#
+# A bench press, two blocks wide: a heavy bed on a plinth, two uprights and a
+# crown beam over it, and a ram hanging from the beam. The parts you lay on
+# the bed sit on it as what they are. The lever is on the housing at the
+# right-hand end; pull it and the ram comes down.
+
+const PRESS_BED_Y := 0.42          # the top of the bed, where parts rest
+const PRESS_BED_X := -0.25         # the middle of the bed
+const PRESS_RAM_UP := 1.22         # the ram's head, raised
+const PRESS_RAM_DOWN := 0.56       # ...and come down onto the parts
+const PRESS_LEVER := Vector3(0.72, 0.6, 0.31)   # the lever's hinge
+const PRESS_STEEL := Color(0.40, 0.42, 0.46)
+
+
+static func press_spot(i: int) -> Vector3:
+	return Vector3(PRESS_BED_X + (float(i) - 1.5) * 0.27, PRESS_BED_Y, 0)
+
+
+static func press_boxes() -> Array:
+	const RED := Color(0.72, 0.22, 0.18)
+	return [
+		[Vector3(0, 0.12, 0), Vector3(1.9, 0.24, 0.86), DARK],                  # plinth
+		[Vector3(PRESS_BED_X, 0.33, 0), Vector3(1.2, 0.18, 0.72), PRESS_STEEL],  # bed
+		[Vector3(PRESS_BED_X, PRESS_BED_Y - 0.004, 0), Vector3(1.1, 0.01, 0.62),
+			PRESS_STEEL.lightened(0.2)],                                          # die face
+		[Vector3(-0.93, 0.95, 0), Vector3(0.14, 1.3, 0.22), PRESS_STEEL],        # uprights
+		[Vector3(0.43, 0.95, 0), Vector3(0.14, 1.3, 0.22), PRESS_STEEL],
+		[Vector3(PRESS_BED_X, 1.66, 0), Vector3(1.52, 0.2, 0.34), DARK],         # crown
+		[Vector3(0.72, 0.45, 0), Vector3(0.42, 0.42, 0.6), METAL],              # housing
+		[Vector3(0.72, 0.36, 0.305), Vector3(0.12, 0.05, 0.01), RED],           # a warning stripe
+	]
+
+
+## The ram, in its own space: the head at the origin, the shaft up into the
+## crown. The node it lives on is raised and lowered.
+static func press_ram_boxes() -> Array:
+	return [
+		[Vector3(PRESS_BED_X, 0, 0), Vector3(1.0, 0.14, 0.6), PRESS_STEEL.darkened(0.15)],
+		[Vector3(PRESS_BED_X, -0.075, 0), Vector3(0.94, 0.01, 0.54), PRESS_STEEL.lightened(0.15)],
+		# Long enough to stay in the crown with the ram all the way down: a
+		# ram hanging off nothing looks like it fell off.
+		[Vector3(PRESS_BED_X, 0.66, 0), Vector3(0.14, 1.2, 0.14), PRESS_STEEL],
+	]
+
+
+## The lever, from its hinge: upright at rest, pulled toward you to press.
+static func press_lever_boxes() -> Array:
+	return [
+		[Vector3(0, 0.02, -0.02), Vector3(0.1, 0.1, 0.06), DARK],
+		[Vector3(0, 0.21, 0), Vector3(0.05, 0.42, 0.05), METAL],
+		[Vector3(0, 0.44, 0), Vector3(0.1, 0.1, 0.1), Color(0.72, 0.24, 0.20)],
+	]
+
+
+## An item as boxes, fitted into a spot `size` across and standing on `at`:
+## its own model where it has one (metal stock, tools, a battery), a tinted
+## block where it does not. Anything taller than it is wide is laid down.
+static func press_item_boxes(item: Dictionary, at: Vector3, size: float) -> Array:
+	var id := int(item.get("id", Blocks.AIR))
+	var mat: Dictionary = item.get("mat", {})
+	var tint: Color = mat.get("color", Color(0, 0, 0, 0))
+	var raw: Array = ItemModels.boxes_for(id, tint)
+	if raw.is_empty() and ToolModels.has_model(id):
+		raw = ToolModels.boxes_for(id, tint)
+	if raw.is_empty() and id == Blocks.BATTERY:
+		raw = battery_boxes(0.0)
+	if raw.is_empty():
+		var col: Color = tint if tint.a > 0.0 else Blocks.color_of(id)
+		raw = [[Vector3.ZERO, Vector3(1, 0.5, 1), col]]
+	var lo := Vector3(1e9, 1e9, 1e9)
+	var hi := -lo
+	for b in raw:
+		lo = lo.min((b[0] as Vector3) - (b[1] as Vector3) * 0.5)
+		hi = hi.max((b[0] as Vector3) + (b[1] as Vector3) * 0.5)
+	var ext := hi - lo
+	var lay: bool = ext.y > maxf(ext.x, ext.z)
+	if lay:
+		ext = Vector3(ext.y, ext.x, ext.z)
+	var k: float = size / maxf(maxf(ext.x, ext.z), 0.001)
+	var mid := (lo + hi) * 0.5
+	var out: Array = []
+	for b in raw:
+		var c: Vector3 = (b[0] as Vector3) - mid
+		var sz: Vector3 = b[1]
+		if lay:
+			c = Vector3(c.y, c.x, c.z)
+			sz = Vector3(sz.y, sz.x, sz.z)
+		out.append([at + Vector3(c.x * k, c.y * k + ext.y * k * 0.5, c.z * k), sz * k, b[2]])
+	return out
+
+
+## The press with these parts on its bed and `output` (if any) waiting where
+## the ram left it.
+static func press_mesh(parts: Array, output: Dictionary) -> ArrayMesh:
+	var boxes: Array = press_boxes()
+	for i in parts.size():
+		boxes.append_array(press_item_boxes(parts[i], press_spot(i), 0.22))
+	if not output.is_empty():
+		boxes.append_array(press_item_boxes(output,
+			Vector3(PRESS_BED_X, PRESS_BED_Y, 0), 0.42))
+	return _mesh_from(boxes)
 
 
 ## Where a chest's lid is hinged: the top of the back edge, so it swings up and

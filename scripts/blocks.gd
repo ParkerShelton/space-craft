@@ -352,7 +352,7 @@ const DOOR_OPEN := 58        # open door: passable, does NOT seal (air escapes)
 #     so not everything is gated behind "refine ore and you're done") ---
 const ALLOY := 60      # refined + Metal -> structural stock (Shipworks: Thruster, Life Support)
 const CIRCUIT := 61    # refined + Metal -> functional stock (Fabricator: Drill, Suit, Weapon)
-const INTERMEDIATE_IDS := [ALLOY, CIRCUIT, BAR, SHEET, SCRAP]
+const INTERMEDIATE_IDS := [ALLOY, CIRCUIT, BAR, SHEET, SCRAP, PLATE]
 
 const INTERFACE := 65  # placeable trigger block: surround it with a recognized shell
 						# pattern (see MULTIBLOCK_RECIPES) to build a bigger structure
@@ -820,6 +820,11 @@ const ANVIL := 204     # carpenter's bench: ingots. Holds one workpiece on top.
 const BAR := 205
 const SHEET := 206
 const SCRAP := 207
+## What the anvil's last stage gives: a flat plate, as a PART -- the thing a
+## generator, a heater or a power bay is built from. It is not hull. Hull is a
+## ship block, pressed out of four plates at the Press (see PRESS_RECIPES).
+## How many plates one ingot gives is the ore's Density (plate_yield).
+const PLATE := 208
 
 const SWORD_DAMAGE := 6.0
 
@@ -946,21 +951,23 @@ const STATION_GROWTH := [
 	# --- fire: the campfire line ---
 	{"from": CAMPFIRE, "to": SMELTER, "needs": [{"any": STONE_IDS, "n": 8, "label": "Rock"}]},
 	{"from": SMELTER, "to": FORGE,
-		"needs": [{"any": STONE_IDS, "n": 8, "label": "Rock"}, {"id": METAL, "n": 6}]},
+		"needs": [{"any": STONE_IDS, "n": 8, "label": "Rock"}, {"id": PLATE, "n": 6}]},
 	# --- the workbench line ---
-	{"from": CARPENTER, "to": FABRICATOR,
-		"needs": [{"id": METAL, "n": 6}, {"id": CIRCUIT, "n": 2}]},
+	# A carpenter's bench no longer grows into the Fabricator: that is the
+	# Press now, a metal machine with a bed and a ram you can see, put down
+	# whole from the station ring. (A grown one is a heap of blocks with no
+	# model, which is no press at all.) Old grown ones still grow on.
 	{"from": FABRICATOR, "to": SHIPWORKS, "needs": [{"id": ALLOY, "n": 6}]},
 	# --- the generator line ---
-	{"from": GENERATOR, "to": POWER_BAY, "needs": [{"id": METAL, "n": 8}]},
+	{"from": GENERATOR, "to": POWER_BAY, "needs": [{"id": PLATE, "n": 8}]},
 	{"from": GENERATOR, "to": OXYGEN_PLANT,
-		"needs": [{"id": GLASS, "n": 6}, {"id": METAL, "n": 4}]},
+		"needs": [{"id": GLASS, "n": 6}, {"id": PLATE, "n": 4}]},
 	{"from": GENERATOR, "to": HEATER,
-		"needs": [{"any": STONE_IDS, "n": 10, "label": "Rock"}, {"id": METAL, "n": 4}]},
+		"needs": [{"any": STONE_IDS, "n": 10, "label": "Rock"}, {"id": PLATE, "n": 4}]},
 	{"from": GENERATOR, "to": COOLER,
-		"needs": [{"id": GLASS, "n": 4}, {"id": METAL, "n": 8}]},
+		"needs": [{"id": GLASS, "n": 4}, {"id": PLATE, "n": 8}]},
 	{"from": GENERATOR, "to": CLIMATE_UNIT,
-		"needs": [{"id": METAL, "n": 6}, {"any": WOOD_IDS, "n": 4, "label": "Wood"}]},
+		"needs": [{"id": PLATE, "n": 6}, {"any": WOOD_IDS, "n": 4, "label": "Wood"}]},
 ]
 
 
@@ -1042,16 +1049,19 @@ const STATION_BUILDS := [
 	{"kind": SMELTER, "reqs": [{"any": STONE_IDS, "n": 12, "label": "Rock"},
 		{"any": WOOD_IDS, "n": 4, "label": "Wood"}]},
 	{"kind": FORGE, "reqs": [{"any": STONE_IDS, "n": 16, "label": "Rock"},
-		{"id": METAL, "n": 6}]},
-	{"kind": GENERATOR, "reqs": [{"id": METAL, "n": 10}, {"id": WIRE, "n": 4}]},
-	{"kind": POWER_BAY, "reqs": [{"id": METAL, "n": 12}, {"id": BATTERY, "n": 1}]},
+		{"id": PLATE, "n": 6}]},
+	{"kind": GENERATOR, "reqs": [{"id": PLATE, "n": 10}, {"id": WIRE, "n": 4}]},
+	{"kind": POWER_BAY, "reqs": [{"id": PLATE, "n": 12}, {"id": BATTERY, "n": 1}]},
 	{"kind": HEATER, "reqs": [{"any": STONE_IDS, "n": 10, "label": "Rock"},
-		{"id": METAL, "n": 6}]},
-	{"kind": COOLER, "reqs": [{"id": GLASS, "n": 6}, {"id": METAL, "n": 10}]},
-	{"kind": OXYGEN_PLANT, "reqs": [{"id": GLASS, "n": 6}, {"id": METAL, "n": 8}]},
-	{"kind": CLIMATE_UNIT, "reqs": [{"id": METAL, "n": 8}, {"id": CIRCUIT, "n": 2}]},
-	{"kind": FABRICATOR, "reqs": [{"id": METAL, "n": 10}, {"id": CIRCUIT, "n": 4}]},
-	{"kind": SHIPWORKS, "reqs": [{"id": METAL, "n": 20}, {"id": ALLOY, "n": 6}]},
+		{"id": PLATE, "n": 6}]},
+	{"kind": COOLER, "reqs": [{"id": GLASS, "n": 6}, {"id": PLATE, "n": 10}]},
+	{"kind": OXYGEN_PLANT, "reqs": [{"id": GLASS, "n": 6}, {"id": PLATE, "n": 8}]},
+	{"kind": CLIMATE_UNIT, "reqs": [{"id": PLATE, "n": 8}, {"id": CIRCUIT, "n": 2}]},
+	# The Press is metal and nothing else: plates for the frame and the bed,
+	# bars for the uprights and the ram. It is where circuitry comes FROM now,
+	# so it cannot ask for any.
+	{"kind": FABRICATOR, "reqs": [{"id": PLATE, "n": 4}, {"id": BAR, "n": 2}]},
+	{"kind": SHIPWORKS, "reqs": [{"id": PLATE, "n": 20}, {"id": ALLOY, "n": 6}]},
 ]
 
 
@@ -1358,6 +1368,22 @@ static func all_recipes() -> Array:
 				"n": int(r.get("n", 1)), "reqs": r.get("reqs", []),
 				"cost": int(r.get("cost", 0)), "extra": r.get("extra", {}),
 				"diagram": ""})
+	# The anvil: what each stage of beating an ingot gives.
+	for sh in [[BAR, 1], [SHEET, 1], [PLATE, 4]]:
+		out.append({"key": "anvil:%d" % int(sh[0]), "src": "Anvil (strike with a hammer)",
+			"cat": "Metalwork", "out": int(sh[0]), "n": int(sh[1]),
+			"reqs": [{"refined": true, "n": 1}], "cost": 0, "extra": {}, "diagram": ""})
+	# The press: parts laid on the bed, and the lever pulled.
+	for pr in PRESS_RECIPES:
+		var preqs: Array = []
+		for part in pr["parts"]:
+			if typeof(part[0]) == TYPE_STRING:
+				preqs.append({"refined": true, "n": int(part[1])})
+			else:
+				preqs.append({"id": int(part[0]), "n": int(part[1])})
+		out.append({"key": "press:%d" % int(pr["out"]), "src": "Press (lay parts, pull lever)",
+			"cat": "Metalwork", "out": int(pr["out"]), "n": int(pr.get("n", 1)),
+			"reqs": preqs, "cost": 0, "extra": {}, "diagram": ""})
 	# Stations: put down whole from the station ring (hold C), paid for out of
 	# your pockets. Listed here so the book still answers "what does a Smelter
 	# take", which is the only question anyone asked of the old patterns.
@@ -1635,6 +1661,85 @@ static func smith_hits_of(id: int, props: Dictionary) -> int:
 	return 0
 
 
+# --- the press ------------------------------------------------------------------
+#
+# The Press has a bed with four spots and a ram. You lay parts on the bed and
+# pull the lever; if what is on the bed is exactly one of these, the ram comes
+# down and it becomes that. Nothing else happens on it -- it is where metal
+# PARTS are made, some of which are things in their own right (hull, a bucket,
+# a drill) and some of which go on to other benches.
+#
+# `parts` is [[what, how many], ...]; "ingot" means any ingot. The FIRST entry
+# is where the result takes its material from -- a drill is as good as its
+# bar, a battery holds what its ingot can.
+const PRESS_SPOTS := 4
+const PRESS_RECIPES := [
+	{"label": "Metal Hull", "out": METAL, "n": 1, "parts": [[PLATE, 4]]},
+	# The base's nervous system: how much comes off one bar is the bar's
+	# Reactivity (wire_yield), so a conductive ore still goes further.
+	{"label": "Wire", "out": WIRE, "n": 8, "yield_from_material": true, "parts": [[BAR, 1]]},
+	{"label": "Battery", "out": BATTERY, "n": 1, "parts": [["ingot", 1], [SHEET, 2]]},
+	{"label": "Machine Core", "out": MACHINE_CORE, "n": 1, "parts": [[BAR, 2], [PLATE, 2]]},
+	{"label": "Circuitry x2", "out": CIRCUIT, "n": 2, "parts": [[SHEET, 1], [WIRE, 2]]},
+	{"label": "Glow Lamp x2", "out": GLOW_LAMP, "n": 2, "parts": [[SHEET, 1], [CRYSTAL, 1]]},
+	{"label": "Bucket", "out": BUCKET, "n": 1, "parts": [[SHEET, 2]]},
+	# The gear the Fabricator used to make, as parts: a drill is a bar driven
+	# by circuitry, a pistol is circuitry in a sheet casing, a blade is two
+	# bars edged with plate.
+	{"label": "Drill", "out": DRILL, "n": 1, "parts": [[BAR, 1], [CIRCUIT, 3]]},
+	{"label": "Pulse Pistol", "out": PULSE_PISTOL, "n": 1, "parts": [[SHEET, 1], [CIRCUIT, 3]]},
+	{"label": "Melee Weapon", "out": WEAPON, "n": 1, "parts": [[BAR, 2], [PLATE, 1]]},
+]
+
+
+## Does `id` count as `what` from a press recipe?
+static func press_part_is(id: int, what) -> bool:
+	if typeof(what) == TYPE_STRING:
+		return is_refined(id)
+	return id == int(what)
+
+
+## Can this go on the press bed at all?
+static func press_takes(id: int) -> bool:
+	for r in PRESS_RECIPES:
+		for part in r["parts"]:
+			if press_part_is(id, part[0]):
+				return true
+	return false
+
+
+## The recipe exactly matching these ids on the bed, or {} if none does.
+static func press_match(ids: Array) -> Dictionary:
+	for r in PRESS_RECIPES:
+		var left: Array = ids.duplicate()
+		var ok := true
+		for part in r["parts"]:
+			for i in int(part[1]):
+				var found := -1
+				for j in left.size():
+					if press_part_is(int(left[j]), part[0]):
+						found = j
+						break
+				if found < 0:
+					ok = false
+					break
+				left.remove_at(found)
+			if not ok:
+				break
+		if ok and left.is_empty():
+			return r
+	return {}
+
+
+## A press recipe's parts in words: "4 Plate", "1 Ingot, 2 Sheet".
+static func press_parts_text(r: Dictionary) -> String:
+	var bits := PackedStringArray()
+	for part in r["parts"]:
+		var what: String = "Ingot" if typeof(part[0]) == TYPE_STRING else name_of(int(part[0]))
+		bits.append("%d %s" % [int(part[1]), what])
+	return ", ".join(bits)
+
+
 ## Will a crafting bench take `id` into its storage? The benches were strict
 ## about their PRIMARY material only, which shut out everything else their own
 ## recipes asked for -- the Fabricator refused the bar its Wire is made from.
@@ -1679,33 +1784,15 @@ const STATION_CRAFTS := {
 		# Hull plate is not made here any more: it is beaten out of an ingot on
 		# an anvil (see the smithing section). The smelter's job is the fire --
 		# ore into ingots, and scrap back into them.
-		{"label": "Alloy Plating x2", "out": ALLOY, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 3}},
-		{"label": "Circuitry x2", "out": CIRCUIT, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 2}},
+		{"label": "Alloy Plating x2", "out": ALLOY, "n": 2, "cost": 2, "extra": {"id": PLATE, "n": 3}},
 	],
-	FABRICATOR: [
-		{"label": "Glow Lamp x2", "out": GLOW_LAMP, "n": 2,
-			"reqs": [{"id": CRYSTAL, "n": 1}, {"id": METAL, "n": 1}]},
-		# The base's nervous system: cheap, because a grid you cannot afford to
-		# run across your base is a grid you build around instead of with.
-		# From a BAR: the length comes from the bar's ore (wire_yield reads its
-		# Reactivity), so a conductive ore still goes further.
-		{"label": "Wire", "out": WIRE, "n": 8, "yield_from_material": true,
-			"reqs": [{"id": BAR, "n": 1}]},
-		{"label": "Machine Core", "out": MACHINE_CORE, "n": 1,
-			"reqs": [{"id": METAL, "n": 2}, {"id": BAR, "n": 2}]},
-		# A casing of sheet round an ingot's worth of cell. The ingot is what the
-		# charge is stored in, so its ore still decides the capacity.
-		{"label": "Battery", "out": BATTERY, "n": 1,
-			"reqs": [{"id": SHEET, "n": 2}, {"refined": true, "n": 1}]},
-		{"label": "Drill", "out": DRILL, "n": 1, "cost": 3},
-		{"label": "Melee Weapon", "out": WEAPON, "n": 1, "cost": 3},
-		{"label": "Pulse Pistol", "out": PULSE_PISTOL, "n": 1, "cost": 4},
-	],
+	# The Fabricator is the Press now, and presses rather than crafts: see
+	# PRESS_RECIPES. It has no buttons.
 	SHIPWORKS: [
 		{"label": "Thruster", "out": THRUSTER, "n": 1, "cost": 3},
 		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "cost": 4},
 		{"label": "Warp Drive", "out": WARP_DRIVE, "n": 1, "cost": 10},
-		{"label": "Hull Plate x4", "out": METAL, "n": 4, "reqs": [{"id": ALLOY, "n": 2}]},
+		{"label": "Metal Hull x4", "out": METAL, "n": 4, "reqs": [{"id": ALLOY, "n": 2}]},
 	],
 	# The bootstrap bench, and the only one that can be commissioned without a
 	# Wrench -- because the Wrench is made here. Everything on it asks for plain
@@ -1736,8 +1823,6 @@ const STATION_CRAFTS := {
 		# Metal, at the bench you can reach with nothing -- so it costs a trip
 		# to a smelter and no more than that. A field has to be near water, and
 		# a bucket is what stops that meaning "on a beach".
-		{"label": "Bucket", "out": BUCKET, "n": 1,
-			"reqs": [{"id": SHEET, "n": 2}]},
 		# Smithing. The hammer is the same wood and rock as the other first
 		# tools, so it is waiting for you the moment you have an ingot; the
 		# anvil is three ingots, so the first metal you smelt becomes the thing
@@ -1793,7 +1878,7 @@ const STATION_CRAFTS := {
 		# "6 items", which tells you nothing about what to go and get.
 		{"label": "Door", "out": DOOR, "n": 1,
 			"reqs": [{"any": WOOD_IDS + PLANK_IDS, "n": 6, "label": "Wood or Planks"}]},
-		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": METAL, "n": 1}]},
+		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": PLATE, "n": 1}]},
 	],
 }
 
@@ -1876,7 +1961,7 @@ const NAMES := {
 	URANIUM_ORE: "Uranium Ore",
 	WATER: "Water",
 	SMELTER: "Smelter",
-	FABRICATOR: "Fabricator",
+	FABRICATOR: "Press",
 	SHIPWORKS: "Shipworks",
 	CHEST: "Wooden Chest",
 	CARPENTER: "Carpenter's Bench",
@@ -1915,6 +2000,7 @@ const NAMES := {
 	REFINED_0: "Ingot", REFINED_1: "Ingot",
 	REFINED_2: "Ingot", REFINED_3: "Ingot",
 	HAMMER: "Hammer", ANVIL: "Anvil", BAR: "Bar", SHEET: "Sheet", SCRAP: "Scrap",
+	PLATE: "Plate",
 	DRILL: "Drill",
 	O2_TANK: "O2 Tank",
 	SUIT: "Insulated Suit",
@@ -1926,8 +2012,9 @@ const NAMES := {
 const USES := {
 	HAMMER: "Strike a workpiece on an anvil",
 	ANVIL: "Put an ingot on it, then strike it with a hammer",
-	BAR: "Wire and machine cores -- or back on the anvil for sheet",
-	SHEET: "Batteries and buckets -- or back on the anvil for plate",
+	BAR: "A part: pressed into wire, machine cores and tools",
+	SHEET: "A part: casings -- batteries, circuitry, lamps, buckets",
+	PLATE: "A part: machines are built from it; four pressed together make hull",
 	SCRAP: "Overworked. Remelt it at a smelter into an ingot",
 	CRACKED_METAL: "Crumbles if you work at it -- nothing worth keeping",
 	IRON_ORE: "Hulls & tools",
@@ -2023,6 +2110,7 @@ const COLORS := {
 	BAR: Color(0.70, 0.68, 0.64),
 	SHEET: Color(0.74, 0.74, 0.72),
 	SCRAP: Color(0.42, 0.38, 0.34),
+	PLATE: Color(0.66, 0.67, 0.70),
 	COCKPIT: Color(0.35, 0.55, 0.90),
 	THRUSTER: Color(0.85, 0.45, 0.20),
 	WOOD: Color(0.42, 0.28, 0.16),

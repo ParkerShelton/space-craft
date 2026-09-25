@@ -80,6 +80,8 @@ static func capacity_of(k: int) -> int:
 		return 1   # one battery, seated in the cradle -- no inventory to open
 	if k == Blocks.ANVIL:
 		return 2   # the workpiece on its face, and the pile waiting beside it
+	if k == Blocks.FABRICATOR:
+		return Blocks.PRESS_SPOTS + 1   # the bed's spots, and what the ram made
 	if k == Blocks.OXYGEN_PLANT or k == Blocks.HEATER or k == Blocks.COOLER:
 		return 2   # spare filters / elements: no recipes, just somewhere to stash parts
 	if k == Blocks.FORGE:
@@ -173,6 +175,20 @@ func _build_visual() -> void:
 	elif kind == Blocks.POWER_BAY:
 		_bay_shown = _bay_state()
 		_mi.mesh = StationModels.power_bay_mesh(_bay_shown.x > 0.5, _bay_shown.y)
+	elif kind == Blocks.FABRICATOR:
+		_press_shown = "-"
+		_mi.mesh = StationModels.press_mesh([], {})
+		if _ram == null:
+			# The ram and the lever are nodes of their own so they can move.
+			_ram = MeshInstance3D.new()
+			_ram.mesh = StationModels.mesh_from_boxes(StationModels.press_ram_boxes())
+			_ram.position = Vector3(0, -0.5 + StationModels.PRESS_RAM_UP, 0)
+			add_child(_ram)
+			_press_lever = MeshInstance3D.new()
+			_press_lever.mesh = StationModels.mesh_from_boxes(StationModels.press_lever_boxes())
+			_press_lever.position = StationModels.PRESS_LEVER + Vector3(0, -0.5, 0)
+			add_child(_press_lever)
+		_refresh_press.call_deferred()
 	elif kind == Blocks.ANVIL:
 		_anvil_shown = "-"
 		_mi.mesh = StationModels.anvil_mesh("", Color.WHITE)
@@ -777,14 +793,14 @@ func anvil_take() -> Array:
 			var back := scrap_to_ingot(p)
 			out.append({"id": back["id"], "count": 1, "props": props,
 				"src": back["src"], "mat": back["mat"]})
-		"plate", "cracking":
-			out.append({"id": Blocks.METAL, "count": Blocks.plate_yield(props),
-				"props": props, "src": "", "mat": {}})
 		_:
-			var id: int = {"bar": Blocks.BAR, "sheet": Blocks.SHEET}.get(shape, Blocks.SCRAP)
+			var id: int = {"bar": Blocks.BAR, "sheet": Blocks.SHEET, "plate": Blocks.PLATE,
+				"cracking": Blocks.PLATE}.get(shape, Blocks.SCRAP)
+			# Plate comes off as however many this ore gives; the rest are one.
+			var n: int = Blocks.plate_yield(props) if id == Blocks.PLATE else 1
 			# Different metals must not stack into one, so the source names the
 			# metal as well as where it was dug.
-			out.append({"id": id, "count": 1, "props": props,
+			out.append({"id": id, "count": n, "props": props,
 				"src": "%s:%s" % [str(mat.get("src0", "")), str(mat.get("name", ""))],
 				"mat": mat})
 	storage[0] = {"id": Blocks.AIR, "count": 0, "eighths": 0, "props": {},
@@ -806,6 +822,173 @@ func _refresh_anvil() -> void:
 	var pile_col: Color = (pile.get("mat", {}) as Dictionary).get("color", Color(0.7, 0.68, 0.64))
 	_mi.mesh = StationModels.anvil_mesh(shape, anvil_colour(), anvil_progress(), hits,
 		anvil_pile_count(), pile_col)
+
+
+# --- the press -------------------------------------------------------------------
+#
+# storage[0..3] are the four spots on the bed, filled left to right, one part
+# each. storage[4] is what the ram made, waiting to be taken. Anything past that
+# is left over from when this was a Fabricator with a hopper, and comes back to
+# whoever empties the bed.
+
+var _press_shown := "-"
+var _ram: MeshInstance3D
+var _press_lever: MeshInstance3D
+var _press_busy := false
+
+
+func press_parts() -> Array:
+	var out: Array = []
+	for i in mini(Blocks.PRESS_SPOTS, storage.size()):
+		if int(storage[i].get("count", 0)) > 0:
+			out.append(storage[i])
+	return out
+
+
+func press_output() -> Dictionary:
+	var i := Blocks.PRESS_SPOTS
+	if storage.size() <= i or int(storage[i].get("count", 0)) <= 0:
+		return {}
+	return storage[i]
+
+
+## Lay one of `item` on the next free spot. Returns false if the bed is full,
+## something is waiting to be taken, or it is not a part the press uses.
+func press_add(item: Dictionary) -> bool:
+	_ensure_storage()
+	if not Blocks.press_takes(int(item.get("id", Blocks.AIR))) or not press_output().is_empty():
+		return false
+	for i in Blocks.PRESS_SPOTS:
+		if int(storage[i].get("count", 0)) <= 0:
+			var one: Dictionary = item.duplicate(true)
+			one["count"] = 1
+			one.erase("eighths")
+			storage[i] = one
+			_refresh_press()
+			return true
+	return false
+
+
+## Take the last part laid back off the bed.
+func press_take_last() -> Dictionary:
+	for i in range(Blocks.PRESS_SPOTS - 1, -1, -1):
+		if i < storage.size() and int(storage[i].get("count", 0)) > 0:
+			var out: Dictionary = storage[i].duplicate(true)
+			storage[i] = _empty_slot()
+			_refresh_press()
+			return out
+	return {}
+
+
+## Take what the ram made.
+func press_take_output() -> Dictionary:
+	var o := press_output()
+	if o.is_empty():
+		return {}
+	var out: Dictionary = o.duplicate(true)
+	storage[Blocks.PRESS_SPOTS] = _empty_slot()
+	_refresh_press()
+	return out
+
+
+## Anything left in the slots a Fabricator used to have, taken out.
+func press_leftovers() -> Array:
+	var out: Array = []
+	for i in range(Blocks.PRESS_SPOTS + 1, storage.size()):
+		if int(storage[i].get("count", 0)) > 0:
+			out.append(storage[i].duplicate(true))
+			storage[i] = _empty_slot()
+	return out
+
+
+## What pulling the lever would make right now, or {} if these parts do not
+## make anything.
+func press_would_make() -> Dictionary:
+	var ids: Array = []
+	for p in press_parts():
+		ids.append(int(p["id"]))
+	return Blocks.press_match(ids) if not ids.is_empty() else {}
+
+
+## Pull the lever. If what is on the bed is a recipe, the parts become its
+## result and this returns it; otherwise nothing is used and this returns {}.
+## The ram moves either way -- all the way down, or stopped short.
+func press_stamp() -> Dictionary:
+	var r := press_would_make()
+	_animate_press(not r.is_empty())
+	if r.is_empty() or not press_output().is_empty():
+		return {}
+	# The result takes its material from the first part the recipe names.
+	var first = r["parts"][0][0]
+	var src_part: Dictionary = {}
+	for p in press_parts():
+		if Blocks.press_part_is(int(p["id"]), first):
+			src_part = p
+			break
+	var props: Dictionary = src_part.get("props", {})
+	var mat: Dictionary = src_part.get("mat", {})
+	var out_id := int(r["out"])
+	var n := int(r.get("n", 1))
+	if bool(r.get("yield_from_material", false)):
+		n = Blocks.yield_for(out_id, props, n)
+	var omat := {}
+	var osrc := ""
+	if mat.has("name"):
+		omat = {"name": mat.get("name", ""), "color": mat.get("color", Color(0.7, 0.7, 0.7)),
+			"tier": mat.get("tier", 0)}
+	match out_id:
+		Blocks.DRILL:
+			omat["power"] = Blocks.drill_power(props)
+		Blocks.WEAPON:
+			omat["damage"] = Blocks.weapon_damage(props)
+		Blocks.PULSE_PISTOL:
+			omat["damage"] = Blocks.ranged_weapon_damage(props)
+		Blocks.METAL, Blocks.WIRE, Blocks.CIRCUIT, Blocks.GLOW_LAMP, Blocks.MACHINE_CORE:
+			# Plain stock that stacks with any other of its kind.
+			omat = {}
+	var res := {"id": out_id, "count": n, "eighths": 0, "props": props, "src": osrc,
+		"mat": omat}
+	for i in Blocks.PRESS_SPOTS:
+		storage[i] = _empty_slot()
+	storage[Blocks.PRESS_SPOTS] = res
+	_refresh_press.call_deferred()
+	return res
+
+
+func _empty_slot() -> Dictionary:
+	return {"id": Blocks.AIR, "count": 0, "eighths": 0, "props": {}, "src": "", "mat": {}}
+
+
+## The lever thrown and the ram coming down -- to the bed if the parts are
+## good, or stopping short with a jolt if they are not -- and back up.
+func _animate_press(good: bool) -> void:
+	if _ram == null or _press_busy:
+		return
+	_press_busy = true
+	var top: float = -0.5 + StationModels.PRESS_RAM_UP
+	var down: float = -0.5 + (StationModels.PRESS_RAM_DOWN if good else
+		lerpf(StationModels.PRESS_RAM_UP, StationModels.PRESS_RAM_DOWN, 0.55))
+	var tw := create_tween()
+	tw.tween_property(_press_lever, "rotation:x", 1.05, 0.12)
+	tw.tween_property(_ram, "position:y", down, 0.09).set_ease(Tween.EASE_IN)
+	tw.tween_interval(0.18 if good else 0.08)
+	tw.tween_property(_ram, "position:y", top, 0.35).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(_press_lever, "rotation:x", 0.0, 0.35)
+	tw.tween_callback(func(): _press_busy = false)
+
+
+func _refresh_press() -> void:
+	if kind != Blocks.FABRICATOR or headless or _mi == null:
+		return
+	var sig := ""
+	for p in press_parts():
+		sig += "%d:%s," % [int(p["id"]), str(p.get("src", ""))]
+	var o := press_output()
+	sig += "|%d:%d" % [int(o.get("id", 0)), int(o.get("count", 0))]
+	if sig == _press_shown:
+		return
+	_press_shown = sig
+	_mi.mesh = StationModels.press_mesh(press_parts(), o)
 
 
 ## Swing the lever toward where the switch is set.

@@ -47,8 +47,8 @@ static func checklist(ship: Ship) -> Array:
 		elif cabin.has(v):
 			plates += 1
 	out.append(Item.new("Hull sealed", plates == 0 and bool(st.get("sealed", false)),
-		"%d metal plate%s needed" % [plates, "" if plates == 1 else "s"] if plates > 0 else "airtight",
-		"Put a metal plate in each hole in the cabin. Cut plate off the wreckage, or hammer an ingot flat on an anvil."))
+		"%d hull block%s needed" % [plates, "" if plates == 1 else "s"] if plates > 0 else "airtight",
+		"Put a block of Metal Hull in each hole in the cabin. Cut it off the wreckage, or press four plates into one at a Press."))
 	# 2. A doorway with nothing in it is a hole like any other.
 	out.append(Item.new("Door", not door_missing,
 		"missing -- one needed" if door_missing else "fitted",
@@ -72,7 +72,7 @@ static func checklist(ship: Ship) -> Array:
 				else "battery flat")),
 		("A Power Bay is built at a Shipworks and mounts inside the hull."
 			if bay == null
-			else "Charge a battery in a Generator (10 metal plate, 4 wire), feed it ore from a black seam, then drop the battery in the rack.")))
+			else "Charge a battery in a Generator (10 plates, 4 wire), feed it ore from a black seam, then drop the battery in the rack.")))
 	# 4. Air.
 	var has_ls := bool(st.get("life_support", false))
 	out.append(Item.new("Life support", has_ls,

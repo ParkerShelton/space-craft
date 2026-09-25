@@ -56,6 +56,8 @@ const CATALOG := {
 	# blows is a rhythm rather than the same clip on repeat.
 	"forge_strike": {"files": [FORGE + "strike.wav"], "db": -5.0, "pitch": 0.06, "throttle": 60},
 	"forge_scrap": {"files": [FORGE + "scrap.wav"], "db": -3.0, "pitch": 0.04, "throttle": 200},
+	"press_stamp": {"files": [FORGE + "press_stamp.wav"], "db": -2.0, "pitch": 0.03, "throttle": 300},
+	"press_miss": {"files": [FORGE + "press_miss.wav"], "db": -5.0, "pitch": 0.03, "throttle": 300},
 
 	# The world. Nothing behind these yet -- see the note at the top. The short
 	# throttle is because these arrive in bursts as well as singly: assembling
@@ -236,7 +238,7 @@ func _build_material_table() -> void:
 			"LIFE_SUPPORT", "WARP_DRIVE", "INTERFACE", "ALLOY", "CIRCUIT",
 			"DRILL", "SUIT", "WEAPON", "PULSE_PISTOL", "HOE", "WRENCH",
 			"TORCH", "GLOW_LAMP", "EMBER_TORCH", "ROOF_SLAB", "HAMMER", "ANVIL",
-			"BAR", "SHEET", "SCRAP"],
+			"BAR", "SHEET", "SCRAP", "PLATE"],
 	}
 	for mat in t:
 		for nm in t[mat]:

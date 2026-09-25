@@ -4842,6 +4842,8 @@ func _process_mining(delta: float) -> void:
 	if tgt.get("kind", "") == "station":
 		if _process_anvil_strike(tgt["obj"], lmb_pressed):
 			return
+		if _process_press_look(tgt["obj"]):
+			return
 		_process_station_mining(delta, tgt["obj"])
 		return
 	if tgt.get("kind", "") == "creature":
@@ -7441,6 +7443,10 @@ func _open_station(st: Station) -> void:
 	if st.kind == Blocks.ANVIL:
 		_use_anvil(st)
 		return
+	# And the press: parts go on its bed by hand and the lever does the work.
+	if st.kind == Blocks.FABRICATOR:
+		_use_press(st)
+		return
 	_station_open = st
 	st.lid_open = true
 	if inv_open:
@@ -8300,9 +8306,123 @@ func _smith_name(d: Dictionary) -> String:
 	var id := int(d.get("id", Blocks.AIR))
 	var mname := str((d.get("mat", {}) as Dictionary).get("name", ""))
 	if id == Blocks.METAL:
-		return "Hull Plate"
+		return "Metal Hull"
 	var what := "Ingot" if Blocks.is_refined(id) else Blocks.name_of(id)
 	return ("%s %s" % [mname, what.to_lower()]).strip_edges() if mname != "" else what
+
+
+# --- the press ----------------------------------------------------------------------
+
+## Right-click a press. The lever end pulls the lever. Anywhere else: take
+## what the ram made if something is waiting; otherwise lay what you are
+## holding on the next spot of the bed, or with an empty hand take the last
+## part back off.
+func _use_press(st: Station) -> void:
+	# A press that used to be a Fabricator may still be holding what went into
+	# its hopper. That comes back first, all of it.
+	var lefts := st.press_leftovers()
+	if not lefts.is_empty():
+		for d in lefts:
+			_add_item(int(d["id"]), int(d["count"]), d.get("props", {}),
+				str(d.get("src", "")), d.get("mat", {}))
+		_toast("Emptied what the old Fabricator was holding into your bag")
+		_refresh_slots()
+		return
+	if not st.headless and _ray.is_colliding():
+		var p: Vector3 = st.to_local(_ray.get_collision_point()) + Vector3(0, 0.5, 0)
+		if p.x > 0.5:
+			_pull_press(st)
+			return
+	var out := st.press_output()
+	if not out.is_empty():
+		var got := st.press_take_output()
+		if _add_item(int(got["id"]), int(got["count"]), got.get("props", {}),
+				str(got.get("src", "")), got.get("mat", {})) > 0:
+			st.storage[Blocks.PRESS_SPOTS] = got
+			st._refresh_press()
+			_toast("No room in your bag for it")
+			Audio.ui("ui_deny")
+			return
+		Audio.at("place_metal", st.global_position)
+		_toast("Took %d %s" % [int(got["count"]), _smith_name(got)])
+		_refresh_slots()
+		return
+	var held: Dictionary = _active_item()
+	var hid := int(held.get("id", Blocks.AIR))
+	if int(held.get("count", 0)) > 0:
+		if not Blocks.press_takes(hid):
+			_toast("The press takes metal parts: plates, bars, sheets, ingots, wire, circuitry, crystal")
+			return
+		if not st.press_add(held):
+			_toast("The bed is full -- pull the lever, or take a part back with an empty hand")
+			return
+		_take_one_from_active()
+		Audio.at("place_metal", st.global_position)
+		var r := st.press_would_make()
+		_toast("On the bed: %s%s" % [_smith_name(held),
+			("  --  pull the lever for %s" % str(r["label"])) if not r.is_empty() else ""])
+		_refresh_slots()
+		return
+	# Empty-handed at a press with no lever to reach (one grown out of blocks
+	# before the Press existed): a full bed that makes something is pressed.
+	if st.headless and not st.press_would_make().is_empty():
+		_pull_press(st)
+		return
+	var back := st.press_take_last()
+	if back.is_empty():
+		_toast("Lay metal parts on the bed, then pull the lever")
+		return
+	_add_item(int(back["id"]), 1, back.get("props", {}), str(back.get("src", "")),
+		back.get("mat", {}))
+	_toast("Took back %s" % _smith_name(back))
+	_refresh_slots()
+
+
+func _pull_press(st: Station) -> void:
+	if not st.press_output().is_empty():
+		_toast("Take what it made first")
+		return
+	var bed: Vector3 = st.to_global(Vector3(StationModels.PRESS_BED_X,
+		StationModels.PRESS_BED_Y - 0.5 + 0.05, 0))
+	if st.press_parts().is_empty():
+		st.press_stamp()   # it still moves; there is just nothing under it
+		Audio.at("press_miss", bed)
+		_toast("Nothing on the bed")
+		return
+	var made := st.press_stamp()
+	if made.is_empty():
+		Audio.at("press_miss", bed)
+		_toast("Those parts don't make anything")
+		return
+	Audio.at("press_stamp", bed)
+	# After the ram lands, not when the lever moves.
+	get_tree().create_timer(0.2).timeout.connect(
+		_spark_burst.bind(bed, 18, Color(1.0, 0.7, 0.3), true))
+	_toast("Pressed: %d %s -- right-click to take it" % [int(made["count"]), _smith_name(made)])
+
+
+## What the look line says over a press: what is on the bed and what it would
+## make. Returns true when there is something on it, which also stops a held
+## click from taking the press apart with parts still on it.
+func _process_press_look(st: Station) -> bool:
+	if not is_instance_valid(st) or st.kind != Blocks.FABRICATOR:
+		return false
+	var parts := st.press_parts()
+	var out := st.press_output()
+	if parts.is_empty() and out.is_empty():
+		return false
+	if not out.is_empty():
+		_look_name = "Press -- %d %s ready  (right-click to take it)" % [
+			int(out["count"]), _smith_name(out)]
+		return true
+	var names := PackedStringArray()
+	for p in parts:
+		names.append(_smith_name(p))
+	var r := st.press_would_make()
+	_look_name = "Press: %s  %s" % [", ".join(names),
+		("-> %s  (pull the lever)" % str(r["label"])) if not r.is_empty()
+			else "(makes nothing yet)"]
+	return true
 
 
 ## The top of the anvil's face, in the world: where blows land and sparks fly.

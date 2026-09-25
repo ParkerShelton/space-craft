@@ -61,6 +61,24 @@ def main():
            bunch=0.4)
     write("scrap", b)
 
+    # --- press ---------------------------------------------------------------
+    # The ram landing: a lot of weight arriving at once, a flat metal slap on
+    # top, and the frame ringing briefly low. Heavier and duller than the
+    # anvil -- it is a machine, not a blow.
+    b = blank(0.9)
+    thump(b, 58.0, 0.3, 1.0, decay=11.0)
+    tap(b, 0.04, 0.8, decay=180.0)
+    thock(b, 320.0, 0.2, 0.55, q=4.5, decay=18.0)
+    ring(b, [410.0, 410.0 * 2.76, 410.0 * 5.4], 0.7, 0.28, decay=7.0)
+    write("press_stamp", b)
+
+    # The ram stopping short: a dead clunk and a rattle, no ring at all.
+    b = blank(0.5)
+    thump(b, 80.0, 0.15, 0.6, decay=26.0)
+    thock(b, 240.0, 0.12, 0.5, q=3.0, decay=30.0)
+    grains(b, 8, 0.15, 0.15, 400.0, 1400.0, q=3.0, decay=160.0, start=0.02, seed=5)
+    write("press_miss", b)
+
 
 if __name__ == "__main__":
     main()

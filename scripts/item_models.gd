@@ -130,7 +130,8 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 ## rather than as paint.
 static func _stock_boxes(b: int, tint: Color) -> Array:
 	var is_ingot := Blocks.is_refined(b)
-	if not (is_ingot or b == Blocks.BAR or b == Blocks.SHEET or b == Blocks.SCRAP):
+	if not (is_ingot or b == Blocks.BAR or b == Blocks.SHEET or b == Blocks.SCRAP
+			or b == Blocks.PLATE):
 		return []
 	var base := Color(0.64, 0.64, 0.66)
 	var c: Color = base.lerp(Color(tint.r, tint.g, tint.b), 0.55) if tint.a > 0.0 else base
@@ -142,6 +143,12 @@ static func _stock_boxes(b: int, tint: Color) -> Array:
 	if b == Blocks.BAR:
 		return [[Vector3(0, 0, 0), Vector3(0.8, 0.11, 0.12), c],
 			[Vector3(0, 0.06, 0), Vector3(0.78, 0.01, 0.08), hi]]
+	if b == Blocks.PLATE:
+		# Thicker than a sheet, square, with a raised rim along two edges --
+		# the same look it has on the anvil when it is done.
+		return [[Vector3(0, 0, 0), Vector3(0.6, 0.09, 0.6), c],
+			[Vector3(0, 0.05, -0.27), Vector3(0.6, 0.02, 0.05), hi],
+			[Vector3(0, 0.05, 0.27), Vector3(0.6, 0.02, 0.05), hi]]
 	if b == Blocks.SHEET:
 		return [[Vector3(0, 0, 0), Vector3(0.66, 0.04, 0.5), c],
 			[Vector3(0.2, 0.021, 0.12), Vector3(0.2, 0.004, 0.18), hi]]
