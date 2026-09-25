@@ -2144,6 +2144,8 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	# Loaded worlds already have theirs (or have taken it apart).
 	if not load_existing and mode != "joined":
 		_place_crash_site(ground, player)
+		if TEST_SMITHING_KIT:
+			_give_smithing_kit(ground, player)
 		# She goes in, the screen goes white and then black -- and the wake picks
 		# up from that black, so there is no seam between the two.
 		if _reel != null:
@@ -2198,6 +2200,23 @@ const LOAD_TIMEOUT_SEC := 25.0  # safety cap so a bug elsewhere can't hang the s
 ## Turn this off and the loading screen is the plain one it used to be; delete
 ## scripts/crash_reel.gd and the three CrashReel lines below and it is gone.
 const CRASH_REEL := true
+
+## TESTING ONLY: start every NEW world with a hammer, an anvil and a stack of
+## each of this planet's ores in the bag, so smithing can be tried without the
+## hour it takes to earn them. Set false (or delete this and the function
+## below) before shipping.
+const TEST_SMITHING_KIT := true
+
+
+func _give_smithing_kit(ground: Planet, player: Player) -> void:
+	player.grant_item(Blocks.HAMMER, 1)
+	player.grant_item(Blocks.ANVIL, 1)
+	# Each ore carries this planet's own identity -- name, colour, stats --
+	# exactly as if it had been dug here, so it refines into the right ingot.
+	for od in ground.ore_defs:
+		player.call("_add_item", int(od["block"]), 10, od["props"], ground.planet_name,
+			{"name": od["name"], "color": od["color"], "tier": od["tier"]})
+	player.call("_refresh_slots")
 var _reel: CrashReel
 
 var _loading_layer: CanvasLayer
