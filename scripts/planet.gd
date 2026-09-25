@@ -158,6 +158,8 @@ var hazard := "none"     # "none" / "cold" / "heat"
 ## Which of the four families this world belongs to ("verdant", "dust",
 ## "frozen", "scorched"), or "" for a side world. Decides its signature ore.
 var family := ""
+## What kind of world this is ("Reef world", "Tundra"...), for anything that describes it.
+var world_type := ""
 
 # --- planet class -------------------------------------------------------------
 #
@@ -435,7 +437,28 @@ var grass_density := 0.0
 var flora_variants: Array = []
 var flora_leaves: Array = []  # this planet's leaf-color palette (subset of Blocks.LEAF_IDS)
 var flora_wood := Blocks.WOOD
-var flora_shape := 0          # 0 round, 1 pine, 2 wide, 3 giant, 4 coral
+var flora_shape := 0          # see FLORA_* below
+## The growth shapes a world may use, one per region. Empty = the old roll
+## (recognisable trees on a homely world, giants and coral on a strange one),
+## which is what the home world keeps.
+var flora_pool: Array = []
+## A floor on how strange this world's colours are, 0..1. Away from home most
+## worlds are set well clear of Earth-green.
+var strange_min := 0.0
+# What stands on a world. 0-4 are trees and lobed coral; the rest are the alien
+# growths that make a world feel like nowhere on Earth.
+const FLORA_ROUND := 0
+const FLORA_PINE := 1
+const FLORA_WIDE := 2
+const FLORA_GIANT := 3
+const FLORA_CORAL := 4
+const FLORA_MUSHROOM := 5   # a stem as thick as a trunk under a cap you can shelter beneath
+const FLORA_DOME := 6       # hollow blisters swelling out of the ground, with smaller ones budding off
+const FLORA_BRANCH := 7     # staghorn coral: forking arms reaching up, bright at the tips
+const FLORA_TUBE := 8       # tube sponges: clusters of open-topped pipes
+const FLORA_SPIRE := 9      # banded needles leaning out of the ground
+## Grid spacing each shape wants. A world's spacing is the widest its pool asks for.
+const FLORA_CELL := {0: 7, 1: 7, 2: 7, 3: 22, 4: 10, 5: 17, 6: 13, 7: 11, 8: 9, 9: 10}
 var trunk_rad := 0.7          # trunk half-width in blocks; a giant is a pillar
 var _tree_scan := 1           # neighbouring tree cells to consider per voxel
 var trunk_min := 3
@@ -585,6 +608,7 @@ func configure(cfg: Dictionary) -> void:
 	hazard = cfg.get("hazard", "none")
 	hazard_dps = cfg.get("hazard_dps", 0.0)
 	family = cfg.get("family", "")
+	world_type = cfg.get("type", "")
 	shape_cube = cfg.get("cube", true)  # cube-planet-test branch: cubes by default
 
 	# 3 to 9 minutes per day, per planet.
@@ -620,6 +644,9 @@ func configure(cfg: Dictionary) -> void:
 	# depends on which region -- and the palette wants to know whether it is
 	# dressing one place or six.
 	_derive_biomes()
+	_derive_relief(cfg)
+	flora_pool = cfg.get("flora", [])
+	strange_min = float(cfg.get("strange_min", 0.0))
 	_derive_palette()
 	_derive_flora(cfg.get("tree_density", 0.0))
 	var grng := RandomNumberGenerator.new()
@@ -1548,7 +1575,7 @@ func _max_reach() -> float:
 	for i in _b_amp.size():
 		b_amp = maxf(b_amp, _b_amp[i])
 		b_lift = maxf(b_lift, _b_lift[i])
-	return maxf(radius + terrain_amp * (b_amp + b_lift) + mountain_amp
+	return maxf(radius + terrain_amp * (b_amp + b_lift) + mountain_amp + _relief_up()
 		+ maxf(tree_reach, settlement_reach), water_level)
 
 
@@ -2457,6 +2484,8 @@ func _derive_palette() -> void:
 	# properly strange, and the strangeness carries through hue, saturation,
 	# the sky and the shape of the trees.
 	strangeness = r.randf()
+	if strange_min > 0.0:
+		strangeness = strange_min + strangeness * (1.0 - strange_min)
 	var homely := strangeness < 0.35
 	var life_h: float
 	var life_s: float
@@ -2807,7 +2836,11 @@ func _roll_flora(fr: RandomNumberGenerator, force_shape: int,
 		shape = [0, 2, 3, 4][fr.randi() % 4]
 	else:
 		shape = [3, 4, 4, 2][fr.randi() % 4]
-	if force_shape >= 0:
+	if not flora_pool.is_empty():
+		# A world with its own pool: each region picks any shape in it, so a
+		# reef world can be staghorn here, tube sponges there.
+		shape = int(flora_pool[fr.randi() % flora_pool.size()])
+	elif force_shape >= 0:
 		# Same family as the world's own trees. Giants stay giants and coral
 		# stays coral; everything else is free to be round, pine or wide, which
 		# is the difference you actually read walking from one wood into another.
@@ -2837,6 +2870,41 @@ func _roll_flora(fr: RandomNumberGenerator, force_shape: int,
 		cell = 10
 		cmin = fr.randf_range(2.4, 3.4)
 		cmax = cmin + fr.randf_range(1.2, 2.6)
+	elif shape == FLORA_MUSHROOM:
+		tmin = fr.randi_range(9, 14)
+		tmax = tmin + fr.randi_range(4, 9)
+		trad = fr.randf_range(0.8, 1.3)
+		cmin = fr.randf_range(5.0, 6.5)
+		cmax = cmin + fr.randf_range(1.0, 2.5)
+	elif shape == FLORA_DOME:
+		tmin = 1
+		tmax = 2
+		trad = 0.5
+		cmin = fr.randf_range(3.5, 4.5)
+		cmax = cmin + fr.randf_range(1.0, 2.5)
+	elif shape == FLORA_BRANCH:
+		tmin = 1
+		tmax = 2
+		trad = fr.randf_range(0.6, 0.9)
+		cmin = fr.randf_range(3.5, 4.5)
+		cmax = cmin + fr.randf_range(1.0, 2.5)
+	elif shape == FLORA_TUBE:
+		tmin = fr.randi_range(4, 7)
+		tmax = tmin + fr.randi_range(3, 7)
+		trad = fr.randf_range(0.9, 1.4)
+		cmin = fr.randf_range(3.0, 3.6)
+		cmax = cmin + fr.randf_range(0.4, 1.0)
+	elif shape == FLORA_SPIRE:
+		tmin = fr.randi_range(7, 12)
+		tmax = tmin + fr.randi_range(4, 12)
+		trad = fr.randf_range(1.1, 2.0)
+		cmin = fr.randf_range(4.0, 4.8)
+		cmax = cmin + fr.randf_range(0.4, 1.2)
+	if not flora_pool.is_empty():
+		for sh in flora_pool:
+			cell = maxi(cell, int(FLORA_CELL.get(int(sh), TREE_CELL)))
+	elif FLORA_CELL.has(shape) and shape >= FLORA_MUSHROOM:
+		cell = int(FLORA_CELL[shape])
 	return {"leaves": leaves, "wood": wood, "shape": shape,
 		"trunk_min": tmin, "trunk_max": tmax, "trunk_rad": trad,
 		"canopy_min": cmin, "canopy_max": cmax, "cell": cell}
@@ -2993,6 +3061,132 @@ func surface_radius(dir: Vector3) -> float:
 ## have already worked it out. It is one noise lookup, and generation asks for
 ## the surface height several times per voxel.
 func _surf(dir: Vector3, bpos := -1.0) -> float:
+	var h := _surf_base(dir, bpos)
+	if relief_style == "":
+		return h
+	return _apply_relief(dir, h)
+
+
+# --- relief: the shape of the land itself -------------------------------------
+#
+# What makes a world's ground unlike any on Earth. On top of the rolling hills
+# every world has, a world may carry one of these:
+#   terraces -- the land in flat steps with sheer risers between: mesas, shelves
+#   spires   -- needles of rock standing up out of the plain, some of them huge
+#   bubbles  -- the ground swelling into round domes, shoulder to shoulder
+#   dunes    -- long curving ridges of drift
+#   craters  -- bowls with raised rims, as if the sky had been falling for ages
+# Spires, bubbles and craters are laid out on a cellular grid: each cell holds
+# at most one, sized by that cell's own random value.
+
+var relief_style := ""
+var relief_amp := 0.0
+var relief_size := 30.0        # blocks between features
+var relief_step := 4.0         # terrace height
+var _relief_noise := FastNoiseLite.new()   # distance to the nearest feature
+var _relief_value := FastNoiseLite.new()   # that feature's own random value, -1..1
+
+
+func _derive_relief(cfg: Dictionary) -> void:
+	relief_style = str(cfg.get("relief", ""))
+	if relief_style == "":
+		return
+	var r := RandomNumberGenerator.new()
+	r.seed = _seed + 6161
+	match relief_style:
+		"terraces":
+			relief_step = float(r.randi_range(3, 6))
+		"spires":
+			relief_size = r.randf_range(22.0, 38.0)
+			relief_amp = r.randf_range(18.0, 34.0)
+		"bubbles":
+			relief_size = r.randf_range(12.0, 24.0)
+			relief_amp = relief_size * r.randf_range(0.28, 0.45)
+		"dunes":
+			relief_size = r.randf_range(20.0, 34.0)
+			relief_amp = r.randf_range(6.0, 10.0)
+		"craters":
+			relief_size = r.randf_range(26.0, 46.0)
+			relief_amp = relief_size * r.randf_range(0.18, 0.28)
+	for nz in [_relief_noise, _relief_value]:
+		nz.seed = _seed + 6162
+		nz.noise_type = FastNoiseLite.TYPE_CELLULAR
+		nz.cellular_distance_function = FastNoiseLite.DISTANCE_EUCLIDEAN
+		nz.cellular_jitter = 0.85
+		nz.fractal_type = FastNoiseLite.FRACTAL_NONE
+		nz.frequency = 1.0 / relief_size
+	_relief_noise.cellular_return_type = FastNoiseLite.RETURN_DISTANCE
+	_relief_value.cellular_return_type = FastNoiseLite.RETURN_CELL_VALUE
+	if relief_style == "dunes":
+		# Dunes are waves, not cells: a warped stripe pattern.
+		_relief_value.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		_relief_value.frequency = 1.0 / (relief_size * 6.0)
+
+
+## How far above the ordinary surface relief can reach, and how far below.
+func _relief_up() -> float:
+	match relief_style:
+		"spires", "bubbles", "dunes":
+			return relief_amp
+		"craters":
+			return relief_amp * 0.35
+		"terraces":
+			return relief_step
+	return 0.0
+
+
+func _relief_down() -> float:
+	return relief_amp if relief_style == "craters" else 0.0
+
+
+func _apply_relief(dir: Vector3, h: float) -> float:
+	var x := dir.x * radius
+	var y := dir.y * radius
+	var z := dir.z * radius
+	match relief_style:
+		"terraces":
+			var f := h / relief_step
+			var fl := floorf(f)
+			return (fl + smoothstep(0.72, 1.0, f - fl)) * relief_step
+		"dunes":
+			var warp := _relief_value.get_noise_3d(x, y, z)
+			var ph := (x * 0.8 + y * 0.35 + z * 0.55) / relief_size + warp * 3.0
+			var w := 0.5 + 0.5 * sin(ph * TAU)
+			# Steep lee side, long windward slope.
+			return h + relief_amp * w * w * (0.6 + 0.4 * warp)
+	var d := (_relief_noise.get_noise_3d(x, y, z) + 1.0) * relief_size
+	var cv := _relief_value.get_noise_3d(x, y, z)   # -1..1, one per feature
+	match relief_style:
+		"spires":
+			if cv < -0.2:
+				return h                   # most cells stand empty
+			var rad := relief_size * (0.1 + 0.08 * (cv + 1.0))
+			if d >= rad:
+				return h
+			var k := 1.0 - d / rad
+			var tall := relief_amp * (0.35 + 0.65 * (cv + 0.2) / 1.2)
+			return h + tall * pow(k, 0.55)
+		"bubbles":
+			var rad2 := relief_size * (0.32 + 0.12 * cv)
+			if d >= rad2:
+				return h
+			var t := d / rad2
+			return h + relief_amp * (0.55 + 0.45 * cv) * sqrt(1.0 - t * t)
+		"craters":
+			if cv < 0.0:
+				return h
+			var rad3 := relief_size * (0.2 + 0.18 * cv)
+			var t3 := d / rad3
+			if t3 >= 1.6:
+				return h
+			var depth := relief_amp * (0.4 + 0.6 * cv)
+			var bowl := (1.0 - t3 * t3) * depth if t3 < 1.0 else 0.0
+			var rim := depth * 0.35 * exp(-pow((t3 - 1.0) / 0.22, 2.0))
+			return h - bowl + rim
+	return h
+
+
+func _surf_base(dir: Vector3, bpos := -1.0) -> float:
 	var x := dir.x * radius
 	var y := dir.y * radius
 	var z := dir.z * radius
@@ -3374,6 +3568,8 @@ func _tree_block_for(p: Vector3, info: Array) -> int:
 	var f_wood: int = int(fv.get("wood", flora_wood))
 	var f_shape: int = int(fv.get("shape", flora_shape))
 	var f_rad: float = float(fv.get("trunk_rad", trunk_rad))
+	if f_shape >= FLORA_MUSHROOM:
+		return _alien_growth_block(p, base, up, th, cr, cc, f_shape, f_leaves, f_wood, f_rad)
 	var rel := p - base
 	var along := rel.dot(up)
 	var horiz := (rel - up * along).length()
@@ -3467,6 +3663,142 @@ func _tree_block_for(p: Vector3, info: Array) -> int:
 		var li: int = f_leaves[int(_hash01(cc, 3) * f_leaves.size()) % f_leaves.size()]
 		return li
 	return Blocks.AIR
+	return Blocks.AIR
+
+
+## The alien growths (FLORA_MUSHROOM and up): what one of them puts at `p`.
+##
+## Every one stays inside the bounds the neighbour scan and tree_reach promise:
+## no further out than 1.15 x its canopy radius, no higher than its height plus
+## twice that radius.
+func _alien_growth_block(p: Vector3, base: Vector3, up: Vector3, th: int, cr: float,
+		cc: Vector3i, shape: int, leaves: Array, wood: int, rad: float) -> int:
+	var rel := p - base
+	var along := rel.dot(up)
+	var flat := rel - up * along
+	var horiz := flat.length()
+	if horiz > cr * 1.15 + 2.0 or along < -2.5 or along > float(th) + cr * 2.0 + 1.0:
+		return Blocks.AIR
+	var ax := up.cross(Vector3(1, 0, 0))
+	if ax.length_squared() < 0.01:
+		ax = up.cross(Vector3(0, 0, 1))
+	ax = ax.normalized()
+	var bx := up.cross(ax).normalized()
+	var main_leaf: int = leaves[int(_hash01(cc, 3) * leaves.size()) % leaves.size()]
+	var other_leaf: int = leaves[(leaves.find(main_leaf) + 1) % leaves.size()]
+	if other_leaf == main_leaf:
+		# One-colour world: the accent is the next shade along the ramp.
+		var li := Blocks.LEAF_IDS.find(main_leaf)
+		other_leaf = Blocks.LEAF_IDS[(li + 3) % Blocks.LEAF_IDS.size()]
+	match shape:
+		FLORA_MUSHROOM:
+			# The stem leans a little as it rises, and the cap goes with it.
+			var lean_a := _hash01(cc, 80) * TAU
+			var lean := _hash01(cc, 81) * minf(1.6, cr * 0.25)
+			var ldir := ax * cos(lean_a) + bx * sin(lean_a)
+			var k := clampf(along / float(th), 0.0, 1.0)
+			var off := ldir * lean * k * k
+			var sh := (flat - off).length()
+			var sink := 1.0 + rad * 2.0
+			if along >= -sink and along <= float(th) and sh < rad * (1.15 - 0.25 * k):
+				return wood
+			# The cap: an umbrella. A flattened dome on top, a flat underside
+			# of gills in the accent colour, and a rim that hangs down past it
+			# -- the shape that says "mushroom" from any distance.
+			var ch := cr * 0.55
+			var cvert := along - float(th)
+			var ch_h := (flat - ldir * lean).length()
+			if cvert < -1.6 or cvert > ch or ch_h > cr:
+				return Blocks.AIR
+			if cvert >= 0.0:
+				var e := (ch_h * ch_h) / (cr * cr) + (cvert * cvert) / (ch * ch)
+				if e >= 1.0:
+					return Blocks.AIR
+				if cvert < 1.0 and ch_h < cr * 0.88:
+					return other_leaf   # the gills, seen from beneath
+				# Spots, in clumps two voxels across so they read as spots.
+				var spot := _hash01(Vector3i(floori(p.x * 0.5), floori(p.y * 0.5),
+					floori(p.z * 0.5)), 82)
+				return other_leaf if spot < 0.14 else main_leaf
+			# The rim, hanging down round the edge.
+			if ch_h > cr * 0.84:
+				return main_leaf
+			return Blocks.AIR
+		FLORA_DOME:
+			# A hollow blister half-sunk in the ground, and up to two smaller
+			# ones budding off its side.
+			var domes := [[base - up * cr * 0.15, cr]]
+			var buds := int(_hash01(cc, 83) * 3.0)
+			for b in buds:
+				var a := _hash01(cc, 84 + b) * TAU
+				var br := cr * (0.35 + _hash01(cc, 86 + b) * 0.15)
+				domes.append([base + (ax * cos(a) + bx * sin(a)) * cr * 0.62 - up * br * 0.3, br])
+			for i in domes.size():
+				var dc: Vector3 = domes[i][0]
+				var dr: float = domes[i][1]
+				var dist := (p - dc).length()
+				if dist < dr and dist > dr - 1.3:
+					# A ring of the accent colour round each crown.
+					var hgt := (p - dc).dot(up) / dr
+					if hgt > 0.78:
+						return other_leaf
+					return main_leaf
+			return Blocks.AIR
+		FLORA_BRANCH:
+			# Staghorn: arms reaching up and out from the base, each forking
+			# once, the ends swelling into bright tips.
+			var arms := 3 + int(_hash01(cc, 90) * 3.0)
+			var length := cr * 0.85
+			var thick := maxf(rad, 0.6)
+			for i in arms:
+				var a := _hash01(cc, 91 + i) * TAU
+				var tilt := deg_to_rad(22.0 + _hash01(cc, 101 + i) * 26.0)
+				var out := ax * cos(a) + bx * sin(a)
+				var p0 := base + up * 0.4
+				var p1 := p0 + (up * cos(tilt) + out * sin(tilt)) * length
+				if _dist_to_segment(p, p0, p1) < thick:
+					return main_leaf
+				for f in 2:
+					var fa := a + (0.55 if f == 0 else -0.55)
+					var fout := ax * cos(fa) + bx * sin(fa)
+					var ftilt := tilt * 0.5
+					var p2 := p1 + (up * cos(ftilt) + fout * sin(ftilt)) * length * 0.5
+					if _dist_to_segment(p, p1, p2) < thick * 0.8:
+						return main_leaf
+					if (p - p2).length() < thick * 1.35:
+						return other_leaf
+			return Blocks.AIR
+		FLORA_TUBE:
+			# Pipes of different heights, open at the top, hollow all the way down.
+			var tubes := 3 + int(_hash01(cc, 110) * 4.0)
+			for i in tubes:
+				var a := _hash01(cc, 111 + i) * TAU
+				var off := (ax * cos(a) + bx * sin(a)) * cr * 0.6 * _hash01(cc, 121 + i)
+				var tr := rad * (0.8 + _hash01(cc, 131 + i) * 0.5)
+				var h := float(th) * (0.45 + _hash01(cc, 141 + i) * 0.55)
+				if along > h or along < -2.0:
+					continue
+				var dh := (flat - off).length()
+				if dh < tr and dh > tr - 0.8:
+					return other_leaf if along > h - 1.0 else main_leaf
+			return Blocks.AIR
+		FLORA_SPIRE:
+			# A needle, leaning, banded in two colours; sometimes a smaller twin.
+			var spires := 1 + (1 if _hash01(cc, 150) < 0.4 else 0)
+			for i in spires:
+				var a := _hash01(cc, 151 + i) * TAU
+				var out := ax * cos(a) + bx * sin(a)
+				var hgt := float(th) * (1.0 if i == 0 else 0.55)
+				var r0 := rad * (1.0 if i == 0 else 0.65)
+				var foot := base + (out * cr * 0.45 if i == 1 else Vector3.ZERO) - up * 1.5
+				var lean := minf(cr * 0.35, hgt * 0.2) * _hash01(cc, 153 + i)
+				var tip := foot + up * (hgt + 1.5) + out * lean
+				var axis := tip - foot
+				var t := clampf((p - foot).dot(axis) / axis.length_squared(), 0.0, 1.0)
+				var dist := (p - (foot + axis * t)).length()
+				if dist < r0 * pow(1.0 - t, 0.9) + 0.35:
+					return other_leaf if int(floor(t * hgt / 2.5)) % 2 == 1 else main_leaf
+			return Blocks.AIR
 	return Blocks.AIR
 
 
@@ -4204,7 +4536,7 @@ func _min_surface() -> float:
 	for i in _b_amp.size():
 		b_amp = maxf(b_amp, _b_amp[i])
 		b_sink = maxf(b_sink, absf(_b_lift[i]))
-	return radius - terrain_amp * (b_amp + b_sink) - 2.0
+	return radius - terrain_amp * (b_amp + b_sink) - _relief_down() - 2.0
 
 
 func _want_add(cc: Vector3i) -> void:

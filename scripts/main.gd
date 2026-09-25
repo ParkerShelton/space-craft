@@ -10,22 +10,28 @@ const SPACE_AMBIENT := Color(0.50, 0.55, 0.70)
 const _ARCHETYPES := [
 	{"family": "verdant", "top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.45, 0.68, 1.0), "water": "liquid", "wmin": 0.15, "wmax": 0.4,
-		"tmin": 0.3, "tmax": 0.55, "moon": false, "hazard": "none", "hdps": 0.0},
+		"tmin": 0.3, "tmax": 0.55, "moon": false, "hazard": "none", "hdps": 0.0,
+		"type": "Garden world", "flora": [3, 4, 5, 7, 2], "relief": ""},
 	{"family": "frozen", "top": Blocks.SNOW, "sub": Blocks.ICE, "rock": Blocks.ROCK, "core": Blocks.ICE,
 		"atmo": true, "atmo_color": Color(0.62, 0.76, 0.95), "water": "ice", "wmin": 0.3, "wmax": 0.6,
-		"tmin": 0.05, "tmax": 0.2, "moon": false, "hazard": "cold", "hdps": 3.5},
+		"tmin": 0.05, "tmax": 0.2, "moon": false, "hazard": "cold", "hdps": 3.5,
+		"type": "Ice world", "flora": [1, 9, 7], "relief": "terraces"},
 	{"family": "dust", "top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.85, 0.6, 0.4), "water": "none", "wmin": 0.0, "wmax": 0.0,
-		"tmin": 0.0, "tmax": 0.0, "moon": false, "hazard": "heat", "hdps": 2.0},
+		"tmin": 0.0, "tmax": 0.0, "moon": false, "hazard": "heat", "hdps": 2.0,
+		"type": "Desert", "flora": [], "relief": "dunes"},
 	{"family": "", "top": Blocks.CRYSTAL, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CRYSTAL,
 		"atmo": false, "atmo_color": Color(0.4, 0.85, 0.9), "water": "liquid", "wmin": 0.6, "wmax": 0.95,
-		"tmin": 0.0, "tmax": 0.0, "moon": true, "hazard": "none", "hdps": 0.0},
+		"tmin": 0.04, "tmax": 0.12, "moon": true, "hazard": "none", "hdps": 0.0,
+		"type": "Crystal moon", "flora": [9], "relief": "craters"},
 	{"family": "", "top": Blocks.ROCK, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": false, "atmo_color": Color(0.6, 0.6, 0.65), "water": "none", "wmin": 0.0, "wmax": 0.0,
-		"tmin": 0.0, "tmax": 0.0, "moon": true, "hazard": "cold", "hdps": 3.0},
+		"tmin": 0.0, "tmax": 0.0, "moon": true, "hazard": "cold", "hdps": 3.0,
+		"type": "Rock moon", "flora": [], "relief": "craters"},
 	{"family": "scorched", "top": Blocks.ROCK, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.9, 0.5, 0.35), "water": "none", "wmin": 0.0, "wmax": 0.0,
-		"tmin": 0.0, "tmax": 0.0, "moon": false, "hazard": "heat", "hdps": 4.5},
+		"tmin": 0.03, "tmax": 0.1, "moon": false, "hazard": "heat", "hdps": 4.5,
+		"type": "Red mesas", "flora": [6], "relief": "terraces"},
 	# --- dusty worlds ---------------------------------------------------------
 	# The regolith world was the only one of its kind and the best of the lot to
 	# look at, so it has company now: the same dust under different skies. What
@@ -36,31 +42,74 @@ const _ARCHETYPES := [
 	# for its ores and leave again.
 	{"family": "dust", "top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": false, "atmo_color": Color(0.72, 0.68, 0.62), "water": "none", "wmin": 0.0, "wmax": 0.0,
-		"tmin": 0.0, "tmax": 0.0, "moon": true, "hazard": "cold", "hdps": 2.5},
+		"tmin": 0.0, "tmax": 0.0, "moon": true, "hazard": "cold", "hdps": 2.5,
+		"type": "Dust moon", "flora": [], "relief": "craters"},
 	# An ASH PLAIN: dust with a sky over it, and that sky is the problem.
 	{"family": "dust", "top": Blocks.REGOLITH, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.55, 0.38, 0.34), "water": "none", "wmin": 0.0, "wmax": 0.0,
-		"tmin": 0.0, "tmax": 0.05, "moon": false, "hazard": "heat", "hdps": 3.2},
+		"tmin": 0.0, "tmax": 0.05, "moon": false, "hazard": "heat", "hdps": 3.2,
+		"type": "Ash plain", "flora": [9], "relief": "spires"},
 	# RUST BARRENS: dust you can stand on without a suit. Warm, dry, harmless --
 	# the desert you would actually build a base on.
 	{"family": "dust", "top": Blocks.REGOLITH, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.86, 0.52, 0.30), "water": "none", "wmin": 0.0, "wmax": 0.0,
-		"tmin": 0.0, "tmax": 0.1, "moon": false, "hazard": "heat", "hdps": 1.2},
+		"tmin": 0.0, "tmax": 0.1, "moon": false, "hazard": "heat", "hdps": 1.2,
+		"type": "Rust barrens", "flora": [8], "relief": "terraces"},
 	# A CRYSTAL DESERT: dust with something growing out of it that is not alive.
 	{"family": "", "top": Blocks.CRYSTAL, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CRYSTAL,
 		"atmo": true, "atmo_color": Color(0.72, 0.62, 0.92), "water": "none", "wmin": 0.0, "wmax": 0.0,
-		"tmin": 0.0, "tmax": 0.0, "moon": false, "hazard": "none", "hdps": 0.0},
+		"tmin": 0.03, "tmax": 0.1, "moon": false, "hazard": "none", "hdps": 0.0,
+		"type": "Crystal desert", "flora": [9], "relief": "dunes"},
 	# --- and two more worlds worth walking around -----------------------------
 	# TUNDRA: cold, but a cold you can live in, and the only frozen world with
 	# trees on it.
 	{"family": "frozen", "top": Blocks.SNOW, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.70, 0.82, 0.92), "water": "liquid", "wmin": 0.1, "wmax": 0.3,
-		"tmin": 0.1, "tmax": 0.3, "moon": false, "hazard": "cold", "hdps": 1.5},
+		"tmin": 0.1, "tmax": 0.3, "moon": false, "hazard": "cold", "hdps": 1.5,
+		"type": "Tundra", "flora": [1, 5, 9], "relief": ""},
 	# ARCHIPELAGO: the temperate world, mostly drowned. Islands to find rather
 	# than a continent to walk across.
 	{"family": "verdant", "top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.40, 0.72, 0.95), "water": "liquid", "wmin": 0.72, "wmax": 0.92,
-		"tmin": 0.35, "tmax": 0.6, "moon": false, "hazard": "none", "hdps": 0.0},
+		"tmin": 0.35, "tmax": 0.6, "moon": false, "hazard": "none", "hdps": 0.0,
+		"type": "Archipelago", "flora": [4, 7, 8, 6], "relief": ""},
+	# --- the strange ones -----------------------------------------------------
+	# Worlds that look like nowhere on Earth. Their shapes come from their
+	# growth pools and their relief more than from their colours.
+	#
+	# A REEF WORLD: coral country left high and dry -- staghorn, tube sponges,
+	# lobed coral and blisters, on ground that swells into rounded heads.
+	{"family": "verdant", "top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.45, 0.85, 0.85), "water": "liquid", "wmin": 0.08, "wmax": 0.25,
+		"tmin": 0.4, "tmax": 0.65, "moon": false, "hazard": "none", "hdps": 0.0,
+		"type": "Reef world", "flora": [4, 7, 8, 6], "relief": "bubbles"},
+	# A FUNGAL WORLD: a forest of mushrooms the size of trees under a dim sky.
+	{"family": "verdant", "top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.55, 0.45, 0.72), "water": "liquid", "wmin": 0.05, "wmax": 0.2,
+		"tmin": 0.35, "tmax": 0.6, "moon": false, "hazard": "none", "hdps": 0.0,
+		"type": "Fungal world", "flora": [5, 5, 6], "relief": ""},
+	# BLISTER FIELDS: hot ground heaving up in domes, and hollow blisters
+	# growing out of it.
+	{"family": "scorched", "top": Blocks.ROCK, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.95, 0.45, 0.3), "water": "none", "wmin": 0.0, "wmax": 0.0,
+		"tmin": 0.1, "tmax": 0.25, "moon": false, "hazard": "heat", "hdps": 3.0,
+		"type": "Blister fields", "flora": [6], "relief": "bubbles"},
+	# GLASS MESAS: stepped shelves of baked stone with needles standing on them.
+	{"family": "scorched", "top": Blocks.ROCK, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.9, 0.7, 0.45), "water": "none", "wmin": 0.0, "wmax": 0.0,
+		"tmin": 0.06, "tmax": 0.16, "moon": false, "hazard": "heat", "hdps": 3.6,
+		"type": "Glass mesas", "flora": [9, 6], "relief": "terraces"},
+	# A SPIRE FOREST: dust between needles of rock, and banded spires growing
+	# among them like trees.
+	{"family": "dust", "top": Blocks.REGOLITH, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CORE,
+		"atmo": true, "atmo_color": Color(0.8, 0.62, 0.5), "water": "none", "wmin": 0.0, "wmax": 0.0,
+		"tmin": 0.15, "tmax": 0.35, "moon": false, "hazard": "heat", "hdps": 1.8,
+		"type": "Spire forest", "flora": [9], "relief": "spires"},
+	# A FROST REEF: frozen seas and coral-like growths standing in the snow.
+	{"family": "frozen", "top": Blocks.SNOW, "sub": Blocks.ICE, "rock": Blocks.ROCK, "core": Blocks.ICE,
+		"atmo": true, "atmo_color": Color(0.6, 0.8, 0.95), "water": "ice", "wmin": 0.2, "wmax": 0.4,
+		"tmin": 0.15, "tmax": 0.35, "moon": false, "hazard": "cold", "hdps": 2.5,
+		"type": "Frost reef", "flora": [7, 8], "relief": ""},
 ]
 const _NAME_PRE := ["Ver", "Kro", "Zel", "Nyx", "Tor", "Aur", "Hel", "Ori", "Vex",
 	"Mar", "Cae", "Lun", "Sol", "Ith", "Ryl", "Dun", "Pyr", "Oss", "Tal", "Ael", "Par"]
@@ -2468,6 +2517,11 @@ func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, 
 		"atmo_height": rng.randf_range(600.0, 950.0),
 		"water_style": water, "water_amount": water_amount,
 		"hazard": a["hazard"], "hazard_dps": a["hdps"], "family": a["family"],
+		# Home stays close to what it always was; everywhere else grows its own
+		# shapes, keeps its own relief and is always coloured well clear of Earth.
+		"type": a["type"], "relief": a["relief"],
+		"flora": [] if index == 0 else a["flora"],
+		"strange_min": 0.0 if index == 0 else 0.45,
 		"settlements_enabled": settled_info["enabled"],
 		"force_settlement": settled_info["forced"],
 		"settlement_tier_cap": settled_info["tier_cap"],
