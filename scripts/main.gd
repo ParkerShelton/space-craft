@@ -2201,8 +2201,8 @@ const LOAD_TIMEOUT_SEC := 25.0  # safety cap so a bug elsewhere can't hang the s
 ## scripts/crash_reel.gd and the three CrashReel lines below and it is gone.
 const CRASH_REEL := true
 
-## TESTING ONLY: start every NEW world with a hammer, an anvil and a stack of
-## each of this planet's ores in the bag, so smithing can be tried without the
+## TESTING ONLY: start every NEW world with a hammer, an anvil, a smelter, a
+## pick and a stack of each of this planet's ores in the bag, so smithing can be tried without the
 ## hour it takes to earn them. Set false (or delete this and the function
 ## below) before shipping.
 const TEST_SMITHING_KIT := true
@@ -2211,6 +2211,8 @@ const TEST_SMITHING_KIT := true
 func _give_smithing_kit(ground: Planet, player: Player) -> void:
 	player.grant_item(Blocks.HAMMER, 1)
 	player.grant_item(Blocks.ANVIL, 1)
+	player.grant_item(Blocks.SMELTER, 1)
+	player.grant_item(Blocks.PICK, 1)
 	# Each ore carries this planet's own identity -- name, colour, stats --
 	# exactly as if it had been dug here, so it refines into the right ingot.
 	for od in ground.ore_defs:
