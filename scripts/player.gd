@@ -923,6 +923,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				pass
 			elif _try_bucket(_raycast_voxel()):
 				pass
+			elif _try_read_journal():
+				pass
 			elif _try_launch_boat():
 				pass
 			elif _try_sit():
@@ -943,7 +945,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_close_ring()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			if _ship_panel != null:
+			if _journal_panel != null:
+				_close_journal()
+			elif _ship_panel != null:
 				_close_ship_computer()
 			elif _place_kind != Blocks.AIR:
 				_cancel_placing()
@@ -1338,7 +1342,11 @@ func _place_spot(tgt: Dictionary = {}) -> Dictionary:
 		return {}
 	if tgt.is_empty():
 		tgt = _raycast_voxel()
-	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "planet":
+	if tgt.is_empty() or not tgt.get("hit", false):
+		return {}
+	if tgt.get("kind", "") == "ship":
+		return _place_spot_on_ship(tgt)
+	if tgt.get("kind", "") != "planet":
 		return {}
 	var planet := tgt["obj"] as Planet
 	var anchor: Vector3i = tgt["place"]
@@ -1390,6 +1398,63 @@ func _place_spot(tgt: Dictionary = {}) -> Dictionary:
 	return {"planet": planet, "cells": cells, "pos": pos, "up": up, "fwd": fwd, "ok": ok}
 
 
+## The same question asked of a ship instead of a planet: where would this
+## station stand, does it fit, and is it standing on anything.
+##
+## A ship has no gravity of its own and no axis to snap to, so everything is
+## measured in the hull's own frame -- up is the deck's up, whichever way the
+## ship is lying. Without this a station could not go on a ship at all: the
+## routine returned nothing the moment you were not pointing at a planet, so
+## there was no ghost and no way to put one down.
+func _place_spot_on_ship(tgt: Dictionary) -> Dictionary:
+	var ship := tgt["obj"] as Ship
+	if ship == null:
+		return {}
+	var anchor: Vector3i = tgt["place"]
+	var sb := ship.global_transform.basis
+	var up: Vector3 = sb.y.normalized()
+	var upi := Vector3i(0, 1, 0)
+	# Facing: the ship-local axis nearest the way you are looking, turned by
+	# however many times R was pressed.
+	var look: Vector3 = sb.inverse() * (-global_transform.basis.z)
+	look.y = 0.0
+	var fi := Vector3i(0, 0, -1)
+	if absf(look.x) > absf(look.z):
+		fi = Vector3i(1, 0, 0) if look.x > 0.0 else Vector3i(-1, 0, 0)
+	elif look.z > 0.0:
+		fi = Vector3i(0, 0, 1)
+	for i in _place_rot:
+		fi = Vector3i(fi.z, 0, -fi.x)
+	var ri := Vector3i(fi.z, 0, -fi.x)
+	var fp := StationModels.footprint(_place_kind)
+	var cells: Array = []
+	for a in fp.x:
+		for b in fp.y:
+			for c in fp.z:
+				cells.append(anchor + ri * a + upi * b + fi * c)
+	var ok := true
+	for cv in cells:
+		if ship.blocks.has(cv):
+			ok = false
+		elif world.station_blocking(ship.to_global(Vector3(cv) + Vector3(0.5, 0.5, 0.5))):
+			ok = false
+	var footed := false
+	for a2 in fp.x:
+		for c2 in fp.z:
+			if ship.blocks.has(anchor + ri * a2 + fi * c2 - upi):
+				footed = true
+	if not footed:
+		ok = false
+	var centre_local := Vector3(anchor) + Vector3(0.5, 0.5, 0.5) \
+		+ (Vector3(ri) * float(fp.x - 1) + Vector3(fi) * float(fp.z - 1)) * 0.5
+	var pos := ship.to_global(centre_local)
+	if pos.distance_to(global_position) < 1.2:
+		ok = false
+	return {"ship": ship, "cells": cells, "pos": pos, "up": up,
+		"fwd": (sb * Vector3(fi)).normalized(), "ok": ok,
+		"local": anchor, "local_fwd": fi}
+
+
 ## Follow the crosshair with the ghost, green where it would go, red where it
 ## would not.
 func _update_place_ghost(spot: Dictionary = {}) -> void:
@@ -1433,8 +1498,15 @@ func _do_place_station() -> void:
 		_consume_active()
 	else:
 		_pay(reqs)
-	var st := world.spawn_station(_place_kind, (spot["pos"] as Vector3) - Vector3(0.5, 0.5, 0.5),
-		spot["up"] as Vector3, spot["fwd"] as Vector3)
+	# On a ship it is mounted as a child of the hull, so it rides with her; on
+	# a planet it simply stands where it was put.
+	var st: Station = null
+	if spot.has("ship"):
+		st = world.spawn_station_on_ship(_place_kind, spot["ship"] as Ship,
+			spot["local"] as Vector3i, spot["local_fwd"] as Vector3i)
+	else:
+		st = world.spawn_station(_place_kind, (spot["pos"] as Vector3) - Vector3(0.5, 0.5, 0.5),
+			spot["up"] as Vector3, spot["fwd"] as Vector3)
 	if st != null:
 		_toast("%s built" % Blocks.name_of(_place_kind))
 		Audio.at("place_rock", spot["pos"] as Vector3)
@@ -1453,6 +1525,8 @@ func _do_place_station() -> void:
 
 var _ship_panel: Control
 var _ship_panel_ship: Ship
+## The journal page, while it is open.
+var _journal_panel: Panel
 var _ship_panel_body: Control = null
 var _ship_panel_sig := ""
 var _ship_panel_t := 0.0
@@ -7647,3 +7721,62 @@ func _water_surface_near(p: Planet, at: Vector3, up: Vector3):
 		var centre: Vector3 = p.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5))
 		return centre - up * 0.5 + up * fill
 	return null
+
+
+
+## Right-click with the journal in hand. One page, the same page every time in
+## this world, from the world's own seed -- it is a thing that happened here.
+func _try_read_journal() -> bool:
+	if active_slot < 0 or active_slot >= inv.size():
+		return false
+	if int(inv[active_slot].get("id", Blocks.AIR)) != Blocks.JOURNAL:
+		return false
+	_open_journal()
+	return true
+
+
+func _open_journal() -> void:
+	_close_journal()
+	_journal_panel = Panel.new()
+	_journal_panel.custom_minimum_size = Vector2(520, 360)
+	_journal_panel.size = _journal_panel.custom_minimum_size
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.13, 0.11, 0.08, 0.97)
+	sb.border_color = Color(0.45, 0.36, 0.24, 0.9)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(6)
+	_journal_panel.add_theme_stylebox_override("panel", sb)
+	_ui_layer.add_child(_journal_panel)
+	var head := Label.new()
+	head.text = "SALVAGED JOURNAL"
+	head.position = Vector2(24, 20)
+	head.add_theme_font_size_override("font_size", 20)
+	head.modulate = Color(0.85, 0.74, 0.52)
+	_journal_panel.add_child(head)
+	var body := Label.new()
+	body.text = Blocks.journal_page(world.world_seed if world != null else 0)
+	body.position = Vector2(24, 60)
+	body.custom_minimum_size = Vector2(472, 0)
+	body.size = Vector2(472, 220)
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	body.modulate = Color(0.92, 0.88, 0.80)
+	_journal_panel.add_child(body)
+	var close := Button.new()
+	close.text = "Close"
+	close.custom_minimum_size = Vector2(120, 34)
+	close.position = Vector2(24, 300)
+	close.pressed.connect(func(): Audio.ui("ui_back"))
+	close.pressed.connect(_close_journal)
+	_journal_panel.add_child(close)
+	menu_open = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_fit_panel(_journal_panel)
+
+
+func _close_journal() -> void:
+	if _journal_panel != null and is_instance_valid(_journal_panel):
+		_journal_panel.queue_free()
+	_journal_panel = null
+	menu_open = false
+	if not (inv_open or book_open or _station_open != null):
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED

@@ -27,6 +27,8 @@ const H := 3             # shell roof; the cabin inside is two blocks tall
 const DOOR_AT := Vector3i(2, 1, 1)
 ## Where the battery rack stands, on the deck at the back of the cabin.
 const POWER_BAY_AT := Vector3i(0, 1, CABIN_BACK - 1)
+## Where the supply locker is bolted, beside the battery rack.
+const LOCKER_AT := Vector3i(1, 1, CABIN_BACK - 1)
 
 ## Which piece of the airframe a cell belongs to. Everything but the nose can be
 ## torn off; only the cabin's own shell has to be airtight to fly.
@@ -278,6 +280,17 @@ static func _passable(ship: Ship, v: Vector3i) -> bool:
 ## thing you carry. You fill one at a Generator, drop it in the bay, and the bay
 ## feeds the ship -- so a spare in a chest is a ship that never goes dark.
 static func _fit_systems(ship: Ship, world: WorldManager, rng: RandomNumberGenerator) -> void:
+	# A locker, always, with enough in it to last the first night and to put a
+	# bench down without having to find a tree first. It is the one thing in the
+	# wreck that is not damaged: you are meant to open it, find it stocked, and
+	# understand from that that somebody packed it.
+	var locker := world.spawn_station_on_ship(Blocks.CHEST, ship, LOCKER_AT)
+	if locker != null:
+		locker.store_add(Blocks.COOKED_MEAT, 4, {})
+		locker.store_add(Blocks.TORCH, 3, {})
+		locker.store_add(Blocks.WOOD, 6, {})
+		locker.store_add(Blocks.ROCK, 6, {})
+		locker.store_add(Blocks.JOURNAL, 1, {})
 	if rng.randf() < 0.55:
 		ship.blocks[Vector3i(-1, 1, CABIN_BACK - 1)] = Blocks.LIFE_SUPPORT
 	for side in [-1, 1]:

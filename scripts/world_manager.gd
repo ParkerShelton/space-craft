@@ -710,11 +710,19 @@ func spawn_boat(pos: Vector3, up: Vector3, fwd: Vector3) -> Boat:
 	return b
 
 
-func spawn_station_on_ship(kind: int, ship: Ship, local_v: Vector3i) -> Station:
+func spawn_station_on_ship(kind: int, ship: Ship, local_v: Vector3i,
+		fwd_local: Vector3i = Vector3i(0, 0, -1)) -> Station:
 	var st := Station.new()
 	ship.add_child(st)
 	st.configure(kind, self)
-	st.transform = Transform3D(Basis.IDENTITY, Vector3(local_v) + Vector3(0.5, 0.5, 0.5))
+	# Turned to face the way it was placed, in the hull's own frame -- a bench
+	# you set down facing the door should still face the door.
+	var f := Vector3(fwd_local)
+	if f.length() < 0.5:
+		f = Vector3(0, 0, -1)
+	f = f.normalized()
+	var bx := Basis(Vector3.UP.cross(-f).normalized(), Vector3.UP, -f)
+	st.transform = Transform3D(bx, Vector3(local_v) + Vector3(0.5, 0.5, 0.5))
 	# The station is a static body inside the ship's own volume; without this the
 	# ship's move_and_collide would collide with it and the ship couldn't fly.
 	ship.add_collision_exception_with(st)
