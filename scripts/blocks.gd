@@ -240,6 +240,19 @@ static func is_fuel(id: int, props: Dictionary) -> bool:
 	return is_ore(id) and combustion_of(props) > 0
 
 
+## The Combustion at which an ore counts as FUEL rather than a metal that
+## happens to smoulder. Every ore burns a little; the volatile third of them
+## (see Planet._make_ore) come out at 62 or more and the rest top out at 40,
+## so this line falls in the gap between the two. An ore over it sits in black,
+## sooty stone in the ground, so you can tell a coal seam from a metal vein
+## before you have dug any of it.
+const FUEL_GRADE := 55
+
+
+static func is_fuel_grade(props: Dictionary) -> bool:
+	return combustion_of(props) >= FUEL_GRADE
+
+
 static func conductivity_of(props: Dictionary) -> int:
 	return int(props.get("r", 0))
 

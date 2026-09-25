@@ -92,6 +92,11 @@ static func _get_material(p: Planet) -> ShaderMaterial:
 	for oid in Blocks.ORE_SLOT_IDS:
 		oids.append(float(oid))
 	m.set_shader_parameter("ore_ids", oids)
+	# Which of those are fuel, for the grimier texture on their stone.
+	var soot := PackedFloat32Array()
+	for oid in Blocks.ORE_SLOT_IDS:
+		soot.append(1.0 if p.ore_is_fuel_grade(oid) else 0.0)
+	m.set_shader_parameter("ore_soot", soot)
 	m.set_shader_parameter("ore_chunk_id", ORE_CHUNK_ID)
 	# Foliage silhouette varies per world, so an alien canopy differs in shape
 	# and density and not only in colour.
@@ -1758,6 +1763,10 @@ static func _block_color(planet: Planet, id: int, slot: int = 0) -> Color:
 	# chunks embedded in that stone (colour supplied per planet via uniforms),
 	# rather than the whole block being one flat ore colour.
 	if Blocks.is_ore(id):
+		# ...except that the stone round a good fuel is black with it, the way
+		# coal is, so a seam worth burning reads from across a cave.
+		if planet.ore_is_fuel_grade(id):
+			return planet.sooty_rock_color()
 		return planet.color_of(planet.pal_rock)
 	# Per-planet, not per-registry: the block id stays global so recipes and
 	# inventories are unchanged, while what you see belongs to this world. And

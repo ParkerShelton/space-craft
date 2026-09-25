@@ -2946,6 +2946,21 @@ func ore_color(block_id: int) -> Color:
 	var d := ore_def(block_id)
 	return d["color"] if d.has("color") else Blocks.color_of(block_id)
 
+## Is this ore one of the good burners? Its stone is drawn black and sooty.
+func ore_is_fuel_grade(block_id: int) -> bool:
+	var d := ore_def(block_id)
+	return d.has("props") and Blocks.is_fuel_grade(d["props"])
+
+
+## The stone a fuel ore sits in: the planet's own rock, gone most of the way to
+## soot. Kept a touch of the rock's tint so it still belongs to this world.
+const SOOT := Color(0.065, 0.058, 0.052)
+
+
+func sooty_rock_color() -> Color:
+	return color_of(pal_rock).lerp(SOOT, 0.74)
+
+
 func ore_hardness(block_id: int) -> float:
 	var d := ore_def(block_id)
 	return d["hardness"] if d.has("hardness") else 1.0

@@ -74,6 +74,9 @@ uniform float metal_seam = 0.22;
 // protruding geometry (see Chunk._emit_ore_chunks) tagged with ore_chunk_id,
 // which carries the ore colour in its own vertex colour.
 uniform float ore_ids[4];
+// 1 for an ore that is good fuel: its stone is meshed near-black (see
+// Chunk._block_color) and textured here as grimy rather than calm.
+uniform float ore_soot[4];
 uniform float ore_chunk_id = 63.0;
 // Light-emitting blocks (torch / lamp / ember torch) occupy a contiguous id
 // range. They must GLOW rather than merely be a bright colour, or in daylight
@@ -352,6 +355,15 @@ void fragment() {
 		if (abs(id - ore_ids[i]) < 0.5) {
 			shade = 1.0 + (quantize(hash21(floor(fc * texels * 0.5 * rock_grain) + 2.0), 2.0)
 				- 0.5) * 0.05 * rock_contrast;
+			if (ore_soot[i] > 0.5) {
+				// Coal-ish: fine grit on a full-resolution grid over broad dark
+				// smudges, and the odd bright fleck where the face has fractured
+				// clean. Dirty rather than calm, which is the whole point.
+				float grit = quantize(hash21(floor(fc * texels * 1.0) + vec2(3.0, 7.0)), 4.0);
+				float smudge = quantize(hash21(floor(fc * texels * 0.25) + vec2(11.0, 1.0)), 3.0);
+				float fleck = step(0.955, hash21(floor(fc * texels * 1.0) + vec2(17.0, 5.0)));
+				shade = 0.62 + grit * 0.42 + smudge * 0.36 + fleck * 1.2;
+			}
 		}
 	}
 	// The protruding lumps themselves: keep their own (ore) vertex colour, and
