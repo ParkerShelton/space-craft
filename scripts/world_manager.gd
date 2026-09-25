@@ -644,7 +644,18 @@ func spawn_ship(pos: Vector3, up: Vector3, fwd: Vector3) -> Ship:
 		f = _any_perp(y)
 	var z := -f                                      # forward is -Z
 	var x := y.cross(z)
-	ship.global_transform = Transform3D(Basis(x, y, z), pos.round())
+	# On the planet's own grid rather than the world's: a planet's centre is
+	# not on a whole number, and a ship half a block off its ground can never
+	# have anything built against her line up.
+	var basis := Basis(x, y, z)
+	var origin := pos.round()
+	var p := nearest_planet(pos)
+	if p != null:
+		# The cockpit goes in exactly the cell `pos` is in: that cell's centre
+		# is where the ship's first cell's centre has to be.
+		var centre := p.to_global(Vector3(p.world_to_voxel(pos)) + Vector3(0.5, 0.5, 0.5))
+		origin = centre - basis * Vector3(0.5, 0.5, 0.5)
+	ship.global_transform = Transform3D(basis, origin)
 
 	ship.set_block(Vector3i.ZERO, Blocks.COCKPIT)
 	_ships.append(ship)

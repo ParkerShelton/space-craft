@@ -2452,6 +2452,12 @@ func _toggle_pilot() -> void:
 	var cockpit_world := ship.to_global(ship.cockpit_local() + Vector3(0.5, 0.5, 0.5))
 	if global_position.distance_to(cockpit_world) > 4.0:
 		return
+	# Whatever was built onto her from the ground comes aboard first, so a
+	# thruster set down beside her counts towards whether she can fly.
+	if not ship.flying:
+		var got := ship.take_aboard(world.nearest_planet(ship.global_position))
+		if got > 0:
+			_toast("%d built block%s taken aboard" % [got, "" if got == 1 else "s"])
 	if not ship.get_status()["can_fly"]:
 		return
 	_enter_pilot(ship)
@@ -4036,7 +4042,16 @@ func _edit_block(_break_it: bool) -> void:
 				world.edit_block(obj as Planet, pv + axis,
 					Blocks.door_with(false, face, 0, true))
 			else:
-				world.edit_block(obj as Planet, pv, placed_value)
+				# Built against a ship standing on the ground: it is part of
+				# her, not of the planet -- unless it is ground itself.
+				var sh := world.nearest_ship(obj.to_global(Vector3(pv)))
+				var sc = null
+				if sh != null and not sh.flying and not Blocks.is_natural(placed_value):
+					sc = sh.cell_touching(obj as Planet, pv)
+				if sc != null:
+					sh.set_block(sc, placed_value, inv[active_slot].get("props", {}))
+				else:
+					world.edit_block(obj as Planet, pv, placed_value)
 			_consume_active()
 
 	elif tgt["kind"] == "ship":

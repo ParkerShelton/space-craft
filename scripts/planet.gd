@@ -4316,6 +4316,12 @@ func gravity_at(world_pos: Vector3) -> Vector3:
 
 # --- coordinate helpers -------------------------------------------------------
 
+## Was this cell put there by someone, rather than generated?
+func is_placed(v: Vector3i) -> bool:
+	var e = _edits_by_chunk.get(chunk_of(v))
+	return e != null and (e as Dictionary).has(v) and int(e[v]) != Blocks.AIR
+
+
 func world_to_voxel(world_pos: Vector3) -> Vector3i:
 	var local := to_local(world_pos)
 	return Vector3i(floori(local.x), floori(local.y), floori(local.z))

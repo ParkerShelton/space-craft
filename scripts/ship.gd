@@ -427,6 +427,83 @@ func set_block(v: Vector3i, id: int, meta: Dictionary = {}) -> void:
 	rebuild()
 
 
+# --- building on the ground ------------------------------------------------------
+#
+# A ship started on the ground sits on the planet's own grid, so anything built
+# against it lines up. What you build touching her -- hull laid on the grass,
+# a thruster set beside the cockpit -- is hers; the grass is not. Built blocks
+# that join her through the ground come aboard when she lifts off, and the
+# ground stays where it is.
+
+const _DIRS := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+	Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+
+
+## The planet cell that ship cell `c` covers, or null if she is not square to
+## that planet's grid (a ship that has flown and landed at an angle).
+func planet_cell(p: Planet, c: Vector3i):
+	var centre := to_global(Vector3(c) + Vector3(0.5, 0.5, 0.5))
+	var pv := p.world_to_voxel(centre)
+	if (p.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)) - centre).length() > 0.05:
+		return null
+	return pv
+
+
+## The ship cell a planet cell would be, if it touches her and lines up.
+func cell_touching(p: Planet, pv: Vector3i):
+	var local := to_local(p.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)))
+	var c := Vector3i(floori(local.x), floori(local.y), floori(local.z))
+	if blocks.has(c):
+		return null
+	if planet_cell(p, c) != pv:
+		return null
+	for d in _DIRS:
+		if blocks.has(c + d):
+			return c
+	return null
+
+
+## Take aboard every built block joined to her through the ground: anything
+## someone placed, touching her or touching something that does, that is not
+## part of the land itself. Returns how many came aboard.
+func take_aboard(p: Planet) -> int:
+	if p == null or blocks.is_empty():
+		return 0
+	var any: Vector3i = blocks.keys()[0]
+	if planet_cell(p, any) == null:
+		return 0
+	var frontier: Array = blocks.keys()
+	var taken := {}        # ship cell -> planet cell
+	var ids := {}
+	while not frontier.is_empty() and taken.size() < 4000:
+		var c: Vector3i = frontier.pop_back()
+		for d in _DIRS:
+			var n: Vector3i = c + d
+			if blocks.has(n) or taken.has(n):
+				continue
+			var pv = planet_cell(p, n)
+			if pv == null:
+				continue
+			var id := p.get_id(pv)
+			if id == Blocks.AIR or Blocks.is_natural(id) or not p.is_placed(pv):
+				continue
+			taken[n] = pv
+			ids[n] = id
+			frontier.append(n)
+	if taken.is_empty():
+		return 0
+	var clear := {}
+	for n in taken:
+		blocks[n] = ids[n]
+		clear[taken[n]] = Blocks.AIR
+	if world != null:
+		world.edit_blocks(p, clear)
+	else:
+		p.set_blocks(clear)
+	rebuild()
+	return taken.size()
+
+
 # --- ship tanks --------------------------------------------------------------
 #
 # A ship makes nothing of its own. Its Life Support is a TANK: you fill it from

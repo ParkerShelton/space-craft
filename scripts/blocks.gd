@@ -1104,6 +1104,22 @@ static func all_recipes() -> Array:
 ## -- which the `extra` reader used to assume meant a plain id, so the first
 ## recipe whose extra offered a CHOICE of materials crashed the Recipe Book on
 ## open. Anything that formats a requirement goes through here now.
+## Is this part of the land rather than something built? Ground, stone, ice,
+## ore, logs, leaves, water and plants -- and any slab or stair cut from them.
+## A ship never takes these aboard, so one built sitting on the ground lifts
+## off clean and leaves the ground behind.
+static func is_natural(id: int) -> bool:
+	var b := bottom_of(id)
+	if b == AIR:
+		return false
+	var m := base_material_of(b)
+	if m in [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, CORE, WATER, PATH, TALL_GRASS]:
+		return true
+	if m in WOOD_IDS or m in LEAF_IDS or is_ore(m):
+		return true
+	return m == CROP or m == SAPLING
+
+
 ## Does one stack of `id` (with these ore properties) count towards requirement
 ## `r`? The one test every station, the ring and the book share, so a recipe
 ## that asks for "a sheet of Reactivity 80" means the same thing everywhere.
@@ -1371,10 +1387,12 @@ const STATION_CRAFTS := {
 			{"id": MACHINE_CORE, "n": 1}, {"id": ALLOY, "n": 2}, {"id": WIRE, "n": 2},
 			{"refined": true, "prop": "c", "min": FUEL_GRADE, "n": 1,
 				"label": "Fuel-grade ingot (Combustion %d+)" % FUEL_GRADE}]},
-		# Tanks of glass, and ice to split into air.
+		# Tanks of glass, and a scrubber bed packed with living leaves to turn
+		# stale air back into good -- things any world with plants has, since a
+		# wreck does not always keep its own.
 		{"label": "Life Support", "out": LIFE_SUPPORT, "n": 1, "reqs": [
 			{"id": MACHINE_CORE, "n": 1}, {"id": GLASS, "n": 4}, {"id": CIRCUIT, "n": 2},
-			{"id": ICE, "n": 4}]},
+			{"any": LEAF_IDS, "n": 8, "label": "Leaves"}]},
 		{"label": "Warp Coil", "out": WARP_COIL, "n": 1, "reqs": [
 			{"id": BAR, "prop": "e", "min": WARP_GRADE["e"], "n": 2,
 				"label": "Bar (Energy %d+, living worlds)" % WARP_GRADE["e"]},
