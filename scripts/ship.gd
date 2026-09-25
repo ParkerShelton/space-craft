@@ -40,6 +40,21 @@ var landed := false      # resting on the ground (HUD)
 
 # --- flight tuning ---
 const THRUST_UNIT := 350.0    # base thrust per thruster; scaled by its material's Energy
+## What a ship ought to manage, in m/s^2. Set from what the starting wreck
+## actually does with the two engines it is built for -- about four -- so "the
+## number it wants" matches the ship the game hands you rather than some ideal
+## nothing in the game has ever met. Used only to tell you how many
+## thrusters this hull wants -- nothing stops you flying with fewer, she is
+## simply slow, which is the honest consequence of not fitting them.
+const GOOD_ACCEL := 5.0
+## How far the push may sit from the weight before she starts to wander, in
+## blocks. Generous on purpose: a ship has to be ROUGHLY even, not perfect.
+const TRIM_DEADZONE := 1.1
+## How hard being out of trim turns her, per block of error per second.
+const TRIM_TORQUE := 0.22
+## ...and the most it can ever turn her, so a wildly lopsided ship is a
+## nuisance to fly rather than an uncontrollable spin.
+const TRIM_TORQUE_MAX := 0.9
 const HULL_MASS_BASE := 0.6   # every block has some mass...
 const HULL_MASS_DENSITY := 0.8  # ...plus more for denser material (heavier -> less agile)
 const SHIP_DRAG := 0.6        # velocity damping (arcade feel + control)
@@ -58,8 +73,17 @@ const LAND_VSPEED := 16.0      # climb/descend speed while landing
 const LAND_ACCEL := 3.5        # how quickly velocity eases to the target
 const LAND_MAX := 45.0         # hard speed cap on entering assist (kills a fast dive)
 
+## How much of the landing-assist speed this hull can actually manage.
+var _assist_mult := 1.0
 var _reticle: MeshInstance3D   # ring projected on the ground showing the landing spot
 
+## Flight figures, recomputed whenever the hull changes (see _recompute_flight).
+var _mass := 0.0
+var _thrust_total := 0.0
+var _thrusters := 0
+var _com := Vector3.ZERO           # centre of mass, ship-local
+var _thrust_centre := Vector3.ZERO # where the push comes from, ship-local
+var _trim := Vector3.ZERO          # thrust centre minus centre of mass
 var _mi: MeshInstance3D
 var _col_shapes: Array[CollisionShape3D] = []
 var _chase_cam: Camera3D
@@ -585,18 +609,67 @@ func toggle_door(local_v: Vector3i) -> bool:
 ## agile -- crafted (Shipworks) parts carry their material; default parts use
 ## mid-range stats, so old ships fly as before.
 func thrust_accel() -> float:
-	var total_thrust := 0.0
-	var total_mass := 0.0
+	if _mass <= 0.0:
+		return 0.0
+	return _thrust_total / _mass
+
+
+## What she weighs, where that weight is, how hard she pushes and from where.
+##
+## Worked out when the hull changes rather than every frame: it is a pass over
+## every block, and a ship of any size is rebuilt far less often than it flies.
+func _recompute_flight() -> void:
+	_mass = 0.0
+	_thrust_total = 0.0
+	var mass_moment := Vector3.ZERO
+	var thrust_moment := Vector3.ZERO
+	_thrusters = 0
 	for v in blocks:
 		var meta: Dictionary = block_meta.get(v, {})
+		var centre: Vector3 = Vector3(v as Vector3i) + Vector3(0.5, 0.5, 0.5)
 		var density := float(meta.get("d", 40))
-		total_mass += HULL_MASS_BASE + density / 100.0 * HULL_MASS_DENSITY
-		if blocks[v] == Blocks.THRUSTER:
+		var m: float = HULL_MASS_BASE + density / 100.0 * HULL_MASS_DENSITY
+		_mass += m
+		mass_moment += centre * m
+		if int(blocks[v]) == Blocks.THRUSTER:
 			var energy := float(meta.get("e", 50))
-			total_thrust += THRUST_UNIT * (0.4 + energy / 100.0)
-	if total_mass <= 0.0:
-		return 0.0
-	return total_thrust / total_mass
+			var t: float = THRUST_UNIT * (0.4 + energy / 100.0)
+			_thrust_total += t
+			thrust_moment += centre * t
+			_thrusters += 1
+	_com = mass_moment / _mass if _mass > 0.0 else Vector3.ZERO
+	_thrust_centre = thrust_moment / _thrust_total if _thrust_total > 0.0 else _com
+	# How far the push is from the weight. This is the whole of "is she
+	# balanced": thrust applied off the centre of mass turns a ship, and how
+	# much it turns her is how far off it is.
+	_trim = _thrust_centre - _com
+
+
+## How far out of trim she is, in blocks, past the slop that is forgiven.
+func trim_error() -> float:
+	return maxf(_trim.length() - TRIM_DEADZONE, 0.0)
+
+
+## Everything the computer needs to say about how she flies.
+func flight_stats() -> Dictionary:
+	var accel := thrust_accel()
+	var per: float = _thrust_total / float(maxi(_thrusters, 1))
+	var want: int = 0
+	if per > 0.0:
+		want = int(ceil(_mass * GOOD_ACCEL / per))
+	else:
+		# Nothing fitted yet, so price it against a plain one.
+		want = int(ceil(_mass * GOOD_ACCEL / (THRUST_UNIT * 0.9)))
+	return {
+		"mass": _mass,
+		"thrusters": _thrusters,
+		"thrust": _thrust_total,
+		"per_thruster": per,
+		"accel": accel,
+		"want_thrusters": maxi(want, 1),
+		"trim": _trim,
+		"trim_error": trim_error(),
+	}
 
 
 # --- piloting -----------------------------------------------------------------
@@ -661,12 +734,38 @@ func _fly_free(delta: float, input: Dictionary, g: Vector3) -> void:
 
 	var b := global_transform.basis
 	var move: Vector2 = input["move"]
-	var thrust := (-b.z) * move.y * thrust_accel() + b.x * move.x * thrust_accel() + b.y * float(input["ascend"]) * thrust_accel()
+	var acc := thrust_accel()
+	var wish_local := Vector3(move.x, float(input["ascend"]), -move.y)
+	_apply_trim_torque(wish_local, delta)
+	var thrust := (-b.z) * move.y * acc + b.x * move.x * acc + b.y * float(input["ascend"]) * acc
 	velocity += (g + thrust) * delta
 	velocity = velocity.lerp(Vector3.ZERO, clampf(SHIP_DRAG * delta, 0.0, 1.0))
 	var col := move_and_collide(velocity * delta)
 	if col != null:
 		velocity = velocity.slide(col.get_normal())
+
+
+## Thrust that does not pass through the centre of mass turns the ship. That is
+## the whole of it: torque is r cross F, with r the offset from the weight to
+## the push, so a ship whose engines are even about her middle feels nothing
+## and a ship with everything down one side wanders while you burn.
+##
+## Deliberately forgiving. There is a dead zone of a block or so, and a ceiling
+## on how hard it can ever pull, so being roughly even is enough and being
+## badly lopsided is a nuisance rather than a spin you cannot recover from. It
+## only bites while the engines are actually lit: let go and she stops fighting
+## you, which is what makes a crooked ship flyable at all.
+func _apply_trim_torque(wish_local: Vector3, delta: float) -> void:
+	if wish_local.length() < 0.01:
+		return
+	var err := trim_error()
+	if err <= 0.0:
+		return
+	var axis := _trim.normalized().cross(wish_local.normalized())
+	if axis.length() < 0.001:
+		return   # pushing straight along the offset turns nothing
+	var amount: float = minf(err * TRIM_TORQUE, TRIM_TORQUE_MAX) * delta
+	rotate_object_local(axis.normalized(), amount)
 
 
 # Landing assist: the ship auto-levels and HOVERS (gravity cancelled). You fly it
@@ -696,12 +795,16 @@ func _fly_assisted(delta: float, input: Dictionary, g: Vector3) -> void:
 	if camf.length() > 0.01: camf = camf.normalized()
 	if camr.length() > 0.01: camr = camr.normalized()
 	var move: Vector2 = input["move"]
+	# An under-powered hull is slow here as well. Landing assist caps speed
+	# rather than applying thrust, so without this a ship with one engine and
+	# two hundred blocks handled like a racer the moment it neared the ground.
+	_assist_mult = clampf(thrust_accel() / GOOD_ACCEL, 0.35, 1.0)
 	var wish := camf * move.y + camr * move.x
 	if wish.length() > 1.0:
 		wish = wish.normalized()
 
-	var target_h := wish * LAND_SPEED
-	var target_v := float(input["ascend"]) * LAND_VSPEED  # Space up, Shift down; hover at 0
+	var target_h := wish * LAND_SPEED * _assist_mult
+	var target_v := float(input["ascend"]) * LAND_VSPEED * _assist_mult  # Space up, Shift down; hover at 0
 
 	var v_up := velocity.dot(up)
 	var v_h := velocity - up * v_up
@@ -876,6 +979,7 @@ func rebuild() -> void:
 
 	_rebuild_collision()
 	_recompute_habitable()
+	_recompute_flight()
 	# The fittings follow the blocks: fit a cockpit and its console appears,
 	# break it and the console goes with it.
 	build_props()

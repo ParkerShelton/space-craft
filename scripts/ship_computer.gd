@@ -116,9 +116,58 @@ static func status_lines(ship: Ship) -> Array:
 	out.append("Hull: %s" % ("airtight" if bool(st.get("sealed", false)) else "breached"))
 	out.append("Air: %d%%" % int(float(st.get("air", 0.0)) * 100.0))
 	out.append("Power: %d%%" % int(float(st.get("charge", 0.0)) * 100.0))
-	out.append("Thrusters: %d" % int(st.get("thrusters", 0)))
 	out.append("Warp drive: %s" % ("fitted" if bool(st.get("warp_drive", false)) else "none"))
+	out.append_array(flight_lines(ship))
 	return out
+
+
+## How she actually flies, which is a question about her weight and where her
+## engines are, not about how many you bolted on.
+static func flight_lines(ship: Ship) -> Array:
+	var f: Dictionary = ship.flight_stats()
+	var out: Array = []
+	var n := int(f["thrusters"])
+	var want := int(f["want_thrusters"])
+	var accel := float(f["accel"])
+	out.append("")
+	out.append("Hull mass: %d" % int(round(float(f["mass"]))))
+	out.append("Thrusters: %d fitted, %d for this mass" % [n, want])
+	if n > 0:
+		out.append("Thrust: %d total, %d each"
+			% [int(round(float(f["thrust"]))), int(round(float(f["per_thruster"])))])
+	out.append("Acceleration: %.1f  (%s)" % [accel, _accel_word(accel)])
+	out.append("Trim: %s" % _trim_word(ship, float(f["trim_error"])))
+	return out
+
+
+## What that acceleration means, in words, so a number is a verdict.
+static func _accel_word(accel: float) -> String:
+	if accel < Ship.GOOD_ACCEL * 0.35:
+		return "barely moves"
+	if accel < Ship.GOOD_ACCEL * 0.7:
+		return "sluggish"
+	if accel < Ship.GOOD_ACCEL * 1.4:
+		return "answers well"
+	return "lively"
+
+
+## Which way she pulls, and how badly. Naming the side is the difference
+## between a complaint and something you can go and fix.
+static func _trim_word(ship: Ship, err: float) -> String:
+	if int(ship.flight_stats()["thrusters"]) <= 0:
+		return "nothing fitted"
+	if err <= 0.0:
+		return "balanced"
+	var t: Vector3 = ship.flight_stats()["trim"]
+	var side := ""
+	if absf(t.x) >= absf(t.y) and absf(t.x) >= absf(t.z):
+		side = "starboard" if t.x > 0.0 else "port"
+	elif absf(t.y) >= absf(t.z):
+		side = "high" if t.y > 0.0 else "low"
+	else:
+		side = "aft" if t.z > 0.0 else "forward"
+	var how := "slightly" if err < 1.0 else ("noticeably" if err < 2.5 else "badly")
+	return "%s %s to %s -- she will wander under power" % [how, "off", side]
 
 
 ## The battery rack mounted in this ship, if it has one. Stations are children
