@@ -19,7 +19,6 @@ const FOOTPRINT := {
 	Blocks.CHEST: Vector3i(1, 1, 1),
 	Blocks.SHAPER: Vector3i(2, 1, 1),
 	Blocks.SMELTER: Vector3i(1, 2, 1),
-	Blocks.FORGE: Vector3i(2, 2, 1),
 	Blocks.GENERATOR: Vector3i(1, 1, 1),
 	Blocks.POWER_BAY: Vector3i(1, 1, 1),
 	Blocks.OXYGEN_PLANT: Vector3i(1, 2, 1),
@@ -87,14 +86,6 @@ static func boxes_for(kind: int) -> Array:
 				[Vector3(0, 1.15, 0), Vector3(0.5, 0.3, 0.5), STONE],
 				[Vector3(0, 1.45, 0), Vector3(0.34, 0.3, 0.34), DARK],
 				[Vector3(0, 0.35, -0.44), Vector3(0.46, 0.44, 0.12), EMBER]]
-		Blocks.FORGE:
-			return [
-				[Vector3(-0.5, 0.55, 0), Vector3(0.94, 1.1, 0.94), STONE],
-				[Vector3(-0.5, 1.3, 0), Vector3(0.4, 0.5, 0.4), DARK],
-				[Vector3(-0.5, 0.4, -0.45), Vector3(0.5, 0.5, 0.12), EMBER],
-				[Vector3(0.62, 0.42, 0), Vector3(0.9, 0.84, 0.9), METAL],
-				[Vector3(0.62, 0.95, 0), Vector3(0.7, 0.24, 0.7), DARK],
-				[Vector3(0.62, 1.2, 0.2), Vector3(0.18, 0.3, 0.18), METAL]]
 		Blocks.GENERATOR:
 			return generator_boxes(false, 0.0, false, 0.0)
 		Blocks.POWER_BAY:

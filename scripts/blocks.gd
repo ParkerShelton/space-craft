@@ -65,9 +65,12 @@ const FABRICATOR := 35
 const SHIPWORKS := 36
 const CHEST := 52     # pure storage (bigger than a machine)
 const CARPENTER := 62 # base-building bench: structural blocks from plain resources
-const FORGE := 63     # multiblock-built smelter upgrade: bigger + faster
+## Cut for now (station upgrades will come back as their own thing). The id is
+## kept only so a world saved with one loads it as a Smelter -- see
+## Station.configure.
+const FORGE := 63
 const CLIMATE_UNIT := 64  # planet base shelter: negates hazard damage nearby
-const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER, GENERATOR, OXYGEN_PLANT, HEATER, COOLER, POWER_BAY, CAMPFIRE, BED, ANVIL]
+const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, CLIMATE_UNIT, SHAPER, GENERATOR, OXYGEN_PLANT, HEATER, COOLER, POWER_BAY, CAMPFIRE, BED, ANVIL]
 
 # --- procedural ore slots ---------------------------------------------------
 # Each planet invents its own ores (unique name + color) and assigns each to a
@@ -912,93 +915,6 @@ static func part_index(sx: int, sy: int, sz: int) -> int:
 static func is_partable(id: int) -> bool:
 	return id == ALLOY or id == CIRCUIT or (id in PLACEABLE and not is_station(id))
 
-## Machines that can ONLY exist as a structure you physically build -- there is
-## deliberately no single-block version that does the same job worse. The small
-## benches stay craftable items; these are the things whose whole point is that
-## they are big.
-##
-## `layers` reads bottom-to-top; within a layer each string is a row along the
-## structure's local +Z, and each character a cell along local +X. The legend
-## maps characters to the block that must be there. Exactly one cell is the
-## controller, and the pattern is matched in all four rotations about local up,
-## so orientation never has to be guessed.
-# Whole-block patterns. Only the power core is built this way now: the Oxygen
-# Plant, Heater and Cooler are GROWN from it by packing material around it, and
-# the Forge is grown from a Smelter (see STATION_GROWTH).
-# Whole-block patterns. Empty: every station is either one of the eighth-block
-# cores below or grown from one. Kept as the hook it is -- a machine that wants
-# to be described in whole blocks can be added here without new code.
-const STRUCTURES := []
-
-
-# --- growing a station --------------------------------------------------------
-#
-# Only a few stations are BUILT from an exact pattern. The rest are GROWN: you
-# pack the right material around one you already have and commission it again.
-# Rock banked around a campfire is a smelter; the same fire with metal in the
-# rock is a forge. That is a shape you arrive at by building something that
-# looks right, rather than a diagram you copy.
-#
-# `needs` counts blocks TOUCHING the station -- sharing a face with any of the
-# cells it is made of. Not a radius: a pile of rock in the corner of the room
-# should not turn your fire into a smelter, and a ring around it should.
-#
-# Every entry names what it grows FROM, so the chain is the data. Nothing here
-# is consumed: the rock you bank around a fire IS the smelter, which is why
-# taking it away again drops the station back down the chain (see
-# Planet.revalidate_machines).
-const STATION_GROWTH := [
-	# --- fire: the campfire line ---
-	{"from": CAMPFIRE, "to": SMELTER, "needs": [{"any": STONE_IDS, "n": 8, "label": "Rock"}]},
-	{"from": SMELTER, "to": FORGE,
-		"needs": [{"any": STONE_IDS, "n": 8, "label": "Rock"}, {"id": PLATE, "n": 6}]},
-	# --- the workbench line ---
-	# A carpenter's bench no longer grows into the Fabricator: that is the
-	# Press now, a metal machine with a bed and a ram you can see, put down
-	# whole from the station ring. (A grown one is a heap of blocks with no
-	# model, which is no press at all.) Old grown ones still grow on.
-	{"from": FABRICATOR, "to": SHIPWORKS, "needs": [{"id": ALLOY, "n": 6}]},
-	# --- the generator line ---
-	{"from": GENERATOR, "to": POWER_BAY, "needs": [{"id": PLATE, "n": 8}]},
-	{"from": GENERATOR, "to": OXYGEN_PLANT,
-		"needs": [{"id": GLASS, "n": 6}, {"id": PLATE, "n": 4}]},
-	{"from": GENERATOR, "to": HEATER,
-		"needs": [{"any": STONE_IDS, "n": 10, "label": "Rock"}, {"id": PLATE, "n": 4}]},
-	{"from": GENERATOR, "to": COOLER,
-		"needs": [{"id": GLASS, "n": 4}, {"id": PLATE, "n": 8}]},
-	{"from": GENERATOR, "to": CLIMATE_UNIT,
-		"needs": [{"id": PLATE, "n": 6}, {"any": WOOD_IDS, "n": 4, "label": "Wood"}]},
-]
-
-
-## Everything a station of `kind` could become, given enough material.
-static func growth_from(kind: int) -> Array:
-	var out: Array = []
-	for g in STATION_GROWTH:
-		if int(g["from"]) == kind:
-			out.append(g)
-	return out
-
-
-## What a station of `kind` falls back to when its material is taken away, or
-## -1 if it is a core that was built rather than grown.
-static func growth_parent(kind: int) -> int:
-	for g in STATION_GROWTH:
-		if int(g["to"]) == kind:
-			return int(g["from"])
-	return -1
-
-
-# --- buildable stations -------------------------------------------------------
-#
-# Patterns are written in EIGHTH-blocks, so a full cube is simply eight filled
-# sub-cells and legs, worktops and panels can all be described in one grid.
-# Layers run bottom to top; each row runs along local +Z, each character along
-# local +X. Matched in four rotations about local up.
-#
-# A legend character names a CLASS, not one block, so the same bench can be oak
-# or pine and still be a bench. That is deliberate: the shape is the recipe, the
-# material is yours.
 ## How much hunger each food restores. Raw meat is deliberately poor value: it
 ## keeps you going, but cooking it is worth roughly four times as much, which is
 ## what makes a campfire worth building the moment you start hunting.
@@ -1019,17 +935,6 @@ static func food_value(raw: int) -> float:
 	return float(FOOD_VALUE.get(bottom_of(raw), 0.0))
 
 
-const PART_CLASSES := {
-	"W": WOOD_IDS,                       # any wood
-	"S": STONE_IDS,                      # stone only -- not soil, not ice
-	"M": [METAL],
-	"A": [ALLOY],
-	"C": [CIRCUIT],
-	"G": [GLASS],
-	"K": [MACHINE_CORE],                 # the works inside a machine
-	"T": [CLOTH, LEATHER],               # textile: either soft stock will do
-}
-
 ## What a station costs to put down, in the order they should be offered. This
 ## is the whole of station building now: you hold the station ring open, pick
 ## one, and these come out of your pockets when it lands.
@@ -1048,8 +953,6 @@ const STATION_BUILDS := [
 		{"any": STONE_IDS, "n": 6, "label": "Rock"}]},
 	{"kind": SMELTER, "reqs": [{"any": STONE_IDS, "n": 12, "label": "Rock"},
 		{"any": WOOD_IDS, "n": 4, "label": "Wood"}]},
-	{"kind": FORGE, "reqs": [{"any": STONE_IDS, "n": 16, "label": "Rock"},
-		{"id": PLATE, "n": 6}]},
 	{"kind": GENERATOR, "reqs": [{"id": PLATE, "n": 10}, {"id": WIRE, "n": 4}]},
 	{"kind": POWER_BAY, "reqs": [{"id": PLATE, "n": 12}, {"id": BATTERY, "n": 1}]},
 	{"kind": HEATER, "reqs": [{"any": STONE_IDS, "n": 10, "label": "Rock"},
@@ -1079,277 +982,6 @@ static func is_station_build(kind: int) -> bool:
 
 # Eighth-block patterns. These are the CORE stations -- the only ones with a
 # shape you have to copy. Everything else grows out of one of them.
-const PART_STRUCTURES := [
-	{
-		"name": "Carpenter's Bench",
-		"result": CARPENTER,
-		"size": Vector3i(4, 2, 2),       # two blocks wide, one deep, one tall
-		"layers": [
-			["W..W", "W..W"],            # a leg at each end
-			["WWWW", "WWWW"],            # worktop across the top
-		],
-	},
-	{
-		# A frame with something soft over it. Same footprint as the bench --
-		# two blocks long, one wide, one tall -- because that is the shape of a
-		# thing you lie on, and because the bench already proved it reads as
-		# furniture rather than as a wall.
-		"name": "Bed",
-		"result": BED,
-		"size": Vector3i(4, 2, 2),
-		"layers": [
-			["W..W", "W..W"],            # a leg at each end, open underneath
-			["TTTT", "TTTT"],            # cloth or leather across the top
-		],
-	},
-	{
-		# The cheapest structure there is: one 2x2 layer of wood eighths, laid
-		# flat on the ground. Deliberately trivial -- food should not wait on a
-		# workshop -- and it doubles as a light source once lit.
-		"name": "Campfire",
-		"result": CAMPFIRE,
-		"size": Vector3i(2, 1, 2),        # a single block, one eighth-layer tall
-		"layers": [
-			["WW", "WW"],
-		],
-	},
-	{
-		# The power core: a metal casing with the works packed on top of it,
-		# the whole thing inside a single block. Small on purpose -- it is the
-		# root of the whole power line, and everything else in that line grows
-		# by packing material around THIS.
-		"name": "Generator",
-		"result": GENERATOR,
-		"size": Vector3i(2, 2, 2),       # one block, in eighths
-		"layers": [
-			["MM", "MM"],                # casing underneath
-			["KK", "KK"],                # works on top
-		],
-	},
-	{
-		# The bench that reshapes blocks: stone legs under a metal top, so it
-		# reads as heavier work than the all-wood bench next to it.
-		"name": "Block Shaper",
-		"result": SHAPER,
-		"size": Vector3i(4, 2, 2),
-		"layers": [
-			["WWW.", "WWW."],            # a wooden bench
-			[".S..", ".S.."],            # with a stone edge set into it
-		],
-	},
-]
-
-
-# Class membership as SETS. The matcher asks "is this id in this class" tens of
-# thousands of times per wrench click, and a linear scan of an Array there is
-# most of the cost.
-static var _CLASS_SETS: Dictionary = {}
-# Per pattern and rotation, the cells flattened once into [offset, class_char].
-# Rebuilding these inside the search meant re-reading strings and re-running the
-# rotation maths for every candidate placement -- that was the wrench's lag.
-static var _PART_CELLS: Dictionary = {}
-
-
-static func class_set(ch: String) -> Dictionary:
-	if _CLASS_SETS.is_empty():
-		for k in PART_CLASSES:
-			var d := {}
-			for id in PART_CLASSES[k]:
-				d[id] = true
-			_CLASS_SETS[k] = d
-	return _CLASS_SETS.get(ch, {})
-
-
-## Flattened, rotated cells of a pattern: [[Vector3i offset, String ch], ...].
-static func part_cells(di: int, rot: int) -> Array:
-	var key := di * 4 + rot
-	var got = _PART_CELLS.get(key)
-	if got != null:
-		return got
-	var def: Dictionary = PART_STRUCTURES[di]
-	var size: Vector3i = def["size"]
-	var layers: Array = def["layers"]
-	var out: Array = []
-	for y in layers.size():
-		var rows: Array = layers[y]
-		for z in rows.size():
-			var row: String = rows[z]
-			for x in row.length():
-				out.append([_rotate_offset(Vector3i(x, y, z), size, rot), row[x]])
-	_PART_CELLS[key] = out
-	return out
-
-
-static var _PART_ORDER: Array = []
-
-## Which patterns to try first: the BIGGEST first.
-##
-## Structures contain one another. A Campfire is a two-by-two of wood eighths,
-## and every wooden bench top in the game has one of those inside it -- so a
-## search that takes the first pattern that fits reports whichever happens to be
-## listed earliest, and the answer depends on the order of a table rather than
-## on what somebody built. The Carpenter's Bench only ever worked because it was
-## written above the Campfire.
-##
-## Trying the largest first makes the containing structure win, which is what
-## anybody looking at the thing would say it is.
-static func part_order() -> Array:
-	if not _PART_ORDER.is_empty():
-		return _PART_ORDER
-	var rows: Array = []
-	for di in PART_STRUCTURES.size():
-		var filled := 0
-		for c in part_cells(di, 0):
-			if c[1] != ".":
-				filled += 1
-		rows.append({"di": di, "n": filled})
-	rows.sort_custom(func(a, b): return int(a["n"]) > int(b["n"]))
-	for r in rows:
-		_PART_ORDER.append(int(r["di"]))
-	return _PART_ORDER
-
-
-static var _PART_PROBES: Dictionary = {}
-
-## Three filled cells spread across a pattern, used to reject a candidate
-## placement in three checks instead of ninety-six. Without this the search has
-## to score every placement equally, runs out of its work budget, and reports
-## whichever wrong answer it happened to reach first.
-static func part_probes(di: int, rot: int) -> Array:
-	var key := di * 4 + rot
-	var got = _PART_PROBES.get(key)
-	if got != null:
-		return got
-	var filled: Array = []
-	for c in part_cells(di, rot):
-		if c[1] != ".":
-			filled.append(c)
-	var out: Array = []
-	if not filled.is_empty():
-		out.append(filled[0])
-		out.append(filled[filled.size() / 2])
-		out.append(filled[filled.size() - 1])
-	_PART_PROBES[key] = out
-	return out
-
-
-static var _PART_IDS: Dictionary = {}
-
-## Every block id that appears anywhere in a pattern, as a set. Used to skip
-## patterns the block you clicked could not possibly belong to.
-static func part_pattern_ids(di: int) -> Dictionary:
-	var got = _PART_IDS.get(di)
-	if got != null:
-		return got
-	var d := {}
-	for lay in (PART_STRUCTURES[di] as Dictionary)["layers"]:
-		for row in lay:
-			for ch in str(row):
-				if ch == ".":
-					continue
-				for id in PART_CLASSES.get(ch, []):
-					d[id] = true
-	_PART_IDS[di] = d
-	return d
-
-
-## Is every sub-cell in this pattern doubled up on all three axes? If so it can
-## be built out of whole cubes, and the Recipe Book can say so at block scale
-## instead of making you read an eighth-by-eighth grid.
-static func part_pattern_is_blocky(def: Dictionary) -> bool:
-	var size: Vector3i = def["size"]
-	if size.x % 2 != 0 or size.y % 2 != 0 or size.z % 2 != 0:
-		return false
-	var layers: Array = def["layers"]
-	for y in layers.size():
-		var rows: Array = layers[y]
-		# paired with the layer it shares a block with
-		var orows: Array = layers[y ^ 1]
-		for z in rows.size():
-			var row: String = rows[z]
-			if row != String(orows[z]) or row != String(rows[z ^ 1]):
-				return false
-			for x in row.length():
-				if row[x] != row[x ^ 1]:
-					return false
-	return true
-
-
-## A build guide for a sub-cell station.
-static func part_structure_diagram(def: Dictionary, with_name := true) -> String:
-	var size: Vector3i = def["size"]
-	var layers: Array = def["layers"]
-	var blocky := part_pattern_is_blocky(def)
-	var step := 2 if blocky else 1
-	var out := "%s  (%d wide x %d tall x %d deep %s)" % [
-		def["name"] if with_name else "Pattern",
-		size.x / step, size.y / step, size.z / step,
-		"blocks" if blocky else "eighths"]
-	var names := ["bottom", "middle", "top"]
-	var count := layers.size() / step
-	var y := 0
-	while y < layers.size():
-		var li := y / step
-		var tag := ""
-		if count == 2:
-			tag = "  (%s)" % ["bottom", "top"][li]
-		elif count == 3:
-			tag = "  (%s)" % names[li]
-		out += "
-  layer %d%s" % [li + 1, tag]
-		# Rows STACKED, one per line, so a layer reads as the footprint you
-		# actually lay down rather than a run of groups on one line.
-		var rows: Array = layers[y]
-		var z := 0
-		while z < rows.size():
-			var row: String = rows[z]
-			var cut := ""
-			var x := 0
-			while x < row.length():
-				cut += row[x]
-				x += step
-			out += "
-	  " + cut
-			z += step
-		y += step
-	out += "
-  rows run front to back, seen from above"
-	# Say the quiet part: nothing here becomes a station until you tell it to.
-	out += "
-  build it, then right-click it and confirm"
-	var key := PackedStringArray()
-	var seen := {}
-	for lay in layers:
-		for row in lay:
-			for ch in str(row):
-				if seen.has(ch):
-					continue
-				seen[ch] = true
-				if ch == ".":
-					key.append(". = empty")
-				else:
-					key.append("%s = %s" % [ch, class_label(ch)])
-	out += "
-  " + "   ".join(key)
-	if not blocky:
-		out += "
-  (each character is an eighth-block part)"
-	return out
-
-
-## Name the ACTUAL blocks a pattern character accepts. Saying "any stone" was
-## worse than useless: there is no block called Stone, so it read as a block
-## name that does not exist and gave no clue that Grass or Snow are not it.
-static func class_label(ch: String) -> String:
-	var cls: Array = PART_CLASSES.get(ch, [])
-	if cls.is_empty():
-		return "?"
-	var names := PackedStringArray()
-	for id in cls:
-		names.append(name_of(int(id)))
-	return " / ".join(names)
-
-
 ## Every recipe in the game, flattened into one list the Recipe Book can show.
 ##
 ## Each entry carries a STABLE key, so unlocking recipes as you progress is a
@@ -1391,10 +1023,6 @@ static func all_recipes() -> Array:
 		out.append({"key": "build:%d" % int(b["kind"]), "src": "Station ring (hold C)",
 			"cat": "Machines", "out": int(b["kind"]), "n": 1, "reqs": b["reqs"],
 			"cost": 0, "extra": {}, "diagram": ""})
-	for d in STRUCTURES:
-		out.append({"key": "struct:%s" % str(d["name"]), "src": "Built from blocks",
-			"cat": "Machines", "out": int(d["result"]), "n": 1, "reqs": [],
-			"cost": 0, "extra": {}, "diagram": structure_diagram(d, false), "def": d})
 	return out
 
 
@@ -1427,169 +1055,14 @@ static func recipe_needs(rec: Dictionary) -> String:
 	return ",  ".join(parts)
 
 
-## A readable build guide for a structure. There is no other way in the game to
-## learn what a machine looks like, so a failed assembly prints this rather than
-## just saying no.
-## `with_name` is off in the Recipe Book, where the entry's own header already
-## says which machine this is.
-## One way to pack a station's growth materials round it, as a whole-block
-## pattern the Recipe Book can draw: the station in the middle of a 3x3, its
-## materials filling the ring around it and then the layer above. Any cell
-## touching the station counts in the game -- this is just a tidy example.
-static func growth_example_def(g: Dictionary) -> Dictionary:
-	var legend := {".": AIR, "C": int(g["from"])}
-	var fill: Array = []      # letter per material cell, in order
-	var letters := "abcdefgh"
-	var i := 0
-	for req in g["needs"]:
-		var id: int = int(req["id"]) if req.has("id") else int((req["any"] as Array)[0])
-		var ch := letters[i]
-		legend[ch] = id
-		for k in int(req["n"]):
-			fill.append(ch)
-		i += 1
-	# The ring round the station first, then the layer over it.
-	var ring := [Vector2i(0, 0), Vector2i(1, 0), Vector2i(2, 0), Vector2i(2, 1),
-		Vector2i(2, 2), Vector2i(1, 2), Vector2i(0, 2), Vector2i(0, 1)]
-	var grid := [[[".", ".", "."], [".", "C", "."], [".", ".", "."]]]
-	var n := 0
-	for c in ring:
-		if n >= fill.size():
-			break
-		grid[0][c.y][c.x] = fill[n]
-		n += 1
-	if n < fill.size():
-		grid.append([[".", ".", "."], [".", ".", "."], [".", ".", "."]])
-		var over := [Vector2i(1, 1)] + ring
-		for c in over:
-			if n >= fill.size():
-				break
-			grid[1][c.y][c.x] = fill[n]
-			n += 1
-	var layers: Array = []
-	for lay in grid:
-		var rows: Array = []
-		for r in lay:
-			rows.append("".join(PackedStringArray(r)))
-		layers.append(rows)
-	return {"name": "grow:%d" % int(g["to"]), "legend": legend, "layers": layers,
-		"size": Vector3i(3, layers.size(), 3)}
-
-
-## A build pattern's filled cells, as {Vector3i: block to show there}. Eighths
-## for a part pattern, whole blocks for one with a legend. What the Recipe Book
-## draws -- see PatternPicture.
-static func pattern_cells(def: Dictionary) -> Dictionary:
-	var out := {}
-	var layers: Array = def["layers"]
-	for y in layers.size():
-		var rows: Array = layers[y]
-		for z in rows.size():
-			var row: String = rows[z]
-			for x in row.length():
-				var id := pattern_letter_id(def, row[x])
-				if id != AIR:
-					out[Vector3i(x, y, z)] = id
-	return out
-
-
-## The block a pattern letter stands for, as something to draw. A letter that
-## accepts several (any wood) shows the first of them.
-static func pattern_letter_id(def: Dictionary, ch: String) -> int:
-	if ch == "." or ch == " ":
-		return AIR
-	if def.has("legend"):
-		return int((def["legend"] as Dictionary).get(ch, AIR))
-	var opts: Array = PART_CLASSES.get(ch, [])
-	return int(opts[0]) if not opts.is_empty() else AIR
-
-
-## What a pattern letter means, in words -- "Any wood", not "W".
-static func pattern_letter_label(def: Dictionary, ch: String) -> String:
-	if not def.has("legend"):
-		match ch:
-			"W": return "Any wood"
-			"S": return "Stone"
-			"T": return "Cloth or leather"
-	return name_of(pattern_letter_id(def, ch))
-
-
-## Every letter a pattern uses, in first-seen order, empty cells left out.
-static func pattern_letters(def: Dictionary) -> Array:
-	var out: Array = []
-	for rows in def["layers"]:
-		for row in rows:
-			for i in (row as String).length():
-				var ch: String = (row as String)[i]
-				if pattern_letter_id(def, ch) != AIR and not out.has(ch):
-					out.append(ch)
-	return out
-
-
-static func structure_diagram(def: Dictionary, with_name := true) -> String:
-	var layers: Array = def["layers"]
-	var legend: Dictionary = def["legend"]
-	var tiers := ["bottom", "middle", "top"]
-	var out := "%s  (%dx%dx%d)" % [def["name"] if with_name else "Pattern",
-		(def["size"] as Vector3i).x,
-		(def["size"] as Vector3i).y, (def["size"] as Vector3i).z]
-	for y in layers.size():
-		var tier: String = tiers[y] if layers.size() == 3 and y < 3 else "layer %d" % (y + 1)
-		out += "
-  %-7s %s" % [tier, "  ".join(PackedStringArray(layers[y]))]
-	var key := PackedStringArray()
-	for ch in legend:
-		var id: int = legend[ch]
-		key.append("%s = %s" % [ch, "empty" if id == AIR else name_of(id)])
-	out += "
-  " + "   ".join(key)
-	return out
-
-
-## Cells of a structure pattern as {offset: block_id}, plus which offset is the
-## controller. Rotation `rot` is a quarter-turn count about local up.
-static func structure_cells(def: Dictionary, rot: int) -> Dictionary:
-	var legend: Dictionary = def["legend"]
-	var size: Vector3i = def["size"]
-	var cells := {}
-	var controller := Vector3i.ZERO
-	var layers: Array = def["layers"]
-	for y in layers.size():
-		var rows: Array = layers[y]
-		for z in rows.size():
-			var row: String = rows[z]
-			for x in row.length():
-				var ch := row[x]
-				var id: int = int(legend.get(ch, AIR))
-				var off := _rotate_offset(Vector3i(x, y, z), size, rot)
-				cells[off] = id
-				if ch == "C":
-					controller = off
-	return {"cells": cells, "controller": controller}
-
-
-## Quarter-turns about the local up (Y) axis, keeping offsets non-negative.
-static func _rotate_offset(o: Vector3i, size: Vector3i, rot: int) -> Vector3i:
-	match posmod(rot, 4):
-		1: return Vector3i(size.z - 1 - o.z, o.y, o.x)
-		2: return Vector3i(size.x - 1 - o.x, o.y, size.z - 1 - o.z)
-		3: return Vector3i(o.z, o.y, size.x - 1 - o.x)
-		_: return o
-
 ## Categories for the recipe book. A flat list stops being usable long before the
 ## recipe count gets interesting -- these let the panel filter, and a new recipe
 ## only has to declare which drawer it lives in.
 const CRAFT_CATS := ["All", "Stations", "Light", "Building", "Materials"]
 
-# NOTHING is made by hand any more. Everything is made at a bench, which is why
-# the inventory no longer carries a crafting column.
-#
-# That leaves one thing to be careful about, and it is the whole game: a Wrench
-# is what commissions a station, and the Wrench is now made AT a station. Taken
-# literally that is a world you can never build anything in. The Carpenter's
-# Bench is the way out -- see Player._try_assemble_machine, which lets that one
-# bench be commissioned bare-handed. It is planks and pegs; you do not need a
-# spanner to nail a bench together, and every other station still does.
+# NOTHING is made by hand any more. Everything is made at a station, and every
+# station is put down whole from the station ring, which is why the inventory
+# no longer carries a crafting column.
 const HAND_RECIPES := []
 
 # Which material TYPE a station builds from (see Blocks.id_matches_material).
@@ -1602,7 +1075,7 @@ static func primary_material_for(kind: int) -> String:
 			return "circuit"
 		SHIPWORKS:
 			return "alloy"
-		SMELTER, FORGE:
+		SMELTER:
 			return "refined"
 		_:
 			return "any"
@@ -1762,7 +1235,7 @@ static func station_accepts(kind: int, id: int) -> bool:
 	return false
 
 static func is_smelter_kind(kind: int) -> bool:
-	return kind == SMELTER or kind == FORGE
+	return kind == SMELTER
 
 # Each craft consumes either `cost` units of the station's primary material (see
 # primary_material_for/id_matches_material above), optionally plus an `extra`
@@ -1785,6 +1258,10 @@ const STATION_CRAFTS := {
 		# an anvil (see the smithing section). The smelter's job is the fire --
 		# ore into ingots, and scrap back into them.
 		{"label": "Alloy Plating x2", "out": ALLOY, "n": 2, "cost": 2, "extra": {"id": PLATE, "n": 3}},
+		# Sand, melted. Regolith is the only sand there is -- the loose surface
+		# of the dust, ash, rust and crystal-desert worlds -- so glass is a
+		# reason to go to one of those.
+		{"label": "Glass", "out": GLASS, "n": 1, "reqs": [{"id": REGOLITH, "n": 1}]},
 	],
 	# The Fabricator is the Press now, and presses rather than crafts: see
 	# PRESS_RECIPES. It has no buttons.
@@ -1794,10 +1271,9 @@ const STATION_CRAFTS := {
 		{"label": "Warp Drive", "out": WARP_DRIVE, "n": 1, "cost": 10},
 		{"label": "Metal Hull x4", "out": METAL, "n": 4, "reqs": [{"id": ALLOY, "n": 2}]},
 	],
-	# The bootstrap bench, and the only one that can be commissioned without a
-	# Wrench -- because the Wrench is made here. Everything on it asks for plain
-	# gathered material for the same reason: this is the bench you reach with
-	# nothing but what you picked up off the ground.
+	# The bootstrap bench. Everything on it asks for plain gathered material:
+	# this is the bench you reach with nothing but what you picked up off the
+	# ground.
 	CARPENTER: [
 		# Deliberately cheap and made from the most common material there is: a
 		# light source gates cave exploration and surviving the first night, so
@@ -1878,7 +1354,6 @@ const STATION_CRAFTS := {
 		# "6 items", which tells you nothing about what to go and get.
 		{"label": "Door", "out": DOOR, "n": 1,
 			"reqs": [{"any": WOOD_IDS + PLANK_IDS, "n": 6, "label": "Wood or Planks"}]},
-		{"label": "Glass x4", "out": GLASS, "n": 4, "reqs": [{"id": ROCK, "n": 4}, {"id": PLATE, "n": 1}]},
 	],
 }
 

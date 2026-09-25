@@ -112,28 +112,18 @@ func sun_angle() -> float:
 	var u := (t / DAY_SHARE) * 0.5 if t < DAY_SHARE 		else 0.5 + (t - DAY_SHARE) / (1.0 - DAY_SHARE) * 0.5
 	return u * TAU
 
-# --- built machines ----------------------------------------------------------
-# Machines that must be physically constructed. Only the CONTROLLER position is
-# persisted: the blocks themselves already save, so re-validating around each
-# controller on load costs one pattern check per machine you built (a handful),
-# while keeping the world blocks as the single source of truth. Saving the whole
-# footprint instead would be larger and could drift out of sync with the blocks.
-var machine_cores: Array = []
-## Which station each anchor was commissioned INTO, when it has been grown past
-## what its pattern alone makes. Remembered rather than derived, because a
-## Generator packed in metal could become several different things and the
-## player picked one -- see Blocks.STATION_GROWTH.
-var machine_kinds := {}              # Array[Vector3i], saved
-var _world_ref: WorldManager               # for headless machine stations
-var _machines: Dictionary = {}             # controller -> {def, rot, online, missing}
-var _machine_at: Dictionary = {}           # voxel -> controller
-# controller -> Station. Kept OUTSIDE _machines so revalidate_machines() can
-# rebuild the registry without orphaning the node that holds the fuel.
-var _machine_stations: Dictionary = {}
-## Cells holding a lit campfire. Tracked apart from block ids because an
-## assembled machine is not a block -- it is a logical thing sitting over a group
-## of eighth-parts -- and both the mesher (which draws the flames) and the light
-## bake need to know where the fires are.
+# --- stations on this planet ---------------------------------------------------
+# Every station is put down whole from the station ring and is a node of its
+# own (see Station). The planet keeps no registry of them: when it needs to know
+# which ones make up a base, it looks at the stations standing on it (see
+# _rebuild_placed).
+var _world_ref: WorldManager
+## voxel -> the Station filling it, for stations standing on this planet.
+## Rebuilt with each base scan, which is the only thing that asks.
+var _placed_at: Dictionary = {}
+## Cells holding a lit campfire: both the mesher (which draws the flames) and the
+## light bake need to know where the fires are. A Campfire station registers its
+## own cell when it is put down (see Station._register_fire).
 var _fire_cells: Dictionary = {}
 var surface_noise := FastNoiseLite.new()
 var ore_noise := FastNoiseLite.new()
@@ -1633,174 +1623,6 @@ func _make_ore(orng: RandomNumberGenerator, slot: int, tier: int,
 	}
 
 
-# --- per-planet ore lookups (block id is a generic ORE slot) ------------------
-## Try to assemble a machine whose controller sits at `c`. Returns a result
-## dictionary describing success or exactly what is wrong, so the caller can
-## tell the player rather than failing silently.
-## Pattern offsets are authored with Y as "up". On a sphere the local up is
-## whichever face you're standing on, so they're mapped onto that frame here --
-## otherwise a structure would only assemble near the pole where up happens to
-## be world +Y.
-func _pattern_axes(c: Vector3i) -> Array:
-	var up := Vector3i(_axis_of(Vector3(c) + Vector3(0.5, 0.5, 0.5)))
-	if up == Vector3i.ZERO:
-		up = Vector3i(0, 1, 0)
-	var ax := Vector3i(1, 0, 0)
-	if absi(up.x) > 0:
-		ax = Vector3i(0, 1, 0)
-	var az := Vector3i(
-		up.y * ax.z - up.z * ax.y,
-		up.z * ax.x - up.x * ax.z,
-		up.x * ax.y - up.y * ax.x)
-	return [ax, up, az]
-
-
-func _pattern_to_world(off: Vector3i, axes: Array) -> Vector3i:
-	return (axes[0] as Vector3i) * off.x + (axes[1] as Vector3i) * off.y 		+ (axes[2] as Vector3i) * off.z
-
-
-func assemble_machine(c: Vector3i, dry: bool = false) -> Dictionary:
-	if get_id(c) != Blocks.MACHINE_CORE:
-		return {"ok": false, "reason": "No machine core here"}
-	# Track the closest near-miss across every structure and rotation, so a
-	# build that is nearly right says what is missing instead of the useless
-	# "that isn't a machine".
-	var best_missing := 1 << 30
-	var best_name := ""
-	var best_block := Blocks.AIR
-	var best_def := {}
-	for i in Blocks.STRUCTURES.size():
-		var def: Dictionary = Blocks.STRUCTURES[i]
-		for rot in 4:
-			var built := Blocks.structure_cells(def, rot)
-			var cells: Dictionary = built["cells"]
-			var axes := _pattern_axes(c)
-			var origin: Vector3i = c - _pattern_to_world(built["controller"], axes)
-			var missing := 0
-			var first_missing := Blocks.AIR
-			for off in cells:
-				var want: int = cells[off]
-				if get_id(origin + _pattern_to_world(off, axes)) != want:
-					missing += 1
-					if first_missing == Blocks.AIR:
-						first_missing = want
-			if missing == 0:
-				if dry:
-					return {"ok": true, "name": str(def["name"]),
-						"result": int(def["result"])}
-				_register_machine(c, def, rot, origin)
-				return {"ok": true, "name": str(def["name"]),
-					"result": int(def["result"])}
-			if missing < best_missing:
-				best_missing = missing
-				best_name = str(def["name"])
-				best_block = first_missing
-				best_def = def
-	if best_name != "":
-		var what := "empty space" if best_block == Blocks.AIR else Blocks.name_of(best_block)
-		var head := "%s: %d block%s wrong or missing (needs %s)" % [
-			best_name, best_missing, "" if best_missing == 1 else "s", what]
-		# Print the whole pattern, not just the count: with nothing built yet the
-		# count alone tells you nothing, and there is no blueprint screen.
-		return {"ok": false, "reason": head + "
-" + Blocks.structure_diagram(best_def)}
-	return {"ok": false, "reason": "These blocks don't form a machine"}
-
-
-func _register_machine(c: Vector3i, def: Dictionary, rot: int, origin: Vector3i) -> void:
-	var built := Blocks.structure_cells(def, rot)
-	var cells: Dictionary = built["cells"]
-	var axes := _pattern_axes(c)
-	# Reuse Station for storage, jobs and UI, but HEADLESS: the blocks the
-	# player built are the machine, so it must not drop a second body inside
-	# them. Kept across damage so a raid doesn't empty the fuel bunker.
-	var st: Station = _machine_stations.get(c)
-	if st == null or not is_instance_valid(st):
-		st = Station.new()
-		st.headless = true
-		st.configure(int(def["result"]), _world_ref)
-		add_child(st)
-		st.position = Vector3(c) + Vector3(0.5, 0.5, 0.5)
-		_machine_stations[c] = st
-	st.active = true
-	_machines[c] = {"def": def, "rot": rot, "origin": origin, "online": true, "station": st}
-	for off in cells:
-		_machine_at[origin + _pattern_to_world(off, axes)] = c
-	_grid_cache.clear()
-	if not machine_cores.has(c):
-		machine_cores.append(c)
-
-
-## A machine is only as whole as its blocks. Breaking any part takes it offline
-## until THAT block is put back -- a brick for a brick, the core for the core --
-## rather than disbanding the structure, so a raid damages your base instead of
-## deleting it.
-## Re-settle one station after something around it changed.
-func _settle_kind_at(anchor: Vector3i) -> void:
-	var m: Dictionary = _machines.get(anchor, {})
-	if m.is_empty():
-		return
-	_settle_kind(anchor, int((m["def"] as Dictionary)["result"]))
-
-
-func _machine_block_changed(v: Vector3i) -> void:
-	var c = _machine_at.get(v)
-	if c == null:
-		return
-	var m: Dictionary = _machines.get(c, {})
-	if m.is_empty():
-		return
-	var whole := true
-	if bool(m.get("parts", false)):
-		whole = _part_machine_intact(m)
-	else:
-		var built := Blocks.structure_cells(m["def"], int(m["rot"]))
-		var cells: Dictionary = built["cells"]
-		var origin: Vector3i = m["origin"]
-		var axes := _pattern_axes(c)
-		for off in cells:
-			if get_id(origin + _pattern_to_world(off, axes)) != int(cells[off]):
-				whole = false
-				break
-	_grid_cache.clear()
-	m["online"] = whole
-	var st: Station = m.get("station")
-	if st != null and is_instance_valid(st):
-		st.active = whole   # a machine with a hole in it produces nothing
-	_machines[c] = m
-
-
-## The headless Station backing the machine covering `v`, or null.
-## Which station, if any, this voxel belongs to -- its anchor, or null.
-## Which way the long side of a built structure runs, in world space.
-##
-## A pattern is written with its length along its own +X -- a bed and a bench
-## are both four cells wide and two deep -- and `rot` turns that a quarter turn
-## at a time before the planet's axes map it onto the world. So the answer is
-## the pattern's +X, rotated, then mapped.
-func machine_long_axis(anchor: Vector3i) -> Vector3:
-	var m: Dictionary = _machines.get(anchor, {})
-	if m.is_empty():
-		return Vector3.ZERO
-	var turned := [Vector3i(1, 0, 0), Vector3i(0, 0, 1),
-		Vector3i(-1, 0, 0), Vector3i(0, 0, -1)]
-	var d: Vector3i = turned[posmod(int(m.get("rot", 0)), 4)]
-	var local := Vector3(_pattern_to_world(d, _pattern_axes(anchor)))
-	return (global_transform.basis * local).normalized()
-
-
-func machine_anchor_at(v: Vector3i):
-	return _machine_at.get(v)
-
-
-func machine_station_at(v: Vector3i) -> Station:
-	var c = _machine_at.get(v)
-	if c == null:
-		return null
-	var st = _machines.get(c, {}).get("station")
-	return st if st != null and is_instance_valid(st) else null
-
-
 # --- growing things -----------------------------------------------------------
 #
 # A planted cell keeps its species and how far along it is in a table beside the
@@ -2070,279 +1892,6 @@ func sub_id(sv: Vector3i) -> int:
 	return Blocks.bottom_of(raw)
 
 
-## sub_id, but remembering each VOXEL it has already resolved.
-##
-## The matcher asks about the same voxel eight times (once per sub-cell) for
-## every candidate placement, and an unedited voxel costs a terrain noise sample
-## each time. Caching that within one wrench click is the difference between a
-## visible freeze and no pause at all.
-func _sub_id_cached(sv: Vector3i, cache: Dictionary) -> int:
-	var v := Vector3i(floori(sv.x / 2.0), floori(sv.y / 2.0), floori(sv.z / 2.0))
-	var raw = cache.get(v)
-	if raw == null:
-		raw = get_id(v)
-		cache[v] = raw
-	if raw == Blocks.PARTS:
-		var o := sv - v * 2
-		return part_at(v, Blocks.part_index(o.x, o.y, o.z))
-	if raw == Blocks.AIR or raw == Blocks.WATER or raw == Blocks.DOOR_OPEN:
-		return Blocks.AIR
-	return Blocks.bottom_of(raw)
-
-
-func _sub_matches_cached(sv: Vector3i, ch: String, cache: Dictionary) -> bool:
-	var got := _sub_id_cached(sv, cache)
-	if ch == ".":
-		return got == Blocks.AIR
-	if not Blocks.class_set(ch).has(got):
-		return false
-	# ...and it has to be an EIGHTH somebody placed, not a whole block.
-	#
-	# A solid block reads as eight filled sub-cells, which is what makes one
-	# pattern language describe cubes and parts alike -- but it also meant a log
-	# in a tree satisfied the campfire's four eighths of wood, and right-clicking
-	# a trunk offered to make it a campfire. These patterns are fine work by
-	# definition; a log is a log.
-	var v := Vector3i(floori(sv.x / 2.0), floori(sv.y / 2.0), floori(sv.z / 2.0))
-	return int(cache.get(v, Blocks.AIR)) == Blocks.PARTS
-
-
-## Does what is at `sv` satisfy this pattern character?
-func _sub_matches(sv: Vector3i, ch: String) -> bool:
-	var got := sub_id(sv)
-	if ch == ".":
-		return got == Blocks.AIR
-	var cls = Blocks.PART_CLASSES.get(ch)
-	if cls == null:
-		return false
-	return got in (cls as Array)
-
-
-## Spot the commonest way a build goes wrong: the right shape laid out in
-## EIGHTHS because fine placing was left on. Such a cell holds a part or two and
-## reads as a solid block from outside, so the player counts their blocks, finds
-## them all present, and has no way to see what is wrong.
-func _fine_hint(v: Vector3i) -> String:
-	if get_id(v) != Blocks.PARTS:
-		return ""
-	var filled := 0
-	for si in Blocks.PART_COUNT:
-		if part_at(v, si) != Blocks.AIR:
-			filled += 1
-	if filled == 0 or filled >= Blocks.PART_COUNT:
-		return ""
-	return " — this block is only %d/%d filled. Turn OFF fine placing (C) and build it from whole blocks." % [filled, Blocks.PART_COUNT]
-
-
-## A pattern's extent AFTER rotating it. A quarter turn swaps the x and z
-## extents, so scanning candidate origins with the unrotated size searched too
-## narrow a band on one axis and too wide on the other -- which meant a build
-## laid out sideways could never be found, and the "blocks missing" count
-## changed depending on which block you happened to right-click.
-func _rot_extent(size: Vector3i, rot: int) -> Vector3i:
-	return Vector3i(size.z, size.y, size.x) if (rot % 2) == 1 else size
-
-
-## Try to turn whatever the player is pointing at into a station.
-##
-## The clicked voxel can be ANY part of the build, so every placement of the
-## pattern that would cover it is tried, in four rotations. That is a few
-## thousand checks, which costs nothing because it only runs on a wrench click.
-## `require`, when set, refuses to commission anything but that result. It exists
-## for the bare-handed case: the Carpenter's Bench can be brought to life without
-## a Wrench, and nothing else can, and the check has to happen BEFORE the machine
-## is registered rather than by undoing it afterwards.
-## `dry` reports what would be commissioned without commissioning it, which is
-## what the crosshair asks several times a second.
-func assemble_parts(v: Vector3i, require: int = -1, dry: bool = false) -> Dictionary:
-	var cache := {}
-	# PASS 1 -- is it finished? Bail on the first cell that does not fit, which
-	# kills almost every candidate placement immediately.
-	# Biggest first, so a structure that CONTAINS a smaller one wins -- see
-	# Blocks.part_order.
-	for di in Blocks.part_order():
-		var size: Vector3i = (Blocks.PART_STRUCTURES[di] as Dictionary)["size"]
-		for rot in 4:
-			var cells: Array = Blocks.part_cells(di, rot)
-			var ext := _rot_extent(size, rot)
-			for ox in range(1 - ext.x, 2):
-				for oy in range(1 - ext.y, 2):
-					for oz in range(1 - ext.z, 2):
-						var origin := v * 2 + Vector3i(ox, oy, oz)
-						var fits := true
-						for c in cells:
-							if not _sub_matches_cached(origin + (c[0] as Vector3i),
-									c[1], cache):
-								fits = false
-								break
-						if fits:
-							var fdef: Dictionary = Blocks.PART_STRUCTURES[di]
-							if dry:
-								return {"ok": true, "name": str(fdef["name"]),
-									"result": int(fdef["result"])}
-							if require >= 0 and int(fdef["result"]) != require:
-								return {"ok": false, "built": true,
-									"name": str(fdef["name"]),
-									"reason": "%s is finished -- right-click to commission it"
-										% str(fdef["name"])}
-							return _register_part_machine(v, fdef, rot, origin)
-	# PASS 2 -- nothing fits, so work out what to TELL them. Only reached on a
-	# failed click, and only for placements whose first cell is already right,
-	# which is enough to find the build they were plainly attempting.
-	var best_score := INF
-	var best_missing := 0
-	var best_name := ""
-	var best_def := {}
-	# Remembered so the exact cells that are wrong can be recomputed and shown.
-	var best_origin := Vector3i.ZERO
-	var best_rot := 0
-	var best_di := 0
-	# What did they actually click? A pattern that cannot contain that material
-	# is not what they were building, so it is neither searched nor reported --
-	# which is why a lone rock no longer comes back as a failed wooden bench.
-	# What materials are actually in the clicked cell? A PARTS voxel holds a
-	# MARKER, not a material, so reading it directly matched no pattern at all
-	# and every build made of parts reported "that is not a station yet".
-	var clicked_ids := {}
-	var craw := get_id(v)
-	if craw == Blocks.PARTS:
-		for si in Blocks.PART_COUNT:
-			var pid := part_at(v, si)
-			if pid != Blocks.AIR:
-				clicked_ids[pid] = true
-	elif craw != Blocks.AIR and craw != Blocks.WATER:
-		clicked_ids[Blocks.bottom_of(craw)] = true
-	# Hard ceiling on the diagnosis. This only runs on a FAILED click, and a
-	# perfect explanation is not worth a visible freeze.
-	var budget := 12000
-	var searched := 0
-	for di in Blocks.PART_STRUCTURES.size():
-		var def: Dictionary = Blocks.PART_STRUCTURES[di]
-		if not clicked_ids.is_empty():
-			var ids := Blocks.part_pattern_ids(di)
-			var shares := false
-			for cid in clicked_ids:
-				if ids.has(cid):
-					shares = true
-					break
-			if not shares:
-				continue
-		searched += 1
-		var size: Vector3i = def["size"]
-		for rot in 4:
-			var cells: Array = Blocks.part_cells(di, rot)
-			var probes: Array = Blocks.part_probes(di, rot)
-			var ext := _rot_extent(size, rot)
-			for ox in range(1 - ext.x, 2):
-				for oy in range(1 - ext.y, 2):
-					for oz in range(1 - ext.z, 2):
-						var origin := v * 2 + Vector3i(ox, oy, oz)
-						# Cheap rejection first: a placement that gets two of
-						# three spread-out landmarks wrong is not the build in
-						# front of the player, and is not worth scoring.
-						var hits := 0
-						for pc in probes:
-							if _sub_matches_cached(origin + (pc[0] as Vector3i),
-									pc[1], cache):
-								hits += 1
-						budget -= probes.size()
-						if probes.size() == 3 and hits < 2:
-							continue
-						var missing := 0
-						var pruned := false
-						# No pruning until there is something to prune against:
-						# int(INF * n) overflows to a negative, which would abort
-						# the very first candidate after one miss and let its
-						# bogus score win.
-						var cutoff := cells.size() + 1
-						if best_score < INF:
-							cutoff = maxi(int(best_score * float(cells.size())), 1)
-						if budget <= 0:
-							pruned = true
-						for c in cells:
-							if budget <= 0:
-								pruned = true
-								break
-							budget -= 1
-							if not _sub_matches_cached(origin + (c[0] as Vector3i),
-									c[1], cache):
-								missing += 1
-								if missing >= cutoff:
-									pruned = true
-									break
-						# A pruned count is a LOWER BOUND, not a result. Scoring
-						# it let a hopeless candidate that stopped counting early
-						# out-rank the build actually in front of the player.
-						if pruned:
-							continue
-						# Scored as a FRACTION of the pattern, so a small build
-						# that is entirely wrong stops out-ranking a big one that
-						# is nearly right -- which is what made a half-finished
-						# Smelter report itself as a failed Carpenter's Bench.
-						var score := float(missing) / float(maxi(cells.size(), 1))
-						if score < best_score:
-							best_score = score
-							best_missing = missing
-							best_name = str(def["name"])
-							best_def = def
-							best_origin = origin
-							best_rot = rot
-							best_di = di
-	if best_name != "":
-		# Work out exactly WHICH cells are wrong for the closest candidate, so
-		# the player can be shown the difference instead of being told a number
-		# and left to hunt for it.
-		var wrong: Array = []
-		if not best_def.is_empty():
-			for c in Blocks.part_cells(best_di, best_rot):
-				var sv: Vector3i = best_origin + (c[0] as Vector3i)
-				if not _sub_matches_cached(sv, c[1], cache):
-					wrong.append([sv, str(c[1])])
-		# Count in whatever the player actually placed. Telling someone who put
-		# one block in the wrong spot that eight "pieces" are wrong is true only
-		# in sub-cells, and useless to them.
-		var unit := "piece"
-		var n := best_missing
-		if Blocks.part_pattern_is_blocky(best_def):
-			unit = "block"
-			n = int(ceil(best_missing / 8.0))
-		var msg := "%s: %d %s%s wrong or missing" % [
-			best_name, n, unit, "" if n == 1 else "s"]
-		return {"ok": false, "wrong": wrong, "reason": msg + _fine_hint(v)}
-	if craw == Blocks.PARTS:
-		var h := _fine_hint(v)
-		if h != "":
-			return {"ok": false, "wrong": [], "reason": "This is built from eighths" + h}
-	if searched == 0 and not clicked_ids.is_empty():
-		# Nothing is made of what they are holding this up with. Saying so beats
-		# "that is not a station yet", which sounds like the SHAPE is wrong and
-		# sends people back to re-count blocks that were never going to work.
-		var names := PackedStringArray()
-		for cid in clicked_ids:
-			names.append(Blocks.name_of(cid))
-		return {"ok": false, "wrong": [],
-			"reason": "No station is built from %s" % " / ".join(names)}
-	return {"ok": false, "wrong": [], "reason": "That is not a station yet"}
-
-
-## Every VOXEL a sub-cell pattern touches, so damage checks can hook the same
-## per-voxel machinery the block-built structures already use.
-func _part_machine_voxels(def: Dictionary, rot: int, origin: Vector3i) -> Array:
-	var size: Vector3i = def["size"]
-	var layers: Array = def["layers"]
-	var seen := {}
-	for y in layers.size():
-		var rows: Array = layers[y]
-		for z in rows.size():
-			var row: String = rows[z]
-			for x in row.length():
-				if row[x] == ".":
-					continue
-				var sv: Vector3i = origin + Blocks._rotate_offset(Vector3i(x, y, z), size, rot)
-				seen[Vector3i(floori(sv.x / 2.0), floori(sv.y / 2.0), floori(sv.z / 2.0))] = true
-	return seen.keys()
-
-
 ## A campfire lights its surroundings the same way a torch does, so the same
 ## chunks have to re-bake. Mirrors the light fan-out in set_block.
 func _relight_around(v: Vector3i) -> void:
@@ -2358,291 +1907,15 @@ func _relight_around(v: Vector3i) -> void:
 					_dirty[ncc] = true
 
 
-func _register_part_machine(anchor: Vector3i, def: Dictionary, rot: int,
-		origin: Vector3i) -> Dictionary:
-	var st: Station = _machine_stations.get(anchor)
-	if st == null or not is_instance_valid(st):
-		st = Station.new()
-		st.headless = true
-		st.configure(int(def["result"]), _world_ref)
-		add_child(st)
-		st.position = Vector3(anchor) + Vector3(0.5, 0.5, 0.5)
-		_machine_stations[anchor] = st
-	st.active = true
-	_machines[anchor] = {"def": def, "rot": rot, "origin": origin, "online": true,
-		"station": st, "parts": true}
-	for pv in _part_machine_voxels(def, rot, origin):
-		_machine_at[pv] = anchor
-	if not machine_cores.has(anchor):
-		machine_cores.append(anchor)
-	_settle_kind(anchor, int(def["result"]))
-	_grid_cache.clear()
-	if int(def["result"]) == Blocks.CAMPFIRE and not _fire_cells.has(anchor):
-		_fire_cells[anchor] = true
-		_relight_around(anchor)
-	return {"ok": true, "name": str(def["name"])}
-
-
-# --- growing a station --------------------------------------------------------
-
-## Bring a station's kind into line with what is packed around it. Whatever it
-## was commissioned as, if the material that made it that is gone it drops back
-## down the chain until it reaches something that still holds up.
-func _settle_kind(anchor: Vector3i, base_kind: int) -> void:
-	var m: Dictionary = _machines.get(anchor, {})
-	if m.is_empty():
-		return
-	var want := int(machine_kinds.get(anchor, base_kind))
-	want = station_settled_kind(anchor, want)
-	if want != int(machine_kinds.get(anchor, base_kind)):
-		if want == base_kind:
-			machine_kinds.erase(anchor)
-		else:
-			machine_kinds[anchor] = want
-	m["kind"] = want
-	var st: Station = m.get("station")
-	if st != null and is_instance_valid(st) and st.kind != want:
-		st.configure(want, _world_ref)
-
-
-## Commission a station into something bigger. `to` must be one of the options
-## station_growth_options offered, which is the same check the caller showed the
-## player -- taking it on trust would let a client grow anything it liked.
-func grow_station(anchor: Vector3i, to: int) -> Dictionary:
-	var ok := false
-	for o in station_growth_options(anchor):
-		if int(o["to"]) == to:
-			ok = true
-			break
-	if not ok:
-		return {"ok": false, "reason": "Not enough material around it"}
-	machine_kinds[anchor] = to
-	var m: Dictionary = _machines.get(anchor, {})
-	m["kind"] = to
-	var st: Station = m.get("station")
-	if st != null and is_instance_valid(st):
-		st.configure(to, _world_ref)
-	return {"ok": true, "name": Blocks.name_of(to)}
-
-
-## What this station currently IS, which is not always what its pattern says.
-func machine_kind_at(anchor: Vector3i) -> int:
-	var m: Dictionary = _machines.get(anchor, {})
-	if m.is_empty():
-		return Blocks.AIR
-	return int(m.get("kind", int((m["def"] as Dictionary)["result"])))
-
-
-
-## Every voxel this station is made of.
-func machine_voxels(anchor: Vector3i) -> Array:
-	var m: Dictionary = _machines.get(anchor, {})
-	if m.is_empty():
-		return []
-	if bool(m.get("parts", false)):
-		return _part_machine_voxels(m["def"], int(m["rot"]), m["origin"])
-	var out: Array = []
-	for v in _machine_at:
-		if _machine_at[v] == anchor:
-			out.append(v)
-	return out
-
-
-## What is packed around this station: block id -> how many blocks of it share a
-## face with the station. Its own cells do not count, and neither does the same
-## block counted twice from two different sides.
-func machine_surround(anchor: Vector3i) -> Dictionary:
-	var own := {}
-	for v in machine_voxels(anchor):
-		own[v] = true
-	var seen := {}
-	var tally := {}
-	# Nothing BELOW the station counts: it stands on the ground, and a fire lit
-	# on bare rock used to find nine of its eight rock already underneath it.
-	# What counts is what the Recipe Book shows -- the ring round it and the
-	# layer over it.
-	var upf := _axis_of(Vector3(anchor) + Vector3(0.5, 0.5, 0.5))
-	var up_i := Vector3i(roundi(upf.x), roundi(upf.y), roundi(upf.z))
-	var floor_h := 1 << 30
-	for v in own:
-		var hv: Vector3i = v
-		floor_h = mini(floor_h, hv.x * up_i.x + hv.y * up_i.y + hv.z * up_i.z)
-	# Everything in the shell around it -- corners and edges included, not only
-	# the six faces. A campfire is ONE voxel: counting faces alone left it six
-	# possible neighbours, so "bank eight rock around the fire" was a thing the
-	# world could not physically hold. The shell of a single block is 26 cells,
-	# which is what a hearth actually looks like.
-	for v in own:
-		for dx in [-1, 0, 1]:
-			for dy in [-1, 0, 1]:
-				for dz in [-1, 0, 1]:
-					if dx == 0 and dy == 0 and dz == 0:
-						continue
-					var n: Vector3i = (v as Vector3i) + Vector3i(dx, dy, dz)
-					if own.has(n) or seen.has(n):
-						continue
-					seen[n] = true
-					if n.x * up_i.x + n.y * up_i.y + n.z * up_i.z < floor_h:
-						continue
-					var id := Blocks.bottom_of(get_id(n) & Blocks.ID_MASK)
-					if id == Blocks.AIR:
-						continue
-					tally[id] = int(tally.get(id, 0)) + 1
-	return tally
-
-
-## Does what is packed around this station satisfy one growth entry?
-func _growth_met(tally: Dictionary, g: Dictionary) -> bool:
-	for req in g["needs"]:
-		var have := 0
-		if req.has("any"):
-			for id in req["any"]:
-				have += int(tally.get(int(id), 0))
-		else:
-			have = int(tally.get(int(req["id"]), 0))
-		if have < int(req["n"]):
-			return false
-	return true
-
-
-## Everything the station at `anchor` could be commissioned into right now.
-## Returns [{to, name, def}], possibly empty.
-func station_growth_options(anchor: Vector3i) -> Array:
-	var m: Dictionary = _machines.get(anchor, {})
-	if m.is_empty() or not bool(m.get("online", true)):
-		return []
-	# What it IS now, not what its pattern built: a campfire already made a
-	# Smelter is offered what a Smelter grows into, not the Smelter again.
-	var kind := machine_kind_at(anchor)
-	var opts := Blocks.growth_from(kind)
-	if opts.is_empty():
-		return []
-	var tally := machine_surround(anchor)
-	var out: Array = []
-	for g in opts:
-		if _growth_met(tally, g):
-			out.append({"to": int(g["to"]), "name": Blocks.name_of(int(g["to"]))})
-	return out
-
-
-## The highest thing this station still qualifies as, walking back down the chain
-## from what it is now. Returns its own kind when nothing has been taken away.
-func station_settled_kind(anchor: Vector3i, kind: int) -> int:
-	var tally := machine_surround(anchor)
-	var at := kind
-	# Bounded rather than `while true`: the chain is data, and a table someone
-	# edits into a loop should degrade a station, not hang the game.
-	for _step in Blocks.STATION_GROWTH.size() + 1:
-		var parent := Blocks.growth_parent(at)
-		if parent < 0:
-			return at        # a core: built from a pattern, not grown into
-		# Still holding up? Then this is what it is.
-		var ok := false
-		for g in Blocks.STATION_GROWTH:
-			if int(g["from"]) == parent and int(g["to"]) == at and _growth_met(tally, g):
-				ok = true
-				break
-		if ok:
-			return at
-		at = parent
-	return at
-
-
-## Is a sub-cell-built machine still whole?
-func _part_machine_intact(m: Dictionary) -> bool:
-	var def: Dictionary = m["def"]
-	var size: Vector3i = def["size"]
-	var layers: Array = def["layers"]
-	var origin: Vector3i = m["origin"]
-	var rot: int = int(m["rot"])
-	for y in layers.size():
-		var rows: Array = layers[y]
-		for z in rows.size():
-			var row: String = rows[z]
-			for x in row.length():
-				if not _sub_matches(origin + Blocks._rotate_offset(
-						Vector3i(x, y, z), size, rot), row[x]):
-					return false
-	return true
-
-
 # --- power grid --------------------------------------------------------------
 #
-# Machines are wired together with Power Conduit. A generator feeds any machine
-# reachable through a run of conduit, plus anything built flush against it -- so
-# a small base can skip wiring entirely, and a sprawling one runs cable.
+# Stations are wired together with Power Conduit. A generator feeds any station
+# reachable through a run of conduit, plus anything standing in the same sealed
+# room -- so a small base can skip wiring entirely, and a sprawling one runs cable.
 const GRID_MAX := 2500        # conduit cells followed before giving up
 
-var _grid_cache := {}         # controller -> Array[Station] of generators feeding it
+var _grid_cache := {}         # station id -> Array[Station] of generators feeding it
 
-## Every voxel belonging to the machine at controller `c`.
-func _machine_cells(c: Vector3i) -> Array:
-	var m: Dictionary = _machines.get(c, {})
-	if m.is_empty():
-		return []
-	if bool(m.get("parts", false)):
-		return _part_machine_voxels(m["def"], int(m["rot"]), m["origin"])
-	var built := Blocks.structure_cells(m["def"], int(m["rot"]))
-	var axes := _pattern_axes(c)
-	var origin: Vector3i = m["origin"]
-	var out: Array = []
-	for off in (built["cells"] as Dictionary):
-		out.append(origin + _pattern_to_world(off, axes))
-	return out
-
-
-## The online generators feeding the machine at `c`, via conduit or direct contact.
-func grid_generators(c: Vector3i) -> Array:
-	if _grid_cache.has(c):
-		return _grid_cache[c]
-	var ctrls := {}
-	var wires := {}
-	var q: Array[Vector3i] = []
-	for cell in _machine_cells(c):
-		for n in _NEIGH6:
-			var a: Vector3i = (cell as Vector3i) + n
-			if Blocks.bottom_of(get_id(a)) == Blocks.WIRE:
-				if not wires.has(a):
-					wires[a] = true
-					q.append(a)
-			else:
-				var m = _machine_at.get(a)
-				if m != null:
-					ctrls[m] = true
-	var head := 0
-	while head < q.size():
-		var w: Vector3i = q[head]
-		head += 1
-		for n in _NEIGH6:
-			var a: Vector3i = w + n
-			if Blocks.bottom_of(get_id(a)) == Blocks.WIRE:
-				if not wires.has(a) and wires.size() < GRID_MAX:
-					wires[a] = true
-					q.append(a)
-			else:
-				var m = _machine_at.get(a)
-				if m != null:
-					ctrls[m] = true
-	var gens: Array = []
-	for k in ctrls:
-		var rec: Dictionary = _machines.get(k, {})
-		if not bool(rec.get("online", false)):
-			continue
-		var st: Station = rec.get("station")
-		if st != null and is_instance_valid(st) and st.kind == Blocks.GENERATOR:
-			gens.append(st)
-	_grid_cache[c] = gens
-	return gens
-
-
-# --- bases -------------------------------------------------------------------
-#
-# A BASE is a sealed pocket of air you built: flood-fill from where you stand
-# through open cells, and if it closes without running away into the open world,
-# you are indoors. This is the check the Climate Unit deliberately skipped ("no
-# cheap way to flood-fill is this voxel structure enclosed") -- it is affordable
-# because it only ever runs for the ONE room the player is standing in, and only
-# when they cross into a new cell.
 const ROOM_MAX_CELLS := 900    # bigger than this and you are outdoors, not in a room
 const ROOM_RECHECK := 0.35     # seconds between re-floods while walking around
 const ROOM_GIVEUP := 2.0       # ...but much slower once we know you are outside
@@ -2651,7 +1924,7 @@ const BASE_NEAR := 26          # only look for a room this close to a real machi
 var _room: Dictionary = {}     # cached flood-fill result for the player's room
 var _room_at := Vector3i(0, -99999, 0)
 var _room_age := 999.0
-var _room_ctrls: Array = []    # machine controllers bordering _room, found with it
+var _room_ctrls: Array = []    # stations in or against _room, found with it
 var _room_scan_at := Vector3i(0, -99999, 0)   # where the last flood was attempted
 var _room_temp := 1e9          # the room's own temperature; 1e9 = not established yet
 
@@ -2694,11 +1967,91 @@ func _cell_seals(v: Vector3i) -> bool:
 ## machines in it by definition -- an empty box is not a base and would not keep
 ## you alive anyway -- so out in the world, and in caves, the fill never runs.
 func _near_base_machine(v: Vector3i) -> bool:
-	for c in machine_cores:
-		var d: Vector3i = (c as Vector3i) - v
+	for pv in _placed_at:
+		var d: Vector3i = (pv as Vector3i) - v
 		if absi(d.x) <= BASE_NEAR and absi(d.y) <= BASE_NEAR and absi(d.z) <= BASE_NEAR:
 			return true
 	return false
+
+
+## Every station standing on this planet (not riding a ship), by each voxel it
+## fills. Cheap -- a handful of stations, a few cells each -- and run with each
+## base scan rather than kept up to date edit by edit.
+func _rebuild_placed() -> void:
+	_placed_at.clear()
+	_grid_cache.clear()
+	if _world_ref == null:
+		return
+	for st in _world_ref._stations:
+		if not is_instance_valid(st) or st.get_parent() is Ship or st.headless:
+			continue
+		if _world_ref.nearest_planet(st.global_position) != self:
+			continue
+		for v in station_voxels(st):
+			_placed_at[v] = st
+
+
+## The voxels a station fills, from its footprint and the way it stands. The
+## station's origin is the centre of its first cell; a wider footprint runs out
+## either side of it the same way its collision box does.
+func station_voxels(st: Station) -> Array:
+	var fp := StationModels.footprint(st.kind)
+	var out: Array = []
+	for ix in fp.x:
+		for iy in fp.y:
+			for iz in fp.z:
+				var local := Vector3(float(ix) - float(fp.x - 1) * 0.5, float(iy),
+					float(iz) - float(fp.z - 1) * 0.5)
+				out.append(world_to_voxel(st.to_global(local)))
+	return out
+
+
+## The generators feeding station `st` through conduit: out along every wire
+## touching it, and every generator touching those wires.
+func station_grid_generators(st: Station) -> Array:
+	var key := st.get_instance_id()
+	if _grid_cache.has(key):
+		return _grid_cache[key]
+	var wires := {}
+	var q: Array[Vector3i] = []
+	for cell in station_voxels(st):
+		for n in _NEIGH6:
+			var a: Vector3i = (cell as Vector3i) + n
+			if Blocks.bottom_of(get_id(a)) == Blocks.WIRE and not wires.has(a):
+				wires[a] = true
+				q.append(a)
+	var gens := {}
+	var head := 0
+	while head < q.size():
+		var w: Vector3i = q[head]
+		head += 1
+		for n in _NEIGH6:
+			var a: Vector3i = w + n
+			var other = _placed_at.get(a)
+			if other != null and is_instance_valid(other) and other.kind == Blocks.GENERATOR:
+				gens[other] = true
+			if Blocks.bottom_of(get_id(a)) == Blocks.WIRE and not wires.has(a) \
+					and wires.size() < GRID_MAX:
+				wires[a] = true
+				q.append(a)
+	var out: Array = gens.keys()
+	_grid_cache[key] = out
+	return out
+
+
+## A Campfire station burning in cell `v`: flames drawn and light baked there.
+func add_fire(v: Vector3i) -> void:
+	if _fire_cells.has(v):
+		return
+	_fire_cells[v] = true
+	_relight_around(v)
+
+
+func remove_fire(v: Vector3i) -> void:
+	if not _fire_cells.has(v):
+		return
+	_fire_cells.erase(v)
+	_relight_around(v)
 
 
 ## Flood-fill the open space containing `start`. Returns the set of cells, or an
@@ -2775,21 +2128,25 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 		_room_scan_at = v
 		_room_age = 0.0
 		var was := _room.size()
-		# Both cheap tests first: near a machine at all, and standing under
-		# something. Before the first station existed machine_cores was empty
-		# and none of this ever ran, which is why the cost appeared the moment
-		# one was built and never went away again.
+		# Both cheap tests first: near a station at all, and standing under
+		# something. Out in the open with no station about, the flood never runs.
 		var tr := Time.get_ticks_usec()
+		_rebuild_placed()
 		_room = _flood_room(v) if (_near_base_machine(v) and _has_ceiling(v)) else {}
 		WorldManager.perf_mark("room scan", tr)
 		if _room.size() != was:
 			_room_temp = 1e9   # different room (or none): start from outside again
 		# Found once with the room rather than re-walked every tick: this scan is
 		# 6 lookups per cell, and the room only changes when the fill does.
+		# A station stands IN the room's air (it is a node, not a block, so the
+		# flood runs through it) or against its wall; either way it serves it.
 		var found := {}
 		for c in _room:
+			var here = _placed_at.get(c)
+			if here != null:
+				found[here] = true
 			for n in _NEIGH6:
-				var m = _machine_at.get((c as Vector3i) + n)
+				var m = _placed_at.get((c as Vector3i) + n)
 				if m != null:
 					found[m] = true
 		_room_ctrls = found.keys()
@@ -2810,15 +2167,9 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 	var ls: Station = null
 	var heater: Station = null
 	var cooler: Station = null
-	var ls_c := Vector3i.ZERO
-	var heater_c := Vector3i.ZERO
-	var cooler_c := Vector3i.ZERO
 	var gset := {}
-	for c in _room_ctrls:
-		var rec: Dictionary = _machines.get(c, {})
-		if not bool(rec.get("online", false)):
-			continue
-		var st: Station = rec.get("station")
+	for sv in _room_ctrls:
+		var st: Station = sv as Station
 		if st == null or not is_instance_valid(st):
 			continue
 		if st.kind == Blocks.GENERATOR:
@@ -2827,17 +2178,14 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 		else:
 			# A consumer is powered by whatever its CONDUIT reaches, which may be
 			# a generator in another room entirely.
-			for g in grid_generators(c):
+			for g in station_grid_generators(st):
 				gset[g] = true
 			if st.kind == Blocks.OXYGEN_PLANT:
 				ls = st
-				ls_c = c
 			elif st.kind == Blocks.HEATER:
 				heater = st
-				heater_c = c
 			elif st.kind == Blocks.COOLER:
 				cooler = st
-				cooler_c = c
 	gens = gset.keys()
 	for g in gens:
 		out["power"] += (g as Station).power
@@ -2849,13 +2197,13 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 	# Touching the base is a connection; anything further off needs conduit run
 	# to it. Base generators are tried first, so a self-contained base never
 	# depends on wiring at all.
-	var draw := func(cc2: Vector3i, amount: float) -> bool:
+	var draw := func(consumer: Station, amount: float) -> bool:
 		for g in room_gens:
 			var st: Station = g
 			if st.power >= amount:
 				st.power -= amount
 				return true
-		for g2 in grid_generators(cc2):
+		for g2 in station_grid_generators(consumer):
 			var st2: Station = g2
 			if st2.power >= amount:
 				st2.power -= amount
@@ -2865,7 +2213,7 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 		# A bigger room takes proportionally longer to fill, so a cathedral is a
 		# real commitment and a cupboard is quick.
 		var rate: float = 0.55 * (200.0 / maxf(float(_room.size()), 60.0))
-		if draw.call(ls_c, Station.O2_POWER_RATE * delta):
+		if draw.call(ls, Station.O2_POWER_RATE * delta):
 			ls.o2 = minf(ls.o2 + rate * delta, 1.0)
 		else:
 			ls.o2 = maxf(ls.o2 - 0.05 * delta, 0.0)
@@ -2875,9 +2223,9 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 	# way only, so a Heater is no help on a world that is cooking you -- that
 	# needs a Cooler, and vice versa.
 	var target := ambient_temp()
-	if heater != null and draw.call(heater_c, Station.HEAT_POWER_RATE * delta):
+	if heater != null and draw.call(heater, Station.HEAT_POWER_RATE * delta):
 		target = maxf(target, REGULATED_TEMP)
-	if cooler != null and draw.call(cooler_c, Station.HEAT_POWER_RATE * delta):
+	if cooler != null and draw.call(cooler, Station.HEAT_POWER_RATE * delta):
 		target = minf(target, REGULATED_TEMP)
 	if _room_temp > 1e8:
 		_room_temp = ambient_temp()
@@ -2898,53 +2246,6 @@ func ambient_temp() -> float:
 		# on an otherwise mild world.
 		base += lerpf(-12.0, 6.0, clampf(sun_height() * 0.5 + 0.5, 0.0, 1.0))
 	return base
-
-
-## The name of the intact machine covering `v` (""  if there is none, or if it
-## is damaged -- broken structures read as their individual blocks again).
-func machine_name_at(v: Vector3i) -> String:
-	var c = _machine_at.get(v)
-	if c == null:
-		return ""
-	var m: Dictionary = _machines.get(c, {})
-	if not bool(m.get("online", false)):
-		return ""
-	return str((m["def"] as Dictionary)["name"])
-
-
-## Is the machine whose footprint covers `v` currently intact?
-func machine_online_at(v: Vector3i) -> bool:
-	var c = _machine_at.get(v)
-	if c == null:
-		return false
-	return bool(_machines.get(c, {}).get("online", false))
-
-
-## Re-check every saved machine. Called after a load, once blocks are in place.
-func revalidate_machines() -> void:
-	_machines.clear()
-	_machine_at.clear()
-	var keep: Array = []
-	for c in machine_cores:
-		var r := assemble_machine(c)
-		if not r.get("ok", false):
-			r = assemble_parts(c)   # sub-cell builds re-check the same way
-		if r.get("ok", false):
-			keep.append(c)
-	machine_cores = keep
-	for c in _machine_stations.keys():
-		if not keep.has(c):
-			var dead: Station = _machine_stations[c]
-			if dead != null and is_instance_valid(dead):
-				dead.queue_free()
-			_machine_stations.erase(c)
-	# A fire whose wood was broken out from under it stops burning: the flames and
-	# the light it was casting both have to go, which means the chunks it lit have
-	# to bake again.
-	for fc in _fire_cells.keys():
-		if not keep.has(fc):
-			_fire_cells.erase(fc)
-			_relight_around(fc)
 
 
 func ore_def(block_id: int) -> Dictionary:
@@ -5473,21 +4774,6 @@ func set_block(v: Vector3i, id: int, quiet := false) -> void:
 	var was := get_id(v)
 	if not quiet:
 		_edit_sound(v, was, id)
-	# A built machine only works while every one of its blocks is present, so
-	# any edit inside a footprint re-checks it (see _machine_block_changed).
-	if not _machine_at.is_empty():
-		if _machine_at.has(v):
-			call_deferred("_machine_block_changed", v)
-		else:
-			# A block BESIDE a station is part of what it is now: rock banked
-			# against a fire is the smelter, so mining that rock has to be
-			# noticed the same way mining the fire itself is.
-			for d in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
-					Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
-				var a = _machine_at.get(v + d)
-				if a != null:
-					call_deferred("_settle_kind_at", a)
-					break
 	var cc := chunk_of(v)
 	if not _edits_by_chunk.has(cc):
 		_edits_by_chunk[cc] = {}

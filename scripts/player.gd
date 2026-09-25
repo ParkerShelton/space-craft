@@ -361,12 +361,9 @@ var _ray: RayCast3D
 var _outline: MeshInstance3D       # wireframe box around the block under the crosshair
 var _stair_state := 0              # R cycles every stair rotation + shape
 var _ghost: MeshInstance3D         # translucent preview of the block about to be placed
-var _diff: MeshInstance3D          # what is wrong with a build the wrench refused
-var _diff_t := 0.0
 var _ghost_sig := ""
 var _ghost_mat: StandardMaterial3D               # shape key, so the mesh is only rebuilt when it changes
 var _ghost_dist := 99.0            # eye to previewed block, drives how faint it is
-var _commission_panel: Control     # "make this a Smelter?" confirmation
 var _prospect_name := ""           # what the crosshair is currently offering
 var _prospect_key := Vector3i(9999, 9999, 9999)   # block the answer above is about
 ## Off hides the placement preview entirely. Some people would rather judge the
@@ -550,17 +547,6 @@ func _ready() -> void:
 	# Draw over the world: a preview sunk inside terrain is worse than useless.
 	gm.no_depth_test = true
 	_ghost.material_override = gm
-	# Blueprint diff: the cells a refused build got wrong, shown in place. A
-	# count in a toast tells you there is a mistake; this tells you where.
-	_diff = MeshInstance3D.new()
-	_diff.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	var dm := StandardMaterial3D.new()
-	dm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	dm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	dm.albedo_color = Color(1.0, 0.35, 0.3, 0.55)
-	dm.no_depth_test = true
-	_diff.material_override = dm
-	_diff.visible = false
 	_ghost.visible = false
 
 	_crack = MeshInstance3D.new()
@@ -572,12 +558,10 @@ func _ready() -> void:
 	if world != null:
 		world.add_child(_outline)
 		world.add_child(_ghost)
-		world.add_child(_diff)
 		world.add_child(_crack)
 	else:
 		get_parent().add_child(_outline)
 		get_parent().add_child(_ghost)
-		get_parent().add_child(_diff)
 		get_parent().add_child(_crack)
 
 	_init_inventory()
@@ -925,8 +909,6 @@ func _unhandled_input(event: InputEvent) -> void:
 				_edit_block(false)
 				return
 			var st := _looked_at_station()
-			# Beds are not reached here -- a build made of eighths has no
-			# collider of its own, so see _try_assemble_machine below.
 			if st != null and not eva:
 				if not _use_generator_part(st):
 					_open_station(st)
@@ -954,8 +936,6 @@ func _unhandled_input(event: InputEvent) -> void:
 			elif _try_ship_computer():
 				pass
 			elif _try_ship_fitting():
-				pass
-			elif _try_assemble_machine():
 				pass
 			elif _try_toggle_door():
 				pass
@@ -2091,20 +2071,7 @@ func _rebuild_book() -> void:
 		mats.custom_minimum_size = Vector2(548, 0)
 		mats.modulate = Color(1, 1, 1, 0.75)
 		vb.add_child(mats)
-		if rec.has("grow_from"):
-			# An upgrade: what it grows out of, then the same picture a build
-			# gets -- here, the station with its materials packed round it.
-			var from_name := Blocks.name_of(int(rec["grow_from"]))
-			where.text = "Upgrade a %s" % from_name
-			vb.add_child(_pattern_view(rec["def"],
-				"Pack these anywhere touching a %s -- corners count -- then right-click it and choose %s." % [
-					from_name, name]))
-		elif rec.has("def"):
-			# Multiblocks are the reason this screen exists. Shown as a picture
-			# of the finished build, each layer drawn out with the materials'
-			# own icons, and a key in words -- not letters to decode.
-			vb.add_child(_pattern_view(rec["def"]))
-		elif str(rec["diagram"]) != "":
+		if str(rec["diagram"]) != "":
 			var dg := Label.new()
 			dg.text = str(rec["diagram"])
 			dg.add_theme_font_size_override("font_size", 12)
@@ -2113,110 +2080,6 @@ func _rebuild_book() -> void:
 		_book_vbox.add_child(row)
 	_book_empty.text = "" if shown > 0 else "Nothing matches that."
 	_book_empty.visible = shown == 0
-
-
-## A build pattern drawn out for the Recipe Book: the finished thing in 3D on
-## the left; on the right, each layer from the ground up as a grid of the
-## materials' icons, and a key saying what each one is.
-func _pattern_view(def: Dictionary, how_text: String = "") -> Control:
-	var hb := HBoxContainer.new()
-	hb.add_theme_constant_override("separation", 14)
-	# The finished build as a live model, turning, and turned by dragging.
-	hb.add_child(PatternView.new(def))
-
-	var right := VBoxContainer.new()
-	right.add_theme_constant_override("separation", 6)
-	hb.add_child(right)
-	var planet := world.nearest_planet(global_position) if world != null else null
-	# Blocky patterns are shown a block to a square; fine ones an eighth.
-	var step := 2 if (not def.has("legend") and Blocks.part_pattern_is_blocky(def)) else 1
-	var layers: Array = def["layers"]
-	var grids := HBoxContainer.new()
-	grids.add_theme_constant_override("separation", 16)
-	right.add_child(grids)
-	var count := int(ceil(layers.size() / float(step)))
-	var y := 0
-	while y < layers.size():
-		var li := y / step
-		var col := VBoxContainer.new()
-		col.add_theme_constant_override("separation", 3)
-		var cap := Label.new()
-		cap.text = "Layer %d" % (li + 1)
-		if count > 1 and li == 0:
-			cap.text += " (bottom)"
-		elif count > 1 and li == count - 1:
-			cap.text += " (top)"
-		cap.add_theme_font_size_override("font_size", 11)
-		cap.modulate = Color(0.62, 0.80, 0.95)
-		col.add_child(cap)
-		var grid := GridContainer.new()
-		var rows: Array = layers[y]
-		var width := int(ceil((rows[0] as String).length() / float(step)))
-		grid.columns = maxi(width, 1)
-		grid.add_theme_constant_override("h_separation", 2)
-		grid.add_theme_constant_override("v_separation", 2)
-		var z := 0
-		while z < rows.size():
-			var row: String = rows[z]
-			var x := 0
-			while x < row.length():
-				grid.add_child(_pattern_cell(def, row[x], planet))
-				x += step
-			z += step
-		col.add_child(grid)
-		grids.add_child(col)
-		y += step
-	var seen := Label.new()
-	seen.text = "Each layer seen from above."
-	seen.add_theme_font_size_override("font_size", 10)
-	seen.modulate = Color(1, 1, 1, 0.45)
-	right.add_child(seen)
-
-	# The key, in pictures and words.
-	var key := HFlowContainer.new()
-	key.add_theme_constant_override("h_separation", 12)
-	key.custom_minimum_size = Vector2(360, 0)
-	for ch in Blocks.pattern_letters(def):
-		var item := HBoxContainer.new()
-		item.add_theme_constant_override("separation", 4)
-		item.add_child(_pattern_cell(def, ch, planet))
-		var lab := Label.new()
-		lab.text = Blocks.pattern_letter_label(def, ch)
-		lab.add_theme_font_size_override("font_size", 12)
-		item.add_child(lab)
-		key.add_child(item)
-	right.add_child(key)
-	var how := Label.new()
-	how.text = how_text if how_text != "" else "Build it, then right-click it to confirm."
-	how.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	how.custom_minimum_size = Vector2(340, 0)
-	how.add_theme_font_size_override("font_size", 11)
-	how.modulate = Color(0.98, 0.86, 0.58)
-	right.add_child(how)
-	return hb
-
-
-## One square of a pattern grid: the material's icon on its colour, or a faint
-## outline where the cell is left empty.
-func _pattern_cell(def: Dictionary, ch: String, planet: Planet) -> Control:
-	const CELL := 22
-	var id := Blocks.pattern_letter_id(def, ch)
-	var box := ColorRect.new()
-	box.custom_minimum_size = Vector2(CELL, CELL)
-	if id == Blocks.AIR:
-		box.color = Color(1, 1, 1, 0.06)
-		return box
-	var c := Blocks.color_of(id)
-	box.color = Color(c.r, c.g, c.b, 0.35)
-	var icon := TextureRect.new()
-	icon.texture = ItemIcon.of(id, c, planet)
-	icon.set_anchors_preset(Control.PRESET_FULL_RECT)
-	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.add_child(icon)
-	box.tooltip_text = Blocks.pattern_letter_label(def, ch)
-	return box
 
 
 func _toggle_inventory() -> void:
@@ -2426,11 +2289,6 @@ func _physics_process(delta: float) -> void:
 	_tick_held_anim(delta)
 	if _trail != null:
 		_trail.emitting = velocity.length() > 0.8
-	# The build diff fades on its own; it is a hint, not a mode.
-	if _diff != null and _diff.visible:
-		_diff_t -= delta
-		if _diff_t <= 0.0:
-			_diff.visible = false
 	if _toast_time > 0.0:
 		_toast_time -= delta
 		if _toast_time <= 0.0 and _toast_label != null:
@@ -4439,28 +4297,6 @@ func _try_harvest(tgt: Dictionary) -> bool:
 	return true
 
 
-## Paint the cells a refused build got wrong, in place, for a few seconds.
-func _show_build_diff(planet: Planet, wrong: Array) -> void:
-	if _diff == null:
-		return
-	if wrong.is_empty():
-		_diff.visible = false
-		return
-	var boxes: Array = []
-	for w in wrong:
-		var sv: Vector3i = w[0]
-		var lo := Vector3(sv) * 0.5
-		# Cells that should be EMPTY are drawn full-size so "something is in the
-		# way here" reads differently from "something is missing here".
-		var pad := 0.5 if str(w[1]) == "." else 0.46
-		boxes.append([lo + Vector3.ONE * ((0.5 - pad) * 0.5), lo + Vector3.ONE * pad])
-	_diff.mesh = _make_ghost_mesh(boxes)
-	_diff.global_transform = Transform3D(planet.global_transform.basis,
-		planet.global_position)
-	_diff.visible = true
-	_diff_t = 6.0
-
-
 ## The sub-cell the crosshair is on, and the one a part would go into, both in
 ## GLOBAL eighth coordinates (voxel * 2 + sub). Working in that space makes
 ## "the next eighth over" one addition whether it lands in this voxel or the
@@ -4623,184 +4459,19 @@ func _try_eat() -> bool:
 	return true
 
 
-## Turn the crosshair into a wrench when what you are looking at could be
-## commissioned, and name it beside the crosshair.
-##
-## With the Wrench item gone this is the ONLY thing that tells you a build is
-## finished -- there is nothing in your hand to notice it for you -- so it runs
-## off the same raycast the placement ghost already does.
-func _update_prospect(tgt: Dictionary = {}) -> void:
+## The crosshair: a plain "+", or amber with "1/8" beside it while fine
+## placing is on -- left on by accident it builds eighth-blocks where you meant
+## whole ones, so it has to be visible where you are looking.
+func _update_prospect(_tgt: Dictionary = {}) -> void:
 	if _crosshair == null:
 		return
-	# Asked once per BLOCK looked at, not once per frame. Turning on the spot
-	# crosses a lot of blocks, but standing still crosses none, and it is the
-	# standing-still case that was paying for a raycast and a pattern search
-	# sixty times a second.
-	var key: Vector3i = tgt.get("voxel", Vector3i(9999, 9999, 9999)) if not tgt.is_empty() 		else Vector3i(9999, 9999, 9999)
-	if key == _prospect_key and not tgt.is_empty():
-		return
-	_prospect_key = key
-	var p := station_prospect(tgt)
-	var on := not p.is_empty()
-	var mark := "wrench" if on else ("fine" if fine_place else "plain")
+	var mark := "fine" if fine_place else "plain"
 	if mark == _prospect_name:
 		return
 	_prospect_name = mark
-	if on:
-		# The crosshair BECOMES the wrench and says nothing else. What it would
-		# make is named in the confirmation, where there is room for it and where
-		# it matters -- a caption stuck to the middle of the screen is just
-		# something else to read past while you are looking at the world.
-		_crosshair.text = "⚒"
-		_crosshair.modulate = Color(1, 1, 1)
-		# The wrench glyph's ink sits high in its line box -- measured 4px above
-		# where "+" draws at this size -- so the label is nudged down by exactly
-		# that, or the cursor jumps as it changes.
-		_crosshair.position.y = WRENCH_NUDGE_Y
-	else:
-		_crosshair.text = "+ 1/8" if fine_place else "+"
-		_crosshair.modulate = Color(1.0, 0.78, 0.30) if fine_place else Color(1, 1, 1)
+	_crosshair.text = "+ 1/8" if fine_place else "+"
+	_crosshair.modulate = Color(1.0, 0.78, 0.30) if fine_place else Color(1, 1, 1)
 
-
-## The confirmation. Nothing changes until it is answered, and it names what you
-## are about to make -- there is no tool in your hand to tell you any more, and a
-## pile of rock round a fire could reasonably be several things.
-func _open_commission(prospect: Dictionary) -> void:
-	if _commission_panel != null:
-		return
-	var opts: Array = prospect["options"]
-	# Centred by a container that fills the screen, not by setting a position on
-	# something that has not been laid out yet: a panel's size is zero until the
-	# frame after it is added, so centring it by hand put it in the top-left
-	# corner with half of it off the edge.
-	_commission_panel = Control.new()
-	_commission_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_commission_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var center := CenterContainer.new()
-	center.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_commission_panel.add_child(center)
-	var box := PanelContainer.new()
-	center.add_child(box)
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 10)
-	box.add_child(vb)
-	var head := Label.new()
-	head.text = ("Commission this build as:" if opts.size() > 1
-		else "Make this a %s?" % str(opts[0]["name"]))
-	head.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	head.add_theme_font_size_override("font_size", 18)
-	vb.add_child(head)
-	for o in opts:
-		var b := Button.new()
-		# One option is a yes/no question, and the thing being made is already
-		# named above it; several is a menu, and then each has to say which.
-		b.text = "Confirm" if opts.size() == 1 else str(o["name"])
-		b.custom_minimum_size = Vector2(240, 38)
-		b.pressed.connect(_confirm_commission.bind(prospect, int(o["to"])))
-		vb.add_child(b)
-	var cancel := Button.new()
-	cancel.text = "Cancel"
-	cancel.custom_minimum_size = Vector2(240, 32)
-	cancel.pressed.connect(_close_commission)
-	vb.add_child(cancel)
-	_ui_layer.add_child(_commission_panel)
-	menu_open = true      # the world runs on; this body just stops taking orders
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-
-
-func _close_commission() -> void:
-	if _commission_panel != null:
-		_commission_panel.queue_free()
-		_commission_panel = null
-	menu_open = false
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-
-
-func _confirm_commission(prospect: Dictionary, to: int) -> void:
-	var planet: Planet = prospect["planet"]
-	var v: Vector3i = prospect["voxel"]
-	_close_commission()
-	var res: Dictionary
-	if str(prospect["mode"]) == "grow":
-		res = world.grow(planet, v, to)
-	else:
-		res = world.assemble(planet, v, bool(prospect.get("parts", true)))
-	if res.get("ok", false):
-		_toast("%s commissioned" % res.get("name", "Station"))
-		var st := planet.machine_station_at(v)
-		if st != null:
-			_open_station(st)
-	else:
-		_toast(str(res.get("reason", "Cannot commission that")))
-
-
-## What right-clicking the block you are looking at would COMMISSION, if
-## anything: a finished pattern waiting to be brought to life, or a station with
-## enough material packed around it to become something bigger.
-##
-## Cheap enough to run whenever the target changes, which is what lets the
-## crosshair turn into a wrench the moment you look at one -- there is no tool to
-## carry any more, so the cursor is the only thing that can tell you.
-func station_prospect(tgt: Dictionary = {}) -> Dictionary:
-	if tgt.is_empty():
-		tgt = _raycast_voxel()
-	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "planet":
-		return {}
-	var planet := tgt["obj"] as Planet
-	var v: Vector3i = tgt["voxel"]
-	var anchor = planet.machine_anchor_at(v)
-	if anchor != null:
-		var opts: Array = planet.station_growth_options(anchor)
-		if not opts.is_empty():
-			return {"mode": "grow", "planet": planet, "voxel": anchor, "options": opts}
-		return {}
-	# Nothing but a cell of EIGHTHS can be a pattern, so anything else is
-	# answered by one comparison. This is the whole cost of the check on the
-	# terrain you actually spend your time looking at: without it, every frame
-	# ran the full matcher -- four patterns by four rotations by every offset --
-	# against whatever rock happened to be under the crosshair.
-	if int(tgt.get("id", Blocks.AIR)) & Blocks.ID_MASK != Blocks.PARTS:
-		return {}
-	var dry := planet.assemble_parts(v, -1, true)
-	if dry.get("ok", false):
-		return {"mode": "build", "planet": planet, "voxel": v, "parts": true,
-			"options": [{"to": int(dry["result"]), "name": str(dry["name"])}]}
-	return {}
-
-
-## Right-click on something commissionable. Opens a station you already have,
-## or puts up the confirmation naming what you are about to make.
-func _try_assemble_machine() -> bool:
-	var tgt := _raycast_voxel()
-	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "planet":
-		return false
-	var planet := tgt["obj"] as Planet
-	var v: Vector3i = tgt["voxel"]
-	var is_core := int(tgt.get("id", Blocks.AIR)) == Blocks.MACHINE_CORE
-	var existing := planet.machine_station_at(v)
-	# ANY block of a working machine opens it: the structure is the machine, so
-	# clicking its wall should do what clicking the core does. While it is
-	# damaged only the core opens -- the other blocks go back to being blocks so
-	# you can right-click to put the missing one back.
-	#
-	# Growing it comes FIRST, though: once there is rock banked around your fire,
-	# right-clicking it means "make this a smelter", and you can still open the
-	# fire from the confirmation or by cancelling it.
-	if existing != null and (is_core or planet.machine_online_at(v)):
-		if not planet.machine_online_at(v):
-			_toast("%s is damaged -- replace the missing block" % existing.title())
-			_open_station(existing)
-			return true
-		# A bed is not opened, it is got into. This is the path that catches it:
-		# a build made of eighths has no collider of its own -- the ray hits the
-		# blocks, and _looked_at_station only ever sees stations that ARE a
-		# node, so the check up in the click handler never fired for one.
-		if existing.kind == Blocks.BED:
-			_use_bed(existing, planet.machine_long_axis(planet.machine_anchor_at(v)))
-		else:
-			_open_station(existing)
-		return true
-	return false
 
 func _place_station(id: int) -> void:
 	if world == null:
@@ -4903,14 +4574,6 @@ func _process_mining(delta: float) -> void:
 					int(c.get("stage", 0)) + 1, int(g["stages"])]
 				use = ""
 		_look_name = nm + ("  (" + use + ")" if use != "" else "")
-	# Every block of an assembled machine reports the MACHINE, so a hand-built
-	# structure reads as one object instead of the bricks it is made of. Only
-	# while it is intact -- damage it and the blocks go back to being blocks,
-	# which is also how you spot that it has stopped working.
-	if planet != null:
-		var mach := planet.machine_name_at(v)
-		if mach != "":
-			_look_name = mach + "  (right-click to open)"
 
 	# High-tier ore is too hard for weak tools -- that gate is itself the tier hint.
 	var hardness := Blocks.hardness(id)
@@ -6125,8 +5788,8 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 		var tst: Station = _stor_map[ti]["st"]
 		var fid: int = from["id"]
 		if Blocks.is_smelter_kind(tst.kind) and not (Blocks.is_ore(fid) or Blocks.is_refined(fid)
-				or fid == Blocks.METAL or fid == Blocks.SCRAP):
-			_toast("Smelter takes raw ore, ingots, scrap, or Metal")
+				or fid == Blocks.PLATE or fid == Blocks.SCRAP or fid == Blocks.REGOLITH):
+			_toast("Smelter takes raw ore, ingots, scrap, plates, or Regolith (sand)")
 			return
 		# A bench takes what its own recipes use -- see Blocks.station_accepts.
 		if (tst.kind == Blocks.FABRICATOR or tst.kind == Blocks.SHIPWORKS) \
@@ -6542,7 +6205,6 @@ func _tick_eating(delta: float) -> void:
 	_refresh_slots()
 	_reset_held_pose()
 	_eat_bites = -1
-
 
 
 ## Back to a whole item held normally -- either because you finished one and the
@@ -7030,7 +6692,6 @@ func _recipe_text(recipe: Dictionary) -> String:
 	return "%s %s  (%s)" % [verb, out_txt, ",  ".join(parts)]
 
 
-
 # --- crafting stations --------------------------------------------------------
 
 const _LEFT_W := 250   # left column (blueprints/actions) width
@@ -7311,7 +6972,6 @@ func _material_name(mtype: String) -> String:
 			return "Material"
 
 
-
 ## Labels currently shown, so a dynamic list is only torn down and rebuilt when
 ## it actually changed (rebuilding every frame would fight clicks and focus).
 func _craft_button_labels() -> Array:
@@ -7451,6 +7111,10 @@ func _open_station(st: Station) -> void:
 	# for the one in the bay. One click, whichever of those it turns out to be.
 	if st.kind == Blocks.POWER_BAY:
 		_swap_bay_battery(st)
+		return
+	# A bed is got into, not opened. Its long side runs along its own Z.
+	if st.kind == Blocks.BED:
+		_use_bed(st, st.global_transform.basis.z.normalized())
 		return
 	# Likewise the anvil: nothing to open. Right-click puts a piece on it or
 	# takes the piece off; the hammer does the rest.
@@ -8664,7 +8328,6 @@ func _water_surface_near(p: Planet, at: Vector3, up: Vector3):
 		var centre: Vector3 = p.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5))
 		return centre - up * 0.5 + up * fill
 	return null
-
 
 
 ## Right-click with the journal in hand. One page, the same page every time in

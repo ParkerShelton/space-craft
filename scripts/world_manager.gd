@@ -310,28 +310,6 @@ func edit_part(p: Planet, v: Vector3i, sub: int, id: int) -> void:
 		p.set_part(v, sub, id)
 
 
-## Turning a finished build into a working machine.
-##
-## The RESULT is not sent, only the fact that it happened: assembly is a pure
-## function of the blocks, and the blocks are already replicated, so every
-## machine runs the same assembly and arrives at the same station rather than
-## being told what to believe.
-func assemble(p: Planet, v: Vector3i, parts: bool, require: int = -1) -> Dictionary:
-	var res: Dictionary = p.assemble_parts(v, require) if parts else p.assemble_machine(v)
-	if res.get("ok", false) and net != null and net.active:
-		net.assembled(p.planet_name, v, parts)
-	return res
-
-
-## Commissioning a station into something bigger. Like assembly, only the fact
-## travels: every machine re-runs it against blocks it already has.
-func grow(p: Planet, v: Vector3i, to: int) -> Dictionary:
-	var res := p.grow_station(v, to)
-	if res.get("ok", false) and net != null and net.active:
-		net.grown(p.planet_name, v, to)
-	return res
-
-
 ## Sowing, reaping, and the clock they run on.
 ##
 ## Growth belongs to the host alone: two machines counting the same seconds
@@ -428,7 +406,6 @@ func save_game() -> bool:
 	# Time of day travels with the save, so stepping away and coming back does
 	# not snap the world to a different hour.
 	data["day_phase"] = {}
-	data["machines"] = {}
 	data["parts"] = {}
 	for p in planets:
 		# Not _edits_by_chunk itself: water the simulation placed is left out,
@@ -445,14 +422,6 @@ func save_game() -> bool:
 		if not p._parts_by_chunk.is_empty():
 			data["parts"][p.planet_name] = p._parts_by_chunk
 		data["day_phase"][p.planet_name] = p.day_phase
-		# Only the CONTROLLER positions: the blocks already persist, so this
-		# stays tiny and can never disagree with the world it describes.
-		if not p.machine_cores.is_empty():
-			data["machines"][p.planet_name] = p.machine_cores.duplicate()
-		# Which of several things each one was commissioned INTO. Derivable from
-		# the blocks only up to the point where the player had a choice.
-		if not p.machine_kinds.is_empty():
-			data.get_or_add("machine_kinds", {})[p.planet_name] = p.machine_kinds.duplicate()
 		# A field has to still be there tomorrow, or planting is a waste of an
 		# afternoon.
 		if not p.sites_opened.is_empty():
@@ -543,16 +512,10 @@ func load_game() -> bool:
 		p.load_water(pwater.get(p.planet_name, []))
 		p.load_edits(pedits.get(p.planet_name, {}))
 		p.day_phase = float(pphase.get(p.planet_name, p.day_phase))
-		p.machine_cores = (data.get("machines", {}).get(p.planet_name, []) as Array).duplicate()
-		p.machine_kinds = (data.get("machine_kinds", {}).get(p.planet_name, {}) as Dictionary).duplicate()
 		p.load_crops((data.get("crops", {}).get(p.planet_name, []) as Array))
 		p.sites_opened = {}
 		for sid in (data.get("sites_opened", {}).get(p.planet_name, []) as Array):
 			p.sites_opened[str(sid)] = true
-		# Re-check each saved machine against the blocks actually present, so a
-		# structure someone dismantled while it was unloaded comes back damaged
-		# rather than silently still working.
-		p.revalidate_machines()
 
 	# ships: rebuild from scratch
 	for s in _ships:
@@ -820,7 +783,7 @@ func add_planet(cfg: Dictionary) -> Planet:
 	p.name = cfg.get("name", "Planet")
 	p.position = cfg.get("position", Vector3.ZERO)
 	add_child(p)
-	p._world_ref = self   # so built machines can create their headless stations
+	p._world_ref = self   # so it can find the stations standing on it
 	_live = self          # so the static perf report has something to ask
 	p.configure(cfg)
 	planets.append(p)

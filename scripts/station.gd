@@ -84,8 +84,6 @@ static func capacity_of(k: int) -> int:
 		return Blocks.PRESS_SPOTS + 1   # the bed's spots, and what the ram made
 	if k == Blocks.OXYGEN_PLANT or k == Blocks.HEATER or k == Blocks.COOLER:
 		return 2   # spare filters / elements: no recipes, just somewhere to stash parts
-	if k == Blocks.FORGE:
-		return 16  # a multiblock-built upgrade over the hand-built Smelter
 	if k == Blocks.BED:
 		return 0   # you sleep in it; there is nowhere to put anything
 	if k == Blocks.SHAPER:
@@ -124,11 +122,42 @@ func _ensure_storage() -> void:
 
 
 func configure(k: int, w: WorldManager) -> void:
-	kind = k
+	# The Forge is cut for now; one saved in an older world comes back as the
+	# Smelter it was an upgrade of, with everything that was in it.
+	kind = Blocks.SMELTER if k == Blocks.FORGE else k
 	world = w
 	_ensure_storage()
 	if not headless:
 		_build_visual()
+	if kind == Blocks.CAMPFIRE:
+		# Once it is standing where it was put: whoever placed it sets the
+		# transform after configuring it.
+		_register_fire.call_deferred()
+
+
+## A campfire is a FIRE: the planet draws its flames and bakes its light into
+## the ground round it, the same as it did for one built out of wood eighths.
+## Taken back out when the campfire goes (see _exit_tree).
+var _fire_on: Planet
+var _fire_v := Vector3i.ZERO
+
+
+func _register_fire() -> void:
+	if kind != Blocks.CAMPFIRE or world == null or not is_inside_tree() \
+			or get_parent() is Ship:
+		return
+	var p := world.nearest_planet(global_position)
+	if p == null:
+		return
+	_fire_on = p
+	_fire_v = p.world_to_voxel(global_position)
+	p.add_fire(_fire_v)
+
+
+func _exit_tree() -> void:
+	if _fire_on != null and is_instance_valid(_fire_on):
+		_fire_on.remove_fire(_fire_v)
+		_fire_on = null
 
 
 ## How far through being taken apart this station is, 0 to 1. Shown rather than
@@ -439,7 +468,7 @@ func start_refine() -> int:
 		return 0
 	_job = "refine"
 	_job_t = 0.0
-	var per := REFINE_TIME_PER * (0.5 if kind == Blocks.FORGE else 1.0)  # a Forge runs hot
+	var per := REFINE_TIME_PER
 	_job_total = maxf(0.4, n * per)
 	return n
 
