@@ -463,7 +463,6 @@ var _rx := 0                       # right-column x
 var _station_store_label: Label    # "<station> contents" header above its storage
 var _left_header: Label            # "Blueprints" / "Actions" header on the left column
 var _refine_btn: Button            # Smelter action
-var _gen_switch_btn: Button        # Generator's on/off, the lever's twin
 var _craft_row: Control            # holds per-station craft buttons
 var _craft_scroll: ScrollContainer # scrolls them when a bench has many
 var _craft_buttons: Array = []     # current station's craft buttons
@@ -6849,18 +6848,6 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	_refine_btn.pressed.connect(_on_refine)
 	_station_panel.add_child(_refine_btn)
 
-	# The same switch as the lever on a generator's front, for when you have
-	# the panel open anyway or the generator is one you built out of blocks
-	# and has no lever to pull.
-	_gen_switch_btn = Button.new()
-	_gen_switch_btn.position = Vector2(12, 62)
-	_gen_switch_btn.custom_minimum_size = Vector2(_LEFT_W, 36)
-	_gen_switch_btn.visible = false
-	_gen_switch_btn.pressed.connect(func():
-		if _station_open != null and is_instance_valid(_station_open):
-			_throw_gen_switch(_station_open))
-	_station_panel.add_child(_gen_switch_btn)
-
 	# per-station craft buttons are (re)built when the station opens.
 	#
 	# Inside a scroller with a fixed height, because the number of recipes on a
@@ -7274,12 +7261,11 @@ func _open_station(st: Station) -> void:
 		_station_store_label.text = ""
 	var is_smelter: bool = Blocks.is_smelter_kind(st.kind)
 	_refine_btn.visible = is_smelter
-	_gen_switch_btn.visible = is_gen
 
 	_rebuild_craft_buttons(st)
-	var has_left: bool = is_smelter or not _craft_buttons.is_empty() or is_gen
+	var has_left: bool = is_smelter or not _craft_buttons.is_empty()
 	_left_header.visible = has_left
-	_left_header.text = "Actions" if is_smelter else ("Switch" if is_gen else "Blueprints")
+	_left_header.text = "Actions" if is_smelter else "Blueprints"
 
 	# preview + job label sit just below the action/blueprint buttons (same spot;
 	# only one shows at a time -- preview when idle, progress when working)
@@ -7576,9 +7562,8 @@ func _refresh_station_ui() -> void:
 			and _craft_signature(_station_open) != _craft_sig:
 		_rebuild_craft_buttons(_station_open)
 	if _station_open.kind == Blocks.GENERATOR:
-		var on: bool = _station_open.switched_on
-		_gen_switch_btn.text = "ON  --  click to switch off" if on else "OFF  --  click to switch on"
-		_gen_switch_btn.modulate = Color(0.75, 1.0, 0.75) if on else Color(1.0, 0.75, 0.7)
+		# No button here: the lever on the front of the machine is the switch,
+		# and one switch in two places is two things to keep in step.
 		_preview_label.text = _craft_preview_text(Blocks.GENERATOR)
 		_job_label.visible = false
 		return
@@ -7911,7 +7896,7 @@ func _use_gen_hopper(st: Station) -> bool:
 	return true
 
 
-## Throw a generator's switch, from its lever or its panel.
+## Throw the lever on the front of a generator.
 func _throw_gen_switch(st: Station) -> void:
 	var on := st.gen_toggle()
 	Audio.ui("ui_toggle_on" if on else "ui_toggle_off")
