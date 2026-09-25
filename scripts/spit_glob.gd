@@ -157,8 +157,12 @@ func _splat(at: Vector3) -> void:
 	ps.initial_velocity_max = 4.0
 	ps.gravity = world.gravity_at(at) * 0.5 if world != null else Vector3.DOWN * 5.0
 	ps.particle_flag_align_y = true
+	# Emitting only once it is in place: a one-shot CPUParticles3D fires its
+	# batch with the transform it had BEFORE it was moved, which was the
+	# world's origin (see Player._emit_at).
+	ps.emitting = false
 	get_parent().add_child(ps)
 	ps.global_position = at
-	ps.emitting = true
+	ps.set_deferred("emitting", true)
 	get_tree().create_timer(1.2).timeout.connect(ps.queue_free)
 	queue_free()

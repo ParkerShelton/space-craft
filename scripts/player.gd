@@ -3413,10 +3413,12 @@ func _splash(pos: Vector3, strength: float) -> void:
 	ramp.set_color(0, Color(wc.r, wc.g, wc.b, 0.9))
 	ramp.set_color(1, Color(wc.r, wc.g, wc.b, 0.0))
 	ps.color_ramp = ramp
+	# Emitting only once it is in place -- see _emit_at.
+	ps.emitting = false
 	host.add_child(ps)
 	var x := up.cross(Vector3(0.31, 0.12, 0.94)).normalized()
 	ps.global_transform = Transform3D(Basis(x, up, x.cross(up)), pos)
-	ps.emitting = true
+	ps.set_deferred("emitting", true)
 	get_tree().create_timer(ps.lifetime + 0.3).timeout.connect(ps.queue_free)
 	Audio.at("splash_big" if strength >= 0.5 else "splash", pos)
 
@@ -3977,6 +3979,20 @@ func _update_crack(obj: Object, v: Vector3i, raw: int, progress: float) -> void:
 
 ## A short burst of block-coloured debris where a block just broke, so it pops
 ## rather than silently vanishing.
+## Put a one-shot particle burst at `where` and set it off.
+##
+## NOT "add it, move it, emit": CPUParticles3D emits a one-shot batch with the
+## transform it had before it was moved, so every burst in the game was going
+## off at the world's origin -- a kilometre and more under your feet on a
+## planet -- and nobody ever saw a spark or a chip of rock. Emission starts on
+## the next frame, once the node is where it was put.
+func _emit_at(ps: CPUParticles3D, parent: Node, where: Vector3) -> void:
+	ps.emitting = false
+	parent.add_child(ps)
+	ps.global_position = where
+	ps.set_deferred("emitting", true)
+
+
 func _break_burst(where: Vector3, col: Color) -> void:
 	var ps := CPUParticles3D.new()
 	# CPU rather than GPU particles: this project runs the GL Compatibility
@@ -4000,9 +4016,7 @@ func _break_burst(where: Vector3, col: Color) -> void:
 	ps.scale_amount_min = 0.6
 	ps.scale_amount_max = 1.3
 	var parent: Node = world if world != null else get_parent()
-	parent.add_child(ps)
-	ps.global_position = where
-	ps.emitting = true
+	_emit_at(ps, parent, where)
 	# Clean itself up once the last particle has died.
 	get_tree().create_timer(ps.lifetime + 0.3).timeout.connect(ps.queue_free)
 
@@ -8093,35 +8107,44 @@ func _throw_gen_switch(st: Station) -> void:
 
 # --- smithing ---------------------------------------------------------------------
 
-## Right-click an anvil. With something on it, that comes off -- as whatever it
-## has been beaten into. With nothing on it, one of what you are holding goes
-## on, if it is something that can be worked.
+## Right-click an anvil.
+##
+## Empty, and holding something workable: one goes on the face and the rest of
+## the stack is set down beside it, to be worked one after another.
+##
+## With a WORKED piece on it: that comes off as whatever it has been beaten
+## into, and the next one slides on from the pile.
+##
+## With an unworked ingot on it: holding more of the same adds them to the
+## pile; anything else (or nothing) takes the ingot and the pile back.
 func _use_anvil(st: Station) -> void:
 	var face: Vector3 = _anvil_face(st)
-	if not st.anvil_piece().is_empty():
-		# Everything it comes off as has to fit, or none of it moves: half a
-		# stack of plates lost to a full bag would be the worst way to learn.
-		var before_inv: Array = inv.duplicate(true)
-		var before_piece: Dictionary = st.anvil_piece().duplicate(true)
-		var got := st.anvil_take()
-		var said := PackedStringArray()
-		for it in got:
-			var d: Dictionary = it
-			if _add_item(int(d["id"]), int(d["count"]), d.get("props", {}),
-					str(d.get("src", "")), d.get("mat", {})) > 0:
-				inv = before_inv
-				st.anvil_put_back(before_piece)
-				_toast("No room in your bag for it")
-				Audio.ui("ui_deny")
-				return
-			said.append("%d %s" % [int(d["count"]), _smith_name(d)])
-		Audio.at("place_metal", face)
-		_toast("Took off " + ", ".join(said))
-		_refresh_slots()
-		return
 	var held: Dictionary = _active_item()
 	var hid := int(held.get("id", Blocks.AIR))
-	if int(held.get("count", 0)) <= 0:
+	var hn := int(held.get("count", 0))
+	var piece := st.anvil_piece()
+	if not piece.is_empty():
+		# Worked = struck at least once since it went on (a bar goes on already
+		# at the bar's count of blows, so that is where "unworked" starts).
+		var worked: bool = int(piece.get("hits", 0)) > Blocks.smith_hits_of(
+			int(piece.get("id", Blocks.AIR)), piece.get("props", {}))
+		if not worked and hn > 0 and st.anvil_pile_fits(held) and _same_stock(held, piece):
+			var put := st.anvil_pile_add(held, hn)
+			_take_from_active(put)
+			Audio.at("place_metal", face)
+			_toast("%d more on the pile -- %d waiting" % [put, st.anvil_pile_count()])
+			_refresh_slots()
+			return
+		if not _anvil_take_off(st, not worked):
+			return
+		Audio.at("place_metal", face)
+		if worked and st.anvil_feed():
+			_toast(_last_took + "  --  next one on (%d left)" % st.anvil_pile_count())
+		else:
+			_toast(_last_took)
+		_refresh_slots()
+		return
+	if hn <= 0:
 		_toast("Put an ingot on the anvil, then strike it with a hammer")
 		return
 	if hid == Blocks.SCRAP:
@@ -8134,10 +8157,64 @@ func _use_anvil(st: Station) -> void:
 		_toast("Only ingots, bars and sheets can be worked on an anvil")
 		return
 	st.anvil_put(held)
-	_take_one_from_active()
+	var rest := st.anvil_pile_add(held, hn - 1) if st.anvil_pile_fits(held) else 0
+	_take_from_active(1 + rest)
 	Audio.at("place_metal", face)
-	_toast("On the anvil: %s -- strike it with a hammer" % _smith_name(held))
+	if rest > 0:
+		_toast("On the anvil: %s, and %d more waiting -- strike it with a hammer" % [
+			_smith_name(held), rest])
+	else:
+		_toast("On the anvil: %s -- strike it with a hammer" % _smith_name(held))
 	_refresh_slots()
+
+
+var _last_took := ""
+
+
+## Take the face (and, with `and_pile`, the pile) back into the bag. All of it
+## fits or none of it moves: half a stack of plates lost to a full bag would be
+## the worst way to learn. Leaves what it said in _last_took.
+func _anvil_take_off(st: Station, and_pile: bool) -> bool:
+	var before_inv: Array = inv.duplicate(true)
+	var before: Array = st.storage.duplicate(true)
+	var got := st.anvil_take()
+	if and_pile:
+		var pile := st.anvil_pile_take()
+		if not pile.is_empty():
+			got.append(pile)
+	var counts := {}     # name -> how many, so an ingot and its pile read as one
+	var order: Array = []
+	for it in got:
+		var d: Dictionary = it
+		if _add_item(int(d["id"]), int(d["count"]), d.get("props", {}),
+				str(d.get("src", "")), d.get("mat", {})) > 0:
+			inv = before_inv
+			st.storage = before
+			st._refresh_anvil()
+			_toast("No room in your bag for it")
+			Audio.ui("ui_deny")
+			return false
+		var nm := _smith_name(d)
+		if not counts.has(nm):
+			order.append(nm)
+		counts[nm] = int(counts.get(nm, 0)) + int(d["count"])
+	var said := PackedStringArray()
+	for nm2 in order:
+		said.append("%d %s" % [int(counts[nm2]), nm2])
+	_last_took = ("Took back " if and_pile else "Took off ") + ", ".join(said)
+	return true
+
+
+## Is `a` the same metal in the same form as the piece `p` went on as?
+func _same_stock(a: Dictionary, p: Dictionary) -> bool:
+	return int(a.get("id", -1)) == int(p.get("id", -2)) \
+		and str(a.get("src", "")) == str(p.get("src", ""))
+
+
+## Take `n` off the stack in your hand.
+func _take_from_active(n: int) -> void:
+	for i in n:
+		_take_one_from_active()
 
 
 ## Left-click at an anvil with something on it. With a hammer, each click is a
@@ -8169,12 +8246,12 @@ func _process_anvil_strike(st: Station, lmb_pressed: bool) -> bool:
 	var face := _anvil_face(st)
 	if now == "scrap":
 		Audio.at("forge_scrap", face)
-		_spark_burst(face, 6, Color(0.55, 0.5, 0.45))
+		_spark_burst(face, 10, Color(0.55, 0.5, 0.45))
 		_toast("Overworked -- it's scrap. Remelt it at a smelter")
 		return true
 	Audio.at("forge_strike", face)
-	_spark_burst(face, 10 + 4 * ["ingot", "bar", "sheet", "plate", "cracking"].find(now),
-		Color(1.0, 0.72, 0.3))
+	_spark_burst(face, 16 + 4 * ["ingot", "bar", "sheet", "plate", "cracking"].find(now),
+		Color(1.0, 0.62, 0.18), now != before)
 	if now != before:
 		match now:
 			"bar":
@@ -8188,9 +8265,15 @@ func _process_anvil_strike(st: Station, lmb_pressed: bool) -> bool:
 	return true
 
 
-## What the look line says over an anvil: what is on it, and how far it is from
-## the next shape.
+## What the look line says over an anvil: what is on it, how far it is from
+## the next shape, and how many are waiting.
 func _anvil_look(st: Station) -> String:
+	var line := _anvil_look_piece(st)
+	var n := st.anvil_pile_count()
+	return line + ("   ·   %d waiting" % n if n > 0 else "")
+
+
+func _anvil_look_piece(st: Station) -> String:
 	var p := st.anvil_piece()
 	var shape := st.anvil_shape()
 	var props: Dictionary = p.get("props", {})
@@ -8227,34 +8310,55 @@ func _anvil_face(st: Station) -> Vector3:
 	return st.to_global(Vector3(0.02, StationModels.ANVIL_FACE - 0.5 + 0.05, 0))
 
 
-## Sparks off a blow: bright, quick, and falling the way this planet pulls.
-func _spark_burst(where: Vector3, count: int, col: Color) -> void:
+## Sparks off a blow: hot streaks that fly up and out, fall the way this planet
+## pulls, and cool from white through orange to red as they go -- with a flash
+## of light on the blow itself. `big` is a change of shape, which deserves more.
+func _spark_burst(where: Vector3, count: int, col: Color, big: bool = false) -> void:
 	var ps := CPUParticles3D.new()
-	var box := BoxMesh.new()
-	box.size = Vector3.ONE * 0.035
-	ps.mesh = box
+	# A thin rod stood along its own velocity is a streak, which is what a
+	# spark looks like to the eye; a cube just looks like a crumb.
+	var rod := BoxMesh.new()
+	rod.size = Vector3(0.018, 0.11, 0.018)
+	ps.mesh = rod
+	ps.particle_flag_align_y = true
 	var mat := StandardMaterial3D.new()
-	mat.albedo_color = col
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.vertex_color_use_as_albedo = true
 	ps.material_override = mat
-	ps.amount = maxi(count, 1)
-	ps.lifetime = 0.45
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(1.0, 0.97, 0.8))
+	ramp.set_color(1, Color(0.8, 0.12, 0.02))
+	ramp.add_point(0.35, col)
+	ps.color_ramp = ramp
+	ps.amount = maxi(count, 1) * (2 if big else 1)
+	ps.lifetime = 0.55
 	ps.one_shot = true
-	ps.explosiveness = 1.0
+	ps.explosiveness = 0.95
+	ps.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	ps.emission_sphere_radius = 0.05
 	var g: Vector3 = world.gravity_at(where) if world != null else Vector3.DOWN * 9.8
 	var up: Vector3 = -g.normalized() if g.length() > 0.01 else Vector3.UP
 	ps.direction = up
-	ps.spread = 70.0
-	ps.initial_velocity_min = 1.8
-	ps.initial_velocity_max = 4.2
+	ps.spread = 80.0
+	ps.initial_velocity_min = 2.2
+	ps.initial_velocity_max = 5.5 if big else 4.5
 	ps.gravity = g
-	ps.scale_amount_min = 0.5
-	ps.scale_amount_max = 1.2
+	ps.scale_amount_min = 0.7
+	ps.scale_amount_max = 1.3
 	var parent: Node = world if world != null else get_parent()
-	parent.add_child(ps)
-	ps.global_position = where
-	ps.emitting = true
-	get_tree().create_timer(1.0).timeout.connect(ps.queue_free)
+	_emit_at(ps, parent, where)
+	get_tree().create_timer(1.2).timeout.connect(ps.queue_free)
+	# The flash: gone in a tenth of a second, but it lights the anvil and your
+	# hands, which is most of what makes a blow feel like it landed.
+	var fl := OmniLight3D.new()
+	fl.light_color = Color(1.0, 0.62, 0.25)
+	fl.omni_range = 3.0
+	fl.light_energy = 3.5 if big else 2.2
+	parent.add_child(fl)
+	fl.global_position = where + up * 0.15
+	var tw := fl.create_tween()
+	tw.tween_property(fl, "light_energy", 0.0, 0.14)
+	tw.tween_callback(fl.queue_free)
 
 
 ## Take one off the stack in your hand, clearing the slot when it runs out.

@@ -387,11 +387,14 @@ static func burst(planet: Planet, up: Vector3i, where: Vector3, col: Color, amou
 	ps.scale_amount_max = 1.4
 	var gw := planet.global_transform.basis * -Vector3(up)
 	ps.gravity = gw.normalized() * 12.0
+	# Emitting only once it is in place: a one-shot CPUParticles3D fires its
+	# batch with the transform it had BEFORE it was moved (see Player._emit_at).
+	ps.emitting = false
 	planet.add_child(ps)
 	var upg := (planet.global_transform.basis * Vector3(up)).normalized()
 	var x := upg.cross(Vector3(0.31, 0.12, 0.94)).normalized()
 	ps.global_transform = Transform3D(Basis(x, upg, x.cross(upg)), planet.to_global(where))
-	ps.emitting = true
+	ps.set_deferred("emitting", true)
 	ps.get_tree().create_timer(ps.lifetime + 0.3).timeout.connect(ps.queue_free)
 
 

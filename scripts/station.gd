@@ -79,7 +79,7 @@ static func capacity_of(k: int) -> int:
 	if k == Blocks.POWER_BAY:
 		return 1   # one battery, seated in the cradle -- no inventory to open
 	if k == Blocks.ANVIL:
-		return 1   # the workpiece on its face, and nothing else
+		return 2   # the workpiece on its face, and the pile waiting beside it
 	if k == Blocks.OXYGEN_PLANT or k == Blocks.HEATER or k == Blocks.COOLER:
 		return 2   # spare filters / elements: no recipes, just somewhere to stash parts
 	if k == Blocks.FORGE:
@@ -174,8 +174,9 @@ func _build_visual() -> void:
 		_bay_shown = _bay_state()
 		_mi.mesh = StationModels.power_bay_mesh(_bay_shown.x > 0.5, _bay_shown.y)
 	elif kind == Blocks.ANVIL:
-		_anvil_shown = anvil_shape()
-		_mi.mesh = StationModels.anvil_mesh(_anvil_shown, anvil_colour())
+		_anvil_shown = "-"
+		_mi.mesh = StationModels.anvil_mesh("", Color.WHITE)
+		_refresh_anvil.call_deferred()
 	elif kind == Blocks.GENERATOR:
 		_gen_shown = gen_state()
 		_mi.mesh = StationModels.generator_mesh(_gen_shown.r > 0.5, _gen_shown.g,
@@ -599,6 +600,10 @@ func gen_toggle() -> bool:
 # One workpiece, in storage[0], with how many times it has been struck kept on
 # it as "hits" -- so a half-beaten piece is saved with the world like anything
 # else. What it IS at any moment is Blocks.smith_shape of those hits.
+#
+# storage[1] is the PILE: more of the same, set down beside the anvil, so a
+# stack of ingots can be worked one after another. Taking a finished piece off
+# the face slides the next one on (see anvil_feed).
 
 var _anvil_shown := "-"
 
@@ -620,6 +625,90 @@ func anvil_colour() -> Color:
 	var p := anvil_piece()
 	var mat: Dictionary = p.get("mat", {})
 	return mat.get("color", Color(0.7, 0.68, 0.64))
+
+
+func anvil_pile() -> Dictionary:
+	if storage.size() < 2 or int(storage[1].get("count", 0)) <= 0:
+		return {}
+	return storage[1]
+
+
+func anvil_pile_count() -> int:
+	return int(anvil_pile().get("count", 0))
+
+
+## Would `item` go on the pile? Anything workable, as long as it is the SAME
+## thing as what is already there -- one metal, one shape, one pile.
+func anvil_pile_fits(item: Dictionary) -> bool:
+	var id := int(item.get("id", Blocks.AIR))
+	if not anvil_takes(id):
+		return false
+	var pile := anvil_pile()
+	return pile.is_empty() or (int(pile["id"]) == id
+		and str(pile.get("src", "")) == str(item.get("src", "")))
+
+
+## Set `n` of `item` down on the pile. Returns how many went on.
+func anvil_pile_add(item: Dictionary, n: int) -> int:
+	if n <= 0 or not anvil_pile_fits(item):
+		return 0
+	_ensure_storage()
+	var pile := anvil_pile()
+	if pile.is_empty():
+		var fresh: Dictionary = item.duplicate(true)
+		fresh["count"] = n
+		fresh.erase("eighths")
+		fresh.erase("hits")
+		storage[1] = fresh
+	else:
+		pile["count"] = int(pile["count"]) + n
+	_refresh_anvil()
+	return n
+
+
+## The whole pile, taken back. Returns it as one item (or {} if there was none).
+func anvil_pile_take() -> Dictionary:
+	var pile := anvil_pile()
+	if pile.is_empty():
+		return {}
+	var out: Dictionary = pile.duplicate(true)
+	storage[1] = {"id": Blocks.AIR, "count": 0, "eighths": 0, "props": {},
+		"src": "", "mat": {}}
+	_refresh_anvil()
+	return out
+
+
+## With the face empty, slide the next one off the pile onto it. Returns
+## whether one went on.
+func anvil_feed() -> bool:
+	if not anvil_piece().is_empty():
+		return false
+	var pile := anvil_pile()
+	if pile.is_empty():
+		return false
+	var one: Dictionary = pile.duplicate(true)
+	one["count"] = 1
+	pile["count"] = int(pile["count"]) - 1
+	if int(pile["count"]) <= 0:
+		storage[1] = {"id": Blocks.AIR, "count": 0, "eighths": 0, "props": {},
+			"src": "", "mat": {}}
+	return anvil_put(one)
+
+
+## How far through its current stage the piece is, 0..1 -- what the model uses
+## to change a little with every blow between the big changes of shape.
+func anvil_progress() -> float:
+	var p := anvil_piece()
+	if p.is_empty():
+		return 0.0
+	var st := Blocks.smith_stages(p.get("props", {}))
+	var hits := int(p.get("hits", 0))
+	var bounds := [0, int(st[0]), int(st[1]), int(st[2])]
+	for i in 3:
+		if hits < int(bounds[i + 1]):
+			var lo := int(bounds[i])
+			return float(hits - lo) / float(maxi(int(bounds[i + 1]) - lo, 1))
+	return 0.0
 
 
 ## Can this go on the anvil? An ingot, or a bar or sheet to be carried on.
@@ -707,11 +796,16 @@ func anvil_take() -> Array:
 func _refresh_anvil() -> void:
 	if kind != Blocks.ANVIL or headless or _mi == null:
 		return
-	var want := anvil_shape()
+	var shape := anvil_shape()
+	var hits := int(anvil_piece().get("hits", 0))
+	var want := "%s|%d|%d" % [shape, hits, anvil_pile_count()]
 	if want == _anvil_shown:
 		return
 	_anvil_shown = want
-	_mi.mesh = StationModels.anvil_mesh(want, anvil_colour())
+	var pile := anvil_pile()
+	var pile_col: Color = (pile.get("mat", {}) as Dictionary).get("color", Color(0.7, 0.68, 0.64))
+	_mi.mesh = StationModels.anvil_mesh(shape, anvil_colour(), anvil_progress(), hits,
+		anvil_pile_count(), pile_col)
 
 
 ## Swing the lever toward where the switch is set.

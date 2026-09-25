@@ -526,24 +526,48 @@ static func anvil_boxes() -> Array:
 	]
 
 
+## The main slab of each shape, and how far through the NEXT change of shape a
+## blow takes it. Between the big changes the piece creeps toward the next
+## shape a little with every blow -- then, at the stage, it jumps the rest of
+## the way, so a change of shape is still an unmistakable event.
+const PIECE_INGOT := Vector3(0.26, 0.09, 0.14)
+const PIECE_BAR := Vector3(0.46, 0.06, 0.07)
+const PIECE_SHEET := Vector3(0.40, 0.025, 0.26)
+const PIECE_PLATE := Vector3(0.48, 0.044, 0.32)
+const PIECE_CREEP := 0.6
+
+
 ## The workpiece sitting on the face, as [centre, size, colour] boxes. `shape`
-## is Blocks.smith_shape's answer; "" is nothing on there.
-static func anvil_piece_boxes(shape: String, col: Color) -> Array:
+## is Blocks.smith_shape's answer ("" is nothing on there); `t` is how far
+## through that shape's stage it is, 0..1; `hits` seeds the small unevenness
+## every blow leaves.
+static func anvil_piece_boxes(shape: String, col: Color, t: float = 0.0,
+		hits: int = 0) -> Array:
 	var y := ANVIL_FACE
 	var c := Vector3(0.02, 0, 0)
 	var dark := col.darkened(0.55)
+	var k: float = clampf(t, 0.0, 1.0) * PIECE_CREEP
+	# Hammered, not machined: each blow nudges it a hair off true.
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hits * 7919 + 13
+	var wob := Vector3(rng.randf_range(-0.012, 0.012), 0.0, rng.randf_range(-0.01, 0.01))
 	match shape:
 		"ingot":
 			# A cast ingot: a block with its top a little narrower than its
-			# base, the way it comes out of the mould.
-			return [[c + Vector3(0, y + 0.045, 0), Vector3(0.26, 0.09, 0.14), col],
-				[c + Vector3(0, y + 0.1, 0), Vector3(0.21, 0.02, 0.10), col]]
+			# base, the way it comes out of the mould -- drawn out toward a bar
+			# a little more with each blow.
+			var main: Vector3 = PIECE_INGOT.lerp(PIECE_BAR, k) + wob
+			var top := Vector3(0.21, 0.02, 0.10).lerp(Vector3(0.36, 0.004, 0.05), k)
+			return [[c + Vector3(0, y + main.y * 0.5, 0), main, col],
+				[c + Vector3(0, y + main.y + top.y * 0.5, 0), top, col]]
 		"bar":
-			return [[c + Vector3(0, y + 0.03, 0), Vector3(0.46, 0.06, 0.07), col]]
+			var bar: Vector3 = PIECE_BAR.lerp(PIECE_SHEET, k) + wob
+			return [[c + Vector3(0, y + bar.y * 0.5, 0), bar, col]]
 		"sheet":
-			return [[c + Vector3(0, y + 0.0125, 0), Vector3(0.40, 0.025, 0.26), col]]
+			var sh: Vector3 = PIECE_SHEET.lerp(PIECE_PLATE, k) + wob
+			return [[c + Vector3(0, y + sh.y * 0.5, 0), sh, col]]
 		"plate", "cracking":
-			var out: Array = [[c + Vector3(0, y + 0.022, 0), Vector3(0.48, 0.044, 0.32), col],
+			var out: Array = [[c + Vector3(0, y + 0.022, 0), PIECE_PLATE, col],
 				# a raised rim round the edge, which is what makes a plate a
 				# plate rather than a thick sheet
 				[c + Vector3(0, y + 0.047, -0.15), Vector3(0.48, 0.006, 0.02), col.lightened(0.15)],
@@ -566,16 +590,36 @@ static func anvil_piece_boxes(shape: String, col: Color) -> Array:
 	return []
 
 
-## The anvil with `shape` on its face in `col`. The piece is its own surface,
-## unshaded and pushed toward the colour of hot metal -- except scrap, which
-## has gone cold and dull.
-static func anvil_mesh(shape: String, col: Color) -> ArrayMesh:
-	var m := _mesh_from(anvil_boxes())
+## What is waiting its turn, stacked on the floor at the front of the anvil:
+## small cold ingots (or bars, or sheets -- they are drawn the same), four to a
+## row and a second row on top. Past eight the heap does not get any bigger;
+## the look line says how many.
+static func anvil_pile_boxes(n: int, col: Color) -> Array:
+	if n <= 0:
+		return []
+	var cold: Color = Color(0.62, 0.62, 0.64).lerp(Color(col.r, col.g, col.b), 0.5)
+	var out: Array = []
+	for i in mini(n, 8):
+		var row: int = i / 4
+		var x: float = -0.27 + float(i % 4) * 0.15 + (0.075 if row == 1 else 0.0)
+		out.append([Vector3(x, 0.028 + float(row) * 0.056, 0.38), Vector3(0.12, 0.052, 0.08),
+			cold if i % 2 == 0 else cold.darkened(0.08)])
+	return out
+
+
+## The anvil with `shape` on its face in `col`, `t` through its stage, and
+## `pile` more waiting beside it. The piece is its own surface, unshaded and
+## pushed toward the colour of hot metal -- except scrap, which has gone cold.
+static func anvil_mesh(shape: String, col: Color, t: float = 0.0, hits: int = 0,
+		pile: int = 0, pile_col: Color = Color(0.7, 0.68, 0.64)) -> ArrayMesh:
+	var body: Array = anvil_boxes()
+	body.append_array(anvil_pile_boxes(pile, pile_col))
+	var m := _mesh_from(body)
 	if shape == "":
 		return m
 	var hot: bool = shape != "scrap"
 	var c: Color = col.lerp(EMBER, 0.75).lightened(0.2) if hot else col
-	var sub := _mesh_from(anvil_piece_boxes(shape, c))
+	var sub := _mesh_from(anvil_piece_boxes(shape, c, t, hits))
 	if sub.get_surface_count() == 0:
 		return m
 	var mat := StandardMaterial3D.new()
