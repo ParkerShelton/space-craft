@@ -61,6 +61,15 @@ uniform float plank_hi = 106.0;
 uniform float leaf_lo = 16.0;
 uniform float leaf_hi = 27.0;
 uniform float rock_id = 1.0;
+// Worked metal: hull plate and the alloy cut from it. Plate is the one material
+// in the game that is MANUFACTURED, and speckling it like stone made a ship
+// look like it had been carved out of a cliff.
+uniform float metal_id = 6.0;
+uniform float alloy_id = 60.0;
+// How many panels a block face is divided into, and how dark the seam between
+// them runs.
+uniform float metal_panels = 2.0;
+uniform float metal_seam = 0.26;
 // Ore BLOCKS are meshed as stone and shade like rock; the ore itself is real
 // protruding geometry (see Chunk._emit_ore_chunks) tagged with ore_chunk_id,
 // which carries the ore colour in its own vertex colour.
@@ -142,6 +151,8 @@ void fragment() {
 	vec2 cell = floor(fc * texels) + vec2(world_seed * 13.7, world_seed * 7.1);
 	float h = hash21(cell);
 	float shade = 1.0;
+	// Set by the metal branch. Everything else in this world is matte.
+	float metalish = 0.0;
 
 	vec2 gcell = floor(fc * texels * ground_grain)
 		+ vec2(world_seed * 13.7, world_seed * 7.1);
@@ -291,6 +302,24 @@ void fragment() {
 		shade = 1.0;
 		emit = 1.0;
 
+	} else if (abs(id - metal_id) < 0.5 || abs(id - alloy_id) < 0.5) {
+		// PLATE: panels and seams, not speckle. This is the one material here
+		// that somebody MADE, and the giveaway is that it is regular -- a grid
+		// of panels with a dark line where they meet and a slight lift toward
+		// the middle of each, as though every panel is very lightly domed.
+		//
+		// The noise is almost nothing. A hull wants to read as manufactured and
+		// clean; the same cell hash that makes rock look like rock made a ship
+		// look like it had been carved out of a cliff.
+		vec2 pf = fract(fc * metal_panels);
+		vec2 pd = min(pf, vec2(1.0) - pf);
+		float edge = min(pd.x, pd.y);
+		float seam = 1.0 - smoothstep(0.0, 0.030, edge);
+		float middle = smoothstep(0.030, 0.10, edge);
+		float grain = (h - 0.5) * 0.035;
+		shade = 1.0 + grain + middle * 0.055 - seam * metal_seam;
+		metalish = 1.0;
+
 	} else {
 		// Everything else: gentle cell break-up so large merged quads stop
 		// reading as flat slabs, without inventing a look for them yet.
@@ -385,7 +414,10 @@ void fragment() {
 	// Fully matte. Rock, soil and grass have no sheen, and what specular there
 	// was landed on big flat quads as a soft sweep of highlight that slid about
 	// as you moved -- which is exactly what a brushed metal panel does.
-	ROUGHNESS = 1.0;
-	METALLIC = 0.0;
-	SPECULAR = 0.0;
+	// Matte, except for plate. Rock, soil and grass have no sheen -- but a hull
+	// with no sheen at all is a grey box, and a little specular is most of what
+	// separates worked metal from stone painted grey.
+	ROUGHNESS = mix(1.0, 0.42, metalish);
+	METALLIC = mix(0.0, 0.55, metalish);
+	SPECULAR = mix(0.0, 0.5, metalish);
 }
