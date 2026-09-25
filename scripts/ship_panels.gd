@@ -81,33 +81,33 @@ static func _life_support(vb: VBoxContainer, ship: Ship) -> void:
 	var sealed: bool = bool(st.get("sealed", false))
 	var running: bool = powered and sealed
 
-	status_line(vb, "SCRUBBERS",
+	_status_line(vb, "SCRUBBERS",
 		"running" if running else ("no power" if not powered else "cabin is open"),
 		GOOD if running else (BAD if not powered else WARN))
 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 18)
 	vb.add_child(row)
-	row.add_child(dial(ship.air, "CABIN AIR", _air_colour(ship.air)))
+	row.add_child(_dial(ship.air, "CABIN AIR", _air_colour(ship.air)))
 
 	var side := VBoxContainer.new()
 	side.add_theme_constant_override("separation", 5)
 	row.add_child(side)
-	stat(side, "In the tank", "%d of %d L" % [roundi(ship.air * Ship.AIR_LITRES),
+	_stat(side, "In the tank", "%d of %d L" % [roundi(ship.air * Ship.AIR_LITRES),
 		int(Ship.AIR_LITRES)])
-	stat(side, "Put out, all told", "%d L" % roundi(ship.air_made))
-	stat(side, "Breathed", "%d L" % roundi(ship.air_used))
-	stat(side, "Hours run", _hms(ship.air_runtime))
+	_stat(side, "Put out, all told", "%d L" % roundi(ship.air_made))
+	_stat(side, "Breathed", "%d L" % roundi(ship.air_used))
+	_stat(side, "Hours run", _hms(ship.air_runtime))
 	var draw_rate: float = Ship.AIR_DRAIN * (1.0 if powered else 2.0) * Ship.AIR_LITRES
-	stat(side, "Draw while aboard", "%.1f L/s" % draw_rate)
+	_stat(side, "Draw while aboard", "%.1f L/s" % draw_rate)
 	var left: float = ship.air * Ship.AIR_LITRES / maxf(draw_rate, 0.001)
-	stat(side, "Endurance", _hms(left) if ship.air > 0.0 else "none",
+	_stat(side, "Endurance", _hms(left) if ship.air > 0.0 else "none",
 		_air_colour(ship.air))
 
-	vb.add_child(gap(4))
-	vb.add_child(bar("SHIP POWER", ship.charge,
+	vb.add_child(_gap(4))
+	vb.add_child(_bar("SHIP POWER", ship.charge,
 		GOOD if ship.charge > 0.25 else (WARN if ship.charge > 0.0 else BAD)))
-	vb.add_child(gap(2))
+	vb.add_child(_gap(2))
 	var note := ""
 	if not sealed:
 		note = "The cabin is not airtight. Plate every hole and shut the door, or the scrubbers are filling the sky."
@@ -117,7 +117,7 @@ static func _life_support(vb: VBoxContainer, ship: Ship) -> void:
 		note = "Nearly empty. A charged battery in the power bay refills the tank once the ship's power is topped up."
 	else:
 		note = "Air is only spent while you are aboard. A parked ship holds what it has."
-	vb.add_child(note(note))
+	vb.add_child(_note(note))
 
 
 ## One engine. Its own output first, then what the ship makes of it -- an engine
@@ -127,7 +127,7 @@ static func _thruster(vb: VBoxContainer, ship: Ship, cell: Vector3i) -> void:
 	var mine: float = ship.thruster_output(cell)
 	var total: float = float(f["thrust"])
 	var powered: bool = ship.charge > 0.0
-	status_line(vb, "ENGINE", "ready" if powered else "no power",
+	_status_line(vb, "ENGINE", "ready" if powered else "no power",
 		GOOD if powered else BAD)
 
 	var row := HBoxContainer.new()
@@ -137,28 +137,28 @@ static func _thruster(vb: VBoxContainer, ship: Ship, cell: Vector3i) -> void:
 	# "how good is THIS engine", which is a question about the ore it was made
 	# from and nothing else.
 	var grade: float = clampf(mine / (Ship.THRUST_UNIT * 1.4), 0.0, 1.0)
-	row.add_child(dial(grade, "OUTPUT", GOOD if grade > 0.6 else WARN))
+	row.add_child(_dial(grade, "OUTPUT", GOOD if grade > 0.6 else WARN))
 
 	var side := VBoxContainer.new()
 	side.add_theme_constant_override("separation", 5)
 	row.add_child(side)
-	stat(side, "This engine", "%d kN" % roundi(mine))
-	stat(side, "Share of the ship", "%d%%" % roundi(mine / maxf(total, 0.001) * 100.0))
-	stat(side, "Engines fitted", "%d of %d wanted" % [int(f["thrusters"]),
+	_stat(side, "This engine", "%d kN" % roundi(mine))
+	_stat(side, "Share of the ship", "%d%%" % roundi(mine / maxf(total, 0.001) * 100.0))
+	_stat(side, "Engines fitted", "%d of %d wanted" % [int(f["thrusters"]),
 		int(f["want_thrusters"])],
 		GOOD if int(f["thrusters"]) >= int(f["want_thrusters"]) else WARN)
-	stat(side, "Ship mass", "%d t" % roundi(float(f["mass"]) / 1000.0))
-	stat(side, "Acceleration", "%.1f m/s2" % float(f["accel"]),
+	_stat(side, "Ship mass", "%d t" % roundi(float(f["mass"]) / 1000.0))
+	_stat(side, "Acceleration", "%.1f m/s2" % float(f["accel"]),
 		GOOD if float(f["accel"]) >= Ship.GOOD_ACCEL else WARN)
 	var err: float = float(f["trim_error"])
-	stat(side, "Balance", "even" if err <= 0.0 else "%.1f blocks off" % err,
+	_stat(side, "Balance", "even" if err <= 0.0 else "%.1f blocks off" % err,
 		GOOD if err <= 0.0 else WARN)
 
-	vb.add_child(gap(4))
-	vb.add_child(bar("THRUST AGAINST WEIGHT",
+	vb.add_child(_gap(4))
+	vb.add_child(_bar("THRUST AGAINST WEIGHT",
 		clampf(float(f["accel"]) / Ship.GOOD_ACCEL, 0.0, 1.0),
 		GOOD if float(f["accel"]) >= Ship.GOOD_ACCEL else WARN))
-	vb.add_child(gap(2))
+	vb.add_child(_gap(2))
 	var note := ""
 	if int(f["thrusters"]) < int(f["want_thrusters"]):
 		note = "Underpowered for this hull. Fit %d more, or take weight off." % \
@@ -167,25 +167,25 @@ static func _thruster(vb: VBoxContainer, ship: Ship, cell: Vector3i) -> void:
 		note = "The push is off to one side of the weight, so the ship wanders under thrust. An engine on the light side straightens it."
 	else:
 		note = "Good for this hull. Add hull and it will want more engines."
-	vb.add_child(note(note))
+	vb.add_child(_note(note))
 
 
 static func _warp(vb: VBoxContainer, ship: Ship) -> void:
 	var ready: bool = ship.charge >= 0.5
-	status_line(vb, "WARP DRIVE", "charged" if ready else "charging",
+	_status_line(vb, "WARP DRIVE", "charged" if ready else "charging",
 		GOOD if ready else WARN)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 18)
 	vb.add_child(row)
-	row.add_child(dial(ship.charge, "COILS", GOOD if ready else WARN))
+	row.add_child(_dial(ship.charge, "COILS", GOOD if ready else WARN))
 	var side := VBoxContainer.new()
 	side.add_theme_constant_override("separation", 5)
 	row.add_child(side)
-	stat(side, "Stored power", "%d%%" % roundi(ship.charge * 100.0))
-	stat(side, "Needed to jump", "50%")
-	stat(side, "Jump", "ready" if ready else "not yet", GOOD if ready else WARN)
-	vb.add_child(gap(4))
-	vb.add_child(note("Set a course from the pilot's seat. The drive takes its power from the same store life support runs on, so a jump costs you air time."))
+	_stat(side, "Stored power", "%d%%" % roundi(ship.charge * 100.0))
+	_stat(side, "Needed to jump", "50%")
+	_stat(side, "Jump", "ready" if ready else "not yet", GOOD if ready else WARN)
+	vb.add_child(_gap(4))
+	vb.add_child(_note("Set a course from the pilot's seat. The drive takes its power from the same store life support runs on, so a jump costs you air time."))
 
 
 # --- the pieces they are drawn from --------------------------------------------
@@ -194,13 +194,13 @@ static func _air_colour(v: float) -> Color:
 	return GOOD if v > 0.5 else (WARN if v > 0.15 else BAD)
 
 
-static func gap(h: int) -> Control:
+static func _gap(h: int) -> Control:
 	var c := Control.new()
 	c.custom_minimum_size = Vector2(0, h)
 	return c
 
 
-static func status_line(vb: VBoxContainer, what: String, state: String, col: Color) -> void:
+static func _status_line(vb: VBoxContainer, what: String, state: String, col: Color) -> void:
 	var h := HBoxContainer.new()
 	h.add_theme_constant_override("separation", 10)
 	vb.add_child(h)
@@ -217,7 +217,7 @@ static func status_line(vb: VBoxContainer, what: String, state: String, col: Col
 
 
 ## A name on the left, a figure on the right, lined up down the column.
-static func stat(vb: VBoxContainer, what: String, value: String,
+static func _stat(vb: VBoxContainer, what: String, value: String,
 		col: Color = Color(1, 1, 1, 0.92)) -> void:
 	var h := HBoxContainer.new()
 	vb.add_child(h)
@@ -237,7 +237,7 @@ static func stat(vb: VBoxContainer, what: String, value: String,
 ## The round gauge. Drawn rather than built out of Panels, because a needle
 ## swinging round an arc says "how full" at a glance in a way a number cannot,
 ## and this is a screen you look at with an alarm going.
-static func dial(frac: float, caption: String, col: Color) -> Control:
+static func _dial(frac: float, caption: String, col: Color) -> Control:
 	var c := Control.new()
 	c.custom_minimum_size = Vector2(150, 150)
 	var v := clampf(frac, 0.0, 1.0)
@@ -272,7 +272,7 @@ static func dial(frac: float, caption: String, col: Color) -> Control:
 
 
 ## A labelled bar, for the second-most-important number on a screen.
-static func bar(caption: String, frac: float, col: Color) -> Control:
+static func _bar(caption: String, frac: float, col: Color) -> Control:
 	var c := Control.new()
 	c.custom_minimum_size = Vector2(PANEL_W - 20, 34)
 	var v := clampf(frac, 0.0, 1.0)
@@ -292,7 +292,7 @@ static func bar(caption: String, frac: float, col: Color) -> Control:
 
 
 ## The one sentence at the bottom telling you what to do about it.
-static func note(text: String) -> Control:
+static func _note(text: String) -> Control:
 	var l := Label.new()
 	l.text = text
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART

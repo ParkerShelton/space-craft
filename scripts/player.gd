@@ -462,6 +462,7 @@ var _rx := 0                       # right-column x
 var _station_store_label: Label    # "<station> contents" header above its storage
 var _left_header: Label            # "Blueprints" / "Actions" header on the left column
 var _refine_btn: Button            # Smelter action
+var _gen_switch_btn: Button        # Generator's on/off, the lever's twin
 var _craft_row: Control            # holds per-station craft buttons
 var _craft_scroll: ScrollContainer # scrolls them when a bench has many
 var _craft_buttons: Array = []     # current station's craft buttons
@@ -917,7 +918,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			# Beds are not reached here -- a build made of eighths has no
 			# collider of its own, so see _try_assemble_machine below.
 			if st != null and not eva:
-				_open_station(st)
+				if not _use_generator_part(st):
+					_open_station(st)
 			elif _try_eat():
 				pass
 			# Farming comes before building: with a hoe or a seed in hand, the
@@ -5988,6 +5990,34 @@ func _slot_holds(s: Dictionary) -> bool:
 		or int(s.get("eighths", 0)) > 0)
 
 
+## Which of a generator's bays a slot reference is: 0 the cradle, 1 the
+## hopper, 2+ a leftover slot from an older save, -1 not a generator at all.
+func _gen_bay_of(cont: String, index: int) -> int:
+	if cont != "stor" or index < 0 or index >= _stor_map.size():
+		return -1
+	var st: Station = _stor_map[index]["st"]
+	if not is_instance_valid(st) or st.kind != Blocks.GENERATOR:
+		return -1
+	return int(_stor_map[index]["slot"])
+
+
+## May `item` go into this slot? Only ever says no for a generator's bays, and
+## says why when it does.
+func _gen_bay_allows(cont: String, index: int, item: Dictionary) -> bool:
+	var bay := _gen_bay_of(cont, index)
+	if bay < 0 or not _slot_holds(item):
+		return true
+	if Station.gen_accepts(bay, int(item["id"]), item.get("props", {})):
+		return true
+	if bay == 0:
+		_toast("The cradle takes a battery")
+	elif bay == 1:
+		_toast("The hopper takes ore with Combustion")
+	else:
+		_toast("Take that out -- this generator only has a cradle and a hopper now")
+	return false
+
+
 func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 	# Clicking the lower half of a two-cell item means the item itself.
 	if fc == "inv" and _cover_owner(fi) >= 0:
@@ -6015,6 +6045,30 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 		if tst.kind == Blocks.SHIPWORKS and fid != Blocks.ALLOY:
 			_toast("Shipworks takes Alloy Plating")
 			return
+	# A generator's two bays each take one kind of thing, both ways round: what
+	# goes in has to fit, and so does whatever a swap sends back the other way.
+	if not _gen_bay_allows(tc, ti, from) or (_slot_holds(to) and not _gen_bay_allows(fc, fi, to)):
+		return
+	var gen_cradle := _gen_bay_of(tc, ti)
+	if gen_cradle == 0 and int(from["count"]) > 1:
+		# The cradle holds exactly one battery. Seat one off the stack.
+		if _slot_holds(to):
+			_toast("Take the battery out of the cradle first")
+			return
+		_copy_slot(from, to)
+		to["count"] = 1
+		from["count"] = int(from["count"]) - 1
+		_refresh_slots()
+		_refresh_station_ui()
+		return
+	if gen_cradle == 0 and _slot_holds(to) and int(to["id"]) == int(from["id"]):
+		# Two batteries never stack in the cradle -- swap them instead.
+		var tmp_b: Dictionary = to.duplicate(true)
+		_copy_slot(from, to)
+		_copy_slot(tmp_b, from)
+		_refresh_slots()
+		_refresh_station_ui()
+		return
 	# the equip slot only ever holds a Suit -- that's what makes it worn, not just carried
 	if tc == "equip" and from["id"] != Blocks.SUIT:
 		_toast("Only a Suit fits there")
@@ -6923,6 +6977,18 @@ func _build_station_ui(layer: CanvasLayer) -> void:
 	_refine_btn.pressed.connect(_on_refine)
 	_station_panel.add_child(_refine_btn)
 
+	# The same switch as the lever on a generator's front, for when you have
+	# the panel open anyway or the generator is one you built out of blocks
+	# and has no lever to pull.
+	_gen_switch_btn = Button.new()
+	_gen_switch_btn.position = Vector2(12, 62)
+	_gen_switch_btn.custom_minimum_size = Vector2(_LEFT_W, 36)
+	_gen_switch_btn.visible = false
+	_gen_switch_btn.pressed.connect(func():
+		if _station_open != null and is_instance_valid(_station_open):
+			_throw_gen_switch(_station_open))
+	_station_panel.add_child(_gen_switch_btn)
+
 	# per-station craft buttons are (re)built when the station opens.
 	#
 	# Inside a scroller with a fixed height, because the number of recipes on a
@@ -7301,13 +7367,18 @@ func _open_station(st: Station) -> void:
 	_station_store_label.text = "%s contents  (drag to move)" % st.title()
 	if st.kind == Blocks.SHAPER:
 		_station_store_label.text = "Input a block, take the shapes out"
+	var is_gen: bool = st.kind == Blocks.GENERATOR
+	if is_gen:
+		# Each bay carries its own caption (see _build_storage_cells).
+		_station_store_label.text = ""
 	var is_smelter: bool = Blocks.is_smelter_kind(st.kind)
 	_refine_btn.visible = is_smelter
+	_gen_switch_btn.visible = is_gen
 
 	_rebuild_craft_buttons(st)
-	var has_left: bool = is_smelter or not _craft_buttons.is_empty()
+	var has_left: bool = is_smelter or not _craft_buttons.is_empty() or is_gen
 	_left_header.visible = has_left
-	_left_header.text = "Actions" if is_smelter else "Blueprints"
+	_left_header.text = "Actions" if is_smelter else ("Switch" if is_gen else "Blueprints")
 
 	# preview + job label sit just below the action/blueprint buttons (same spot;
 	# only one shows at a time -- preview when idle, progress when working)
@@ -7321,6 +7392,11 @@ func _open_station(st: Station) -> void:
 	_preview_label.position = Vector2(14, left_bottom + 8)
 	_preview_label.visible = not _craft_buttons.is_empty() or st.kind == Blocks.SHAPER
 	_job_label.position = Vector2(14, left_bottom + 8)
+	if is_gen:
+		# Under the switch, not under the empty recipe list.
+		left_bottom = 62 + 36 + 60
+		_preview_label.position = Vector2(14, 62 + 36 + 12)
+		_preview_label.visible = true
 
 	# build the storage grid (a chest opens its whole connected group) and reflow
 	var ext := _build_storage_cells(st)   # (cols, rows) in cells
@@ -7390,7 +7466,15 @@ func _build_storage_cells(st: Station) -> Vector2i:
 	var maxr := 0
 	for pl in _storage_placements(st):
 		var idx := _stor_map.size()
-		_station_cells.append(_make_stor_cell(idx, pl["cx"], pl["cy"]))
+		var cell := _make_stor_cell(idx, pl["cx"], pl["cy"])
+		_station_cells.append(cell)
+		if st.kind == Blocks.GENERATOR and int(pl["slot"]) < 2:
+			var cap := Label.new()
+			cap.text = "BATTERY" if int(pl["slot"]) == 0 else "FUEL"
+			cap.modulate = Color(1, 1, 1, 0.7)
+			cap.position = Vector2(0, -22)
+			cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			(cell["root"] as Control).add_child(cap)
 		_stor_map.append({"st": pl["st"], "slot": pl["slot"]})
 		maxc = maxi(maxc, int(pl["cx"]) + 1)
 		maxr = maxi(maxr, int(pl["cy"]) + 1)
@@ -7407,6 +7491,16 @@ func _storage_placements(st: Station) -> Array:
 				out.append({"st": cst, "slot": slot,
 					"cx": int(blk["cb"]) * _STORE_COLS + slot % _STORE_COLS,
 					"cy": int(blk["rb"]) * 3 + slot / _STORE_COLS})
+	elif st.kind == Blocks.GENERATOR:
+		# The cradle and the hopper, set apart so they read as two bays with a
+		# job each rather than a row of storage. Anything left over from when
+		# this was a six-slot bunker sits on a row beneath them to be taken out.
+		for slot in st.storage.size():
+			if slot < 2:
+				out.append({"st": st, "slot": slot, "cx": slot * 2, "cy": 0})
+			else:
+				out.append({"st": st, "slot": slot, "cx": (slot - 2) % _STORE_COLS,
+					"cy": 1 + (slot - 2) / _STORE_COLS})
 	else:
 		for slot in st.storage.size():
 			out.append({"st": st, "slot": slot, "cx": slot % _STORE_COLS, "cy": slot / _STORE_COLS})
@@ -7580,6 +7674,13 @@ func _refresh_station_ui() -> void:
 	if _station_open.kind != Blocks.SHAPER \
 			and _craft_signature(_station_open) != _craft_sig:
 		_rebuild_craft_buttons(_station_open)
+	if _station_open.kind == Blocks.GENERATOR:
+		var on: bool = _station_open.switched_on
+		_gen_switch_btn.text = "ON  --  click to switch off" if on else "OFF  --  click to switch on"
+		_gen_switch_btn.modulate = Color(0.75, 1.0, 0.75) if on else Color(1.0, 0.75, 0.7)
+		_preview_label.text = _craft_preview_text(Blocks.GENERATOR)
+		_job_label.visible = false
+		return
 	var craft_key: int = Blocks.SMELTER if Blocks.is_smelter_kind(_station_open.kind) else _station_open.kind
 	var has_crafts: bool = Blocks.STATION_CRAFTS.has(craft_key) or _station_open.kind == Blocks.SHAPER
 	if has_crafts:
@@ -7645,12 +7746,25 @@ func _craft_preview_text(kind: int) -> String:
 		if not st.active:
 			return "DAMAGED — replace the missing block to restart"
 		var pct := 100.0 * st.power / Station.POWER_MAX
-		if st.burn_t > 0.0:
-			return "Power %d%%   burning: +%.1f/s   %.0fs left
-Feed it combustible ore — the higher its Combustion, the longer and harder it burns." % [
-				int(pct), st.burn_rate, st.burn_t]
-		return "Power %d%%   idle
-Load ore with a Combustion rating to start burning." % int(pct)
+		var lines: Array = ["Stored power %d%%" % int(pct)]
+		if st.gen_has_battery():
+			var bp: Dictionary = st.gen_battery().get("props", {})
+			var bpct := int(round(float(bp.get("charge", 0.0))
+				/ maxf(Blocks.battery_capacity(bp), 1.0) * 100.0))
+			lines.append("Battery %d%%%s" % [bpct, "  (full)" if bpct >= 100 else ""])
+		else:
+			lines.append("No battery in the cradle")
+		if not st.switched_on:
+			lines.append("Switched off.")
+		elif st.burn_t > 0.0:
+			lines.append("Burning: +%.1f/s, %.0fs left on this lump" % [st.burn_rate, st.burn_t])
+		elif int(st.gen_fuel().get("count", 0)) <= 0:
+			lines.append("Hopper empty -- put in ore with Combustion.")
+		elif st.power >= Station.POWER_MAX:
+			lines.append("Full -- waiting for somewhere to put it.")
+		else:
+			lines.append("Idle.")
+		return "\n".join(lines)
 	# Every bench is just its list of what it makes. The line of instructions
 	# that used to sit under it ("Load Wood, Rock, and Metal to build", the
 	# loaded material's stats) went: the list already says what the bench is
@@ -7779,14 +7893,17 @@ func _update_ui() -> void:
 		_ship_label.text = ""
 
 
-## Right-click a Power Bay. What happens depends on what is in each hand:
-## a battery in yours goes in (and whatever was in the bay comes out into your
-## hand), an empty hand takes the bay's battery, and an empty hand at an empty
-## bay says so rather than doing nothing silently.
+## Right-click a Power Bay, or a Generator's cradle. What happens depends on
+## what is in each hand: a battery in yours goes in (and whatever was in the
+## cradle comes out into your hand), an empty hand takes the cradle's battery,
+## and an empty hand at an empty cradle says so rather than doing nothing
+## silently.
 func _swap_bay_battery(bay: Station) -> void:
+	var is_gen: bool = bay.kind == Blocks.GENERATOR
 	var held: Dictionary = inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
-	var holding_battery: bool = int(held.get("id", Blocks.AIR)) == Blocks.BATTERY 		and int(held.get("count", 0)) > 0
-	var in_bay: bool = bay.bay_has_battery()
+	var holding_battery: bool = Station.holds_power(int(held.get("id", Blocks.AIR))) \
+		and int(held.get("count", 0)) > 0
+	var in_bay: bool = bay.gen_has_battery() if is_gen else bay.bay_has_battery()
 	if not holding_battery and not in_bay:
 		_toast("The cradle is empty -- put a battery in it")
 		return
@@ -7795,7 +7912,7 @@ func _swap_bay_battery(bay: Station) -> void:
 		# One battery, not the stack: the cradle holds exactly one.
 		giving = held.duplicate(true)
 		giving["count"] = 1
-	var came_out: Dictionary = bay.bay_swap(giving)
+	var came_out: Dictionary = bay.gen_swap_battery(giving) if is_gen else bay.bay_swap(giving)
 	if holding_battery:
 		_take_one_from_active()
 	if not came_out.is_empty():
@@ -7803,12 +7920,20 @@ func _swap_bay_battery(bay: Station) -> void:
 			came_out.get("props", {}))
 		if left > 0:
 			# Nowhere to put it: leave it where it was rather than destroying it.
-			bay.bay_swap(came_out)
+			if is_gen:
+				bay.gen_swap_battery(came_out)
+			else:
+				bay.bay_swap(came_out)
 			if holding_battery:
 				_add_item(int(giving["id"]), 1, giving.get("props", {}))
 			_toast("No room for the battery you are holding")
 			return
-	var pct := int(round(ShipComputer.battery_charge(bay) / maxf(ShipComputer.bay_capacity(bay), 1.0) * 100.0))
+	var pct := 0
+	if is_gen:
+		var bp: Dictionary = bay.gen_battery().get("props", {})
+		pct = int(round(float(bp.get("charge", 0.0)) / maxf(Blocks.battery_capacity(bp), 1.0) * 100.0))
+	else:
+		pct = int(round(ShipComputer.battery_charge(bay) / maxf(ShipComputer.bay_capacity(bay), 1.0) * 100.0))
 	if holding_battery and not came_out.is_empty():
 		_toast("Battery swapped -- %d%%" % pct)
 	elif holding_battery:
@@ -7816,6 +7941,86 @@ func _swap_bay_battery(bay: Station) -> void:
 	else:
 		_toast("Battery removed")
 	_refresh_slots()
+
+
+## Right-clicking a generator's MODEL means the part you clicked: the lever
+## throws the switch, the cradle on top takes or gives a battery, and the
+## hopper beside it takes the fuel in your hand or gives back what is in it.
+## Anywhere else on it opens its panel. Returns whether a part was used.
+func _use_generator_part(st: Station) -> bool:
+	if st.kind != Blocks.GENERATOR or st.headless or not _ray.is_colliding():
+		return false
+	# Into the model's own space, which stands on the floor of its cell.
+	var p: Vector3 = st.to_local(_ray.get_collision_point()) + Vector3(0, 0.5, 0)
+	# The front face, to the right of the firebox window, is the lever's.
+	if p.z < -0.42 and p.x > 0.12 and p.y > 0.08:
+		_throw_gen_switch(st)
+		return true
+	if p.y < StationModels.GEN_TOP - 0.03:
+		return false
+	if p.x < 0.0:
+		_swap_bay_battery(st)
+		return true
+	return _use_gen_hopper(st)
+
+
+## The hopper, from the outside. Fuel in your hand goes in -- the whole
+## stack, since shovelling ore in one lump at a time would be a chore -- and
+## an empty hand takes back what is in there. Anything else is refused by name.
+func _use_gen_hopper(st: Station) -> bool:
+	var held: Dictionary = inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
+	var hid := int(held.get("id", Blocks.AIR))
+	var hopper: Dictionary = st.gen_fuel()
+	var has_fuel: bool = int(hopper.get("count", 0)) > 0
+	if int(held.get("count", 0)) <= 0:
+		if not has_fuel:
+			return false   # nothing either side: open the panel instead
+		var out: Dictionary = st.gen_swap_fuel({})
+		var left := _add_item(int(out["id"]), int(out["count"]), out.get("props", {}),
+			out.get("src", ""), out.get("mat", {}))
+		if left > 0:
+			out["count"] = left
+			st.gen_swap_fuel(out)
+			_toast("No room for all of it")
+		else:
+			_toast("Took the fuel out of the hopper")
+		_refresh_slots()
+		return true
+	if not Blocks.is_fuel(hid, held.get("props", {})):
+		_toast("%s won't burn -- the hopper takes ore with Combustion" % Blocks.name_of(hid))
+		return true
+	if has_fuel and (int(hopper["id"]) != hid or hopper.get("src", "") != held.get("src", "")):
+		# A different ore: swap them, so the one you were holding burns next.
+		var giving: Dictionary = held.duplicate(true)
+		var was: Dictionary = st.gen_swap_fuel(giving)
+		_clear_slot(inv[active_slot])
+		_copy_slot(was, inv[active_slot])
+		_toast("Swapped the fuel in the hopper")
+	elif has_fuel:
+		hopper["count"] = int(hopper["count"]) + int(held["count"])
+		_clear_slot(inv[active_slot])
+		_toast("Hopper: %d %s" % [int(hopper["count"]), Blocks.name_of(hid)])
+	else:
+		st.gen_swap_fuel(held.duplicate(true))
+		_clear_slot(inv[active_slot])
+		_toast("Hopper: %d %s" % [int(st.gen_fuel()["count"]), Blocks.name_of(hid)])
+	_sync_cover(active_slot)
+	_refresh_slots()
+	_refresh_station_ui()
+	return true
+
+
+## Throw a generator's switch, from its lever or its panel.
+func _throw_gen_switch(st: Station) -> void:
+	var on := st.gen_toggle()
+	Audio.ui("ui_toggle_on" if on else "ui_toggle_off")
+	if on and not st.active:
+		_toast("Switched on -- but it is damaged, replace the missing block")
+	elif on:
+		_toast("Generator on")
+	else:
+		_toast("Generator off")
+	_refresh_station_ui()
 
 
 ## Take one off the stack in your hand, clearing the slot when it runs out.

@@ -183,7 +183,7 @@ func _build_visual() -> void:
 				StationModels.generator_lever_boxes())
 			_lever.position = StationModels.GEN_LEVER + Vector3(0, -0.5, 0)
 			_lever_t = 1.0 if switched_on else 0.0
-			_lever.rotation.x = lerpf(1.15, -0.5, _lever_t)
+			_lever.rotation.x = lever_angle(_lever_t)
 			add_child(_lever)
 	else:
 		_mi.mesh = StationModels.mesh_for(kind)
@@ -463,21 +463,22 @@ func _tick_generator(delta: float) -> void:
 		burn_rate = 0.0
 	if power >= POWER_MAX:
 		return   # full: don't waste fuel
-	for s in storage:
-		if int(s.get("count", 0)) <= 0:
-			continue
-		var props: Dictionary = s.get("props", {})
-		if not Blocks.is_fuel(int(s["id"]), props):
-			continue
-		s["count"] = int(s["count"]) - 1
-		if int(s["count"]) <= 0:
-			s["id"] = Blocks.AIR
-			s["props"] = {}
-			s["src"] = ""
-			s["mat"] = {}
-		burn_t = Blocks.fuel_burn_time(props)
-		burn_rate = Blocks.fuel_power_rate(props)
+	# Only the hopper burns. The cradle is not a place to keep ore, and any
+	# old slots left over from the six-slot bunker are just holding things.
+	var s: Dictionary = gen_fuel()
+	if int(s.get("count", 0)) <= 0:
 		return
+	var props: Dictionary = s.get("props", {})
+	if not Blocks.is_fuel(int(s["id"]), props):
+		return
+	s["count"] = int(s["count"]) - 1
+	if int(s["count"]) <= 0:
+		s["id"] = Blocks.AIR
+		s["props"] = {}
+		s["src"] = ""
+		s["mat"] = {}
+	burn_t = Blocks.fuel_burn_time(props)
+	burn_rate = Blocks.fuel_power_rate(props)
 
 
 ## What a battery holds if nothing says otherwise. A real one asks its own
@@ -566,26 +567,103 @@ func _tick_lever(delta: float) -> void:
 	if is_equal_approx(_lever_t, want):
 		return
 	_lever_t = move_toward(_lever_t, want, delta * 5.0)
-	_lever.rotation.x = lerpf(1.15, -0.5, _lever_t)
+	_lever.rotation.x = lever_angle(_lever_t)
 
 
-## Batteries sitting in a Generator soak up its output. This is the only way to
-## get power off a planet, so it is deliberately the simplest possible action:
-## drop them in and wait.
+## The battery in a Generator's cradle soaks up its output. This is the only way
+## to get power off a planet, so it is deliberately the simplest possible
+## action: seat one and wait. Switched off, nothing flows.
 func _tick_batteries(delta: float) -> void:
-	if kind != Blocks.GENERATOR or power <= 0.0:
+	if kind != Blocks.GENERATOR or power <= 0.0 or not switched_on or not active:
 		return
-	for slot in storage:
-		if int(slot.get("id", Blocks.AIR)) != Blocks.BATTERY:
-			continue
-		var cap: float = Blocks.battery_capacity(slot.get("props", {})) 			* float(int(slot.get("count", 0)))
-		var held: float = float((slot["props"] as Dictionary).get("charge", 0.0))
-		if held >= cap:
-			continue
-		var moved: float = minf(minf(CHARGE_RATE * delta, cap - held), power)
-		(slot["props"] as Dictionary)["charge"] = held + moved
-		power -= moved
-		return   # one battery at a time, so a stack fills in order
+	if not gen_has_battery():
+		return
+	var slot: Dictionary = gen_battery()
+	if not slot.has("props") or not (slot["props"] is Dictionary):
+		slot["props"] = {}
+	var props: Dictionary = slot["props"]
+	var cap: float = Blocks.battery_capacity(props)
+	var held: float = float(props.get("charge", 0.0))
+	if held >= cap:
+		return
+	var moved: float = minf(minf(CHARGE_RATE * delta, cap - held), power)
+	props["charge"] = held + moved
+	power -= moved
+
+
+## Can this go in a generator's cradle? Anything that holds power -- which,
+## today, is a battery.
+static func holds_power(id: int) -> bool:
+	return id == Blocks.BATTERY
+
+
+## Would a generator take `id` into bay `slot`? The cradle takes something that
+## holds power, the hopper takes something that burns, and the odd slots left
+## over from an older save take nothing new.
+static func gen_accepts(slot: int, id: int, props: Dictionary) -> bool:
+	if id == Blocks.AIR:
+		return true
+	if slot == 0:
+		return holds_power(id)
+	if slot == 1:
+		return Blocks.is_fuel(id, props)
+	return false
+
+
+## Set the switch outright -- from a save -- with the lever already there
+## rather than swinging to it as the world loads.
+func set_switched(on: bool) -> void:
+	switched_on = on
+	_lever_t = 1.0 if on else 0.0
+	if _lever != null and is_instance_valid(_lever):
+		_lever.rotation.x = lever_angle(_lever_t)
+
+
+## The lever's angle for a throw of `t` (0 off, 1 on). Down and out from the
+## case when off, up and out when on, sweeping out in front of the face between
+## the two rather than through the machine.
+static func lever_angle(t: float) -> float:
+	return lerpf(-2.6, -0.5, t)
+
+
+## A generator saved when it was a six-slot bunker: put a battery in the
+## cradle and fuel in the hopper, and keep the rest in slots after them so
+## nothing that was in it is lost.
+func migrate_generator() -> void:
+	if kind != Blocks.GENERATOR:
+		return
+	var items: Array = []
+	for sl in storage:
+		if int(sl.get("count", 0)) > 0 or int(sl.get("eighths", 0)) > 0:
+			items.append(sl)
+	if storage.size() == 2 and gen_accepts(0, int(storage[0].get("id", Blocks.AIR)),
+			storage[0].get("props", {})) and gen_accepts(1,
+			int(storage[1].get("id", Blocks.AIR)), storage[1].get("props", {})) \
+			and int(storage[0].get("count", 0)) <= 1:
+		return
+	storage = []
+	_ensure_storage()
+	var rest: Array = []
+	for it in items:
+		var d: Dictionary = it
+		var id := int(d.get("id", Blocks.AIR))
+		if holds_power(id) and int(storage[0]["count"]) == 0:
+			storage[0] = d.duplicate(true)
+			if int(d["count"]) > 1:
+				storage[0]["count"] = 1
+				var more: Dictionary = d.duplicate(true)
+				more["count"] = int(d["count"]) - 1
+				rest.append(more)
+		elif Blocks.is_fuel(id, d.get("props", {})) and (int(storage[1]["count"]) == 0
+				or (int(storage[1]["id"]) == id and storage[1].get("src", "") == d.get("src", ""))):
+			if int(storage[1]["count"]) == 0:
+				storage[1] = d.duplicate(true)
+			else:
+				storage[1]["count"] = int(storage[1]["count"]) + int(d["count"])
+		else:
+			rest.append(d)
+	for r in rest:
+		storage.append(r)
 
 
 ## A Power Bay empties batteries into the ship it is mounted on. Charge first --

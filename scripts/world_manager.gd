@@ -473,6 +473,12 @@ func save_game() -> bool:
 		if not is_instance_valid(st):
 			continue
 		var entry := {"kind": st.kind, "storage": st.storage}
+		if st.kind == Blocks.GENERATOR:
+			# Which way the lever is thrown and what it had banked, or every
+			# load would switch your generators back on and empty them.
+			entry["on"] = st.switched_on
+			entry["power"] = st.power
+			entry["burn"] = [st.burn_t, st.burn_rate]
 		var par := st.get_parent()
 		if par is Ship and ship_index.has(par):
 			entry["ship"] = ship_index[par]   # mounted -> save relative to its ship
@@ -607,6 +613,14 @@ func load_game() -> bool:
 			station.global_transform = std.get("xform", Transform3D.IDENTITY)
 		if std.has("storage"):
 			station.storage = std["storage"]
+		if skind == Blocks.GENERATOR:
+			station.migrate_generator()
+			station.set_switched(bool(std.get("on", true)))
+			station.power = float(std.get("power", 0.0))
+			var burn: Array = std.get("burn", [0.0, 0.0])
+			if burn.size() >= 2:
+				station.burn_t = float(burn[0])
+				station.burn_rate = float(burn[1])
 		_stations.append(station)
 
 	# player

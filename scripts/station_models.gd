@@ -386,14 +386,15 @@ static func power_bay_mesh(has_battery: bool, charge: float) -> ArrayMesh:
 const GEN_TOP := 0.72
 const GEN_CRADLE := Vector3(-0.24, GEN_TOP, 0)
 const GEN_HOPPER := Vector3(0.24, GEN_TOP, 0)
-## Where the lever turns: low on the front face, on the right-hand side.
-const GEN_LEVER := Vector3(0.36, 0.30, -0.47)
+## Where the lever turns: on the front face, on the right-hand side, high
+## enough that thrown down it still clears the floor.
+const GEN_LEVER := Vector3(0.36, 0.42, -0.47)
 
 
 ## The case, the two bays and the gauge. The lever is NOT here -- it is a node
 ## of its own so it can actually swing (see `generator_lever_boxes`).
-static func generator_boxes(has_battery: bool, charge: float, burning: bool,
-		power: float) -> Array:
+static func generator_boxes(has_battery: bool, _charge: float, _burning: bool,
+		_power: float) -> Array:
 	const CASE := Color(0.44, 0.40, 0.33)
 	const DEEP := Color(0.17, 0.16, 0.15)
 	const CONT := Color(0.74, 0.62, 0.30)
@@ -457,9 +458,9 @@ static func generator_lit(burning: bool, power: float) -> Array:
 	return out
 
 
-## The lever, in the hinge's own space, so the node it lives on can turn it.
-## Thrown up is on and down is off, which is the way round every switch in a
-## machine shop works.
+## The lever, in the hinge's own space, so the node it lives on can turn it
+## (Station.lever_angle). Thrown up is on and down is off, which is the way
+## round every switch in a machine shop works.
 static func generator_lever_boxes() -> Array:
 	const CASE := Color(0.44, 0.40, 0.33)
 	const HANDLE := Color(0.72, 0.24, 0.20)
@@ -469,8 +470,8 @@ static func generator_lever_boxes() -> Array:
 	]
 
 
-## The plate the lever turns against, drawn on the case so there is something
-## for it to point at.
+## The generator's mesh for a given state: the case, whatever is seated in the
+## cradle, and the lit parts -- fire, power gauge, the battery's own gauge.
 static func generator_mesh(has_battery: bool, charge: float, burning: bool,
 		power: float) -> ArrayMesh:
 	var m := _mesh_from(generator_boxes(has_battery, charge, burning, power))
