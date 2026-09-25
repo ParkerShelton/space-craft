@@ -266,6 +266,7 @@ func _ready() -> void:
 	add_child(_net)
 	_net.bind_world(world)
 	world.net = _net
+	world.avatars = _avatars
 	_net.world_ready.connect(_on_world_ready)
 	_net.profile_restored.connect(_on_profile_restored)
 	# Connected here rather than with the chat box, which does not exist until the
@@ -2312,10 +2313,8 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 					player.hold_toast("Right-click the console to see what the ship needs", 9.0))
 	else:
 		_hide_loading_screen()
-	# Combat testing: don't leave the guaranteed home-planet enemy (see
-	# force_hostile_enemy) to the normal random wildlife spawner -- that only
-	# guarantees it EXISTS, not that you'll actually see it soon.
-	ground.spawn_hostile_enemy_near(player.global_position, world)
+	# The home world's guaranteed enemy is not set down beside you any more:
+	# it is in the wildlife like any other hostile, and comes out with the night.
 
 
 # --- loading screen -------------------------------------------------------------
@@ -2344,7 +2343,7 @@ const CRASH_REEL := true
 ## press, a pick and a stack of each of this planet's ores in the bag, so smithing can be tried without the
 ## hour it takes to earn them. Set false (or delete this and the function
 ## below) before shipping.
-const TEST_SMITHING_KIT := true
+const TEST_SMITHING_KIT := false
 
 
 func _give_smithing_kit(ground: Planet, player: Player) -> void:

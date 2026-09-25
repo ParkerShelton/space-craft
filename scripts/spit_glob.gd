@@ -85,24 +85,17 @@ func _colour() -> Color:
 
 ## What it does to you. Each kind hurts, and then has its own idea besides.
 func _land_on(pl) -> void:
+	# Through the world, so it lands on whichever player it hit -- this
+	# machine's or someone else's (see WorldManager.hurt).
 	match kind:
 		"fire":
-			if pl.has_method("take_damage"):
-				pl.take_damage(4.0)
-			if pl.has_method("ignite"):
-				pl.ignite(4.0)
+			world.hurt(pl, 4.0, Vector3.ZERO, "ignite")
 		"stone":
-			if pl.has_method("take_damage"):
-				pl.take_damage(9.0)
 			# A rock this size shoves you off your feet.
-			if "velocity" in pl and world != null:
-				var up := -world.gravity_at((pl as Node3D).global_position).normalized()
-				pl.velocity += vel.normalized() * 7.0 + up * 4.0
+			var up := -world.gravity_at((pl as Node3D).global_position).normalized()
+			world.hurt(pl, 9.0, vel.normalized() * 7.0 + up * 4.0)
 		_:
-			if pl.has_method("webbed"):
-				pl.webbed(1.0)
-			if pl.has_method("take_damage"):
-				pl.take_damage(3.0)
+			world.hurt(pl, 3.0, Vector3.ZERO, "web")
 
 
 func _physics_process(delta: float) -> void:
@@ -113,8 +106,7 @@ func _physics_process(delta: float) -> void:
 	var from := global_position
 	var to := from + vel * delta
 	_core.rotate(Vector3(0.3, 1.0, 0.2).normalized(), delta * 9.0)
-	var pl = world.player
-	if pl != null and is_instance_valid(pl):
+	for pl in world.player_nodes():
 		# Closest point of this frame's path to you, so a fast glob cannot pass
 		# through you between frames.
 		var c: Vector3 = (pl as Node3D).global_position
@@ -124,7 +116,8 @@ func _physics_process(delta: float) -> void:
 			_land_on(pl)
 			_splat(from + seg * t)
 			return
-		_exclude.append((pl as CollisionObject3D).get_rid())
+		if pl is CollisionObject3D and not _exclude.has((pl as CollisionObject3D).get_rid()):
+			_exclude.append((pl as CollisionObject3D).get_rid())
 	var q := PhysicsRayQueryParameters3D.create(from, to, 1)
 	q.exclude = _exclude
 	var hit := get_world_3d().direct_space_state.intersect_ray(q)

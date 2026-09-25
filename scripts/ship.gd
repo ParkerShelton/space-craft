@@ -126,11 +126,25 @@ const FACES := [
 ## The fittings that are models rather than blocks. Rebuilt rather than saved:
 ## they are decided by what the ship IS, so a loaded ship grows its own back.
 func build_props() -> void:
+	# The seat is carried over rather than rebuilt when it has not moved: it is
+	# something a player can be SITTING in, and every change to the hull comes
+	# through here -- a block placed by a crewmate, a repair arriving from
+	# another machine. Rebuilding it pulled the chair out from under whoever
+	# was in it, and they dropped through the floor.
+	var keep_seat: Node3D = null
 	if _props != null and is_instance_valid(_props):
+		for c in _props.get_children():
+			if (c as Node).is_in_group("ship_seat") and (c as Node3D).position == seat_at \
+					and seat_at != Vector3.ZERO:
+				keep_seat = c
+				_props.remove_child(c)
+				break
 		_props.queue_free()
 	_props = null
 	_props = Node3D.new()
 	add_child(_props)
+	if keep_seat != null:
+		_props.add_child(keep_seat)
 	# Every ship's controls get a console standing over the block, so the thing
 	# you talk to looks like something you would talk to rather than a painted
 	# cube. The block itself stays where it is: it is what the hull is built
@@ -149,7 +163,7 @@ func build_props() -> void:
 		con.position = Vector3(v as Vector3i)
 		con.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_props.add_child(con)
-	if seat_at == Vector3.ZERO:
+	if seat_at == Vector3.ZERO or keep_seat != null:
 		return
 	# The seat is a body rather than a decoration: you can lean on its back, and
 	# right-clicking it puts you in it (see Player._try_sit). Its collision is

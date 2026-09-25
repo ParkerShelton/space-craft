@@ -128,6 +128,8 @@ const CHAT_MAX := 240
 var _world: WorldManager
 ## Ships and stations (see net_sync.gd).
 var sync: NetSync
+## Animals and monsters (see creature_sync.gd).
+var fauna: CreatureSync
 var _seed := 0
 var _system := 0
 ## Edits that arrived before this client had finished building its world. A
@@ -144,6 +146,10 @@ func _ready() -> void:
 	sync.name = "Sync"
 	sync.net = self
 	add_child(sync)
+	fauna = CreatureSync.new()
+	fauna.name = "Fauna"
+	fauna.net = self
+	add_child(fauna)
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected)
@@ -175,6 +181,7 @@ func _local_uid() -> String:
 func bind_world(w: WorldManager) -> void:
 	_world = w
 	sync.world = w
+	fauna.world = w
 
 
 # --- starting a session ---------------------------------------------------
@@ -223,6 +230,7 @@ func leave() -> void:
 	joining = false
 	peers.clear()
 	sync.reset()
+	fauna.reset()
 
 
 ## Called once the planets actually exist. Everything that arrived while this

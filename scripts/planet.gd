@@ -16,16 +16,14 @@ const CS := Blocks.CHUNK_SIZE
 # per-chunk cost contributor and complicates loading-perf debugging, so it's
 # out of the picture entirely until it's brought back deliberately.
 const SETTLEMENTS_DISABLED := true
-## Hostile wildlife is switched off (2026-09-05, user request) -- the guaranteed
-## combat enemy is not created and no hostile species is ever spawned. Passive
-## and neutral wildlife is untouched. Flip this back to false to re-enable; the
-## species are still generated from the seed either way, so turning it off and on
-## does not change what a world rolls.
-const HOSTILES_DISABLED := true
-## Night Stalkers parked while the Watcher is being played with. /spider still
-## summons one, so nothing about them is lost -- they just stop coming on their
-## own. Set false to have them back.
-const STALKERS_DISABLED := true
+## Hostile wildlife on or off. On: hostile species spawn, weighted heavily
+## toward night (see _pick_land_species), and the home world has its
+## guaranteed sword-and-shield enemy among them. Set true to switch every
+## hostile species off; the species are still generated from the seed either
+## way, so turning it off and on does not change what a world rolls.
+const HOSTILES_DISABLED := false
+## Night Stalkers on or off. On: they come out once it is properly dark.
+const STALKERS_DISABLED := false
 
 # --- configuration (set via configure()) ---
 var planet_name := "Planet"
@@ -850,8 +848,9 @@ func _derive_fauna(force_hostile_enemy: bool = false) -> void:
 	var sr := RandomNumberGenerator.new()
 	sr.seed = _seed + 7373
 	stalker_species = NightSpider.make_species(sr)
-	if force_hostile_enemy:
-		spider_cap = maxi(spider_cap, 1)
+	# Every world has at least one out after dark: every kind of monster can
+	# turn up at night, wherever you are.
+	spider_cap = maxi(spider_cap, 1)
 	if force_hostile_enemy and not HOSTILES_DISABLED:
 		# Guaranteed on top of the normal roll (not instead of it) -- for combat
 		# testing on the home planet regardless of what the random wildlife mix
@@ -1161,9 +1160,13 @@ func update_fauna(delta: float, player_pos: Vector3, world: WorldManager) -> voi
 	_update_watchers(delta, player_pos, world)
 	_creatures = _creatures.filter(func(c): return is_instance_valid(c))
 	for c in _creatures.duplicate():
-		if c.global_position.distance_to(player_pos) > CREATURE_DESPAWN_RADIUS:
+		# Far from EVERY player, not just this machine's: in co-op one machine
+		# runs the wildlife around the group.
+		if world.nearest_player_dist(c.global_position) > CREATURE_DESPAWN_RADIUS:
 			c.queue_free()
 	_creatures = _creatures.filter(func(c): return is_instance_valid(c))
+	if not world.spawns_fauna_here():
+		return   # someone nearby is spawning for the group
 
 	# Night is when this world gets dangerous. The cycle was purely cosmetic
 	# until now; tying spawning to it is what gives the player a reason to build
@@ -1200,9 +1203,9 @@ const SPIDER_INTERVAL := 18.0
 func _update_watchers(delta: float, player_pos: Vector3, world: WorldManager) -> void:
 	_watchers = _watchers.filter(func(s): return is_instance_valid(s))
 	for s in _watchers:
-		if (s as Node3D).global_position.distance_to(player_pos) > CREATURE_DESPAWN_RADIUS:
+		if world.nearest_player_dist((s as Node3D).global_position) > CREATURE_DESPAWN_RADIUS:
 			s.queue_free()
-	if watcher_cap <= 0 or night_factor() < 0.55:
+	if watcher_cap <= 0 or night_factor() < 0.55 or not world.spawns_fauna_here():
 		return
 	_watcher_timer -= delta
 	if _watcher_timer > 0.0 or _watchers.size() >= watcher_cap:
@@ -1244,6 +1247,7 @@ func spawn_watcher_near(pos: Vector3, world: WorldManager, near: float, far: flo
 		s.global_position = at + up * 0.1
 		s.setup_watcher(self, world)
 		_watchers.append(s)
+		_share(s, world)
 		return s
 	return null
 
@@ -1275,9 +1279,9 @@ func _cover_near(at: Vector3, up: Vector3) -> bool:
 func _update_spiders(delta: float, player_pos: Vector3, world: WorldManager) -> void:
 	_spiders = _spiders.filter(func(s): return is_instance_valid(s))
 	for s in _spiders:
-		if (s as Node3D).global_position.distance_to(player_pos) > CREATURE_DESPAWN_RADIUS:
+		if world.nearest_player_dist((s as Node3D).global_position) > CREATURE_DESPAWN_RADIUS:
 			s.queue_free()
-	if STALKERS_DISABLED or spider_cap <= 0 or night_factor() < 0.6:
+	if STALKERS_DISABLED or spider_cap <= 0 or night_factor() < 0.6 or not world.spawns_fauna_here():
 		return
 	_spider_timer -= delta
 	if _spider_timer > 0.0 or _spiders.size() >= spider_cap:
@@ -1315,6 +1319,7 @@ func spawn_spider_near(pos: Vector3, world: WorldManager, near: float, far: floa
 		s.setup_spider(self, world, stalker_species)
 		s.global_position = at + up * s.sp_ride
 		_spiders.append(s)
+		_share(s, world)
 		return s
 	return null
 
@@ -1559,7 +1564,14 @@ func _spawn_at(world_pos: Vector3, sp: Dictionary, world: WorldManager) -> Creat
 	c.global_position = world_pos
 	c.configure(sp, self, world)
 	_creatures.append(c)
+	_share(c, world)
 	return c
+
+
+## A creature this machine spawned, shown to everyone else in a co-op game.
+func _share(c: Creature, world: WorldManager) -> void:
+	if world != null and world.net != null and world.net.active:
+		world.net.fauna.register(c)
 
 
 # How far from center anything (terrain, trees, buildings, or water) can possibly exist.

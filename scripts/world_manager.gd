@@ -24,6 +24,9 @@ var planets: Array[Planet] = []
 var player: Node3D
 ## Set by Main when a co-op session starts; null in single player.
 var net: Net
+## The other players, as their avatars on this machine: peer id -> RemotePlayer.
+## Kept by main.gd; read here so wildlife can go after any of them.
+var avatars: Dictionary = {}
 var _ships: Array[Ship] = []
 var _stations: Array[Station] = []
 ## Boats set down on water. They move, so they are their own nodes.
@@ -643,6 +646,107 @@ signal crash_site_known()
 
 func crash_site_arrived() -> void:
 	crash_site_known.emit()
+
+
+# --- players, as wildlife sees them --------------------------------------------
+#
+# A creature is run by one machine (see CreatureSync) but hunts whoever is
+# nearest: the player on that machine or any other player's avatar there.
+# Anything done to a player on another machine is sent to them.
+
+## Everybody a creature could go after: this machine's player and the avatars
+## of everyone else.
+func player_nodes() -> Array:
+	var out: Array = []
+	if player != null and is_instance_valid(player):
+		out.append(player)
+	for id in avatars:
+		var av = avatars[id]
+		if av != null and is_instance_valid(av):
+			out.append(av)
+	return out
+
+
+## The player nearest to `pos`, or null.
+func nearest_target(pos: Vector3) -> Node3D:
+	var best: Node3D = null
+	var bd := INF
+	for n in player_nodes():
+		var d: float = (n as Node3D).global_position.distance_to(pos)
+		if d < bd:
+			bd = d
+			best = n
+	return best
+
+
+func nearest_player_dist(pos: Vector3) -> float:
+	var t := nearest_target(pos)
+	return t.global_position.distance_to(pos) if t != null else INF
+
+
+## Hurt a player, wherever they are playing. `push` is a shove added to their
+## velocity; `status` is "ignite", "web" or a line of text to show them.
+func hurt(target: Node3D, dmg: float, push := Vector3.ZERO, status := "") -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	if target == player:
+		apply_hurt(dmg, push, status)
+	elif target is RemotePlayer and net != null and net.active:
+		net.fauna.hurt_peer((target as RemotePlayer).peer_id, dmg, push, status)
+
+
+## Something hurt THIS machine's player.
+func apply_hurt(dmg: float, push: Vector3, status: String) -> void:
+	var pl = player
+	if pl == null or not is_instance_valid(pl):
+		return
+	if dmg > 0.0 and pl.has_method("take_damage"):
+		pl.take_damage(dmg)
+	if push != Vector3.ZERO and "velocity" in pl:
+		pl.velocity += push
+	match status:
+		"":
+			pass
+		"ignite":
+			if pl.has_method("ignite"):
+				pl.ignite(4.0)
+		"web":
+			if pl.has_method("webbed"):
+				pl.webbed(1.0)
+		_:
+			if pl.has_method("notify"):
+				pl.notify(status)
+
+
+## Where a player's eyes are and which way they look -- the camera for this
+## machine's player, the reported facing for anyone else's avatar.
+func eye_of(target: Node3D) -> Array:
+	if target == player:
+		var cam = player.get("_camera")
+		if cam != null and is_instance_valid(cam):
+			return [(cam as Camera3D).global_position, -(cam as Camera3D).global_transform.basis.z]
+	var up := -gravity_at(target.global_position).normalized()
+	var fwd := -target.global_transform.basis.z
+	if target is RemotePlayer and net != null and net.peers.has((target as RemotePlayer).peer_id):
+		fwd = net.peers[(target as RemotePlayer).peer_id].get("facing", fwd)
+	return [target.global_position + up * 1.6, fwd.normalized()]
+
+
+## Whether wildlife should be spawned around this machine's player. Playing
+## together, only one machine spawns for the group -- the one with the lowest
+## id among the players close by -- or everything would come in doubles.
+const FAUNA_SHARE_RADIUS := 96.0
+
+
+func spawns_fauna_here() -> bool:
+	if net == null or not net.active or player == null:
+		return true
+	var me := net.my_id()
+	for id in net.peers:
+		if int(id) < me and net.peers[id].has("pos") \
+				and (net.peers[id]["pos"] as Vector3).distance_to(player.global_position) < FAUNA_SHARE_RADIUS:
+			return false
+	return true
 
 
 ## Create a new ship seeded with a cockpit. Snaps orientation to the block grid

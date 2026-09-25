@@ -210,6 +210,13 @@ static func ship_hash(s: Ship) -> int:
 		s.cabin_cells, s.seat_at, s.landed, s.flying, s.has_flown])
 
 
+## The same fingerprint as ship_hash, taken from a snapshot rather than a ship.
+static func _snap_hash(d: Dictionary) -> int:
+	return hash([d.get("blocks", {}), d.get("meta", {}), d.get("wreck", {}),
+		(d.get("log", []) as Array).size(), d.get("cabin", []), d.get("seat", Vector3.ZERO),
+		bool(d.get("landed", true)), bool(d.get("flying", false)), bool(d.get("flown", false))])
+
+
 static func ship_snap(s: Ship) -> Dictionary:
 	return {"nid": s.net_id, "blocks": s.blocks, "meta": s.block_meta,
 		"xform": s.global_transform, "air": s.air, "charge": s.charge,
@@ -236,6 +243,12 @@ func apply_ship(d: Dictionary) -> void:
 			_remove(s, nid)
 		return
 	var fresh := s == null
+	if not fresh and _snap_hash(d) == ship_hash(s):
+		# Nothing about her has changed but her tanks: no rebuild for that.
+		s.air = float(d.get("air", s.air))
+		s.charge = float(d.get("charge", s.charge))
+		_known[nid] = ship_hash(s)
+		return
 	if fresh:
 		s = Ship.new()
 		s.world = world

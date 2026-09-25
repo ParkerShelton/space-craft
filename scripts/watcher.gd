@@ -128,9 +128,7 @@ func _build() -> void:
 # --- can you see it? -------------------------------------------------------------
 
 func _player():
-	if world != null and world.player != null and is_instance_valid(world.player):
-		return world.player
-	return null
+	return _target_node()
 
 
 ## True when you could really see it right now: in front of you, inside your
@@ -139,11 +137,10 @@ func _player():
 func _is_seen(pl) -> bool:
 	if pl == null:
 		return false
-	var cam = pl.get("_camera")
-	if cam == null or not is_instance_valid(cam):
-		return false
-	var eye: Vector3 = (cam as Camera3D).global_position
-	var fwd: Vector3 = -(cam as Camera3D).global_transform.basis.z
+	# Any player's eyes, this machine's or another's (see WorldManager.eye_of).
+	var view: Array = world.eye_of(pl)
+	var eye: Vector3 = view[0]
+	var fwd: Vector3 = view[1]
 	var mid: Vector3 = global_position + _up * (HEIGHT * 0.5)
 	if eye.distance_to(mid) > SIGHT:
 		return false
@@ -153,7 +150,9 @@ func _is_seen(pl) -> bool:
 	if to.dot(fwd) < 0.55:
 		return false
 	var space := get_world_3d().direct_space_state
-	var ex: Array[RID] = [get_rid(), (pl as CollisionObject3D).get_rid()]
+	var ex: Array[RID] = [get_rid()]
+	if pl is CollisionObject3D:
+		ex.append((pl as CollisionObject3D).get_rid())
 	for h in [HEIGHT * 0.9, HEIGHT * 0.5, HEIGHT * 0.15]:
 		var q := PhysicsRayQueryParameters3D.create(eye, global_position + _up * h, 1)
 		q.exclude = ex
@@ -164,13 +163,13 @@ func _is_seen(pl) -> bool:
 
 ## Whether a spot is hidden from where you are standing.
 func _hidden_from(pl, at: Vector3) -> bool:
-	var cam = pl.get("_camera")
-	if cam == null:
-		return true
-	var eye: Vector3 = (cam as Camera3D).global_position
+	var eye: Vector3 = world.eye_of(pl)[0]
 	var space := get_world_3d().direct_space_state
 	var q := PhysicsRayQueryParameters3D.create(eye, at + _up * (HEIGHT * 0.6), 1)
-	q.exclude = [get_rid(), (pl as CollisionObject3D).get_rid()]
+	var ex: Array[RID] = [get_rid()]
+	if pl is CollisionObject3D:
+		ex.append((pl as CollisionObject3D).get_rid())
+	q.exclude = ex
 	return not space.intersect_ray(q).is_empty()
 
 
@@ -221,6 +220,9 @@ func _physics_process(delta: float) -> void:
 	_up = -_snap_up(gv) if gv.length() > 0.01 else Vector3.UP
 	if _die_t >= 0.0:
 		_crumble(delta)
+		return
+	if puppet:
+		_stride(delta, _net_follow(delta))
 		return
 	var pl = _player()
 	_seen = _is_seen(pl)
@@ -304,14 +306,10 @@ func _stride(delta: float, speed: float) -> void:
 ## Close enough, and you were not looking. One blow, and it is gone again.
 func _strike(pl) -> void:
 	_cd = STRIKE_CD
-	if pl.has_method("take_damage"):
-		pl.take_damage(STRIKE_DAMAGE)
-	if pl.has_method("notify"):
-		pl.notify("Something struck you from behind")
 	var away := (pl as Node3D).global_position - global_position
 	away -= _up * away.dot(_up)
-	if away.length() > 0.01 and "velocity" in pl:
-		pl.velocity += away.normalized() * 9.0 + _up * 4.0
+	var push := away.normalized() * 9.0 + _up * 4.0 if away.length() > 0.01 else Vector3.ZERO
+	world.hurt(pl, STRIKE_DAMAGE, push, "Something struck you from behind")
 	for a in _limb_arms:
 		((a as Array)[0] as Node3D).rotation.x = 2.4
 	# Straight back into cover rather than standing there to be looked at.
@@ -339,10 +337,15 @@ var daylight_ok := false
 func take_hit(dmg: float, _stagger: float = 0.0) -> bool:
 	if _die_t >= 0.0:
 		return true
+	if puppet:
+		_flash = 1.0
+		_net_hit(dmg, _stagger)
+		return false
 	_health -= dmg
 	_flash = 1.0
 	if _health <= 0.0:
 		_grant_drops()
+		_net_died()
 		_die_t = 0.0
 		set_collision_layer_value(1, false)
 		set_collision_layer_value(CORPSE_LAYER, true)

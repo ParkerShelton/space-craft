@@ -72,6 +72,20 @@ var _elbows: Array = []     # secondary arm joint (forearm), same idea as _knees
 var _tail_pivot: Node3D     # tail or fish tail-fin pivot, animated as a wag
 var _neck_pivot: Node3D     # grazer neck, lowered to the ground while grazing
 var _dropped := false       # drops are handed over once, on the killing blow
+
+# --- co-op (see CreatureSync) ---
+## This creature's name on the network, and which machine runs it.
+var net_cid := ""
+var net_owner := 0
+## A copy of a creature another machine runs: it follows that machine's
+## reports instead of thinking for itself, and blows struck at it are sent on.
+var puppet := false
+## Who struck the blow being applied: 0 for this machine's player, otherwise
+## the peer it came from -- so the drops go to whoever made the kill.
+var _last_hitter := 0
+var _net_to := Transform3D.IDENTITY
+var _net_has := false
+var _net_state := ""
 var _body_height := 1.0     # approximate standing height, for counter-shading
 var _segments: Array = []   # serpent body segments, animated as a wiggle
 var _wings: Array = []      # flyer wing pivots, animated as a flap
@@ -945,6 +959,8 @@ func _play_oneshot(state: String) -> float:
 	if not _play_state(state, true):
 		return 0.0
 	_oneshot_state = state
+	if world != null and world.net != null and not puppet:
+		world.net.fauna.clip(self, state)
 	return _cur_clip_len()
 
 
@@ -1130,10 +1146,14 @@ func _build_biped_skeleton(s: float, color: Color, accent: Color) -> bool:
 # pick up a strong blue cast from the space-ambient light in practice.
 func _mk_glow_box(parent: Node3D, size: Vector3, pos: Vector3, color: Color, energy: float) -> void:
 	var mi := _mk_box(parent, size, pos, color)
-	var mat := mi.material_override as StandardMaterial3D
+	# Its own plain material rather than the skin shader every other box gets:
+	# a blade is not hide, and the shader has no glow to turn up.
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
 	mat.emission_enabled = true
 	mat.emission = color
 	mat.emission_energy_multiplier = energy
+	mi.material_override = mat
 
 
 const BLADE_GLOW := Color(1.0, 0.45, 0.15)  # a hot energy-blade orange, distinct from the pistol's cyan
@@ -1253,6 +1273,9 @@ func _physics_process(delta: float) -> void:
 		if _state_t <= 0.0:
 			_become_corpse()
 		return
+	if puppet:
+		_puppet_physics(delta)
+		return
 	match species.get("kind", "land"):
 		"fish": _swim_physics(delta)
 		"air": _fly_physics(delta)
@@ -1263,9 +1286,66 @@ func _physics_process(delta: float) -> void:
 
 
 func _player_pos():
-	if world != null and world.player != null and is_instance_valid(world.player):
-		return world.player.global_position
-	return null
+	var t := _target_node()
+	return t.global_position if t != null else null
+
+
+## Whichever player is nearest -- on this machine or another.
+func _target_node() -> Node3D:
+	if world == null:
+		return null
+	return world.nearest_target(global_position)
+
+
+## Whether the player it is facing is winding up a heavy blow. Only knowable
+## for this machine's own player; anyone else's reads as not.
+func _target_heavy() -> bool:
+	var t := _target_node()
+	return t != null and t.has_method("is_heavy_telegraphed") and t.is_heavy_telegraphed()
+
+
+# --- as a puppet ------------------------------------------------------------------
+
+## What the owner reports it is doing, for a puppet to show.
+func net_state() -> String:
+	return _state
+
+
+func net_pose(xf: Transform3D, state: String) -> void:
+	_net_to = xf
+	_net_has = true
+	_net_state = state
+
+
+## Glide toward the owner's last report. Returns how fast that was, for the
+## walk cycle.
+func _net_follow(delta: float) -> float:
+	if not _net_has:
+		return 0.0
+	var k := clampf(delta * 10.0, 0.0, 1.0)
+	var before := global_position
+	var cur := global_transform
+	global_transform = Transform3D(cur.basis.slerp(_net_to.basis, k).orthonormalized(),
+		cur.origin.lerp(_net_to.origin, k))
+	velocity = (global_position - before) / maxf(delta, 0.0001)
+	return velocity.length()
+
+
+func _puppet_physics(delta: float) -> void:
+	_net_follow(delta)
+	if _net_state != "" and _net_state != "dying" and _net_state != "corpse":
+		_state = _net_state
+	_animate(delta)
+
+
+## The owner says this one is dead: go down the same way, with nothing to hand
+## out -- the drops were the killer's.
+func net_die() -> void:
+	_dropped = true
+	var was := puppet
+	puppet = false
+	take_hit(1.0e9)
+	puppet = was
 
 
 func _land_physics(delta: float) -> void:
@@ -1317,8 +1397,7 @@ func _land_physics(delta: float) -> void:
 			else:
 				wish = to_player - up * to_player.dot(up)
 				if dist < ATTACK_RANGE and _attack_cd <= 0.0:
-					if world.player.has_method("take_damage"):
-						world.player.take_damage(float(species.get("damage", 5.0)))
+					world.hurt(_target_node(), float(species.get("damage", 5.0)))
 					_attack_cd = ATTACK_COOLDOWN
 		elif temperament == "passive" and dist < float(species.get("flee_range", 10.0)):
 			wish = global_position - ppos
@@ -1479,7 +1558,7 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 		look_at(global_position + new_fwd, up)
 
 	if _state == "chase" or _state == "circle":
-		var blockable: bool = dist < attack_range * 2.0 and world.player.is_heavy_telegraphed()
+		var blockable: bool = dist < attack_range * 2.0 and _target_heavy()
 		if blockable and not _was_blockable and randf() < lerpf(0.15, 0.7, skill):
 			_state = "block"
 			_state_t = BLOCK_MAX_TIME
@@ -1487,7 +1566,7 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 
 	match _state:
 		"block":
-			if not world.player.is_heavy_telegraphed() or _state_t <= 0.0:
+			if not _target_heavy() or _state_t <= 0.0:
 				_state = "chase"
 			return {"wish": Vector3.ZERO, "speed_mult": 1.0}
 		"recover":
@@ -1575,8 +1654,8 @@ func _lunger_ai(delta: float, up: Vector3, ppos: Vector3, dist: float, to_player
 			# and only once per swing.
 			if not _hit_applied and hit_point_reached:
 				_hit_applied = true
-				if dist < attack_range * 1.4 and world.player.has_method("take_damage"):
-					world.player.take_damage(float(species.get("damage", 5.0)))
+				if dist < attack_range * 1.4:
+					world.hurt(_target_node(), float(species.get("damage", 5.0)))
 			var to_target := _lunge_target - global_position
 			var flat_target := to_target - up * to_target.dot(up)
 			if clip_done or _state_t <= 0.0:
@@ -1782,8 +1861,8 @@ func _fly_physics(delta: float) -> void:
 			_landing = false
 			_perched = false
 			if dist < ATTACK_RANGE and _attack_cd <= 0.0:
-				if world != null and world.player != null and world.player.has_method("take_damage"):
-					world.player.take_damage(float(species.get("damage", 5.0)))
+				if world != null:
+					world.hurt(_target_node(), float(species.get("damage", 5.0)))
 				_attack_cd = ATTACK_COOLDOWN
 		elif temperament == "passive" and dist < float(species.get("flee_range", 10.0)):
 			wish = -to_player.normalized()
@@ -2019,6 +2098,9 @@ func _animate(delta: float) -> void:
 func take_hit(dmg: float, stagger: float = 0.0) -> bool:
 	if _state == "dying" or _state == "corpse":
 		return true  # already down; a body can't be killed twice
+	if puppet:
+		_net_hit(dmg, stagger)
+		return false
 	var is_lunger: bool = species.get("pattern", "") == "lunger"
 	var guarded: bool = is_lunger and _state == "block"
 	if guarded:
@@ -2031,6 +2113,7 @@ func take_hit(dmg: float, stagger: float = 0.0) -> bool:
 				_apply_stagger_interrupt()
 	if _health <= 0.0:
 		_grant_drops()
+		_net_died()
 		# Play the death clip through before disappearing, instead of the old
 		# instant queue_free(). Collision and AI are switched off immediately so
 		# a corpse can't keep fighting or block the player mid-animation.
@@ -2092,20 +2175,40 @@ func _grant_drops() -> void:
 		return
 	_dropped = true
 	var drops: Array = species.get("drops", [])
-	if drops.is_empty() or world == null or world.player == null:
+	if drops.is_empty() or world == null:
 		return
-	var got: Array = []
+	var items: Array = []
 	for d in drops:
 		var lo := int(d.get("min", 1))
 		var hi := maxi(lo, int(d.get("max", lo)))
 		var n := randi_range(lo, hi)
-		if n <= 0:
-			continue
-		var id := int(d["id"])
-		world.player.grant_item(id, n)
-		got.append("%s x%d" % [Blocks.name_of(id), n])
-	if not got.is_empty():
-		world.player.notify("%s: %s" % [species.get("name", "Creature"), ", ".join(got)])
+		if n > 0:
+			items.append([int(d["id"]), n])
+	if items.is_empty():
+		return
+	var label := str(species.get("name", "Creature"))
+	# The killing blow came from another machine: the kill is theirs.
+	if _last_hitter != 0 and world.net != null and world.net.active:
+		world.net.fauna.send_drops(_last_hitter, items, label)
+		return
+	if world.player == null:
+		return
+	var got: Array = []
+	for it in items:
+		world.player.grant_item(int(it[0]), int(it[1]))
+		got.append("%s x%d" % [Blocks.name_of(int(it[0])), int(it[1])])
+	world.player.notify("%s: %s" % [label, ", ".join(got)])
+
+
+## A blow struck at a puppet goes to the machine that runs it.
+func _net_hit(dmg: float, stagger: float) -> void:
+	if world != null and world.net != null:
+		world.net.fauna.hit_puppet(self, dmg, stagger)
+
+
+func _net_died() -> void:
+	if world != null and world.net != null and not puppet:
+		world.net.fauna.died(self)
 
 
 func _apply_stagger_interrupt() -> void:

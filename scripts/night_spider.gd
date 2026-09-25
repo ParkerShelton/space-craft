@@ -471,6 +471,16 @@ func _physics_process(delta: float) -> void:
 	if _ai == "dead":
 		_die(delta)
 		return
+	if puppet:
+		# Where the one being run elsewhere is, legs stepping to keep up.
+		_net_follow(delta)
+		_hvel = _flat(velocity)
+		_air = _net_state == "pounce"
+		if _net_state != "":
+			_ai = _net_state
+		_step_legs(delta)
+		_pose(delta)
+		return
 	_think(delta)
 	_move(delta)
 	_orient(delta)
@@ -479,9 +489,11 @@ func _physics_process(delta: float) -> void:
 
 
 func _player():
-	if world != null and world.player != null and is_instance_valid(world.player):
-		return world.player
-	return null
+	return _target_node()
+
+
+func net_state() -> String:
+	return _ai
 
 
 func _flat(v: Vector3) -> Vector3:
@@ -687,12 +699,10 @@ func _slash_pose(t: float) -> Array:
 
 
 func _hurt_player(pl, dmg: float) -> void:
-	if pl.has_method("take_damage"):
-		pl.take_damage(dmg)
 	# A shove away, so a hit is felt rather than just read off the health bar.
 	var away := _flat((pl as Node3D).global_position - global_position)
-	if away.length() > 0.01 and "velocity" in pl:
-		pl.velocity += away.normalized() * 6.0 + _up * 3.0
+	var push := away.normalized() * 6.0 + _up * 3.0 if away.length() > 0.01 else Vector3.ZERO
+	world.hurt(pl, dmg, push)
 
 
 ## Across the ground, and up and down over it.
@@ -990,10 +1000,15 @@ func _segment(mi: MeshInstance3D, a: Vector3, b: Vector3, up_hint: Vector3) -> v
 func take_hit(dmg: float, _stagger: float = 0.0) -> bool:
 	if _ai == "dead":
 		return true
+	if puppet:
+		_flash = 1.0
+		_net_hit(dmg, _stagger)
+		return false
 	_health -= dmg
 	_flash = 1.0
 	if _health <= 0.0:
 		_grant_drops()
+		_net_died()
 		_ai = "dead"
 		_die_t = 0.0
 		set_collision_layer_value(1, false)
