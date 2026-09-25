@@ -12,6 +12,8 @@ const CHEST_SLOTS := 24       # chests hold more
 const MAX_SLOTS := 24         # UI builds this many cells
 
 var kind: int = Blocks.SMELTER
+## This station's name on the network (see NetSync); saved with the world.
+var net_id := ""
 var world: WorldManager
 var storage: Array = []           # slots: {id, count, props, src, mat}
 
@@ -859,6 +861,15 @@ func anvil_take() -> Array:
 		"src": "", "mat": {}}
 	_refresh_anvil()
 	return out
+
+
+## Redraw whatever shows what is in it, after its state arrived from another
+## machine rather than being changed here.
+func net_refresh() -> void:
+	_refresh_anvil()
+	_refresh_press()
+	_refresh_gen()
+	_refresh_bay()
 
 
 func _refresh_anvil() -> void:

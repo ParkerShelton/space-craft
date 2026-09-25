@@ -15,6 +15,11 @@ var _sealed_cells := {}   # the enclosed interior air cells (local voxel -> true
 var _bbox_min := Vector3i.ZERO  # cached block bounding box (local voxels)
 var _bbox_max := Vector3i.ZERO
 var flying := false
+## This ship's name on the network (see NetSync); saved with the world.
+var net_id := ""
+## Someone on another machine is flying her: she follows their stream and her
+## own physics stays out of it.
+var remote_driven := false
 ## If this ship is the wreck a world starts in: the cells it woke up missing,
 ## cell -> the block that belongs there. Emptied as they are put back, which is
 ## what the ship's computer reads its checklist from (see ShipComputer).
@@ -366,8 +371,8 @@ func _ready() -> void:
 ## you can leave the seat mid-cruise and walk around as it keeps traveling), and
 ## falls if it drifts into a gravity well. At rest it stays put.
 func _physics_process(delta: float) -> void:
-	if flying:
-		return  # the pilot drives movement via fly()
+	if flying or remote_driven:
+		return  # the pilot drives movement via fly() -- here, or on their machine
 	if velocity.length() < 0.05:
 		velocity = Vector3.ZERO
 		return

@@ -126,6 +126,8 @@ var chat_log_path := ""
 const CHAT_MAX := 240
 
 var _world: WorldManager
+## Ships and stations (see net_sync.gd).
+var sync: NetSync
 var _seed := 0
 var _system := 0
 ## Edits that arrived before this client had finished building its world. A
@@ -138,6 +140,10 @@ var _world_built := false
 
 func _ready() -> void:
 	uid = _local_uid()
+	sync = NetSync.new()
+	sync.name = "Sync"
+	sync.net = self
+	add_child(sync)
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected)
@@ -168,6 +174,7 @@ func _local_uid() -> String:
 
 func bind_world(w: WorldManager) -> void:
 	_world = w
+	sync.world = w
 
 
 # --- starting a session ---------------------------------------------------
@@ -215,6 +222,7 @@ func leave() -> void:
 	is_host = false
 	joining = false
 	peers.clear()
+	sync.reset()
 
 
 ## Called once the planets actually exist. Everything that arrived while this
@@ -261,6 +269,7 @@ func world_built() -> void:
 			_:
 				_apply_bulk(e[1], e[2], e[3])
 	_pending.clear()
+	sync.flush()
 
 
 func my_id() -> int:
@@ -319,6 +328,8 @@ func _on_peer_connected(id: int) -> void:
 		var wrows: Array = p.water_rows()
 		if not wrows.is_empty():
 			world_water.rpc_id(id, p.planet_name, wrows)
+	# ...and every ship and station, with what is in them.
+	sync.send_all_to(id)
 
 
 func _on_peer_disconnected(id: int) -> void:

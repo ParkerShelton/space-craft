@@ -435,7 +435,7 @@ func save_game() -> bool:
 	for s in _ships:
 		if is_instance_valid(s) and not s.blocks.is_empty():
 			ship_index[s] = data["ships"].size()
-			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform,
+			data["ships"].append({"nid": s.net_id, "blocks": s.blocks, "xform": s.global_transform,
 				"meta": s.block_meta, "air": s.air, "charge": s.charge,
 				"air_made": s.air_made, "air_used": s.air_used,
 				"air_runtime": s.air_runtime,
@@ -450,7 +450,7 @@ func save_game() -> bool:
 	for st in _stations:
 		if not is_instance_valid(st):
 			continue
-		var entry := {"kind": st.kind, "storage": st.storage}
+		var entry := {"kind": st.kind, "storage": st.storage, "nid": st.net_id}
 		if st.kind == Blocks.GENERATOR:
 			# Which way the lever is thrown and what it had banked, or every
 			# load would switch your generators back on and empty them.
@@ -530,6 +530,7 @@ func load_game() -> bool:
 		ship.world = self
 		add_child(ship)
 		ship.blocks = sd.get("blocks", {})
+		ship.net_id = str(sd.get("nid", ""))
 		ship.block_meta = sd.get("meta", {})
 		ship.global_transform = sd.get("xform", Transform3D.IDENTITY)
 		# Ships saved before tanks existed come back full rather than suffocating
@@ -591,6 +592,7 @@ func load_game() -> bool:
 			station.global_transform = std.get("xform", Transform3D.IDENTITY)
 		if std.has("storage"):
 			station.storage = std["storage"]
+		station.net_id = str(std.get("nid", ""))
 		if skind == Blocks.ANVIL:
 			station._refresh_anvil()   # whatever was left on it, drawn there
 		if skind == Blocks.GENERATOR:
@@ -631,6 +633,16 @@ func load_game() -> bool:
 		pl.velocity = Vector3.ZERO
 		pl._refresh_slots()
 	return true
+
+
+## The host has told a joining player where this world began. A player who
+## has only just arrived is set down beside the wreck rather than wherever the
+## home world's spawn point happens to be -- that is where everybody is.
+signal crash_site_known()
+
+
+func crash_site_arrived() -> void:
+	crash_site_known.emit()
 
 
 ## Create a new ship seeded with a cockpit. Snaps orientation to the block grid

@@ -1687,6 +1687,19 @@ func _start_dedicated(port: int, seed_value: int, slot: String = "server_world")
 	_generate_planets(world, sysdef)
 	if not resumed and not world.planets.is_empty():
 		world.planets[0].day_phase = Planet.MORNING_PHASE
+		# A new server world gets its wreck too, by the spawn point, so the
+		# people who join have the same start a single player does.
+		var home: Planet = world.planets[0]
+		var spot := home.find_spawn_point(Vector3.UP)
+		var scc := home.chunk_of(home.world_to_voxel(spot))
+		for dx in range(-1, 2):
+			for dy in range(-2, 1):
+				for dz in range(-1, 2):
+					home.build_chunk_sync(scc + Vector3i(dx, dy, dz))
+		for _f in 3:
+			await get_tree().physics_frame
+		var wreck := _build_crash_site(home, spot, null)
+		print("[server] wreck placed" if wreck != null else "[server] no room for a wreck")
 	# Loaded only now: load_game applies edits ONTO the planets, so they have to
 	# exist first.
 	if resumed and world.load_game():
@@ -1767,15 +1780,45 @@ func _exit_tree() -> void:
 ## Set the wreck down beside the player, and put the player on their feet
 ## outside its door. Which parts are missing is rolled from the world seed, so
 ## the same world always crashes the same way.
+## A player joining someone else's world: stood on the ground a few paces off
+## the wreck, where the others are, instead of at the home world's spawn point.
+func _set_down_by_wreck(player: Player) -> void:
+	if _world == null or not is_instance_valid(player) or _world.crash_site.is_empty():
+		return
+	var p: Planet = null
+	for pl in _world.planets:
+		if pl.planet_name == str(_world.crash_site.get("planet", "")):
+			p = pl
+	if p == null:
+		return
+	var local: Vector3 = _world.crash_site.get("local", Vector3.ZERO)
+	var up := local.normalized()
+	var side := up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
+	player.global_position = p.find_spawn_point((local + side * 10.0).normalized())
+	player.velocity = Vector3.ZERO
+
+
 func _place_crash_site(ground: Planet, player: Player) -> void:
-	var g := _world.gravity_at(player.global_position)
+	var ship := _build_crash_site(ground, player.global_position, player)
+	if ship == null:
+		return
+	var up: Vector3 = ship.global_transform.basis.y
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _world.world_seed ^ 0x57A1 ^ 0x1D
+	_put_player_in_wreck(ship, player, up, rng)
+
+
+## The wreck and the mark it made coming down, a few paces from `near`. Needs
+## no player: a dedicated server builds one for whoever joins.
+func _build_crash_site(ground: Planet, near: Vector3, player: Player) -> Ship:
+	var g := _world.gravity_at(near)
 	var up: Vector3 = (-g).normalized() if g.length() > 0.01 else Vector3.UP
 	var fwd := up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
 	var space := get_world_3d().direct_space_state
-	var at: Vector3 = player.global_position + fwd * 7.0
+	var at: Vector3 = near + fwd * 7.0
 	var floor_at = _drop_to_ground(space, at, up)
 	if floor_at == null:
-		at = player.global_position
+		at = near
 	else:
 		# Ploughed in rather than parked: the belly plate sits a little under
 		# the ground it stopped in.
@@ -1784,13 +1827,14 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	rng.seed = _world.world_seed ^ 0x57A1
 	var ship := CrashSite.build(_world, at, up, fwd, ground, rng)
 	if ship == null:
-		return
+		return null
 	ship.ship_log.append("Came down hard. Ship's log resumes.")
 	# She shows you what she is missing (see repair_ghosts.gd). Delete that file
 	# and this line and nothing else changes.
-	var ghosts := RepairGhosts.new()
-	ship.add_child(ghosts)
-	ghosts.setup(ship, player)
+	if player != null:
+		var ghosts := RepairGhosts.new()
+		ship.add_child(ghosts)
+		ghosts.setup(ship, player)
 	# Where this world began, for the map once she has flown.
 	_world.crash_site = {"planet": ground.planet_name,
 		"local": ground.to_local(ship.global_position), "shown": false}
@@ -1801,6 +1845,11 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	# Nothing of the world inside the hull: a wreck that came down in a wood
 	# would otherwise have half a tree through the cabin.
 	_clear_inside_ship(ground, ship)
+	return ship
+
+
+func _put_player_in_wreck(ship: Ship, player: Player, up: Vector3,
+		rng: RandomNumberGenerator) -> void:
 	# You come round standing at the controls, the seat at your back and the
 	# nose in front. On the planet's own gravity, walking the hull like any
 	# other floor -- a ship sitting in a crater is not a moving deck.
@@ -2187,6 +2236,13 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 	player.position = home.find_spawn_point(Vector3.UP)
 	add_child(player)
 	world.player = player
+	if mode == "joined":
+		# Everybody is at the wreck, so that is where a player arriving goes.
+		# The host may already have said where it is, or may be about to.
+		if not world.crash_site.is_empty():
+			_set_down_by_wreck(player)
+		else:
+			world.crash_site_known.connect(_set_down_by_wreck.bind(player), CONNECT_ONE_SHOT)
 	# AFTER world.player is set, not before. _apply_settings only reaches the
 	# player through world.player, so calling it a line early skipped the whole
 	# player half: every world opened with the preview on, default sensitivity,
