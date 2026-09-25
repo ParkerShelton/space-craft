@@ -421,6 +421,39 @@ var charge := 1.0   # 0..1 stored power, run down by life support and systems
 const AIR_DRAIN := 0.0055     # per second while you are inside breathing it
 const CHARGE_DRAIN := 0.0035  # per second while life support is running
 
+## What a full cabin tank holds. Nothing in the simulation uses it -- `air` is a
+## fraction and always has been -- but a readout that says "412 of 600 litres"
+## tells you something that "0.69" does not, and the scrubber panel is meant to
+## be read at a glance while the alarm is going.
+const AIR_LITRES := 600.0
+## Lifetime totals, for the same panel: how much air has been put into the tank
+## and how much has been breathed out of it since this hull was built.
+var air_made := 0.0
+var air_used := 0.0
+## Seconds the scrubbers have actually run.
+var air_runtime := 0.0
+
+
+## Put air in the tank (a fraction of full), keeping the lifetime total. The
+## Power Bay calls this rather than writing `air` itself, so the meter cannot
+## drift away from what has really been pumped.
+func add_air(frac: float) -> void:
+	if frac <= 0.0:
+		return
+	var before := air
+	air = minf(air + frac, 1.0)
+	air_made += (air - before) * AIR_LITRES
+
+
+## What this one thruster puts out, in the same units as `flight_stats().thrust`.
+## Thrusters are not all alike: one built from a high-Energy ore pushes harder
+## than one built from slag, and the panel on the side of it should say so.
+func thruster_output(cell: Vector3i) -> float:
+	if int(blocks.get(cell, Blocks.AIR)) != Blocks.THRUSTER:
+		return 0.0
+	var meta: Dictionary = block_meta.get(cell, {})
+	return THRUST_UNIT * (0.4 + float(meta.get("e", 50)) / 100.0)
+
 
 ## Burn a slice of the tanks. Driven by the player, so a parked empty ship does
 ## not quietly drain itself while you are off doing something else.
@@ -428,10 +461,13 @@ func consume_life_support(delta: float) -> void:
 	if not _habitable:
 		return
 	charge = maxf(charge - CHARGE_DRAIN * delta, 0.0)
+	var before := air
 	if charge <= 0.0:
 		air = maxf(air - AIR_DRAIN * 2.0 * delta, 0.0)  # no power, no scrubbing
 	else:
 		air = maxf(air - AIR_DRAIN * delta, 0.0)
+		air_runtime += delta
+	air_used += (before - air) * AIR_LITRES
 
 
 func get_status() -> Dictionary:
@@ -456,6 +492,9 @@ func get_status() -> Dictionary:
 		"habitable": is_habitable(),
 		"air": air,
 		"charge": charge,
+		"air_made": air_made,
+		"air_used": air_used,
+		"air_runtime": air_runtime,
 	}
 
 

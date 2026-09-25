@@ -461,6 +461,8 @@ func save_game() -> bool:
 			ship_index[s] = data["ships"].size()
 			data["ships"].append({"blocks": s.blocks, "xform": s.global_transform,
 				"meta": s.block_meta, "air": s.air, "charge": s.charge,
+				"air_made": s.air_made, "air_used": s.air_used,
+				"air_runtime": s.air_runtime,
 				"wreck": s.wreck_missing, "log": s.ship_log,
 				"cabin": s.cabin_cells, "seat": s.seat_at, "landed": s.landed})
 	data["boats"] = []
@@ -554,6 +556,9 @@ func load_game() -> bool:
 		# Ships saved before tanks existed come back full rather than suffocating
 		# their owner the moment the world loads.
 		ship.air = float(sd.get("air", 1.0))
+		ship.air_made = float(sd.get("air_made", 0.0))
+		ship.air_used = float(sd.get("air_used", 0.0))
+		ship.air_runtime = float(sd.get("air_runtime", 0.0))
 		ship.charge = float(sd.get("charge", 1.0))
 		ship.wreck_missing = sd.get("wreck", {})
 		ship.ship_log = sd.get("log", [])

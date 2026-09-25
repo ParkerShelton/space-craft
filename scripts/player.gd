@@ -941,6 +941,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				pass
 			elif _try_ship_computer():
 				pass
+			elif _try_ship_fitting():
+				pass
 			elif _try_assemble_machine():
 				pass
 			elif _try_toggle_door():
@@ -957,6 +959,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.keycode == KEY_ESCAPE:
 			if _journal_panel != null:
 				_close_journal()
+			elif _sys_panel != null:
+				_close_fitting_panel()
 			elif _ship_panel != null:
 				_close_ship_computer()
 			elif _place_kind != Blocks.AIR:
@@ -1581,6 +1585,113 @@ func _open_ship_computer(ship: Ship) -> void:
 	_fit_panel(_ship_panel)
 
 
+# --- the screens on the fittings themselves -----------------------------------
+#
+# The cockpit talks about the whole ship. Right-clicking a scrubber, an engine
+# or the warp drive opens that ONE part's own gauge instead: is it powered, what
+# is it doing, how much is left in it. None of them take anything, so none of
+# them have slots -- they are read, not loaded.
+
+var _sys_panel: Panel = null
+var _sys_body: Control = null
+var _sys_ship: Ship = null
+var _sys_cell := Vector3i.ZERO
+var _sys_id := 0
+var _sys_sig := ""
+
+
+## Right-clicking a fitting on a ship.
+func _try_ship_fitting() -> bool:
+	if piloting:
+		return false
+	var tgt := _raycast_voxel()
+	if tgt.is_empty() or not tgt.get("hit", false) or tgt.get("kind", "") != "ship":
+		return false
+	var id := int(tgt.get("id", Blocks.AIR))
+	if not ShipPanels.has_panel(id):
+		return false
+	var ship := tgt["obj"] as Ship
+	if ship == null:
+		return false
+	_open_fitting_panel(ship, tgt.get("voxel", Vector3i.ZERO) as Vector3i, id)
+	return true
+
+
+func _open_fitting_panel(ship: Ship, cell: Vector3i, id: int) -> void:
+	_close_fitting_panel()
+	_sys_ship = ship
+	_sys_cell = cell
+	_sys_id = id
+	_sys_panel = Panel.new()
+	_sys_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_sys_panel.custom_minimum_size = Vector2(500, 430)
+	_sys_panel.size = _sys_panel.custom_minimum_size
+	_sys_panel.position = -_sys_panel.size * 0.5
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.04, 0.07, 0.09, 0.97)
+	sb.border_color = Color(0.3, 0.7, 0.8, 0.9)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(8)
+	_sys_panel.add_theme_stylebox_override("panel", sb)
+	_ui_layer.add_child(_sys_panel)
+	menu_open = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	Audio.ui("ui_open")
+	# Built once, outside everything the refresh throws away, for the same
+	# reason the ship computer's is: a button freed between your press and your
+	# release does nothing.
+	var close := Button.new()
+	close.text = "Close"
+	close.custom_minimum_size = Vector2(120, 34)
+	close.position = Vector2(20, _sys_panel.custom_minimum_size.y - 48)
+	close.mouse_entered.connect(func(): Audio.ui("ui_hover"))
+	close.pressed.connect(func(): Audio.ui("ui_back"))
+	close.pressed.connect(_close_fitting_panel)
+	_sys_panel.add_child(close)
+	var title := Label.new()
+	title.text = ShipPanels.title_of(id)
+	title.position = Vector2(20, 14)
+	title.add_theme_font_size_override("font_size", 22)
+	title.modulate = Color(0.55, 0.9, 1.0)
+	_sys_panel.add_child(title)
+	_sys_sig = ""
+	_refresh_fitting_panel()
+	_fit_panel(_sys_panel)
+
+
+func _close_fitting_panel() -> void:
+	if _sys_panel != null:
+		_sys_panel.queue_free()
+		_sys_panel = null
+	_sys_body = null
+	_sys_ship = null
+	_sys_sig = ""
+	if not (inv_open or book_open or _station_open != null or _ship_panel != null):
+		menu_open = false
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+
+
+## Redrawn only when the numbers have actually moved, so the gauges keep up
+## without the panel flickering out from under the cursor.
+func _refresh_fitting_panel() -> void:
+	if _sys_panel == null or _sys_ship == null or not is_instance_valid(_sys_ship):
+		_close_fitting_panel()
+		return
+	# Broken off the ship while you were looking at it.
+	if int(_sys_ship.blocks.get(_sys_cell, Blocks.AIR)) != _sys_id:
+		_close_fitting_panel()
+		return
+	var sig := ShipPanels.signature(_sys_ship, _sys_cell, _sys_id)
+	if _sys_body != null and is_instance_valid(_sys_body) and sig == _sys_sig:
+		return
+	_sys_sig = sig
+	if _sys_body != null and is_instance_valid(_sys_body):
+		_sys_body.queue_free()
+	_sys_body = ShipPanels.build(_sys_ship, _sys_cell, _sys_id)
+	_sys_body.position = Vector2(20, 52)
+	_sys_panel.add_child(_sys_body)
+
+
 func _close_ship_computer() -> void:
 	if _ship_panel != null:
 		_ship_panel.queue_free()
@@ -1780,6 +1891,8 @@ func _watch_repairs(delta: float) -> void:
 	_ship_panel_t = 0.75
 	if _ship_panel != null:
 		_refresh_ship_computer()
+	if _sys_panel != null:
+		_refresh_fitting_panel()
 	for sh in world._ships:
 		var ship: Ship = sh
 		if not is_instance_valid(ship) or ship.wreck_missing == null:

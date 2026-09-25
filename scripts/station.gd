@@ -502,7 +502,7 @@ func _tick_power_bay(delta: float) -> void:
 		if sh.charge < 1.0:
 			sh.charge = minf(sh.charge + moved / SHIP_POWER, 1.0)
 		else:
-			sh.air = minf(sh.air + moved / SHIP_AIR_POWER, 1.0)
+			sh.add_air(moved / SHIP_AIR_POWER)
 		_refresh_bay()
 		return
 
