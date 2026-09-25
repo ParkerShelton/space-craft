@@ -8,7 +8,7 @@ extends CharacterBody3D
 ## and then coast free once gravity fades in space.
 
 var blocks := {}       # Vector3i(local voxel) -> block id
-var block_meta := {}   # Vector3i -> {h,d,e,r} material stats for crafted blocks (Shipworks)
+var block_meta := {}   # Vector3i -> tag: what that block was made from (Blocks.make_tag)
 var _habitable := false  # sealed interior + a Life Support block => safe to breathe inside
 var _sealed := false      # cached: interior has an enclosed air pocket
 var _sealed_cells := {}   # the enclosed interior air cells (local voxel -> true)
@@ -496,7 +496,7 @@ func take_aboard(p: Planet) -> int:
 	for n in taken:
 		blocks[n] = ids[n]
 		# The ore it was made from comes aboard with it.
-		var pr: Dictionary = p.block_props.get(taken[n], {})
+		var pr: Dictionary = p.block_tags.get(taken[n], {})
 		if not pr.is_empty():
 			block_meta[n] = pr.duplicate()
 		clear[taken[n]] = Blocks.AIR

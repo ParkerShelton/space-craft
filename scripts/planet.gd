@@ -4316,11 +4316,18 @@ func gravity_at(world_pos: Vector3) -> Vector3:
 
 # --- coordinate helpers -------------------------------------------------------
 
-## The ore a built block was made from, for the blocks that care (see
-## Blocks.QUALITY_BLOCKS): voxel -> props. Cleared whenever the block there
-## changes, saved with the world, handed back when it is mined and carried
-## aboard a ship with it.
-var block_props := {}
+## What each placed block was made from: voxel -> tag (see Blocks.make_tag).
+## Cleared whenever the block there changes, saved with the world, sent to
+## every player with the edit, handed back when it is mined and carried aboard
+## a ship with it.
+var block_tags := {}
+
+
+## Put a block down along with what it was made from.
+func set_block_tagged(v: Vector3i, id: int, tag: Dictionary, quiet := false) -> void:
+	set_block(v, id, quiet)
+	if tag != null and not tag.is_empty() and id != Blocks.AIR:
+		block_tags[v] = tag.duplicate(true)
 
 
 ## Was this cell put there by someone, rather than generated?
@@ -5138,7 +5145,7 @@ func set_blocks(cells: Dictionary) -> void:
 	for key in cells:
 		var v: Vector3i = key
 		var id: int = cells[key]
-		block_props.erase(v)
+		block_tags.erase(v)
 		var cc := chunk_of(v)
 		if not _edits_by_chunk.has(cc):
 			_edits_by_chunk[cc] = {}
@@ -5169,7 +5176,7 @@ func set_blocks(cells: Dictionary) -> void:
 func set_block(v: Vector3i, id: int, quiet := false) -> void:
 	var was := get_id(v)
 	if Blocks.bottom_of(was) != Blocks.bottom_of(id):
-		block_props.erase(v)
+		block_tags.erase(v)
 	if not quiet:
 		_edit_sound(v, was, id)
 	var cc := chunk_of(v)

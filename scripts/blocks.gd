@@ -881,14 +881,40 @@ static func max_durability(id: int) -> int:
 
 ## How many of an item one slot holds. Things that wear out are one to a slot,
 ## since each carries its own wear.
-## Blocks whose ore decides how well they work once built: a thruster pushes by
-## its ore's Energy. Two of these from different ores are never one stack, and
-## the ore stays with the block wherever it is put.
-const QUALITY_BLOCKS := [THRUSTER]
+## Whether two stacks are the same thing and may merge: the same item, from
+## the same world, of the same ore, with the same stats. What something is made
+## of decides how good it is, so two ores' worth never pool into one stack
+## that quietly takes the stats of whichever came first.
+static func same_stack(a: Dictionary, b: Dictionary) -> bool:
+	return int(a.get("id", -1)) == int(b.get("id", -2)) \
+		and str(a.get("src", "")) == str(b.get("src", "")) \
+		and str((a.get("mat", {}) as Dictionary).get("name", "")) \
+			== str((b.get("mat", {}) as Dictionary).get("name", "")) \
+		and (a.get("props", {}) as Dictionary) == (b.get("props", {}) as Dictionary)
 
 
-static func keeps_quality(id: int) -> bool:
-	return bottom_of(id) in QUALITY_BLOCKS
+## A placed block's TAG: everything the item it was placed from knew about
+## itself -- its ore stats at the top level (so a ship reads "e" and "d" straight
+## off it), and its material and home world under "_mat" and "_src". Empty for
+## plain blocks. Planets keep one per cell and ships one per block, so what
+## comes back out when it is mined is exactly what went in.
+static func make_tag(props: Dictionary, mat: Dictionary, src: String) -> Dictionary:
+	var t: Dictionary = props.duplicate(true) if props != null else {}
+	if mat != null and not mat.is_empty():
+		t["_mat"] = mat.duplicate(true)
+	if src != "":
+		t["_src"] = src
+	return t
+
+
+## The item a tag describes: {"props", "mat", "src"}.
+static func untag(t: Dictionary) -> Dictionary:
+	var props := {}
+	for k in t:
+		if not str(k).begins_with("_"):
+			props[k] = t[k]
+	return {"props": props, "mat": (t.get("_mat", {}) as Dictionary).duplicate(true),
+		"src": str(t.get("_src", ""))}
 
 
 static func stack_cap(id: int, normal: int) -> int:

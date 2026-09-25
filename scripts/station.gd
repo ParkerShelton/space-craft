@@ -297,9 +297,7 @@ func store_add(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 	for s in storage:
 		# Two ores' worth of the same shape are two stacks: what a piece is made
 		# of decides what it is good for.
-		if s["count"] > 0 and s["id"] == id and s.get("src", "") == src \
-				and str((s.get("mat", {}) as Dictionary).get("name", "")) == str(mat.get("name", "")) \
-				and (not Blocks.keeps_quality(id) or s.get("props", {}) == props):
+		if s["count"] > 0 and Blocks.same_stack(s, {"id": id, "src": src, "mat": mat, "props": props}):
 			s["count"] += n
 			return 0
 	for s in storage:
@@ -715,8 +713,7 @@ func anvil_pile_fits(item: Dictionary) -> bool:
 	if not anvil_takes(id):
 		return false
 	var pile := anvil_pile()
-	return pile.is_empty() or (int(pile["id"]) == id
-		and str(pile.get("src", "")) == str(item.get("src", "")))
+	return pile.is_empty() or Blocks.same_stack(pile, item)
 
 
 ## Set `n` of `item` down on the pile. Returns how many went on.
@@ -1285,7 +1282,7 @@ func migrate_generator() -> void:
 				more["count"] = int(d["count"]) - 1
 				rest.append(more)
 		elif Blocks.is_fuel(id, d.get("props", {})) and (int(storage[1]["count"]) == 0
-				or (int(storage[1]["id"]) == id and storage[1].get("src", "") == d.get("src", ""))):
+				or Blocks.same_stack(storage[1], d)):
 			if int(storage[1]["count"]) == 0:
 				storage[1] = d.duplicate(true)
 			else:

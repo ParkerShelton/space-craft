@@ -696,9 +696,8 @@ func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 		return n
 	var cap := Blocks.stack_cap(id, STACK_MAX)
 	for s in inv:
-		if s["id"] == id and s.get("src", "") == src and s["count"] > 0 and s["count"] < cap \
-				and str((s.get("mat", {}) as Dictionary).get("name", "")) == str(mat.get("name", "")) \
-				and (not Blocks.keeps_quality(id) or s.get("props", {}) == props):
+		if s["count"] > 0 and s["count"] < cap \
+				and Blocks.same_stack(s, {"id": id, "src": src, "mat": mat, "props": props}):
 			var add: int = mini(n, cap - s["count"])
 			s["count"] += add
 			n -= add
@@ -4059,7 +4058,7 @@ func _edit_block(_break_it: bool) -> void:
 	# beyond it -- a slab stacking onto a slab, or a block replacing tall grass --
 	# so they take an early exit before the normal adjacent-cell path.
 	if tgt["kind"] == "planet" and plan["voxel"] != pv:
-		world.edit_block(obj as Planet, plan["voxel"], plan["value"])
+		world.edit_block(obj as Planet, plan["voxel"], plan["value"], _held_tag())
 		_consume_active()
 		return
 	var placed_value: int = plan["value"]
@@ -4076,9 +4075,9 @@ func _edit_block(_break_it: bool) -> void:
 				# want to have to think about.
 				var face := _door_facing(obj as Planet, pv)
 				world.edit_block(obj as Planet, pv,
-					Blocks.door_with(false, face, 0, false))
+					Blocks.door_with(false, face, 0, false), _held_tag())
 				world.edit_block(obj as Planet, pv + axis,
-					Blocks.door_with(false, face, 0, true))
+					Blocks.door_with(false, face, 0, true), _held_tag())
 			else:
 				# Built against a ship standing on the ground: it is part of
 				# her, not of the planet -- unless it is ground itself.
@@ -4086,18 +4085,16 @@ func _edit_block(_break_it: bool) -> void:
 				var sc = null
 				if sh != null and not sh.flying and not Blocks.is_natural(placed_value):
 					sc = sh.cell_touching(obj as Planet, pv)
-				var held_props: Dictionary = inv[active_slot].get("props", {})
+				var tag := _held_tag()
 				if sc != null:
-					sh.set_block(sc, placed_value, held_props)
+					sh.set_block(sc, placed_value, tag)
 				else:
-					world.edit_block(obj as Planet, pv, placed_value)
-					if Blocks.keeps_quality(placed_value) and not held_props.is_empty():
-						(obj as Planet).block_props[pv] = held_props.duplicate()
+					world.edit_block(obj as Planet, pv, placed_value, tag)
 			_consume_active()
 
 	elif tgt["kind"] == "ship":
 		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
-			var props: Dictionary = inv[active_slot].get("props", {})
+			var props: Dictionary = _held_tag()
 			if place_id == Blocks.DOOR:
 				# A door is two cells tall on a ship exactly as it is on the
 				# ground. Placing one cell of it left a lone half in the wall --
@@ -4762,13 +4759,14 @@ func _process_mining(delta: float) -> void:
 			if _crack != null:
 				_crack.visible = false
 			return
-		var mined_props: Dictionary = {}
+		# What this block was made from, if it was put here by someone: that is
+		# what comes back, not a plain copy of the block.
+		var mined_tag: Dictionary = {}
 		if planet != null:
-			mined_props = (planet.block_props.get(v, {}) as Dictionary).duplicate()
+			mined_tag = (planet.block_tags.get(v, {}) as Dictionary).duplicate(true)
 		elif ship != null:
-			mined_props = (ship.block_meta.get(v, {}) as Dictionary).duplicate()
-		if not Blocks.keeps_quality(id):
-			mined_props = {}
+			mined_tag = (ship.block_meta.get(v, {}) as Dictionary).duplicate(true)
+		var mi := Blocks.untag(mined_tag)
 		if planet != null:
 			world.edit_block(planet, v, Blocks.AIR)
 			_wear_from_block()
@@ -4780,7 +4778,10 @@ func _process_mining(delta: float) -> void:
 					if Blocks.is_door(planet.get_id(v + (dn as Vector3i))):
 						world.edit_block(planet, v + (dn as Vector3i), Blocks.AIR)
 						break
-			if is_ore:
+			if not mined_tag.is_empty() and not Blocks.is_stacked_slab(id) \
+					and Blocks.bottom_of(id) != Blocks.WIRE:
+				_add_item(Blocks.bottom_of(id), 1, mi["props"], mi["src"], mi["mat"])
+			elif is_ore:
 				_add_item(id, 1, od["props"], planet.planet_name,
 					{"name": od["name"], "color": od["color"], "tier": od["tier"]})
 			elif Blocks.is_stacked_slab(id):
@@ -4797,7 +4798,7 @@ func _process_mining(delta: float) -> void:
 				for f in 6:
 					if (fm & (1 << f)) != 0:
 						runs += 1
-				_add_item(Blocks.WIRE, maxi(runs, 1))
+				_add_item(Blocks.WIRE, maxi(runs, 1), mi["props"], mi["src"], mi["mat"])
 			elif Blocks.is_plant(id):
 				# Grass is cleared, not harvested: a handful of blades is not a
 				# thing to carry around. What it sometimes leaves is a seed.
@@ -4815,7 +4816,7 @@ func _process_mining(delta: float) -> void:
 				# Strip any packed orientation before it becomes an item: a
 				# rotated stair or an axis-aligned log would otherwise come back
 				# as a packed value that can't be placed again.
-				_add_item(Blocks.bottom_of(id), 1, mined_props)
+				_add_item(Blocks.bottom_of(id), 1, mi["props"], mi["src"], mi["mat"])
 				# Cut through a trunk and what is above it comes down; and any
 				# leaves this log was holding up start to wither.
 				if Blocks.is_wood(Blocks.bottom_of(id)):
@@ -4831,7 +4832,7 @@ func _process_mining(delta: float) -> void:
 				var oid: int = ship.blocks.get(other, Blocks.AIR)
 				if Blocks.is_door(oid) and Blocks.door_is_top(oid) != Blocks.door_is_top(id):
 					ship.set_block(other, Blocks.AIR)
-			_add_item(Blocks.bottom_of(id), 1, mined_props)
+			_add_item(Blocks.bottom_of(id), 1, mi["props"], mi["src"], mi["mat"])
 		_break_burst(obj.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)),
 			Blocks.color_of(id))
 		if _crack != null:
@@ -5977,7 +5978,7 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 		if int(to["count"]) > 0 and int(to["id"]) != int(from["id"]):
 			_toast("Move that item out first")
 			return
-	if _slot_holds(to) and to["id"] == from["id"] and to.get("src", "") == from.get("src", ""):
+	if _slot_holds(to) and Blocks.same_stack(to, from):
 		var cap: int = STACK_MAX if tc == "inv" else (1 if tc == "equip" or tc == "vanity" else 100000)
 		cap = Blocks.stack_cap(int(from["id"]), cap)
 		var mv: int = mini(cap - int(to["count"]), int(from["count"]))
@@ -7886,7 +7887,7 @@ func _use_gen_hopper(st: Station) -> bool:
 	if not Blocks.is_fuel(hid, held.get("props", {})):
 		_toast("%s won't burn -- the hopper takes ore with Combustion" % Blocks.name_of(hid))
 		return true
-	if has_fuel and (int(hopper["id"]) != hid or hopper.get("src", "") != held.get("src", "")):
+	if has_fuel and not Blocks.same_stack(hopper, held):
 		# A different ore: swap them, so the one you were holding burns next.
 		var giving: Dictionary = held.duplicate(true)
 		var was: Dictionary = st.gen_swap_fuel(giving)
@@ -8022,8 +8023,13 @@ func _anvil_take_off(st: Station, and_pile: bool) -> bool:
 
 ## Is `a` the same metal in the same form as the piece `p` went on as?
 func _same_stock(a: Dictionary, p: Dictionary) -> bool:
-	return int(a.get("id", -1)) == int(p.get("id", -2)) \
-		and str(a.get("src", "")) == str(p.get("src", ""))
+	return Blocks.same_stack(a, p)
+
+
+## The tag for a block put down from the stack in your hand (Blocks.make_tag).
+func _held_tag() -> Dictionary:
+	var h: Dictionary = _active_item()
+	return Blocks.make_tag(h.get("props", {}), h.get("mat", {}), str(h.get("src", "")))
 
 
 ## Take `n` off the stack in your hand.

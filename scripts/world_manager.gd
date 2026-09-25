@@ -280,11 +280,11 @@ func _read_save(path: String):
 ## through; in co-op it goes via the host, which is the only authority on what
 ## the world contains. Routing every edit through here is what keeps two worlds
 ## from drifting apart -- there is no second path to forget about.
-func edit_block(p: Planet, v: Vector3i, id: int) -> void:
+func edit_block(p: Planet, v: Vector3i, id: int, tag: Dictionary = {}) -> void:
 	if net != null and net.active:
-		net.edit_block(p.planet_name, v, id)
+		net.edit_block(p.planet_name, v, id, tag)
 	else:
-		p.set_block(v, id)
+		p.set_block_tagged(v, id, tag)
 
 
 ## Many cells as one change. See Planet.set_blocks. In co-op each cell still
@@ -293,7 +293,7 @@ func edit_block(p: Planet, v: Vector3i, id: int) -> void:
 func edit_blocks(p: Planet, cells: Dictionary) -> void:
 	if net != null and net.active:
 		for v in cells:
-			net.edit_block(p.planet_name, v, int(cells[v]))
+			net.edit_block(p.planet_name, v, int(cells[v]), {})
 	else:
 		p.set_blocks(cells)
 
@@ -421,8 +421,8 @@ func save_game() -> bool:
 			data["water"][p.planet_name] = wrows
 		if not p._parts_by_chunk.is_empty():
 			data["parts"][p.planet_name] = p._parts_by_chunk
-		if not p.block_props.is_empty():
-			data.get_or_add("block_props", {})[p.planet_name] = p.block_props
+		if not p.block_tags.is_empty():
+			data.get_or_add("block_tags", {})[p.planet_name] = p.block_tags
 		data["day_phase"][p.planet_name] = p.day_phase
 		# A field has to still be there tomorrow, or planting is a waste of an
 		# afternoon.
@@ -513,7 +513,7 @@ func load_game() -> bool:
 		# rebuilt before its levels arrive draws every cell full.
 		p.load_water(pwater.get(p.planet_name, []))
 		p.load_edits(pedits.get(p.planet_name, {}))
-		p.block_props = ((data.get("block_props", {}) as Dictionary).get(p.planet_name, {}) as Dictionary).duplicate()
+		p.block_tags = ((data.get("block_tags", {}) as Dictionary).get(p.planet_name, {}) as Dictionary).duplicate(true)
 		p.day_phase = float(pphase.get(p.planet_name, p.day_phase))
 		p.load_crops((data.get("crops", {}).get(p.planet_name, []) as Array))
 		p.sites_opened = {}

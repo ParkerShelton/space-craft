@@ -256,6 +256,8 @@ func world_built() -> void:
 				if pw2 != null:
 					pw2.load_water(e[2])
 					pw2.apply_water(e[2])
+			"tags":
+				_apply_tags(e[1], e[2])
 			_:
 				_apply_bulk(e[1], e[2], e[3])
 	_pending.clear()
@@ -294,6 +296,10 @@ func _on_peer_connected(id: int) -> void:
 				ids.append(int(p._edits_by_chunk[cc][v]))
 		if not ids.is_empty():
 			world_edits.rpc_id(id, p.planet_name, cells, ids)
+		# ...and what each placed block was made from, after the blocks
+		# themselves (placing a block clears whatever tag the cell had).
+		if not p.block_tags.is_empty():
+			world_tags.rpc_id(id, p.planet_name, p.block_tags)
 		# Eighth-block builds live in their own store, not in _edits_by_chunk, so
 		# they need their own pass -- otherwise a newcomer sees PARTS markers with
 		# nothing in them where somebody's fine detail work should be.
@@ -377,6 +383,23 @@ func world_edits(planet_name: String, cells: PackedVector3Array, ids: PackedInt3
 	_apply_bulk(planet_name, cells, ids)
 
 
+## Host -> a joining client: what every placed block on one planet is made of.
+@rpc("authority", "call_remote", "reliable")
+func world_tags(planet_name: String, tags: Dictionary) -> void:
+	if not _world_built:
+		_pending.append(["tags", planet_name, tags])
+		return
+	_apply_tags(planet_name, tags)
+
+
+func _apply_tags(planet_name: String, tags: Dictionary) -> void:
+	var p := _planet(planet_name)
+	if p == null:
+		return
+	for v in tags:
+		p.block_tags[v] = (tags[v] as Dictionary).duplicate(true)
+
+
 func _apply_bulk(planet_name: String, cells: PackedVector3Array, ids: PackedInt32Array) -> void:
 	var p := _planet(planet_name)
 	if p == null:
@@ -424,16 +447,18 @@ func _apply_parts_bulk(planet_name: String, cells: PackedVector3Array,
 ## Called by whoever is editing. On the host this applies and tells everyone; on
 ## a client it applies locally straight away (so building feels instant) and
 ## asks the host to make it real for everyone else.
-func edit_block(planet_name: String, v: Vector3i, id: int) -> void:
+func edit_block(planet_name: String, v: Vector3i, id: int, tag: Dictionary = {}) -> void:
 	var p := _planet(planet_name)
 	if p != null:
-		p.set_block(v, id)
+		p.set_block_tagged(v, id, tag)
 	if not active:
 		return
+	# The tag travels with the block: a hull plate somebody else put down is
+	# the same plate, with the same ore in it, on every machine.
 	if is_host:
-		apply_edit.rpc(planet_name, v, id)
+		apply_edit.rpc(planet_name, v, id, tag)
 	else:
-		request_edit.rpc_id(1, planet_name, v, id)
+		request_edit.rpc_id(1, planet_name, v, id, tag)
 
 
 ## The eighth-block twin of edit_block. Parts cannot ride on the block path:
@@ -674,27 +699,29 @@ func world_crops(planet_name: String, rows: Array) -> void:
 
 ## Client -> host. The host is the only authority on what the world contains.
 @rpc("any_peer", "call_remote", "reliable")
-func request_edit(planet_name: String, v: Vector3i, id: int) -> void:
+func request_edit(planet_name: String, v: Vector3i, id: int, tag: Dictionary) -> void:
 	if not is_host:
 		return
 	var p := _planet(planet_name)
 	if p != null:
-		p.set_block(v, id)
+		p.set_block_tagged(v, id, tag)
 	# Back out to everyone INCLUDING the requester's neighbours; the requester
 	# already applied it locally.
-	apply_edit.rpc(planet_name, v, id)
+	apply_edit.rpc(planet_name, v, id, tag)
 
 
 ## Host -> clients.
 @rpc("authority", "call_remote", "reliable")
-func apply_edit(planet_name: String, v: Vector3i, id: int) -> void:
+func apply_edit(planet_name: String, v: Vector3i, id: int, tag: Dictionary) -> void:
 	if not _world_built:
 		_pending.append(["blocks", planet_name,
 			PackedVector3Array([Vector3(v)]), PackedInt32Array([id])])
+		if not tag.is_empty():
+			_pending.append(["tags", planet_name, {v: tag}])
 		return
 	var p := _planet(planet_name)
 	if p != null:
-		p.set_block(v, id)
+		p.set_block_tagged(v, id, tag)
 
 
 # --- felled trees ------------------------------------------------------------
