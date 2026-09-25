@@ -4992,6 +4992,10 @@ func _process_mining(delta: float) -> void:
 				# thing to carry around. What it sometimes leaves is a seed.
 				if randf() < Blocks.SEED_DROP_CHANCE:
 					_drop_flora_seed(planet, "grass", Blocks.SEEDS)
+			elif Blocks.bottom_of(id) == Blocks.CRACKED_METAL:
+				# Split plate from the wreck: it comes apart rather than off,
+				# and what is left is not worth carrying.
+				pass
 			elif Blocks.is_leaf(Blocks.bottom_of(id)):
 				# Leaves give you the tree, not a pile of leaves.
 				if randf() < Blocks.SAPLING_DROP_CHANCE:

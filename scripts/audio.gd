@@ -213,7 +213,7 @@ func _build_material_table() -> void:
 			"PLANK_DARK", "CAMPFIRE"],
 		"snow": ["SNOW"],
 		"glass": ["GLASS", "ICE", "CRYSTAL"],
-		"metal": ["METAL", "PARTS", "MACHINE_CORE", "SMELTER", "FABRICATOR",
+		"metal": ["METAL", "CRACKED_METAL", "PARTS", "MACHINE_CORE", "SMELTER", "FABRICATOR",
 			"SHIPWORKS", "CARPENTER", "FORGE", "SHAPER", "CLIMATE_UNIT",
 			"GENERATOR", "OXYGEN_PLANT", "HEATER", "COOLER", "WIRE", "BATTERY",
 			"POWER_BAY", "CHEST", "DOOR", "DOOR_OPEN", "COCKPIT", "THRUSTER",

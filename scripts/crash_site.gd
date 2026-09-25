@@ -107,12 +107,15 @@ static func _plan() -> Dictionary:
 	# A door you can walk through: two blocks tall, in the starboard side.
 	out[DOOR_AT] = Blocks.door_with(false, 0, 0, false)
 	out[DOOR_AT + Vector3i(0, 1, 0)] = Blocks.door_with(false, 0, 0, true)
-	# Wings, swept back, a plate thick.
+	# Wings, swept back, a plate thick and three deep. The extra row is what
+	# lets a wing that comes off lie over something -- a locker thrown out in
+	# the crash, a thruster that tore loose -- rather than being too narrow to
+	# hide anything under.
 	for side in [-1, 1]:
 		for i in range(1, 5):
 			var span := 2 + i
 			var sweep := CABIN_BACK - 4 + i
-			for z2 in range(sweep, sweep + 2):
+			for z2 in range(sweep - 1, sweep + 2):
 				out[Vector3i(side * span, 1, z2)] = Blocks.METAL
 	# Nothing stands in the doorway. The wing root runs right down the side she
 	# is hinged in, so the chord across the door comes out -- which is where the
@@ -190,6 +193,10 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 	# are what has to be made airtight again, and nobody should wake to a
 	# shopping list of thirty plates.
 	var torn: Array = []
+	# One wing ALWAYS comes off. What lands out there is where the salvage is
+	# -- metal to cut, and whatever it came down on top of -- and an opening
+	# with nothing lying around it has nothing to walk out to.
+	var lost_wing: int = S_WING_L if rng.randf() < 0.5 else S_WING_R
 	for s2 in [S_WING_L, S_WING_R, S_TAIL]:
 		var cells: Array = by_section.get(s2, [])
 		if cells.is_empty():
@@ -197,6 +204,8 @@ static func _wreck(ship: Ship, plan: Dictionary, rng: RandomNumberGenerator) -> 
 		cells.sort()
 		var roll := rng.randf()
 		var gone_odds: float = 0.35 if (s2 == S_WING_L or s2 == S_WING_R) else 0.15
+		if s2 == lost_wing:
+			roll = 0.0
 		if roll < gone_odds:
 			for v2 in cells:
 				missing[v2] = int(plan[v2])
@@ -310,11 +319,25 @@ static func _fit_systems(ship: Ship, world: WorldManager, planet: Planet,
 		# The journal carries its own page, written from THIS planet when the
 		# wreck is placed, so it stays true wherever it is carried afterwards.
 		locker.store_add(Blocks.JOURNAL, 1, {"text": journal_text(planet)})
-	if rng.randf() < 0.55:
+	var has_ls := rng.randf() < 0.55
+	var thr := {-1: rng.randf() < 0.45, 1: rng.randf() < 0.45}
+	# A FLOOR: something aboard is always missing. A wreck that came down with
+	# its air and both engines teaches you to plate a hole and nothing else,
+	# and the parts are the half of the opening worth learning.
+	if has_ls and thr[-1] and thr[1]:
+		var lose := rng.randi() % 3
+		if lose == 0:
+			has_ls = false
+		else:
+			thr[-1 if lose == 1 else 1] = false
+	if has_ls:
 		ship.blocks[LIFE_SUPPORT_AT] = Blocks.LIFE_SUPPORT
 	for side in [-1, 1]:
-		if rng.randf() < 0.45:
+		if thr[side]:
 			ship.blocks[thruster_at(side)] = Blocks.THRUSTER
+	# ...and a CEILING, below: a flat battery on top of no air and no engines is
+	# the whole tech tree before you can fly, on day one.
+	var stripped: bool = not has_ls and not thr[-1] and not thr[1]
 	# The cradle and a battery in it, always. Leaving without one meant building
 	# a Generator before you could build anything else, and the first hour of a
 	# world should not be a list of prerequisites. What VARIES is how much is
@@ -326,6 +349,10 @@ static func _fit_systems(ship: Ship, world: WorldManager, planet: Planet,
 		var frac: float = 0.0
 		if roll > 0.2:
 			frac = rng.randf_range(0.12, 0.85)
+		elif stripped:
+			# She lost everything else: leave her a little in the battery, so
+			# the generator is a later job rather than the first of many.
+			frac = rng.randf_range(0.15, 0.3)
 		for slot in bay.storage:
 			if int(slot.get("id", Blocks.AIR)) == Blocks.AIR:
 				slot["id"] = Blocks.BATTERY
@@ -384,7 +411,9 @@ static func journal_text(planet: Planet) -> String:
 		if spark > 0:
 			lines.append("  %s best for electrical work." % _count_word(spark))
 		if burn > 0:
-			lines.append("  %s worth burning for power." % _count_word(burn))
+			lines.append("  %s worth burning for power. The stone round" % _count_word(burn))
+			lines.append("  those is black and sooty -- you can see a seam of")
+			lines.append("  it from across a cave.")
 		if burn == 0:
 			lines.append("  None of it burns well. Power will be the hard part.")
 		lines.append("Refine ore at a smelter before you can build with it.")
@@ -400,7 +429,8 @@ static func journal_text(planet: Planet) -> String:
 	lines.append("")
 	lines.append("The battery in the rack is what powers the ship. A flat")
 	lines.append("battery is not a broken one: charge it at a generator and")
-	lines.append("put it back.")
+	lines.append("put it back. A generator takes ten metal plate and four")
+	lines.append("wire, and it burns the ore out of the black seams.")
 	lines.append("")
 	lines.append("Bare hands will not get ore or metal out of anything. They")
 	lines.append("will get wood, and wood makes the bench, and the bench makes")
@@ -412,7 +442,7 @@ static func journal_text(planet: Planet) -> String:
 ## What an ore is mostly good for. One answer each -- the survey is a summary,
 ## not a table.
 static func _ore_use(props: Dictionary) -> String:
-	if Blocks.combustion_of(props) >= 62:
+	if Blocks.is_fuel_grade(props):
 		return "power"
 	if Blocks.conductivity_of(props) >= 55:
 		return "electrical"

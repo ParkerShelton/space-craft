@@ -73,15 +73,31 @@ static func boxes_for(id: int) -> Array:
 					Vector3(0.04, 0.05, 0.22), CRUST])
 			return loaf
 		Blocks.SEEDS:
-			# A pinch of them, heaped.
-			var seeds: Array = [
-				[Vector3(0, -0.10, 0), Vector3(0.42, 0.08, 0.30), GRAIN_DK],
+			# A loose scatter of them, each its own little grain with daylight
+			# between it and the next. The last version stood them on a slab,
+			# which fused the lot into one solid lump -- and seeds are the one
+			# thing that is never one thing. Each lies along X or Z, a few sit
+			# up on the others, and two shades keep them from reading as a
+			# pattern.
+			var seeds: Array = []
+			var spots := [
+				[Vector3(-0.20, -0.12, -0.10), true], [Vector3(-0.04, -0.12, -0.16), false],
+				[Vector3(0.14, -0.12, -0.08), true], [Vector3(-0.15, -0.12, 0.08), false],
+				[Vector3(0.02, -0.12, 0.03), true], [Vector3(0.19, -0.12, 0.10), false],
+				[Vector3(-0.02, -0.12, 0.18), true], [Vector3(0.24, -0.12, -0.19), true],
+				[Vector3(-0.26, -0.12, 0.20), true],
+				# a couple resting on the ones underneath
+				[Vector3(-0.06, -0.075, -0.04), false], [Vector3(0.09, -0.075, 0.07), true],
 			]
-			var spots := [Vector3(-0.10, -0.02, 0.05), Vector3(0.06, -0.02, -0.06),
-				Vector3(0.12, -0.03, 0.08), Vector3(-0.04, 0.03, -0.02),
-				Vector3(0.0, -0.01, 0.10)]
-			for sp in spots:
-				seeds.append([sp as Vector3, Vector3(0.10, 0.07, 0.07), SEED_C])
+			for i in spots.size():
+				var at: Vector3 = spots[i][0]
+				var along_x: bool = spots[i][1]
+				var sz := Vector3(0.09, 0.045, 0.05) if along_x else Vector3(0.05, 0.045, 0.09)
+				seeds.append([at, sz, SEED_C if i % 3 != 1 else GRAIN_DK])
+				# A pale tip at one end, the way a real seed has a germ.
+				var tip := Vector3(0.04, 0.0, 0.0) if along_x else Vector3(0.0, 0.0, 0.04)
+				seeds.append([at + tip, Vector3(0.025, 0.05, 0.03) if along_x
+					else Vector3(0.03, 0.05, 0.025), GRAIN])
 			return seeds
 		Blocks.BONE:
 			return [

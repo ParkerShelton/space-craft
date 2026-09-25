@@ -1813,9 +1813,23 @@ func _scar_the_ground(ground: Planet, ship: Ship, up: Vector3, fwd: Vector3,
 
 ## The wing or the tail that came off, lying out on the ground: flattened into
 ## the dirt, half buried, bent out of shape, but still plainly a piece of the
-## ship. Everything in it is plate -- a thruster that went through a hillside at
-## speed is not a thruster any more -- so what a piece is good for is being cut
-## up for hull, which is exactly what the computer is about to ask you for.
+## ship. Some of it is sound plate, to be cut up for hull -- exactly what the
+## computer is about to ask you for -- and a lot of it split on the way down
+## and will come apart in your hands.
+##
+## A wing that comes down lands ON something. Where it hit, it is tented up
+## over whatever it came down on: a locker thrown out of the hold, or now and
+## then a thruster torn off the tail. The plate right over it is always the
+## cracked kind, so you can pull it away by hand and look underneath before you
+## have made a single tool.
+const CACHE_THRUSTER_ODDS := 0.3
+## What a thrown-out locker holds: a little to eat, and something to wear.
+## Simple things, the sort a crew packs for themselves, rather than a vault's.
+const CACHE_COSMETICS := ["cap", "beanie", "sunglasses", "bandana", "tee",
+	"cargo_shorts", "sneakers", "sandals", "goggles", "party_hat", "backpack",
+	"hoodie", "boots"]
+
+
 func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
 		rng: RandomNumberGenerator) -> void:
 	if ship.wreck_debris.is_empty():
@@ -1823,6 +1837,7 @@ func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
 	var space := get_world_3d().direct_space_state
 	var bx: Basis = ship.global_transform.basis
 	var cells := {}
+	var lockers: Array = []     # [cell, facing] for each chest, placed last
 	for piece in ship.wreck_debris:
 		var list: Array = piece
 		if list.is_empty():
@@ -1840,6 +1855,20 @@ func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
 		var throw: Vector3 = bx * away * rng.randf_range(6.0, 13.0)
 		var spin := rng.randf_range(-PI, PI)
 		var anchor: Vector3 = ship.global_position + throw
+		# What it came down on. Every wing has something under it; the tail
+		# about half the time.
+		var is_wing: bool = absf(mid.x) > 2.5
+		var cache := ""
+		if is_wing or rng.randf() < 0.5:
+			cache = "thruster" if rng.randf() < CACHE_THRUSTER_ODDS else "chest"
+		var cache_v = null
+		if cache != "":
+			var cg = _drop_to_ground(space, anchor, up)
+			if cg == null:
+				cache = ""
+			else:
+				cache_v = ground.world_to_voxel((cg as Vector3) + up * 0.5)
+				_tent_over(ground, space, cells, cg as Vector3, bx, up, rng)
 		for c2 in list:
 			# Crushed: the height it had is gone, and it is squashed along its
 			# length as well, so what lands is a flattened, buckled version of
@@ -1855,19 +1884,87 @@ func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
 			if g == null:
 				continue
 			var top: Vector3 = g as Vector3
+			# The middle of the piece is the tent (see _tent_over); the rest of
+			# it lies about round the edges.
+			if cache != "" and Vector2(fx, fz).length() < 1.6:
+				continue
 			# Most of it is driven into the dirt; a little of it stands proud.
-			var v := ground.world_to_voxel(top + up * 0.5)
-			if Blocks.bottom_of(ground.get_id(v)) == Blocks.AIR:
-				cells[v] = Blocks.METAL
+			var cracked: bool = rng.randf() < 0.3
+			_lay_plate(ground, cells, top + up * 0.5, cracked)
 			if rng.randf() < 0.45:
 				cells[ground.world_to_voxel(top - up * 0.5)] = Blocks.METAL
 			elif rng.randf() < 0.2:
-				var up2 := ground.world_to_voxel(top + up * 1.5)
-				if Blocks.bottom_of(ground.get_id(up2)) == Blocks.AIR:
-					cells[up2] = Blocks.METAL
+				_lay_plate(ground, cells, top + up * 1.5, rng.randf() < 0.5)
+		if cache_v == null:
+			continue
+		# Nothing but the cache in its own cell.
+		if cache == "thruster":
+			cells[cache_v] = Blocks.THRUSTER
+		else:
+			cells[cache_v] = Blocks.AIR
+			lockers.append([cache_v, bx * away])
 	if not cells.is_empty():
 		ground.set_blocks(cells)
+	for lk in lockers:
+		var st: Station = _world.spawn_station(Blocks.CHEST,
+			ground.to_global(Vector3(lk[0] as Vector3i)), up, lk[1] as Vector3)
+		if st != null:
+			_stock_locker(st, rng)
 	ship.wreck_debris = []
+
+
+## The middle of a fallen wing, propped up over what it landed on: a three by
+## three roof of split plate one block up, and a skirt of it down to the ground
+## all round -- bar one gap, so there is a glimpse of something under there to
+## make you pull it apart. All of it cracked: the lid you lift, not the metal
+## you take.
+func _tent_over(ground: Planet, space: PhysicsDirectSpaceState3D, cells: Dictionary,
+		centre: Vector3, bx: Basis, up: Vector3, rng: RandomNumberGenerator) -> void:
+	# Two directions along the ground, square to each other and to `up`.
+	var t1: Vector3 = (bx.x - up * bx.x.dot(up)).normalized()
+	var t2: Vector3 = up.cross(t1).normalized()
+	var gap := Vector2i([-1, 1][rng.randi() % 2], 0) if rng.randf() < 0.5 \
+		else Vector2i(0, [-1, 1][rng.randi() % 2])
+	for dx in range(-1, 2):
+		for dz in range(-1, 2):
+			var side: Vector3 = t1 * float(dx) + t2 * float(dz)
+			# The roof is level with the middle, one block over the cache...
+			_lay_plate(ground, cells, centre + side + up * 1.5, true)
+			if dx == 0 and dz == 0:
+				continue
+			if Vector2i(dx, dz) == gap:
+				continue
+			# ...and the skirt follows the ground under each edge, so on a
+			# slope it still meets the dirt instead of hanging in the air.
+			var g = _drop_to_ground(space, centre + side, up)
+			var foot: Vector3 = (g as Vector3) if g != null else centre + side
+			_lay_plate(ground, cells, foot + up * 0.5, true)
+
+
+## One piece of plate where the wreckage lands, if the cell is free to take it.
+func _lay_plate(ground: Planet, cells: Dictionary, at: Vector3, cracked: bool) -> void:
+	var v := ground.world_to_voxel(at)
+	if cells.has(v) or Blocks.bottom_of(ground.get_id(v)) != Blocks.AIR:
+		return
+	cells[v] = Blocks.CRACKED_METAL if cracked else Blocks.METAL
+
+
+## Fill a locker thrown clear of the wreck: something to eat and, almost always,
+## something to wear.
+func _stock_locker(st: Station, rng: RandomNumberGenerator) -> void:
+	st.store_add(Blocks.COOKED_MEAT if rng.randf() < 0.6 else Blocks.COOKED_CROP,
+		rng.randi_range(1, 2), {})
+	var picks := 1 if rng.randf() < 0.65 else 2
+	var keys: Array = CACHE_COSMETICS.duplicate()
+	for i in picks:
+		if keys.is_empty():
+			break
+		var k: String = keys.pop_at(rng.randi() % keys.size())
+		var d := Cosmetics.by_key(k)
+		if not d.is_empty():
+			st.store_add(int(d["id"]), 1)
+	if rng.randf() < 0.3:
+		st.store_add(Blocks.TORCH, rng.randi_range(1, 2), {})
 
 
 ## Empty every world block the hull touches, and the shell around it, so the

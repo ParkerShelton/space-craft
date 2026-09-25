@@ -65,7 +65,7 @@ static func checklist(ship: Ship) -> Array:
 				else "battery flat")),
 		("A Power Bay is built at a Shipworks and mounts inside the hull."
 			if bay == null
-			else "Charge a battery in a Generator, then drop it in the rack.")))
+			else "Charge a battery in a Generator (10 metal plate, 4 wire), feed it ore from a black seam, then drop the battery in the rack.")))
 	# 4. Air.
 	var has_ls := bool(st.get("life_support", false))
 	out.append(Item.new("Life support", has_ls,

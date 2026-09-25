@@ -66,6 +66,12 @@ uniform float rock_id = 1.0;
 // look like it had been carved out of a cliff.
 uniform float metal_id = 6.0;
 uniform float alloy_id = 60.0;
+// Plate that came down with the wreck and split: the same panels as sound
+// plate, with cracks run through them.
+uniform float cracked_id = 202.0;
+// A thruster lying on open ground (the wreckage can hide one). On a ship it is
+// a model; out here it is a block, so it wears its nozzle on every face.
+uniform float thruster_id = 12.0;
 // How many panels a block face is divided into, and how dark the seam between
 // them runs.
 uniform float metal_panels = 1.4;
@@ -305,7 +311,23 @@ void fragment() {
 		shade = 1.0;
 		emit = 1.0;
 
-	} else if (abs(id - metal_id) < 0.5 || abs(id - alloy_id) < 0.5) {
+	} else if (abs(id - thruster_id) < 0.5) {
+		// Measured from the planet's centre rather than the world origin, so
+		// the nozzle sits in the middle of ITS block whatever odd offset the
+		// planet happens to sit at.
+		vec2 bc = fract(face_coord(v_world - planet_center, n)) - vec2(0.5);
+		float r = length(bc);
+		float rim = smoothstep(0.30, 0.33, r) * (1.0 - smoothstep(0.40, 0.43, r));
+		float throat = 1.0 - smoothstep(0.28, 0.31, r);
+		float edge = max(abs(bc.x), abs(bc.y));
+		// Grey casing; the vertex colour (the thruster's orange) survives only
+		// on the nozzle's rim, where the burn has coloured it.
+		base = mix(vec3(0.34, 0.36, 0.40), base, rim);
+		shade = 1.0 - throat * 0.8 + rim * 0.15 - smoothstep(0.44, 0.49, edge) * 0.3;
+		metalish = 1.0;
+
+	} else if (abs(id - metal_id) < 0.5 || abs(id - alloy_id) < 0.5
+			|| abs(id - cracked_id) < 0.5) {
 		// PLATE: panels and seams, not speckle. This is the one material here
 		// that somebody MADE, and the giveaway is that it is regular -- a grid
 		// of panels with a dark line where they meet and a slight lift toward
@@ -341,6 +363,37 @@ void fragment() {
 		float plate = (hash21(vec2(col, row) + vec2(world_seed * 3.1, 0.0)) - 0.5) * 0.085;
 		shade = 1.0 + plate + middle * 0.05 - seam * metal_seam;
 		metalish = 1.0;
+		if (abs(id - cracked_id) < 0.5) {
+			// Cracks: the edges of a coarse Voronoi pattern, so they run in
+			// jagged lines that meet and fork the way a split sheet does. Only
+			// the thin line near each edge is darkened, and a lighter lip
+			// beside it reads as the plate lifting at the break.
+			vec2 q = fc * 1.6 + vec2(world_seed * 1.7, world_seed * 0.9);
+			vec2 iq = floor(q);
+			vec2 fq = fract(q);
+			float d1 = 8.0;
+			float d2 = 8.0;
+			vec2 c1 = vec2(0.0);
+			vec2 c2 = vec2(0.0);
+			for (int j = -1; j <= 1; j++) {
+				for (int i = -1; i <= 1; i++) {
+					vec2 o = vec2(float(i), float(j));
+					vec2 pt = o + vec2(hash21(iq + o), hash21(iq + o + vec2(19.1, 7.3))) - fq;
+					float d = dot(pt, pt);
+					if (d < d1) { d2 = d1; c2 = c1; d1 = d; c1 = iq + o; }
+					else if (d < d2) { d2 = d; c2 = iq + o; }
+				}
+			}
+			// Only some of the boundaries split -- the pair of cells either
+			// side decides, the same answer from both -- so the cracks run as
+			// a few forking lines through sound plate, not a mosaic.
+			float splits = step(0.45, hash21(c1 + c2 + vec2(3.7, 1.3)));
+			float gap = sqrt(d2) - sqrt(d1);
+			float crack = (1.0 - smoothstep(0.016, 0.05, gap)) * splits;
+			float lip = smoothstep(0.04, 0.06, gap) * (1.0 - smoothstep(0.06, 0.1, gap)) * splits;
+			shade = shade * (1.0 - crack * 0.8) + lip * 0.07;
+			metalish = 0.4;
+		}
 
 	} else {
 		// Everything else: gentle cell break-up so large merged quads stop

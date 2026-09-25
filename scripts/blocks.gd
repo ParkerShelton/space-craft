@@ -796,6 +796,14 @@ const BOAT := 200
 ## the only place this game ever says anything about who was here before you.
 const JOURNAL := 201
 
+## Hull plate that came down with the wreck and did not survive it: split
+## through, buckled, held together by habit. It is only ever found lying in the
+## wreckage, never made. Work at it and it comes apart in your hands -- by hand
+## if need be, slowly -- and leaves nothing worth keeping, which is what makes
+## it the lid you lift rather than the metal you take. Past the cosmetics, which
+## run from Cosmetics.FIRST_ID, and well under ID_MASK.
+const CRACKED_METAL := 202
+
 const SWORD_DAMAGE := 6.0
 
 ## How many uses each tool has in it before it breaks: a block broken, a patch
@@ -1754,6 +1762,7 @@ const NAMES := {
 	CORE: "Molten Core",
 	SNOW: "Snow",
 	METAL: "Metal Hull",
+	CRACKED_METAL: "Cracked Plate",
 	COCKPIT: "Cockpit",
 	THRUSTER: "Thruster",
 	WOOD: "Wood",
@@ -1825,6 +1834,7 @@ const NAMES := {
 
 # What each ore is (eventually) used for -- shown when you aim at it.
 const USES := {
+	CRACKED_METAL: "Crumbles if you work at it -- nothing worth keeping",
 	IRON_ORE: "Hulls & tools",
 	COPPER_ORE: "Wiring & thrusters",
 	GOLD_ORE: "Electronics & trade",
@@ -1871,6 +1881,8 @@ const HARDNESS := {
 	IRON_ORE: 1.3, COPPER_ORE: 1.3, GOLD_ORE: 1.6,
 	TITANIUM_ORE: 1.9, SILICON_ORE: 1.2, URANIUM_ORE: 2.1,
 	METAL: 0.25, COCKPIT: 0.25, THRUSTER: 0.25,  # ship parts break fast
+	# Hand-workable, and slow at it -- about two seconds without a tool.
+	CRACKED_METAL: 0.8,
 	INTERFACE: 0.3,
 }
 
@@ -1909,6 +1921,8 @@ const COLORS := {
 	CORE: Color(0.92, 0.42, 0.16),
 	SNOW: Color(0.94, 0.96, 1.00),
 	METAL: Color(0.60, 0.62, 0.66),
+	# Duller than sound plate, and gone a little toward rust.
+	CRACKED_METAL: Color(0.50, 0.48, 0.46),
 	COCKPIT: Color(0.35, 0.55, 0.90),
 	THRUSTER: Color(0.85, 0.45, 0.20),
 	WOOD: Color(0.42, 0.28, 0.16),

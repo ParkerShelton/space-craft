@@ -113,6 +113,8 @@ static func _get_material(p: Planet) -> ShaderMaterial:
 	# Worked metal gets panels and a sheen rather than stone speckle.
 	m.set_shader_parameter("metal_id", float(Blocks.METAL))
 	m.set_shader_parameter("alloy_id", float(Blocks.ALLOY))
+	m.set_shader_parameter("cracked_id", float(Blocks.CRACKED_METAL))
+	m.set_shader_parameter("thruster_id", float(Blocks.THRUSTER))
 	m.set_shader_parameter("world_seed", _tex_seed + float(p._seed % 9973) * 0.017)
 	m.set_shader_parameter("planet_center", p.global_position)
 	p.block_material = m
