@@ -2955,8 +2955,18 @@ func _process(delta: float) -> void:
 	_sun.global_transform = Transform3D(Basis.looking_at(sun_dir, ref_up),
 		_sun.global_position)
 	_sun.light_energy = lerpf(1.2, 1.5, _atmo) * _day * (1.0 - 0.6 * _overcast)
-	# Warm the sunlight as it sits low, the way real low sun reddens.
-	_sun.light_color = Color(1, 1, 1).lerp(Color(1.0, 0.62, 0.35), dusk * 0.7 * _atmo)
+	# Warm the sunlight as it sits low, the way real low sun reddens -- but only
+	# barely.
+	#
+	# Sunlight is a FILTER over every lit surface, so a saturated orange sun is
+	# an orange world: the same rule that made ambient grey applies here, and it
+	# was being broken at exactly the hour the rule matters most. Light falling
+	# off is a thing you read as evening; the ground turning amber is a thing
+	# you read as the ground being a different colour, which is the complaint.
+	# The sunset itself has not gone anywhere -- the sky, the horizon and the
+	# clouds still redden hard (see `acol` above), because those are the
+	# atmosphere and are allowed to be any colour they like.
+	_sun.light_color = Color(1, 1, 1).lerp(Color(1.0, 0.86, 0.74), dusk * 0.45 * _atmo)
 	# Shadow acne, and the banded lines that come with it, is a GRAZING-ANGLE
 	# problem: with the sun near the horizon the depth slope across a flat voxel
 	# wall is enormous, so any fixed bias is either too small to clear the acne at
@@ -2976,7 +2986,14 @@ func _process(delta: float) -> void:
 	# edge against the void. Black fog does both jobs: it tints nothing, and
 	# distance still dissolves into darkness instead of ending.
 	_env.fog_enabled = _atmo > 0.02 or _underground > 0.02
-	_env.fog_light_color = acol.lerp(Color(0, 0, 0), _underground)
+	# Fog is the other thing that lands on terrain rather than on the sky, and a
+	# sunset-red haze over the near ground repaints it just as surely as a red
+	# sun does. So the fog keeps the sky's BRIGHTNESS through the transition and
+	# gives up most of its hue: grey haze reads as distance, coloured haze reads
+	# as the blocks behind it being a different colour.
+	var fog_lum: float = acol.r * 0.299 + acol.g * 0.587 + acol.b * 0.114
+	var fog_col: Color = acol.lerp(Color(fog_lum, fog_lum, fog_lum), 0.7 * dusk)
+	_env.fog_light_color = fog_col.lerp(Color(0, 0, 0), _underground)
 	# DEPTH fog, not exponential. Exponential fog starts thickening the moment
 	# you look away from your own feet, which was tuned to hide a render edge 80
 	# blocks out; at twice that distance the same setting reads as thick haze on
