@@ -495,6 +495,10 @@ func take_aboard(p: Planet) -> int:
 	var clear := {}
 	for n in taken:
 		blocks[n] = ids[n]
+		# The ore it was made from comes aboard with it.
+		var pr: Dictionary = p.block_props.get(taken[n], {})
+		if not pr.is_empty():
+			block_meta[n] = pr.duplicate()
 		clear[taken[n]] = Blocks.AIR
 	if world != null:
 		world.edit_blocks(p, clear)

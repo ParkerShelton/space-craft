@@ -298,7 +298,8 @@ func store_add(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 		# Two ores' worth of the same shape are two stacks: what a piece is made
 		# of decides what it is good for.
 		if s["count"] > 0 and s["id"] == id and s.get("src", "") == src \
-				and str((s.get("mat", {}) as Dictionary).get("name", "")) == str(mat.get("name", "")):
+				and str((s.get("mat", {}) as Dictionary).get("name", "")) == str(mat.get("name", "")) \
+				and (not Blocks.keeps_quality(id) or s.get("props", {}) == props):
 			s["count"] += n
 			return 0
 	for s in storage:
@@ -1029,6 +1030,41 @@ func press_add(item: Dictionary) -> bool:
 			_refresh_press()
 			return true
 	return false
+
+
+## The part on spot `i`, or empty.
+func press_part_at(i: int) -> Dictionary:
+	if i < 0 or i >= Blocks.PRESS_SPOTS or i >= storage.size() \
+			or int(storage[i].get("count", 0)) <= 0:
+		return {}
+	return storage[i]
+
+
+## Lay one of `item` on spot `i` exactly. False if that spot is taken, the
+## press will not take it, or what it made is still sitting there.
+func press_add_at(i: int, item: Dictionary) -> bool:
+	_ensure_storage()
+	if i < 0 or i >= Blocks.PRESS_SPOTS or not press_part_at(i).is_empty():
+		return false
+	if not Blocks.press_takes(int(item.get("id", Blocks.AIR))) or not press_output().is_empty():
+		return false
+	var one: Dictionary = item.duplicate(true)
+	one["count"] = 1
+	one.erase("eighths")
+	storage[i] = one
+	_refresh_press()
+	return true
+
+
+## Take the part off spot `i`.
+func press_take_at(i: int) -> Dictionary:
+	var got := press_part_at(i)
+	if got.is_empty():
+		return {}
+	var out: Dictionary = got.duplicate(true)
+	storage[i] = _empty_slot()
+	_refresh_press()
+	return out
 
 
 ## Take the last part laid back off the bed.

@@ -741,6 +741,19 @@ static func press_spot(i: int) -> Vector3:
 	return Vector3(PRESS_BED_X + (float(i) - 1.5) * 0.27, PRESS_BED_Y, 0)
 
 
+## What you can aim at on a press, in model space (y 0 on the floor): the lever
+## and each spot on the bed, as {"zone": "lever"|"spot", "i", "c", "s"} boxes.
+## A little bigger than what they wrap, so aiming is forgiving, and never
+## overlapping one another, so it is never ambiguous.
+static func press_zones() -> Array:
+	var out: Array = [{"zone": "lever", "i": -1,
+		"c": PRESS_LEVER + Vector3(0, 0.24, -0.01), "s": Vector3(0.2, 0.6, 0.2)}]
+	for i in Blocks.PRESS_SPOTS:
+		out.append({"zone": "spot", "i": i, "c": press_spot(i) + Vector3(0, 0.09, 0),
+			"s": Vector3(0.26, 0.18, 0.62)})
+	return out
+
+
 static func press_boxes() -> Array:
 	const RED := Color(0.72, 0.22, 0.18)
 	return [

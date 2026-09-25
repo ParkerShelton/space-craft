@@ -881,6 +881,16 @@ static func max_durability(id: int) -> int:
 
 ## How many of an item one slot holds. Things that wear out are one to a slot,
 ## since each carries its own wear.
+## Blocks whose ore decides how well they work once built: a thruster pushes by
+## its ore's Energy. Two of these from different ores are never one stack, and
+## the ore stays with the block wherever it is put.
+const QUALITY_BLOCKS := [THRUSTER]
+
+
+static func keeps_quality(id: int) -> bool:
+	return bottom_of(id) in QUALITY_BLOCKS
+
+
 static func stack_cap(id: int, normal: int) -> int:
 	# A battery is one to a slot for the same reason a tool is: each carries its
 	# own state. Stacking them pooled two different charges into one slot and

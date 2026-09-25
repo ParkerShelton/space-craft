@@ -421,6 +421,8 @@ func save_game() -> bool:
 			data["water"][p.planet_name] = wrows
 		if not p._parts_by_chunk.is_empty():
 			data["parts"][p.planet_name] = p._parts_by_chunk
+		if not p.block_props.is_empty():
+			data.get_or_add("block_props", {})[p.planet_name] = p.block_props
 		data["day_phase"][p.planet_name] = p.day_phase
 		# A field has to still be there tomorrow, or planting is a waste of an
 		# afternoon.
@@ -511,6 +513,7 @@ func load_game() -> bool:
 		# rebuilt before its levels arrive draws every cell full.
 		p.load_water(pwater.get(p.planet_name, []))
 		p.load_edits(pedits.get(p.planet_name, {}))
+		p.block_props = ((data.get("block_props", {}) as Dictionary).get(p.planet_name, {}) as Dictionary).duplicate()
 		p.day_phase = float(pphase.get(p.planet_name, p.day_phase))
 		p.load_crops((data.get("crops", {}).get(p.planet_name, []) as Array))
 		p.sites_opened = {}

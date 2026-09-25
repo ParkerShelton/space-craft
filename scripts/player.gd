@@ -359,6 +359,10 @@ const TETHER_LEN := 18.0          # max EVA tether distance
 var _camera: Camera3D
 var _ray: RayCast3D
 var _outline: MeshInstance3D       # wireframe box around the block under the crosshair
+var _outline_mat: StandardMaterial3D
+const OUTLINE_PLAIN := Color(0, 0, 0, 0.9)
+const OUTLINE_LEVER := Color(1.0, 0.82, 0.2, 1.0)   # something to pull, not a block
+const OUTLINE_SPOT := Color(0.92, 0.94, 1.0, 1.0)
 var _stair_state := 0              # R cycles every stair rotation + shape
 var _ghost: MeshInstance3D         # translucent preview of the block about to be placed
 var _ghost_sig := ""
@@ -531,6 +535,7 @@ func _ready() -> void:
 	om.albedo_color = Color(0, 0, 0, 0.9)
 	om.no_depth_test = false
 	_outline.material_override = om
+	_outline_mat = om
 	_outline.visible = false
 	_ghost = MeshInstance3D.new()
 	_ghost.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -692,7 +697,8 @@ func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 	var cap := Blocks.stack_cap(id, STACK_MAX)
 	for s in inv:
 		if s["id"] == id and s.get("src", "") == src and s["count"] > 0 and s["count"] < cap \
-				and str((s.get("mat", {}) as Dictionary).get("name", "")) == str(mat.get("name", "")):
+				and str((s.get("mat", {}) as Dictionary).get("name", "")) == str(mat.get("name", "")) \
+				and (not Blocks.keeps_quality(id) or s.get("props", {}) == props):
 			var add: int = mini(n, cap - s["count"])
 			s["count"] += add
 			n -= add
@@ -3746,14 +3752,46 @@ func _tdelta(d: float) -> float:
 func _update_outline(tgt: Dictionary) -> void:
 	if _outline == null:
 		return
-	var show: bool = not tgt.is_empty() and tgt.get("hit", false) \
-		and not inv_open and _station_open == null and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	var ui_free: bool = not inv_open and _station_open == null \
+		and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+	var at_station: bool = tgt.get("kind", "") == "station" and ui_free
+	var show: bool = at_station or (not tgt.is_empty() and tgt.get("hit", false) and ui_free)
 	if not show:
 		_outline.visible = false
 		if _ghost != null:
 			_ghost.visible = false
 		if _crack != null:
 			_crack.visible = false
+		return
+	if _outline_mat != null:
+		_outline_mat.albedo_color = OUTLINE_PLAIN
+	if tgt.get("kind", "") == "station":
+		# A press shows exactly what you would be working: its lever, or the
+		# spot on the bed. Anywhere else on it, the press itself.
+		var st: Station = tgt["obj"]
+		if is_instance_valid(st) and st.kind == Blocks.FABRICATOR and not st.headless:
+			var z := _press_zone(st)
+			var c: Vector3
+			var sz: Vector3
+			if z.is_empty():
+				var fp := Vector3(StationModels.footprint(st.kind))
+				c = Vector3(0, 0.9, 0)
+				sz = Vector3(fp.x, 1.8, fp.z)
+			else:
+				c = z["c"]
+				sz = z["s"]
+				if _outline_mat != null:
+					_outline_mat.albedo_color = OUTLINE_LEVER if z["zone"] == "lever" else OUTLINE_SPOT
+			var sb: Basis = st.global_transform.basis
+			_outline.global_transform = Transform3D(sb.scaled(sz),
+				st.to_global(c - sz * 0.5 + Vector3(0, -0.5, 0)))
+			_outline.visible = true
+			if _ghost != null:
+				_ghost.visible = false
+			return
+		_outline.visible = false
+		if _ghost != null:
+			_ghost.visible = false
 		return
 	var obj = tgt["obj"]
 	var v: Vector3i = tgt["voxel"]
@@ -4048,10 +4086,13 @@ func _edit_block(_break_it: bool) -> void:
 				var sc = null
 				if sh != null and not sh.flying and not Blocks.is_natural(placed_value):
 					sc = sh.cell_touching(obj as Planet, pv)
+				var held_props: Dictionary = inv[active_slot].get("props", {})
 				if sc != null:
-					sh.set_block(sc, placed_value, inv[active_slot].get("props", {}))
+					sh.set_block(sc, placed_value, held_props)
 				else:
 					world.edit_block(obj as Planet, pv, placed_value)
+					if Blocks.keeps_quality(placed_value) and not held_props.is_empty():
+						(obj as Planet).block_props[pv] = held_props.duplicate()
 			_consume_active()
 
 	elif tgt["kind"] == "ship":
@@ -4721,6 +4762,13 @@ func _process_mining(delta: float) -> void:
 			if _crack != null:
 				_crack.visible = false
 			return
+		var mined_props: Dictionary = {}
+		if planet != null:
+			mined_props = (planet.block_props.get(v, {}) as Dictionary).duplicate()
+		elif ship != null:
+			mined_props = (ship.block_meta.get(v, {}) as Dictionary).duplicate()
+		if not Blocks.keeps_quality(id):
+			mined_props = {}
 		if planet != null:
 			world.edit_block(planet, v, Blocks.AIR)
 			_wear_from_block()
@@ -4767,7 +4815,7 @@ func _process_mining(delta: float) -> void:
 				# Strip any packed orientation before it becomes an item: a
 				# rotated stair or an axis-aligned log would otherwise come back
 				# as a packed value that can't be placed again.
-				_add_item(Blocks.bottom_of(id), 1)
+				_add_item(Blocks.bottom_of(id), 1, mined_props)
 				# Cut through a trunk and what is above it comes down; and any
 				# leaves this log was holding up start to wither.
 				if Blocks.is_wood(Blocks.bottom_of(id)):
@@ -4783,7 +4831,7 @@ func _process_mining(delta: float) -> void:
 				var oid: int = ship.blocks.get(other, Blocks.AIR)
 				if Blocks.is_door(oid) and Blocks.door_is_top(oid) != Blocks.door_is_top(id):
 					ship.set_block(other, Blocks.AIR)
-			_add_item(Blocks.bottom_of(id), 1)
+			_add_item(Blocks.bottom_of(id), 1, mined_props)
 		_break_burst(obj.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)),
 			Blocks.color_of(id))
 		if _crack != null:
@@ -8089,11 +8137,10 @@ func _use_press(st: Station) -> void:
 		_toast("Emptied what the old Fabricator was holding into your bag")
 		_refresh_slots()
 		return
-	if not st.headless and _ray.is_colliding():
-		var p: Vector3 = st.to_local(_ray.get_collision_point()) + Vector3(0, 0.5, 0)
-		if p.x > 0.5:
-			_pull_press(st)
-			return
+	var zone := {} if st.headless else _press_zone(st)
+	if zone.get("zone", "") == "lever":
+		_pull_press(st)
+		return
 	var out := st.press_output()
 	if not out.is_empty():
 		var got := st.press_take_output()
@@ -8110,6 +8157,35 @@ func _use_press(st: Station) -> void:
 		return
 	var held: Dictionary = _active_item()
 	var hid := int(held.get("id", Blocks.AIR))
+	if not st.headless:
+		# Aimed: a part on the spot comes off; an empty spot takes what you hold.
+		if zone.is_empty():
+			_toast("Aim at a spot on the bed, or at the lever")
+			return
+		var si := int(zone["i"])
+		var there := st.press_part_at(si)
+		if not there.is_empty():
+			var back0 := st.press_take_at(si)
+			_add_item(int(back0["id"]), 1, back0.get("props", {}), str(back0.get("src", "")),
+				back0.get("mat", {}))
+			Audio.at("place_metal", st.global_position)
+			_toast("Took back %s" % _smith_name(back0))
+			_refresh_slots()
+			return
+		if int(held.get("count", 0)) <= 0:
+			_toast("An empty spot -- hold a metal part and right-click to lay it here")
+			return
+		if not Blocks.press_takes(hid):
+			_toast("The press takes metal parts: plates, bars, sheets, ingots, wire, circuitry, crystal")
+			return
+		st.press_add_at(si, held)
+		_take_one_from_active()
+		Audio.at("place_metal", st.global_position)
+		var r0 := st.press_would_make()
+		_toast("On the bed: %s%s" % [_smith_name(held),
+			("  --  pull the lever for %s" % str(r0["label"])) if not r0.is_empty() else ""])
+		_refresh_slots()
+		return
 	if int(held.get("count", 0)) > 0:
 		if not Blocks.press_takes(hid):
 			_toast("The press takes metal parts: plates, bars, sheets, ingots, wire, circuitry, crystal")
@@ -8137,6 +8213,43 @@ func _use_press(st: Station) -> void:
 		back.get("mat", {}))
 	_toast("Took back %s" % _smith_name(back))
 	_refresh_slots()
+
+
+## Which part of a press the crosshair is on: the lever or a spot on the bed
+## (see StationModels.press_zones), or empty. Tested against the zones
+## themselves along the view ray, so it is what you are looking at, not
+## wherever the ray met the press's bounding box.
+func _press_zone(st: Station) -> Dictionary:
+	if _camera == null or not is_instance_valid(st):
+		return {}
+	var inv := st.global_transform.affine_inverse()
+	var o: Vector3 = inv * _camera.global_position + Vector3(0, 0.5, 0)
+	var d: Vector3 = (inv.basis * -_camera.global_transform.basis.z).normalized()
+	var best := {}
+	var best_t := 5.0
+	for z in StationModels.press_zones():
+		var lo: Vector3 = (z["c"] as Vector3) - (z["s"] as Vector3) * 0.5
+		var hi: Vector3 = (z["c"] as Vector3) + (z["s"] as Vector3) * 0.5
+		var t0 := 0.0
+		var t1 := best_t
+		var hit := true
+		for ax in 3:
+			if absf(d[ax]) < 1e-6:
+				if o[ax] < lo[ax] or o[ax] > hi[ax]:
+					hit = false
+					break
+				continue
+			var ta := (lo[ax] - o[ax]) / d[ax]
+			var tb := (hi[ax] - o[ax]) / d[ax]
+			t0 = maxf(t0, minf(ta, tb))
+			t1 = minf(t1, maxf(ta, tb))
+			if t0 > t1:
+				hit = false
+				break
+		if hit and t0 < best_t:
+			best_t = t0
+			best = z
+	return best
 
 
 func _pull_press(st: Station) -> void:
@@ -8170,6 +8283,17 @@ func _process_press_look(st: Station) -> bool:
 		return false
 	var parts := st.press_parts()
 	var out := st.press_output()
+	var z := {} if st.headless else _press_zone(st)
+	if z.get("zone", "") == "lever":
+		var rl := st.press_would_make()
+		_look_name = "Press lever  (right-click to pull%s)" % (
+			(" -- makes %s" % str(rl["label"])) if not rl.is_empty() and out.is_empty() else "")
+		return not (parts.is_empty() and out.is_empty())
+	if z.get("zone", "") == "spot" and out.is_empty():
+		var there := st.press_part_at(int(z["i"]))
+		_look_name = ("%s  (right-click to take it back)" % _smith_name(there)) if not there.is_empty() \
+			else "Empty spot  (right-click with a metal part to lay it here)"
+		return not parts.is_empty()
 	if parts.is_empty() and out.is_empty():
 		return false
 	if not out.is_empty():
