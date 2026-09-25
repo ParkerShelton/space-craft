@@ -86,8 +86,16 @@ func _process(delta: float) -> void:
 		m.albedo_color = Color(BLUE.r, BLUE.g, BLUE.b, lerpf(0.34, 0.62, pulse) * fade)
 	for c in _parts.get_children():
 		var h := c as Node3D
-		if h == null or not h.has_meta("base_y"):
-			continue   # the labels are siblings here; they neither turn nor bob
+		if h == null:
+			continue
+		if h.has_meta("is_label"):
+			# Hidden once you are on top of it. A world-space label in a cabin
+			# two blocks across is across your whole screen at arm's length,
+			# and by then the hologram under it has already said what it is.
+			h.visible = _player.global_position.distance_to(h.global_position) > 1.3
+			continue
+		if not h.has_meta("base_y"):
+			continue
 		# Turning, the way a thing being shown to you turns.
 		h.rotation.y = _t * 0.9
 		h.position.y = h.get_meta("base_y", 0.0) + sin(_t * 1.4) * 0.07
@@ -261,11 +269,12 @@ func _add_part(spec: Dictionary) -> void:
 	label.no_depth_test = true
 	label.render_priority = 3
 	label.outline_render_priority = 2
-	label.font_size = 44
-	label.pixel_size = 0.0032
+	label.font_size = 40
+	label.pixel_size = 0.0013
 	label.modulate = Color(BLUE.r, BLUE.g, BLUE.b, 0.95)
 	label.outline_modulate = Color(0, 0, 0, 0.7)
 	label.outline_size = 10
+	label.set_meta("is_label", true)
 	_parts.add_child(label)
 	label.position = (spec["at"] as Vector3) + Vector3(0, 0.4, 0)
 
