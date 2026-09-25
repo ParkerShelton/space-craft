@@ -50,6 +50,10 @@ static func can_draw(raw: int) -> bool:
 	# seats -- so it can be photographed like anything else.
 	if raw == Blocks.BATTERY or raw == Blocks.BOAT:
 		return true
+	# Food and the journal have models of their own now (see item_models.gd),
+	# so they get a photograph instead of a coloured square.
+	if ItemModels.has_model(raw):
+		return true
 	var id := Blocks.bottom_of(raw)
 	return Blocks.is_placeable_block(id) or Blocks.is_ore(id) 		or Blocks.is_refined(id) or Blocks.is_intermediate(id)
 
@@ -188,7 +192,9 @@ func _shoot(job: Array) -> void:
 	var tool := ToolModels.has_model(raw)
 	var built := Blocks.is_station_build(raw)
 	var worn := Cosmetics.is_cosmetic(raw) or tool or built
-	if raw == Blocks.BOAT:
+	if ItemModels.has_model(raw):
+		_mi.mesh = ItemModels.icon_mesh(raw)
+	elif raw == Blocks.BOAT:
 		_mi.mesh = Boat.icon_mesh()
 	elif raw == Blocks.BATTERY:
 		_mi.mesh = StationModels.battery_icon_mesh()

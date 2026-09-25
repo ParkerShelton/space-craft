@@ -247,6 +247,11 @@ const HAND_IDLE_POS := Vector3(0.34, -0.28, -0.55)
 const SWING_DURATION := 0.28
 var _hand_pivot: Node3D
 var _held_root: Node3D        # current item mesh, child of _hand_pivot
+## The model inside it, when what you are holding has one (food, the journal).
+## Kept so the eating and reading animations have something to move.
+var _held_item: MeshInstance3D
+var _eat_t := 0.0             # counts DOWN through a bite
+var _read_t := 0.0            # 0 shut, 1 open -- the journal in your hands
 var _held_key := ""           # cache key; only rebuild the model when this changes
 var _swing_t := 999.0         # counts up from 0 during a swing; >=SWING_DURATION = idle
 var _bob_phase := 0.0         # walk-cycle position for the held-item bob
@@ -2284,6 +2289,7 @@ func _physics_process(delta: float) -> void:
 	_update_eye_clearance(delta)
 	_tick_web(delta)
 	_tick_dread(delta)
+	_tick_held_anim(delta)
 	if _trail != null:
 		_trail.emitting = velocity.length() > 0.8
 	# The build diff fades on its own; it is a hint, not a mode.
@@ -4462,6 +4468,10 @@ func _try_eat() -> bool:
 		return true
 	var gain := Blocks.food_value(id)
 	hunger = minf(hunger + gain, MAX_HUNGER)
+	# A bite: the model comes up to the mouth, turns, and drops away. Started
+	# BEFORE the item is removed, so there is something in hand to animate --
+	# and if that was the last one the hand empties as the bite finishes.
+	_eat_t = EAT_TIME
 	_remove_item(id, 1)
 	_toast("Ate %s  (+%d food)" % [Blocks.name_of(id), int(round(gain))])
 	_update_survival_ui()
@@ -6177,6 +6187,7 @@ func _update_held_item(active: Dictionary) -> void:
 	if _held_root != null:
 		_held_root.queue_free()
 		_held_root = null
+	_held_item = null
 	if id == Blocks.AIR or _hand_pivot == null:
 		return
 	_held_root = Node3D.new()
@@ -6196,9 +6207,58 @@ func _update_held_item(active: Dictionary) -> void:
 			mi.scale = Vector3.ONE * 0.6
 			mi.position = Vector3(0, -0.04, 0)
 		_held_root.add_child(mi)
+	elif ItemModels.has_model(id):
+		# Food and the journal: a model rather than a tinted cube. Held a little
+		# larger than a tool, because a loaf in the corner of the eye at tool
+		# scale is a crumb.
+		_held_item = MeshInstance3D.new()
+		_held_item.mesh = ItemModels.mesh(id)
+		_held_item.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_held_item.scale = Vector3.ONE * 0.55
+		_held_item.position = Vector3(0, -0.05, 0)
+		_held_item.rotation = Vector3(-0.2, 0.5, 0.15)
+		_held_root.add_child(_held_item)
 	elif Blocks.is_placeable_block(id) or Blocks.is_ore(id) or Blocks.is_refined(id) or Blocks.is_intermediate(id):
 		_build_held_block(mat.get("color", Blocks.color_of(id)))
 	# other gear (the Suit) is worn, not wielded -- nothing shown in hand
+
+
+## How long a bite takes, and how far the food travels to your mouth.
+const EAT_TIME := 0.45
+
+
+## The held model's own little animations: eating and reading. Driven from
+## _process so they run whatever else is happening.
+func _tick_held_anim(delta: float) -> void:
+	if _held_item == null or not is_instance_valid(_held_item):
+		_eat_t = maxf(_eat_t - delta, 0.0)
+		return
+	if _eat_t > 0.0:
+		_eat_t = maxf(_eat_t - delta, 0.0)
+		var k: float = 1.0 - _eat_t / EAT_TIME          # 0 -> 1 through the bite
+		# Up and in on the way, back down on the way out, with a turn of the
+		# wrist at the top -- which is the part that reads as biting rather
+		# than as the food merely moving.
+		var arc: float = sin(k * PI)
+		_held_item.position = Vector3(-0.10 * arc, -0.05 + 0.16 * arc, 0.16 * arc)
+		_held_item.rotation = Vector3(-0.2 - 0.9 * arc, 0.5 + 0.7 * arc, 0.15)
+		_held_item.scale = Vector3.ONE * (0.55 - 0.06 * arc)
+		return
+	# Reading: the book opens in your hands while the page is up and shuts when
+	# you put it away. The mesh is rebuilt as it swings, which is cheap -- it is
+	# six boxes -- and gives a real hinge rather than a fade between two props.
+	if int(_active_item().get("id", Blocks.AIR)) != Blocks.JOURNAL:
+		return
+	var want_open: float = 1.0 if _journal_panel != null else 0.0
+	if not is_equal_approx(_read_t, want_open):
+		_read_t = move_toward(_read_t, want_open, delta * 3.2)
+		var e: float = _read_t * _read_t * (3.0 - 2.0 * _read_t)
+		_held_item.mesh = ItemModels.book_mesh(e)
+		# Brought up and turned square to you as it opens, so you are reading it
+		# rather than holding it out at your side.
+		_held_item.position = Vector3(0.0, -0.05 + 0.07 * e, 0.10 * e)
+		_held_item.rotation = Vector3(-0.2 - 0.5 * e, 0.5 - 0.5 * e, 0.15 - 0.15 * e)
+		_held_item.scale = Vector3.ONE * (0.55 + 0.20 * e)
 
 
 func _mk_view_box(size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
@@ -7771,6 +7831,7 @@ func _try_read_journal() -> bool:
 
 func _open_journal() -> void:
 	_close_journal()
+	_read_t = 0.0001   # the book in your hands starts to open (see _tick_held_anim)
 	_journal_panel = Panel.new()
 	_journal_panel.custom_minimum_size = Vector2(560, 500)
 	_journal_panel.size = _journal_panel.custom_minimum_size
@@ -7824,6 +7885,7 @@ func _open_journal() -> void:
 
 
 func _close_journal() -> void:
+	_read_t = 0.0
 	if _journal_panel != null and is_instance_valid(_journal_panel):
 		_journal_panel.queue_free()
 	_journal_panel = null

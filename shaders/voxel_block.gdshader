@@ -68,8 +68,8 @@ uniform float metal_id = 6.0;
 uniform float alloy_id = 60.0;
 // How many panels a block face is divided into, and how dark the seam between
 // them runs.
-uniform float metal_panels = 2.0;
-uniform float metal_seam = 0.26;
+uniform float metal_panels = 1.4;
+uniform float metal_seam = 0.22;
 // Ore BLOCKS are meshed as stone and shade like rock; the ore itself is real
 // protruding geometry (see Chunk._emit_ore_chunks) tagged with ore_chunk_id,
 // which carries the ore colour in its own vertex colour.
@@ -311,13 +311,32 @@ void fragment() {
 		// The noise is almost nothing. A hull wants to read as manufactured and
 		// clean; the same cell hash that makes rock look like rock made a ship
 		// look like it had been carved out of a cliff.
-		vec2 pf = fract(fc * metal_panels);
-		vec2 pd = min(pf, vec2(1.0) - pf);
-		float edge = min(pd.x, pd.y);
-		float seam = 1.0 - smoothstep(0.0, 0.030, edge);
-		float middle = smoothstep(0.030, 0.10, edge);
-		float grain = (h - 0.5) * 0.035;
-		shade = 1.0 + grain + middle * 0.055 - seam * metal_seam;
+		vec2 p = fc * metal_panels;
+		// Rows of plate, STAGGERED. A plain grid reads as tiling -- every seam
+		// lines up with every other one and the eye sees a lattice rather than
+		// sheet metal. Real plating is laid like brickwork: each strake shifted
+		// along by its own amount, so the vertical seams never run.
+		float row = floor(p.y);
+		float rh = hash21(vec2(row, 3.0));
+		// Rows are not all the same height either, and plates within a row are
+		// not all the same width.
+		float rowy = p.y + (rh - 0.5) * 0.35;
+		row = floor(rowy);
+		rh = hash21(vec2(row, 3.0));
+		float wide = 0.75 + hash21(vec2(row, 11.0)) * 0.9;
+		float sx = (p.x + rh * 5.0) / wide;
+		float col = floor(sx);
+		vec2 f2 = vec2(fract(sx), fract(rowy));
+		vec2 pd = min(f2, vec2(1.0) - f2);
+		// The seam is measured in the UNSCALED space so a wide plate does not
+		// get a wide seam.
+		float edge = min(pd.x * wide, pd.y);
+		float seam = 1.0 - smoothstep(0.0, 0.028, edge);
+		float middle = smoothstep(0.028, 0.11, edge);
+		// Each plate is a slightly different piece of metal. This is what sells
+		// it more than the seams do.
+		float plate = (hash21(vec2(col, row) + vec2(world_seed * 3.1, 0.0)) - 0.5) * 0.085;
+		shade = 1.0 + plate + middle * 0.05 - seam * metal_seam;
 		metalish = 1.0;
 
 	} else {
