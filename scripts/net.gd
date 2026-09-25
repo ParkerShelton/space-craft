@@ -95,6 +95,8 @@ signal roster_changed()
 signal profile_restored(profile: Dictionary)
 ## One line of chat, already formatted and ready to show.
 signal chat_received(line: String)
+## Host side: a player has said who they are (see hello).
+signal player_hello(peer: int, player_uid: String)
 
 ## Where this installation's identity lives. A peer id is issued fresh on every
 ## connection, so it cannot be what the server remembers a player by -- it would
@@ -836,6 +838,7 @@ func hello(player_uid: String) -> void:
 	# client's first push land before the reply did, overwriting the very
 	# inventory the host was about to send back.
 	restore_profile.rpc_id(id, profiles.get(player_uid, {}))
+	player_hello.emit(id, player_uid)
 
 
 @rpc("authority", "call_remote", "reliable")

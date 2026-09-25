@@ -27,6 +27,13 @@ class Item:
 		hint = h
 
 
+static func _has_door(ship: Ship) -> bool:
+	for v in ship.blocks:
+		if Blocks.is_door(int(ship.blocks[v])):
+			return true
+	return false
+
+
 ## Everything the ship needs before it will fly, in the order to do it in.
 static func checklist(ship: Ship) -> Array:
 	var out: Array = []
@@ -46,8 +53,16 @@ static func checklist(ship: Ship) -> Array:
 			door_missing = true
 		elif cabin.has(v):
 			plates += 1
-	out.append(Item.new("Hull sealed", plates == 0 and bool(st.get("sealed", false)),
-		"%d hull block%s needed" % [plates, "" if plates == 1 else "s"] if plates > 0 else "airtight",
+	var sealed := bool(st.get("sealed", false))
+	var hull_detail := "airtight"
+	if plates > 0:
+		hull_detail = "%d hull block%s needed" % [plates, "" if plates == 1 else "s"]
+	elif not sealed:
+		# Every hole plated but no air held: either the doorway was filled in
+		# rather than given a door, or there is a gap somewhere else.
+		hull_detail = "no door -- a cabin needs one to hold air" if door_missing \
+			or not _has_door(ship) else "a gap somewhere -- look for daylight"
+	out.append(Item.new("Hull sealed", plates == 0 and sealed, hull_detail,
 		"Put a block of Metal Hull in each hole in the cabin. Cut it off the wreckage, or press four plates into one at a Press."))
 	# 2. A doorway with nothing in it is a hole like any other.
 	out.append(Item.new("Door", not door_missing,
@@ -120,7 +135,8 @@ static func next_step(ship: Ship) -> String:
 static func status_lines(ship: Ship) -> Array:
 	var st: Dictionary = ship.get_status()
 	var out: Array = []
-	out.append("Hull: %s" % ("airtight" if bool(st.get("sealed", false)) else "breached"))
+	out.append("Hull: %s" % ("airtight" if bool(st.get("sealed", false))
+		else ("no door" if not _has_door(ship) else "breached")))
 	out.append("Air: %d%%" % int(float(st.get("air", 0.0)) * 100.0))
 	out.append("Power: %d%%" % int(float(st.get("charge", 0.0)) * 100.0))
 	out.append("Warp drive: %s" % ("fitted" if bool(st.get("warp_drive", false)) else "none"))

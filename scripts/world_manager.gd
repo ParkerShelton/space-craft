@@ -438,7 +438,8 @@ func save_game() -> bool:
 	for s in _ships:
 		if is_instance_valid(s) and not s.blocks.is_empty():
 			ship_index[s] = data["ships"].size()
-			data["ships"].append({"nid": s.net_id, "blocks": s.blocks, "xform": s.global_transform,
+			data["ships"].append({"nid": s.net_id, "crash": s.crash_wreck, "owner": s.owner_uid,
+				"blocks": s.blocks, "xform": s.global_transform,
 				"meta": s.block_meta, "air": s.air, "charge": s.charge,
 				"air_made": s.air_made, "air_used": s.air_used,
 				"air_runtime": s.air_runtime,
@@ -534,6 +535,8 @@ func load_game() -> bool:
 		add_child(ship)
 		ship.blocks = sd.get("blocks", {})
 		ship.net_id = str(sd.get("nid", ""))
+		ship.crash_wreck = bool(sd.get("crash", not (sd.get("wreck", {}) as Dictionary).is_empty()))
+		ship.owner_uid = str(sd.get("owner", ""))
 		ship.block_meta = sd.get("meta", {})
 		ship.global_transform = sd.get("xform", Transform3D.IDENTITY)
 		# Ships saved before tanks existed come back full rather than suffocating
@@ -642,6 +645,33 @@ func load_game() -> bool:
 ## has only just arrived is set down beside the wreck rather than wherever the
 ## home world's spawn point happens to be -- that is where everybody is.
 signal crash_site_known()
+## A joining player has been told which wreck is theirs. `fresh` when it has
+## just been built or handed to them, so they should come round in its seat.
+signal own_wreck(ship: Ship, fresh: bool)
+
+
+func ship_owned_by(uid: String) -> Ship:
+	for s in _ships:
+		if is_instance_valid(s) and s.crash_wreck and s.owner_uid == uid and uid != "":
+			return s
+	return null
+
+
+## A wreck nobody has claimed: the one a dedicated server builds before
+## anybody arrives.
+func unclaimed_wreck() -> Ship:
+	for s in _ships:
+		if is_instance_valid(s) and s.crash_wreck and s.owner_uid == "":
+			return s
+	return null
+
+
+func crash_wrecks() -> int:
+	var n := 0
+	for s in _ships:
+		if is_instance_valid(s) and s.crash_wreck:
+			n += 1
+	return n
 
 
 func crash_site_arrived() -> void:

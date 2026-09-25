@@ -40,6 +40,7 @@ var _orphans: Array = []  # stations whose ship has not arrived yet
 var _scan_t := 0.0
 var _pose_t := 0.0
 var _poses := {}       # nid -> {"xform", "t"}: where a ship someone else flies is
+var _yours := {}       # which wreck the host said is this player's, until it is here
 
 
 func _ready() -> void:
@@ -136,6 +137,13 @@ func _consider(nid: String, h: int, now: int) -> void:
 		_send("station", station_snap(e[0]))
 
 
+## Host: tell a player which wreck is theirs.
+func tell_yours(peer: int, s: Ship, fresh: bool) -> void:
+	if s.net_id == "":
+		s.net_id = new_id()
+	sync_msg.rpc_id(peer, "yours", {"nid": s.net_id, "fresh": fresh})
+
+
 ## Everything, to a player who has just arrived. Ships first: a station bolted
 ## to a ship needs the ship to be there.
 func send_all_to(peer: int) -> void:
@@ -199,6 +207,8 @@ func _apply(kind: String, data: Dictionary) -> void:
 			_apply_gone(data)
 		"crash":
 			_apply_crash(data)
+		"yours":
+			_yours = data
 
 
 # --- ships --------------------------------------------------------------------
@@ -222,7 +232,7 @@ static func ship_snap(s: Ship) -> Dictionary:
 		"xform": s.global_transform, "air": s.air, "charge": s.charge,
 		"wreck": s.wreck_missing, "log": s.ship_log, "cabin": s.cabin_cells,
 		"seat": s.seat_at, "landed": s.landed, "flown": s.has_flown,
-		"flying": s.flying}
+		"flying": s.flying, "crash": s.crash_wreck, "owner": s.owner_uid}
 
 
 func find_ship(nid: String) -> Ship:
@@ -243,6 +253,9 @@ func apply_ship(d: Dictionary) -> void:
 			_remove(s, nid)
 		return
 	var fresh := s == null
+	if not fresh:
+		s.crash_wreck = bool(d.get("crash", s.crash_wreck))
+		s.owner_uid = str(d.get("owner", s.owner_uid))
 	if not fresh and _snap_hash(d) == ship_hash(s):
 		# Nothing about her has changed but her tanks: no rebuild for that.
 		s.air = float(d.get("air", s.air))
@@ -266,6 +279,8 @@ func apply_ship(d: Dictionary) -> void:
 	s.cabin_cells = (d.get("cabin", []) as Array).duplicate(true)
 	s.seat_at = d.get("seat", Vector3.ZERO)
 	s.has_flown = bool(d.get("flown", false))
+	s.crash_wreck = bool(d.get("crash", false))
+	s.owner_uid = str(d.get("owner", ""))
 	s.air = float(d.get("air", s.air))
 	s.charge = float(d.get("charge", s.charge))
 	if not mine:
@@ -307,6 +322,17 @@ func _give_ghosts(s: Ship) -> void:
 func _adopt_player() -> void:
 	if world.player == null:
 		return
+	# Our own wreck, once both it and we are here.
+	if not _yours.is_empty():
+		var mine := find_ship(str(_yours.get("nid", "")))
+		if mine != null:
+			var fresh := bool(_yours.get("fresh", false))
+			_yours = {}
+			var p := world.nearest_planet(mine.global_position)
+			if p != null:
+				world.crash_site = {"planet": p.planet_name,
+					"local": p.to_local(mine.global_position), "shown": false}
+			world.own_wreck.emit(mine, fresh)
 	for s in world._ships:
 		if not is_instance_valid(s):
 			continue

@@ -269,6 +269,7 @@ func _ready() -> void:
 	world.avatars = _avatars
 	_net.world_ready.connect(_on_world_ready)
 	_net.profile_restored.connect(_on_profile_restored)
+	_net.player_hello.connect(_on_player_hello)
 	# Connected here rather than with the chat box, which does not exist until the
 	# world has finished generating -- a good twenty seconds during which the
 	# host may well have said something, or announced you joining.
@@ -1781,6 +1782,75 @@ func _exit_tree() -> void:
 ## Set the wreck down beside the player, and put the player on their feet
 ## outside its door. Which parts are missing is rolled from the world seed, so
 ## the same world always crashes the same way.
+# --- a wreck for every player --------------------------------------------------
+#
+# In co-op everybody comes round in a wreck of their own, a short walk from the
+# others, built from the same roll: the same plates torn off, the same systems
+# down. So what one crew is missing, another has -- and a thruster pulled off
+# your ship can go on someone else's.
+
+## Host: somebody has said who they are. If they have no wreck, give them one.
+func _on_player_hello(peer: int, uid: String) -> void:
+	if _world == null or _world.planets.is_empty():
+		return
+	var mine := _world.ship_owned_by(uid)
+	if mine != null:
+		_net.sync.tell_yours(peer, mine, false)
+		return
+	var free := _world.unclaimed_wreck()
+	if free != null:
+		free.owner_uid = uid
+		_net.sync.tell_yours(peer, free, true)
+		return
+	var ship := await _build_wreck_nearby()
+	if ship == null:
+		return
+	ship.owner_uid = uid
+	_net.sync.tell_yours(peer, ship, true)
+
+
+## Another wreck, a short walk round from the first, on the same roll.
+func _build_wreck_nearby() -> Ship:
+	var ground: Planet = null
+	for pl in _world.planets:
+		if pl.planet_name == str(_world.crash_site.get("planet", "")):
+			ground = pl
+	if ground == null:
+		ground = _world.planets[0]
+	var local: Vector3 = _world.crash_site.get("local", ground.to_local(
+		ground.find_spawn_point(Vector3.UP)))
+	var centre := ground.to_global(local)
+	var up := -_world.gravity_at(centre).normalized()
+	var a := up.cross(Vector3.RIGHT if absf(up.x) < 0.9 else Vector3.FORWARD).normalized()
+	var b := up.cross(a).normalized()
+	var n := _world.crash_wrecks()
+	var ang := float(n) * 2.4
+	var near := centre + (a * cos(ang) + b * sin(ang)) * (26.0 + 6.0 * float(n)) + up * 6.0
+	# The ground there has to be solid before a ship can be set down on it.
+	var cc := ground.chunk_of(ground.world_to_voxel(near))
+	for dx in range(-1, 2):
+		for dy in range(-2, 1):
+			for dz in range(-1, 2):
+				ground.build_chunk_sync(cc + Vector3i(dx, dy, dz))
+	for _f in 3:
+		await get_tree().physics_frame
+	return _build_crash_site(ground, near, null)
+
+
+## A joining player: this one is yours. Just built or handed over, you come
+## round in its seat the way anyone starting a world does; a wreck you had
+## already, you are stood beside.
+func _on_own_wreck(ship: Ship, fresh: bool, player: Player) -> void:
+	if not is_instance_valid(player) or not is_instance_valid(ship):
+		return
+	if fresh:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = _world.world_seed ^ 0x57A1 ^ 0x1D
+		_put_player_in_wreck(ship, player, ship.global_transform.basis.y, rng)
+	else:
+		_set_down_by_wreck(player)
+
+
 ## A player joining someone else's world: stood on the ground a few paces off
 ## the wreck, where the others are, instead of at the home world's spawn point.
 func _set_down_by_wreck(player: Player) -> void:
@@ -1803,6 +1873,7 @@ func _place_crash_site(ground: Planet, player: Player) -> void:
 	var ship := _build_crash_site(ground, player.global_position, player)
 	if ship == null:
 		return
+	ship.owner_uid = _net.uid
 	var up: Vector3 = ship.global_transform.basis.y
 	var rng := RandomNumberGenerator.new()
 	rng.seed = _world.world_seed ^ 0x57A1 ^ 0x1D
@@ -1836,9 +1907,12 @@ func _build_crash_site(ground: Planet, near: Vector3, player: Player) -> Ship:
 		var ghosts := RepairGhosts.new()
 		ship.add_child(ghosts)
 		ghosts.setup(ship, player)
-	# Where this world began, for the map once she has flown.
-	_world.crash_site = {"planet": ground.planet_name,
-		"local": ground.to_local(ship.global_position), "shown": false}
+	ship.crash_wreck = true
+	# Where this world began, for the map once she has flown. The first wreck
+	# is where it began; the ones built for players joining later are not.
+	if _world.crash_site.is_empty():
+		_world.crash_site = {"planet": ground.planet_name,
+			"local": ground.to_local(ship.global_position), "shown": false}
 	_scar_the_ground(ground, ship, up, fwd, rng)
 	# ...and the pieces that came off her, crushed into the ground where they
 	# stopped. They are the nearest metal there is, which is the point.
@@ -1898,7 +1972,7 @@ func _scar_the_ground(ground: Planet, ship: Ship, up: Vector3, fwd: Vector3,
 				if Blocks.bottom_of(ground.get_id(v)) != Blocks.AIR:
 					cells[v] = Blocks.AIR
 	if not cells.is_empty():
-		ground.set_blocks(cells)
+		_world.edit_blocks(ground, cells)
 	# Torn-off plate, scattered down the furrow.
 	var junk := {}
 	for i in rng.randi_range(4, 8):
@@ -1910,7 +1984,7 @@ func _scar_the_ground(ground: Planet, ship: Ship, up: Vector3, fwd: Vector3,
 		if Blocks.bottom_of(ground.get_id(v2)) == Blocks.AIR:
 			junk[v2] = Blocks.METAL
 	if not junk.is_empty():
-		ground.set_blocks(junk)
+		_world.edit_blocks(ground, junk)
 
 
 ## The wing or the tail that came off, lying out on the ground: flattened into
@@ -2012,7 +2086,7 @@ func _strew_wreckage(ground: Planet, ship: Ship, up: Vector3,
 			cells[cache_v] = Blocks.AIR
 			lockers.append([cache_v, bx * away])
 	if not cells.is_empty():
-		ground.set_blocks(cells)
+		_world.edit_blocks(ground, cells)
 	for lk in lockers:
 		var st: Station = _world.spawn_station(Blocks.CHEST,
 			ground.to_global(Vector3(lk[0] as Vector3i)), up, lk[1] as Vector3)
@@ -2067,7 +2141,7 @@ func _fell_trees(ground: Planet, at: Vector3, up: Vector3, radius: float) -> voi
 	for gv in gone:
 		cells[gv] = Blocks.AIR
 		touched[ground.chunk_of(gv as Vector3i)] = true
-	ground.set_blocks(cells)
+	_world.edit_blocks(ground, cells)
 	for cc in touched:
 		ground.rebuild_chunk_sync(cc as Vector3i)
 
@@ -2119,7 +2193,7 @@ func _clear_inside_ship(ground: Planet, ship: Ship) -> void:
 						cells[wv] = Blocks.AIR
 	if cells.is_empty():
 		return
-	ground.set_blocks(cells)
+	_world.edit_blocks(ground, cells)
 	# ...and put those chunks back on screen NOW, on this thread. The edit is
 	# instant but the re-mesh is queued, so behind a loading screen the data
 	# changed before the world was visible and the mesh landed after it -- you
@@ -2244,6 +2318,8 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 			_set_down_by_wreck(player)
 		else:
 			world.crash_site_known.connect(_set_down_by_wreck.bind(player), CONNECT_ONE_SHOT)
+		# ...and then into the wreck that is theirs, once the host says which.
+		world.own_wreck.connect(_on_own_wreck.bind(player))
 	# AFTER world.player is set, not before. _apply_settings only reaches the
 	# player through world.player, so calling it a line early skipped the whole
 	# player half: every world opened with the preview on, default sensitivity,

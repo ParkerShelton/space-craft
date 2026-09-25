@@ -17,6 +17,11 @@ var _bbox_max := Vector3i.ZERO
 var flying := false
 ## This ship's name on the network (see NetSync); saved with the world.
 var net_id := ""
+## A wreck from the start of the game, and whose it is (their player id, or
+## "" for one nobody has claimed yet). In co-op every player comes round in a
+## wreck of their own -- see Main._on_player_hello.
+var crash_wreck := false
+var owner_uid := ""
 ## Someone on another machine is flying her: she follows their stream and her
 ## own physics stays out of it.
 var remote_driven := false
@@ -704,7 +709,22 @@ func _is_sealed() -> bool:
 				var c := Vector3i(x, y, z)
 				if not _seals(c) and not exterior.has(c):
 					_sealed_cells[c] = true
+	# A room with no way into it is not a cabin, it is a box: there has to be
+	# a door in its walls. Filling the doorway with hull closes the hole, but
+	# it does not make her airtight in any sense that matters to whoever has
+	# to get in.
+	if not _sealed_cells.is_empty() and not _door_on(_sealed_cells, neigh):
+		_sealed_cells = {}
 	return not _sealed_cells.is_empty()
+
+
+## Is there a door in the wall of this pocket?
+func _door_on(pocket: Dictionary, neigh: Array) -> bool:
+	for c in pocket:
+		for n in neigh:
+			if Blocks.is_door(int(blocks.get(c + n, Blocks.AIR))):
+				return true
+	return false
 
 
 ## Is a world point inside the ship's hull footprint, in a passable (air/open-door)
