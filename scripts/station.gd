@@ -78,6 +78,8 @@ static func capacity_of(k: int) -> int:
 		return CHEST_SLOTS
 	if k == Blocks.POWER_BAY:
 		return 1   # one battery, seated in the cradle -- no inventory to open
+	if k == Blocks.ANVIL:
+		return 1   # the workpiece on its face, and nothing else
 	if k == Blocks.OXYGEN_PLANT or k == Blocks.HEATER or k == Blocks.COOLER:
 		return 2   # spare filters / elements: no recipes, just somewhere to stash parts
 	if k == Blocks.FORGE:
@@ -171,6 +173,9 @@ func _build_visual() -> void:
 	elif kind == Blocks.POWER_BAY:
 		_bay_shown = _bay_state()
 		_mi.mesh = StationModels.power_bay_mesh(_bay_shown.x > 0.5, _bay_shown.y)
+	elif kind == Blocks.ANVIL:
+		_anvil_shown = anvil_shape()
+		_mi.mesh = StationModels.anvil_mesh(_anvil_shown, anvil_colour())
 	elif kind == Blocks.GENERATOR:
 		_gen_shown = gen_state()
 		_mi.mesh = StationModels.generator_mesh(_gen_shown.r > 0.5, _gen_shown.g,
@@ -267,7 +272,19 @@ func _count_req(req: Dictionary) -> int:
 ## The props of the stuff a craft is really made OF, for the crafts whose yield
 ## depends on it: the refined material in the hopper if there is one, otherwise
 ## whatever in there carries a material at all.
-func _yield_props() -> Dictionary:
+func _yield_props(reqs: Array = []) -> Dictionary:
+	# What the recipe itself asks for comes first: Wire is made from a bar, and
+	# a bar's worth of wire is a question about THAT bar's ore, not about an
+	# ingot that happens to be sitting in the next slot.
+	for r in reqs:
+		var rd: Dictionary = r
+		for s0 in storage:
+			if int(s0.get("count", 0)) <= 0 or (s0.get("props", {}) as Dictionary).is_empty():
+				continue
+			var sid := int(s0["id"])
+			if (rd.has("id") and sid == int(rd["id"])) \
+					or (rd.has("refined") and Blocks.is_refined(sid)):
+				return s0.get("props", {})
 	for s in storage:
 		if int(s.get("count", 0)) > 0 and Blocks.is_refined(int(s["id"])):
 			return s.get("props", {})
@@ -355,7 +372,25 @@ func refine_all() -> int:
 			if refined != Blocks.AIR:
 				s["id"] = refined
 				done += 1
+		elif s["count"] > 0 and int(s["id"]) == Blocks.SCRAP:
+			# Remelted: back into the very ingot it was beaten from.
+			var back := scrap_to_ingot(s)
+			s["id"] = back["id"]
+			s["src"] = back["src"]
+			s["mat"] = back["mat"]
+			done += 1
 	return done
+
+
+## An ingot's worth of anything beaten from one (bar, sheet, scrap) turned back
+## into that ingot: its id, source and material as they were.
+static func scrap_to_ingot(s: Dictionary) -> Dictionary:
+	var mat: Dictionary = (s.get("mat", {}) as Dictionary).duplicate()
+	var id := int(mat.get("ingot", Blocks.REFINED_0))
+	var src := str(mat.get("src0", s.get("src", "")))
+	mat.erase("ingot")
+	mat.erase("src0")
+	return {"id": id, "src": src, "mat": mat}
 
 
 # --- timed jobs ---------------------------------------------------------------
@@ -381,7 +416,7 @@ func start_refine() -> int:
 		return -1
 	var n := 0
 	for s in storage:
-		if s["count"] > 0 and Blocks.is_ore(s["id"]):
+		if s["count"] > 0 and (Blocks.is_ore(s["id"]) or int(s["id"]) == Blocks.SCRAP):
 			n += s["count"]
 	if n == 0:
 		return 0
@@ -557,6 +592,126 @@ func gen_swap_fuel(incoming: Dictionary) -> Dictionary:
 func gen_toggle() -> bool:
 	switched_on = not switched_on
 	return switched_on
+
+
+# --- the anvil -------------------------------------------------------------------
+#
+# One workpiece, in storage[0], with how many times it has been struck kept on
+# it as "hits" -- so a half-beaten piece is saved with the world like anything
+# else. What it IS at any moment is Blocks.smith_shape of those hits.
+
+var _anvil_shown := "-"
+
+
+func anvil_piece() -> Dictionary:
+	if storage.is_empty() or int(storage[0].get("count", 0)) <= 0:
+		return {}
+	return storage[0]
+
+
+func anvil_shape() -> String:
+	var p := anvil_piece()
+	if p.is_empty():
+		return ""
+	return Blocks.smith_shape(int(p.get("hits", 0)), p.get("props", {}))
+
+
+func anvil_colour() -> Color:
+	var p := anvil_piece()
+	var mat: Dictionary = p.get("mat", {})
+	return mat.get("color", Color(0.7, 0.68, 0.64))
+
+
+## Can this go on the anvil? An ingot, or a bar or sheet to be carried on.
+static func anvil_takes(id: int) -> bool:
+	return Blocks.is_refined(id) or id == Blocks.BAR or id == Blocks.SHEET
+
+
+## Put one of `item` on the face. It starts as far along as it already is: a
+## bar goes on as a bar. Returns false if it is not something you can work.
+func anvil_put(item: Dictionary) -> bool:
+	var id := int(item.get("id", Blocks.AIR))
+	if not anvil_takes(id) or not anvil_piece().is_empty():
+		return false
+	_ensure_storage()
+	var piece: Dictionary = item.duplicate(true)
+	piece["count"] = 1
+	piece.erase("eighths")
+	var mat: Dictionary = (piece.get("mat", {}) as Dictionary).duplicate()
+	if Blocks.is_refined(id):
+		# Remember the ingot it started as, so whatever it becomes can be
+		# melted back into exactly that.
+		mat["ingot"] = id
+		mat["src0"] = str(piece.get("src", ""))
+	piece["mat"] = mat
+	piece["hits"] = Blocks.smith_hits_of(id, piece.get("props", {}))
+	storage[0] = piece
+	_refresh_anvil()
+	return true
+
+
+## Put a piece back exactly as it was, strikes and all -- for when taking it
+## off turned out to have nowhere to go.
+func anvil_put_back(piece: Dictionary) -> void:
+	_ensure_storage()
+	storage[0] = piece.duplicate(true)
+	_refresh_anvil()
+
+
+## One blow. Returns what the piece is now (see Blocks.smith_shape).
+func anvil_strike() -> String:
+	var p := anvil_piece()
+	if p.is_empty():
+		return ""
+	var shape := anvil_shape()
+	if shape != "scrap":
+		p["hits"] = int(p.get("hits", 0)) + 1
+		shape = anvil_shape()
+	_refresh_anvil()
+	return shape
+
+
+## Take the piece off as whatever it has become, and clear the face. Returns
+## the item(s) it comes off as: one ingot, bar, sheet or scrap -- or, at plate,
+## however many plates this ore gives. A plate that had started to crack is
+## still a plate: the warning was the warning.
+func anvil_take() -> Array:
+	var p := anvil_piece()
+	if p.is_empty():
+		return []
+	var shape := anvil_shape()
+	var props: Dictionary = p.get("props", {})
+	var mat: Dictionary = p.get("mat", {})
+	var out: Array = []
+	match shape:
+		"ingot":
+			var back := scrap_to_ingot(p)
+			out.append({"id": back["id"], "count": 1, "props": props,
+				"src": back["src"], "mat": back["mat"]})
+		"plate", "cracking":
+			out.append({"id": Blocks.METAL, "count": Blocks.plate_yield(props),
+				"props": props, "src": "", "mat": {}})
+		_:
+			var id: int = {"bar": Blocks.BAR, "sheet": Blocks.SHEET}.get(shape, Blocks.SCRAP)
+			# Different metals must not stack into one, so the source names the
+			# metal as well as where it was dug.
+			out.append({"id": id, "count": 1, "props": props,
+				"src": "%s:%s" % [str(mat.get("src0", "")), str(mat.get("name", ""))],
+				"mat": mat})
+	storage[0] = {"id": Blocks.AIR, "count": 0, "eighths": 0, "props": {},
+		"src": "", "mat": {}}
+	_refresh_anvil()
+	return out
+
+
+func _refresh_anvil() -> void:
+	if kind != Blocks.ANVIL or headless or _mi == null:
+		return
+	var want := anvil_shape()
+	if want == _anvil_shown:
+		return
+	_anvil_shown = want
+	_mi.mesh = StationModels.anvil_mesh(want, anvil_colour())
 
 
 ## Swing the lever toward where the switch is set.
@@ -787,7 +942,7 @@ func _do_craft(craft: Dictionary) -> bool:
 			return false
 		# Read the material BEFORE consuming it: a yield that depends on what a
 		# thing is made of has to look at the stuff while it is still there.
-		var mprops: Dictionary = _yield_props()
+		var mprops: Dictionary = _yield_props(craft["reqs"])
 		_consume_reqs(craft["reqs"])
 		var many := int(craft.get("n", 1))
 		if bool(craft.get("yield_from_material", false)):

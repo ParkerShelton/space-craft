@@ -28,8 +28,12 @@ static func has_model(id: int) -> bool:
 
 
 ## The model, as [centre, size, colour] boxes in a roughly 1x1x1 space centred
-## on the origin.
-static func boxes_for(id: int) -> Array:
+## on the origin. `tint` colours metal stock by the ore it was made from; an
+## alpha of 0 means "no particular metal".
+static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
+	var stock := _stock_boxes(Blocks.bottom_of(id), tint)
+	if not stock.is_empty():
+		return stock
 	match Blocks.bottom_of(id):
 		Blocks.RAW_MEAT:
 			# A cut of meat on the bone: a thick wedge with fat marbled across
@@ -120,6 +124,34 @@ static func boxes_for(id: int) -> Array:
 			return []
 
 
+## Metal stock -- what the smelter pours and the anvil beats it into -- as the
+## shape it actually is: a cast ingot, a long bar, a thin sheet, a crumpled
+## heap of scrap. Coloured by its ore, pulled toward grey so it reads as metal
+## rather than as paint.
+static func _stock_boxes(b: int, tint: Color) -> Array:
+	var is_ingot := Blocks.is_refined(b)
+	if not (is_ingot or b == Blocks.BAR or b == Blocks.SHEET or b == Blocks.SCRAP):
+		return []
+	var base := Color(0.64, 0.64, 0.66)
+	var c: Color = base.lerp(Color(tint.r, tint.g, tint.b), 0.55) if tint.a > 0.0 else base
+	var hi: Color = c.lightened(0.18)
+	var lo: Color = c.darkened(0.25)
+	if is_ingot:
+		return [[Vector3(0, -0.04, 0), Vector3(0.62, 0.2, 0.32), c],
+			[Vector3(0, 0.08, 0), Vector3(0.52, 0.05, 0.24), hi]]
+	if b == Blocks.BAR:
+		return [[Vector3(0, 0, 0), Vector3(0.8, 0.11, 0.12), c],
+			[Vector3(0, 0.06, 0), Vector3(0.78, 0.01, 0.08), hi]]
+	if b == Blocks.SHEET:
+		return [[Vector3(0, 0, 0), Vector3(0.66, 0.04, 0.5), c],
+			[Vector3(0.2, 0.021, 0.12), Vector3(0.2, 0.004, 0.18), hi]]
+	var d: Color = c.darkened(0.35)
+	return [[Vector3(-0.12, -0.05, -0.06), Vector3(0.3, 0.08, 0.2), d],
+		[Vector3(0.14, 0.0, 0.06), Vector3(0.22, 0.16, 0.22), lo],
+		[Vector3(-0.02, 0.07, 0.1), Vector3(0.16, 0.05, 0.26), d],
+		[Vector3(0.2, -0.06, -0.14), Vector3(0.12, 0.05, 0.1), lo]]
+
+
 ## A book. Shut it is a slab: two covers with a block of pages between them and
 ## a spine down one edge. Open, the covers swing off that spine.
 ##
@@ -191,13 +223,13 @@ static func set_book_open(book: Node3D, open: float) -> void:
 
 ## The model shrunk into the unit cube ItemIcon photographs, with the face
 ## shading baked in -- an icon has no sun on it.
-static func icon_mesh(id: int) -> ArrayMesh:
-	return _mesh(boxes_for(id), true)
+static func icon_mesh(id: int, tint: Color = Color(0, 0, 0, 0)) -> ArrayMesh:
+	return _mesh(boxes_for(id, tint), true)
 
 
 ## The model as it is held or shown in the world, lit by the world.
-static func mesh(id: int) -> ArrayMesh:
-	return _mesh(boxes_for(id), false)
+static func mesh(id: int, tint: Color = Color(0, 0, 0, 0)) -> ArrayMesh:
+	return _mesh(boxes_for(id, tint), false)
 
 
 ## How many bites it takes to finish something.

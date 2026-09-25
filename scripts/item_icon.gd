@@ -43,7 +43,8 @@ var _lit := {}                   # planet id -> its material, held at noon
 ## everything with a shape or a lump. Tools are still a coloured square: a box
 ## is not a bucket, and pretending otherwise would be worse than the square.
 static func can_draw(raw: int) -> bool:
-	if Cosmetics.is_cosmetic(raw) or ToolModels.has_model(raw) or Blocks.is_station_build(raw):
+	if Cosmetics.is_cosmetic(raw) or ToolModels.has_model(raw) or Blocks.is_station_build(raw) \
+			or raw == Blocks.ANVIL:
 		return true
 	# A battery is not a block you place, so it fell through every test below
 	# and came back as a flat green square. It has a model -- the one the cradle
@@ -190,10 +191,10 @@ func _shoot(job: Array) -> void:
 	var col: Color = job[3]
 	var planet: Planet = job[4]
 	var tool := ToolModels.has_model(raw)
-	var built := Blocks.is_station_build(raw)
+	var built := Blocks.is_station_build(raw) or raw == Blocks.ANVIL
 	var worn := Cosmetics.is_cosmetic(raw) or tool or built
 	if ItemModels.has_model(raw):
-		_mi.mesh = ItemModels.icon_mesh(raw)
+		_mi.mesh = ItemModels.icon_mesh(raw, col)
 	elif raw == Blocks.BOAT:
 		_mi.mesh = Boat.icon_mesh()
 	elif raw == Blocks.BATTERY:

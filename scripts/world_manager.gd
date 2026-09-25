@@ -625,6 +625,8 @@ func load_game() -> bool:
 			station.global_transform = std.get("xform", Transform3D.IDENTITY)
 		if std.has("storage"):
 			station.storage = std["storage"]
+		if skind == Blocks.ANVIL:
+			station._refresh_anvil()   # whatever was left on it, drawn there
 		if skind == Blocks.GENERATOR:
 			station.migrate_generator()
 			station.set_switched(bool(std.get("on", true)))

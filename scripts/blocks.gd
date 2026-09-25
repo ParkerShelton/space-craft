@@ -67,7 +67,7 @@ const CHEST := 52     # pure storage (bigger than a machine)
 const CARPENTER := 62 # base-building bench: structural blocks from plain resources
 const FORGE := 63     # multiblock-built smelter upgrade: bigger + faster
 const CLIMATE_UNIT := 64  # planet base shelter: negates hazard damage nearby
-const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER, GENERATOR, OXYGEN_PLANT, HEATER, COOLER, POWER_BAY, CAMPFIRE, BED]
+const STATION_IDS := [SMELTER, FABRICATOR, SHIPWORKS, CHEST, CARPENTER, FORGE, CLIMATE_UNIT, SHAPER, GENERATOR, OXYGEN_PLANT, HEATER, COOLER, POWER_BAY, CAMPFIRE, BED, ANVIL]
 
 # --- procedural ore slots ---------------------------------------------------
 # Each planet invents its own ores (unique name + color) and assigns each to a
@@ -340,7 +340,7 @@ const DRILL := 51            # mining tool; its power (from its material) sets m
 const O2_TANK := 55
 const SUIT := 56             # worn gear: reduces hazard damage (insulation from Density)
 const WEAPON := 59           # melee weapon: its damage (from its material) beats bare hands
-const TOOL_IDS := [DRILL, SUIT, WEAPON, PULSE_PISTOL, WRENCH, PICK, AXE, SPADE, SWORD]
+const TOOL_IDS := [DRILL, SUIT, WEAPON, PULSE_PISTOL, WRENCH, PICK, AXE, SPADE, SWORD, HAMMER]
 
 const LIFE_SUPPORT := 53     # ship block: with a sealed interior it makes the ship habitable
 const GLASS := 54            # transparent, solid hull -- windows that still seal a cabin
@@ -352,7 +352,7 @@ const DOOR_OPEN := 58        # open door: passable, does NOT seal (air escapes)
 #     so not everything is gated behind "refine ore and you're done") ---
 const ALLOY := 60      # refined + Metal -> structural stock (Shipworks: Thruster, Life Support)
 const CIRCUIT := 61    # refined + Metal -> functional stock (Fabricator: Drill, Suit, Weapon)
-const INTERMEDIATE_IDS := [ALLOY, CIRCUIT]
+const INTERMEDIATE_IDS := [ALLOY, CIRCUIT, BAR, SHEET, SCRAP]
 
 const INTERFACE := 65  # placeable trigger block: surround it with a recognized shell
 						# pattern (see MULTIBLOCK_RECIPES) to build a bigger structure
@@ -804,12 +804,29 @@ const JOURNAL := 201
 ## run from Cosmetics.FIRST_ID, and well under ID_MASK.
 const CRACKED_METAL := 202
 
+# --- smithing -------------------------------------------------------------------
+#
+# Refined ore comes out of the smelter as an INGOT. Put one on an ANVIL and
+# strike it with a HAMMER, and it is beaten through a Bar and a Sheet into
+# Hull Plate -- take it off at whichever of those you want. Keep hitting past
+# plate and it cracks, and then it is SCRAP, which only the smelter can turn
+# back into an ingot. How many strikes each stage takes is the ore's Hardness;
+# how many plates one ingot gives is its Density (see smith_stages).
+#
+# Bars, sheets and scrap each remember the ingot they were beaten from (in
+# their `mat`), so they carry its stats and remelt back into it.
+const HAMMER := 203    # carpenter's bench: wood and rock. Strikes, does not mine.
+const ANVIL := 204     # carpenter's bench: ingots. Holds one workpiece on top.
+const BAR := 205
+const SHEET := 206
+const SCRAP := 207
+
 const SWORD_DAMAGE := 6.0
 
 ## How many uses each tool has in it before it breaks: a block broken, a patch
 ## tilled, a hit landed, a shot fired. Anything not listed never wears out.
 const DURABILITY := {
-	PICK: 150, AXE: 150, SPADE: 150, HOE: 120, SWORD: 130,
+	PICK: 150, AXE: 150, SPADE: 150, HOE: 120, SWORD: 130, HAMMER: 400,
 	DRILL: 1500, WEAPON: 500, PULSE_PISTOL: 400,
 }
 
@@ -1364,7 +1381,7 @@ static func all_recipes() -> Array:
 ## open. Anything that formats a requirement goes through here now.
 static func req_text(r: Dictionary) -> String:
 	if r.has("refined"):
-		return "%d Refined Material" % int(r["n"])
+		return "%d Ingot%s" % [int(r["n"]), "" if int(r["n"]) == 1 else "s"]
 	if r.has("any"):
 		return "%d %s" % [int(r["n"]), r.get("label", "items")]
 	return "%d %s" % [int(r["n"]), name_of(int(r["id"]))]
@@ -1375,7 +1392,7 @@ static func recipe_needs(rec: Dictionary) -> String:
 	for r in rec.get("reqs", []):
 		parts.append(req_text(r))
 	if int(rec.get("cost", 0)) > 0:
-		parts.append("%d Refined Material" % int(rec["cost"]))
+		parts.append("%d Ingot%s" % [int(rec["cost"]), "" if int(rec["cost"]) == 1 else "s"])
 	var ex: Dictionary = rec.get("extra", {})
 	if not ex.is_empty():
 		parts.append(req_text(ex))
@@ -1578,6 +1595,67 @@ static func id_matches_material(id: int, mtype: String) -> bool:
 static func is_intermediate(id: int) -> bool:
 	return id in INTERMEDIATE_IDS
 
+
+## The strike counts at which a workpiece of this material becomes a Bar, a
+## Sheet and Hull Plate: [bar, sheet, plate]. A soft ore flattens in a couple of
+## blows a stage; a hard one fights you for twice that.
+static func smith_stages(props: Dictionary) -> Array:
+	var h: float = clampf(float(props.get("h", 40)) / 100.0, 0.0, 1.0)
+	var f: float = lerpf(0.75, 1.6, h)
+	var bar: int = maxi(1, int(round(2.0 * f)))
+	var sheet: int = maxi(bar + 1, int(round(4.0 * f)))
+	var plate: int = maxi(sheet + 1, int(round(6.0 * f)))
+	return [bar, sheet, plate]
+
+
+## What a workpiece with `hits` strikes in it is: "ingot", "bar", "sheet",
+## "plate", "cracking" (one past plate -- a warning), or "scrap".
+static func smith_shape(hits: int, props: Dictionary) -> String:
+	var st := smith_stages(props)
+	if hits < int(st[0]):
+		return "ingot"
+	if hits < int(st[1]):
+		return "bar"
+	if hits < int(st[2]):
+		return "sheet"
+	if hits == int(st[2]):
+		return "plate"
+	if hits == int(st[2]) + 1:
+		return "cracking"
+	return "scrap"
+
+
+## Where a piece already beaten to `id` starts when it goes back on the anvil.
+static func smith_hits_of(id: int, props: Dictionary) -> int:
+	var st := smith_stages(props)
+	if id == BAR:
+		return int(st[0])
+	if id == SHEET:
+		return int(st[1])
+	return 0
+
+
+## Will a crafting bench take `id` into its storage? The benches were strict
+## about their PRIMARY material only, which shut out everything else their own
+## recipes asked for -- the Fabricator refused the bar its Wire is made from.
+## A bench takes its primary material and anything any of its recipes names.
+static func station_accepts(kind: int, id: int) -> bool:
+	if id_matches_material(id, primary_material_for(kind)):
+		return true
+	for craft in STATION_CRAFTS.get(kind, []):
+		var reqs: Array = (craft as Dictionary).get("reqs", []).duplicate()
+		if craft.has("extra"):
+			reqs.append(craft["extra"])
+		for r in reqs:
+			var rd: Dictionary = r
+			if rd.has("id") and int(rd["id"]) == id:
+				return true
+			if rd.has("any") and id in rd["any"]:
+				return true
+			if rd.has("refined") and is_refined(id):
+				return true
+	return false
+
 static func is_smelter_kind(kind: int) -> bool:
 	return kind == SMELTER or kind == FORGE
 
@@ -1598,11 +1676,9 @@ const STATION_CRAFTS := {
 			"reqs": [{"id": CROP, "n": 2}]},
 	],
 	SMELTER: [
-		# Cast refined ingots into plain hull plate -- the step that turns what
-		# you dug up into something you can build with.
-		# The count is a base: what you actually get comes from the ore, via
-		# Blocks.plate_yield. See "yield_from_material".
-		{"label": "Hull Plate", "out": METAL, "n": 4, "cost": 1, "yield_from_material": true},
+		# Hull plate is not made here any more: it is beaten out of an ingot on
+		# an anvil (see the smithing section). The smelter's job is the fire --
+		# ore into ingots, and scrap back into them.
 		{"label": "Alloy Plating x2", "out": ALLOY, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 3}},
 		{"label": "Circuitry x2", "out": CIRCUIT, "n": 2, "cost": 2, "extra": {"id": METAL, "n": 2}},
 	],
@@ -1611,12 +1687,16 @@ const STATION_CRAFTS := {
 			"reqs": [{"id": CRYSTAL, "n": 1}, {"id": METAL, "n": 1}]},
 		# The base's nervous system: cheap, because a grid you cannot afford to
 		# run across your base is a grid you build around instead of with.
+		# From a BAR: the length comes from the bar's ore (wire_yield reads its
+		# Reactivity), so a conductive ore still goes further.
 		{"label": "Wire", "out": WIRE, "n": 8, "yield_from_material": true,
-			"reqs": [{"id": METAL, "n": 1}, {"refined": true, "n": 1}]},
+			"reqs": [{"id": BAR, "n": 1}]},
 		{"label": "Machine Core", "out": MACHINE_CORE, "n": 1,
-			"reqs": [{"id": METAL, "n": 4}, {"refined": true, "n": 1}]},
+			"reqs": [{"id": METAL, "n": 2}, {"id": BAR, "n": 2}]},
+		# A casing of sheet round an ingot's worth of cell. The ingot is what the
+		# charge is stored in, so its ore still decides the capacity.
 		{"label": "Battery", "out": BATTERY, "n": 1,
-			"reqs": [{"id": METAL, "n": 3}, {"refined": true, "n": 2}]},
+			"reqs": [{"id": SHEET, "n": 2}, {"refined": true, "n": 1}]},
 		{"label": "Drill", "out": DRILL, "n": 1, "cost": 3},
 		{"label": "Melee Weapon", "out": WEAPON, "n": 1, "cost": 3},
 		{"label": "Pulse Pistol", "out": PULSE_PISTOL, "n": 1, "cost": 4},
@@ -1657,7 +1737,16 @@ const STATION_CRAFTS := {
 		# to a smelter and no more than that. A field has to be near water, and
 		# a bucket is what stops that meaning "on a beach".
 		{"label": "Bucket", "out": BUCKET, "n": 1,
-			"reqs": [{"id": METAL, "n": 3}]},
+			"reqs": [{"id": SHEET, "n": 2}]},
+		# Smithing. The hammer is the same wood and rock as the other first
+		# tools, so it is waiting for you the moment you have an ingot; the
+		# anvil is three ingots, so the first metal you smelt becomes the thing
+		# you work the rest of it on.
+		{"label": "Hammer", "out": HAMMER, "n": 1,
+			"reqs": [{"any": WOOD_IDS, "n": 2, "label": "Wood"},
+				{"any": STONE_IDS, "n": 3, "label": "Rock"}]},
+		{"label": "Anvil", "out": ANVIL, "n": 1,
+			"reqs": [{"refined": true, "n": 3}]},
 		# Cheap and early on purpose. It exists so that a lake stops being a
 		# wall on your first afternoon, and a boat you cannot afford until you
 		# have a smelter would be a boat nobody ever builds.
@@ -1823,8 +1912,9 @@ const NAMES := {
 	PATH: "Path",
 	WARP_DRIVE: "Warp Drive",
 	ORE_0: "Ore", ORE_1: "Ore", ORE_2: "Ore", ORE_3: "Ore",
-	REFINED_0: "Refined Material", REFINED_1: "Refined Material",
-	REFINED_2: "Refined Material", REFINED_3: "Refined Material",
+	REFINED_0: "Ingot", REFINED_1: "Ingot",
+	REFINED_2: "Ingot", REFINED_3: "Ingot",
+	HAMMER: "Hammer", ANVIL: "Anvil", BAR: "Bar", SHEET: "Sheet", SCRAP: "Scrap",
 	DRILL: "Drill",
 	O2_TANK: "O2 Tank",
 	SUIT: "Insulated Suit",
@@ -1834,6 +1924,11 @@ const NAMES := {
 
 # What each ore is (eventually) used for -- shown when you aim at it.
 const USES := {
+	HAMMER: "Strike a workpiece on an anvil",
+	ANVIL: "Put an ingot on it, then strike it with a hammer",
+	BAR: "Wire and machine cores -- or back on the anvil for sheet",
+	SHEET: "Batteries and buckets -- or back on the anvil for plate",
+	SCRAP: "Overworked. Remelt it at a smelter into an ingot",
 	CRACKED_METAL: "Crumbles if you work at it -- nothing worth keeping",
 	IRON_ORE: "Hulls & tools",
 	COPPER_ORE: "Wiring & thrusters",
@@ -1923,6 +2018,11 @@ const COLORS := {
 	METAL: Color(0.60, 0.62, 0.66),
 	# Duller than sound plate, and gone a little toward rust.
 	CRACKED_METAL: Color(0.50, 0.48, 0.46),
+	HAMMER: Color(0.55, 0.50, 0.44),
+	ANVIL: Color(0.30, 0.31, 0.34),
+	BAR: Color(0.70, 0.68, 0.64),
+	SHEET: Color(0.74, 0.74, 0.72),
+	SCRAP: Color(0.42, 0.38, 0.34),
 	COCKPIT: Color(0.35, 0.55, 0.90),
 	THRUSTER: Color(0.85, 0.45, 0.20),
 	WOOD: Color(0.42, 0.28, 0.16),

@@ -4826,6 +4826,8 @@ func _process_mining(delta: float) -> void:
 	var tgt := _raycast_voxel()
 	_update_outline(tgt)
 	if tgt.get("kind", "") == "station":
+		if _process_anvil_strike(tgt["obj"], lmb_pressed):
+			return
 		_process_station_mining(delta, tgt["obj"])
 		return
 	if tgt.get("kind", "") == "creature":
@@ -6092,14 +6094,14 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 	if tc == "stor" and fc != "stor" and ti < _stor_map.size():
 		var tst: Station = _stor_map[ti]["st"]
 		var fid: int = from["id"]
-		if Blocks.is_smelter_kind(tst.kind) and not (Blocks.is_ore(fid) or Blocks.is_refined(fid) or fid == Blocks.METAL):
-			_toast("Smelter takes raw ore, refined material, or Metal")
+		if Blocks.is_smelter_kind(tst.kind) and not (Blocks.is_ore(fid) or Blocks.is_refined(fid)
+				or fid == Blocks.METAL or fid == Blocks.SCRAP):
+			_toast("Smelter takes raw ore, ingots, scrap, or Metal")
 			return
-		if tst.kind == Blocks.FABRICATOR and fid != Blocks.CIRCUIT:
-			_toast("Fabricator takes Circuitry")
-			return
-		if tst.kind == Blocks.SHIPWORKS and fid != Blocks.ALLOY:
-			_toast("Shipworks takes Alloy Plating")
+		# A bench takes what its own recipes use -- see Blocks.station_accepts.
+		if (tst.kind == Blocks.FABRICATOR or tst.kind == Blocks.SHIPWORKS) \
+				and not Blocks.station_accepts(tst.kind, fid):
+			_toast("The %s has no use for that" % Blocks.name_of(tst.kind))
 			return
 	# A generator's two bays each take one kind of thing, both ways round: what
 	# goes in has to fit, and so does whatever a swap sends back the other way.
@@ -6443,7 +6445,7 @@ func _update_held_item(active: Dictionary) -> void:
 		# Food: a model rather than a tinted cube. Held a little larger than a
 		# tool, because a loaf in the corner of the eye at tool scale is a crumb.
 		_held_item = MeshInstance3D.new()
-		_held_item.mesh = ItemModels.mesh(id)
+		_held_item.mesh = ItemModels.mesh(id, mat.get("color", Color(0, 0, 0, 0)))
 		_held_item.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_held_item.scale = Vector3.ONE * 0.55
 		_held_item.position = Vector3(0, -0.05, 0)
@@ -6868,15 +6870,18 @@ func _item_tooltip_base(slot: Dictionary) -> String:
 	if Blocks.is_refined(id):
 		var tier: int = int(mat.get("tier", 0))
 		var props: Dictionary = slot.get("props", {})
-		var lines := ["Refined %s%s  (%s · Tier %d)" % [mname, suffix, Blocks.TIER_NAMES[tier], tier]]
+		var lines := ["%s Ingot%s  (%s · Tier %d)" % [mname, suffix, Blocks.TIER_NAMES[tier], tier]]
 		for k in Blocks.PROP_KEYS:
 			lines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(props.get(k, 0))])
 		# What those two numbers MEAN, now that they decide different things. A
 		# list of scores is not a decision until something says which way round
 		# they cut.
 		lines.append(Blocks.ore_verdict(props))
-		lines.append("%d plate per unit, %d wire per unit" % [
+		lines.append("%d plate per ingot, %d wire per bar" % [
 			Blocks.plate_yield(props), Blocks.wire_yield(props)])
+		var stg := Blocks.smith_stages(props)
+		lines.append("On the anvil: bar at %d blows, sheet at %d, plate at %d" % [
+			int(stg[0]), int(stg[1]), int(stg[2])])
 		return "\n".join(lines)
 	if Blocks.is_intermediate(id):
 		var itier: int = int(mat.get("tier", 0))
@@ -6885,6 +6890,8 @@ func _item_tooltip_base(slot: Dictionary) -> String:
 			Blocks.name_of(id), mname, suffix, Blocks.TIER_NAMES[itier], itier]]
 		for k in Blocks.PROP_KEYS:
 			ilines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(iprops.get(k, 0))])
+		if Blocks.use_of(id) != "":
+			ilines.append(Blocks.use_of(id))
 		return "\n".join(ilines)
 	# crafted ship part (thruster/hull) carrying a material's stats
 	var cprops: Dictionary = slot.get("props", {})
@@ -6981,7 +6988,7 @@ func _recipe_text(recipe: Dictionary) -> String:
 	var parts := []
 	for r in recipe["reqs"]:
 		if r.has("refined"):
-			parts.append("%d Refined Material" % int(r["n"]))
+			parts.append("%d Ingot%s" % [int(r["n"]), "" if int(r["n"]) == 1 else "s"])
 		elif r.has("any"):
 			parts.append("%d %s" % [int(r["n"]), r.get("label", "items")])
 		else:
@@ -7415,6 +7422,11 @@ func _open_station(st: Station) -> void:
 	if st.kind == Blocks.POWER_BAY:
 		_swap_bay_battery(st)
 		return
+	# Likewise the anvil: nothing to open. Right-click puts a piece on it or
+	# takes the piece off; the hammer does the rest.
+	if st.kind == Blocks.ANVIL:
+		_use_anvil(st)
+		return
 	_station_open = st
 	st.lid_open = true
 	if inv_open:
@@ -7839,7 +7851,7 @@ func _on_station_craft(craft: Dictionary, times: int = 1) -> void:
 			_toast("Missing materials")
 		else:
 			var mtype := Blocks.primary_material_for(_station_open.kind)
-			var mat_label: String = {"refined": "Refined Material", "circuit": "Circuitry",
+			var mat_label: String = {"refined": "Ingots", "circuit": "Circuitry",
 				"alloy": "Alloy Plating"}.get(mtype, "material")
 			var msg := "Need %d %s loaded" % [int(craft["cost"]), mat_label]
 			if craft.has("extra"):
@@ -8077,6 +8089,172 @@ func _throw_gen_switch(st: Station) -> void:
 	else:
 		_toast("Generator off")
 	_refresh_station_ui()
+
+
+# --- smithing ---------------------------------------------------------------------
+
+## Right-click an anvil. With something on it, that comes off -- as whatever it
+## has been beaten into. With nothing on it, one of what you are holding goes
+## on, if it is something that can be worked.
+func _use_anvil(st: Station) -> void:
+	var face: Vector3 = _anvil_face(st)
+	if not st.anvil_piece().is_empty():
+		# Everything it comes off as has to fit, or none of it moves: half a
+		# stack of plates lost to a full bag would be the worst way to learn.
+		var before_inv: Array = inv.duplicate(true)
+		var before_piece: Dictionary = st.anvil_piece().duplicate(true)
+		var got := st.anvil_take()
+		var said := PackedStringArray()
+		for it in got:
+			var d: Dictionary = it
+			if _add_item(int(d["id"]), int(d["count"]), d.get("props", {}),
+					str(d.get("src", "")), d.get("mat", {})) > 0:
+				inv = before_inv
+				st.anvil_put_back(before_piece)
+				_toast("No room in your bag for it")
+				Audio.ui("ui_deny")
+				return
+			said.append("%d %s" % [int(d["count"]), _smith_name(d)])
+		Audio.at("place_metal", face)
+		_toast("Took off " + ", ".join(said))
+		_refresh_slots()
+		return
+	var held: Dictionary = _active_item()
+	var hid := int(held.get("id", Blocks.AIR))
+	if int(held.get("count", 0)) <= 0:
+		_toast("Put an ingot on the anvil, then strike it with a hammer")
+		return
+	if hid == Blocks.SCRAP:
+		_toast("Scrap will not take shape -- remelt it at a smelter first")
+		return
+	if hid == Blocks.METAL:
+		_toast("That is already plate")
+		return
+	if not Station.anvil_takes(hid):
+		_toast("Only ingots, bars and sheets can be worked on an anvil")
+		return
+	st.anvil_put(held)
+	_take_one_from_active()
+	Audio.at("place_metal", face)
+	_toast("On the anvil: %s -- strike it with a hammer" % _smith_name(held))
+	_refresh_slots()
+
+
+## Left-click at an anvil with something on it. With a hammer, each click is a
+## blow; without one it says what you need. Either way it is not a request to
+## take the anvil apart, which is what a held click on a station usually is --
+## so this answers the click first and returns true when it has.
+const STRIKE_CD := 0.2
+
+
+func _process_anvil_strike(st: Station, lmb_pressed: bool) -> bool:
+	if not is_instance_valid(st) or st.kind != Blocks.ANVIL or st.anvil_piece().is_empty():
+		return false
+	_look_name = _anvil_look(st)
+	if not lmb_pressed:
+		return true
+	if _selected_id() != Blocks.HAMMER:
+		_toast("Strike it with a hammer -- or right-click to take it off")
+		return true
+	if _attack_cd > 0.0:
+		return true
+	_attack_cd = STRIKE_CD
+	_swing_t = 0.0
+	var before := st.anvil_shape()
+	if before == "scrap":
+		_toast("It is scrap now -- right-click to take it off")
+		return true
+	var now := st.anvil_strike()
+	_wear_held(1)
+	var face := _anvil_face(st)
+	if now == "scrap":
+		Audio.at("forge_scrap", face)
+		_spark_burst(face, 6, Color(0.55, 0.5, 0.45))
+		_toast("Overworked -- it's scrap. Remelt it at a smelter")
+		return true
+	Audio.at("forge_strike", face)
+	_spark_burst(face, 10 + 4 * ["ingot", "bar", "sheet", "plate", "cracking"].find(now),
+		Color(1.0, 0.72, 0.3))
+	if now != before:
+		match now:
+			"bar":
+				_toast("It's a bar now")
+			"sheet":
+				_toast("It's a sheet now")
+			"plate":
+				_toast("It's plate -- right-click to take it off. More blows will crack it")
+			"cracking":
+				_toast("It's cracking! One more blow and it's scrap -- take it off now")
+	return true
+
+
+## What the look line says over an anvil: what is on it, and how far it is from
+## the next shape.
+func _anvil_look(st: Station) -> String:
+	var p := st.anvil_piece()
+	var shape := st.anvil_shape()
+	var props: Dictionary = p.get("props", {})
+	var mname := str((p.get("mat", {}) as Dictionary).get("name", ""))
+	var stg := Blocks.smith_stages(props)
+	var hits := int(p.get("hits", 0))
+	match shape:
+		"ingot":
+			return "%s ingot  (%d more blows to a bar)" % [mname, int(stg[0]) - hits]
+		"bar":
+			return "%s bar  (%d more to a sheet · right-click to take it)" % [mname, int(stg[1]) - hits]
+		"sheet":
+			return "%s sheet  (%d more to plate · right-click to take it)" % [mname, int(stg[2]) - hits]
+		"plate":
+			return "%s plate, %d pieces  (take it now -- another blow cracks it)" % [
+				mname, Blocks.plate_yield(props)]
+		"cracking":
+			return "%s plate, CRACKING  (right-click to save it -- one more blow is scrap)" % mname
+	return "Scrap  (right-click to take it off, then remelt it)"
+
+
+## An item's name as smithing talks about it: "Ferrite ingot", "Ferrite bar".
+func _smith_name(d: Dictionary) -> String:
+	var id := int(d.get("id", Blocks.AIR))
+	var mname := str((d.get("mat", {}) as Dictionary).get("name", ""))
+	if id == Blocks.METAL:
+		return "Hull Plate"
+	var what := "Ingot" if Blocks.is_refined(id) else Blocks.name_of(id)
+	return ("%s %s" % [mname, what.to_lower()]).strip_edges() if mname != "" else what
+
+
+## The top of the anvil's face, in the world: where blows land and sparks fly.
+func _anvil_face(st: Station) -> Vector3:
+	return st.to_global(Vector3(0.02, StationModels.ANVIL_FACE - 0.5 + 0.05, 0))
+
+
+## Sparks off a blow: bright, quick, and falling the way this planet pulls.
+func _spark_burst(where: Vector3, count: int, col: Color) -> void:
+	var ps := CPUParticles3D.new()
+	var box := BoxMesh.new()
+	box.size = Vector3.ONE * 0.035
+	ps.mesh = box
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = col
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ps.material_override = mat
+	ps.amount = maxi(count, 1)
+	ps.lifetime = 0.45
+	ps.one_shot = true
+	ps.explosiveness = 1.0
+	var g: Vector3 = world.gravity_at(where) if world != null else Vector3.DOWN * 9.8
+	var up: Vector3 = -g.normalized() if g.length() > 0.01 else Vector3.UP
+	ps.direction = up
+	ps.spread = 70.0
+	ps.initial_velocity_min = 1.8
+	ps.initial_velocity_max = 4.2
+	ps.gravity = g
+	ps.scale_amount_min = 0.5
+	ps.scale_amount_max = 1.2
+	var parent: Node = world if world != null else get_parent()
+	parent.add_child(ps)
+	ps.global_position = where
+	ps.emitting = true
+	get_tree().create_timer(1.0).timeout.connect(ps.queue_free)
 
 
 ## Take one off the stack in your hand, clearing the slot when it runs out.

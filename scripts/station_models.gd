@@ -99,6 +99,8 @@ static func boxes_for(kind: int) -> Array:
 			return generator_boxes(false, 0.0, false, 0.0)
 		Blocks.POWER_BAY:
 			return power_bay_boxes(false, 0.0)
+		Blocks.ANVIL:
+			return anvil_boxes()
 		Blocks.OXYGEN_PLANT:
 			return [
 				[Vector3(0, 0.2, 0), Vector3(0.9, 0.4, 0.9), METAL],
@@ -489,6 +491,97 @@ static func generator_mesh(has_battery: bool, charge: float, burning: bool,
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sub.surface_get_arrays(0))
+	m.surface_set_material(m.get_surface_count() - 1, mat)
+	return m
+
+
+# --- the anvil -------------------------------------------------------------------
+#
+# The classic shape, because everybody knows it on sight: a broad foot, a
+# narrow waist, a flat face, the horn out one end and a step at the other. What
+# is being worked sits on the face and is drawn as what it currently IS -- a
+# fat ingot, a long bar, a thin sheet, a flat plate -- so every strike visibly
+# changes it. It glows while it is on there: this is hot work, and a piece that
+# looks the same whether it has been in the fire or not reads as a button.
+
+## The top of the face, where a workpiece rests.
+const ANVIL_FACE := 0.67
+
+
+static func anvil_boxes() -> Array:
+	const IRON := Color(0.27, 0.28, 0.31)
+	const DEEP := Color(0.16, 0.17, 0.19)
+	const FACE := Color(0.46, 0.48, 0.52)
+	return [
+		[Vector3(0, 0.07, 0), Vector3(0.72, 0.14, 0.52), DEEP],       # foot
+		[Vector3(0, 0.17, 0), Vector3(0.56, 0.08, 0.40), IRON],       # plinth
+		[Vector3(0, 0.34, 0), Vector3(0.34, 0.28, 0.26), IRON],       # waist
+		[Vector3(0.02, 0.57, 0), Vector3(0.62, 0.18, 0.34), IRON],    # body
+		[Vector3(0.02, ANVIL_FACE - 0.005, 0), Vector3(0.58, 0.01, 0.30), FACE],
+		[Vector3(-0.38, 0.58, 0), Vector3(0.16, 0.13, 0.20), IRON],   # horn
+		[Vector3(-0.50, 0.60, 0), Vector3(0.10, 0.08, 0.12), IRON],
+		[Vector3(-0.575, 0.61, 0), Vector3(0.05, 0.05, 0.06), IRON],
+		[Vector3(0.36, 0.60, 0), Vector3(0.08, 0.12, 0.30), IRON],    # heel
+	]
+
+
+## The workpiece sitting on the face, as [centre, size, colour] boxes. `shape`
+## is Blocks.smith_shape's answer; "" is nothing on there.
+static func anvil_piece_boxes(shape: String, col: Color) -> Array:
+	var y := ANVIL_FACE
+	var c := Vector3(0.02, 0, 0)
+	var dark := col.darkened(0.55)
+	match shape:
+		"ingot":
+			# A cast ingot: a block with its top a little narrower than its
+			# base, the way it comes out of the mould.
+			return [[c + Vector3(0, y + 0.045, 0), Vector3(0.26, 0.09, 0.14), col],
+				[c + Vector3(0, y + 0.1, 0), Vector3(0.21, 0.02, 0.10), col]]
+		"bar":
+			return [[c + Vector3(0, y + 0.03, 0), Vector3(0.46, 0.06, 0.07), col]]
+		"sheet":
+			return [[c + Vector3(0, y + 0.0125, 0), Vector3(0.40, 0.025, 0.26), col]]
+		"plate", "cracking":
+			var out: Array = [[c + Vector3(0, y + 0.022, 0), Vector3(0.48, 0.044, 0.32), col],
+				# a raised rim round the edge, which is what makes a plate a
+				# plate rather than a thick sheet
+				[c + Vector3(0, y + 0.047, -0.15), Vector3(0.48, 0.006, 0.02), col.lightened(0.15)],
+				[c + Vector3(0, y + 0.047, 0.15), Vector3(0.48, 0.006, 0.02), col.lightened(0.15)]]
+			if shape == "cracking":
+				# Splitting: a jagged dark line most of the way across it.
+				for seg in [[Vector3(-0.14, 0, -0.06), Vector3(0.12, 0, 0.014)],
+						[Vector3(-0.05, 0, -0.02), Vector3(0.014, 0, 0.09)],
+						[Vector3(0.03, 0, 0.03), Vector3(0.13, 0, 0.014)],
+						[Vector3(0.1, 0, 0.07), Vector3(0.014, 0, 0.08)]]:
+					out.append([c + (seg[0] as Vector3) + Vector3(0, y + 0.046, 0),
+						(seg[1] as Vector3) + Vector3(0, 0.004, 0), dark])
+			return out
+		"scrap":
+			# Torn, folded and sitting in pieces.
+			return [[c + Vector3(-0.08, y + 0.025, -0.05), Vector3(0.16, 0.05, 0.11), dark],
+				[c + Vector3(0.09, y + 0.04, 0.04), Vector3(0.12, 0.08, 0.13), dark.lightened(0.1)],
+				[c + Vector3(-0.01, y + 0.06, 0.09), Vector3(0.09, 0.03, 0.15), dark],
+				[c + Vector3(0.14, y + 0.015, -0.1), Vector3(0.07, 0.03, 0.06), dark.lightened(0.05)]]
+	return []
+
+
+## The anvil with `shape` on its face in `col`. The piece is its own surface,
+## unshaded and pushed toward the colour of hot metal -- except scrap, which
+## has gone cold and dull.
+static func anvil_mesh(shape: String, col: Color) -> ArrayMesh:
+	var m := _mesh_from(anvil_boxes())
+	if shape == "":
+		return m
+	var hot: bool = shape != "scrap"
+	var c: Color = col.lerp(EMBER, 0.75).lightened(0.2) if hot else col
+	var sub := _mesh_from(anvil_piece_boxes(shape, c))
+	if sub.get_surface_count() == 0:
+		return m
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	if hot:
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sub.surface_get_arrays(0))
 	m.surface_set_material(m.get_surface_count() - 1, mat)
 	return m

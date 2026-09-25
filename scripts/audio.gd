@@ -17,6 +17,7 @@ extends Node
 const UI := "res://sounds/ui/"
 const WORLD := "res://sounds/world/"
 const SHIP := "res://sounds/ship/"
+const FORGE := "res://sounds/forge/"
 
 ## name -> how to play it.
 ##   files    -- takes to choose between. More than one is what stops a sound
@@ -50,6 +51,11 @@ const CATALOG := {
 	"ship_burn": {"files": [SHIP + "burn.wav"], "db": -3.0, "pitch": 0.08, "throttle": 250},
 	"ship_spool": {"files": [SHIP + "spool.wav"], "db": -3.0, "pitch": 0.0, "throttle": 1000},
 	"ship_nominal": {"files": [SHIP + "nominal.wav"], "db": -6.0, "pitch": 0.0, "throttle": 2000},
+
+	# The anvil (tools/make_forge_sounds.py). A little pitch wander so a run of
+	# blows is a rhythm rather than the same clip on repeat.
+	"forge_strike": {"files": [FORGE + "strike.wav"], "db": -5.0, "pitch": 0.06, "throttle": 60},
+	"forge_scrap": {"files": [FORGE + "scrap.wav"], "db": -3.0, "pitch": 0.04, "throttle": 200},
 
 	# The world. Nothing behind these yet -- see the note at the top. The short
 	# throttle is because these arrive in bursts as well as singly: assembling
@@ -229,7 +235,8 @@ func _build_material_table() -> void:
 			"POWER_BAY", "CHEST", "DOOR", "DOOR_OPEN", "COCKPIT", "THRUSTER",
 			"LIFE_SUPPORT", "WARP_DRIVE", "INTERFACE", "ALLOY", "CIRCUIT",
 			"DRILL", "SUIT", "WEAPON", "PULSE_PISTOL", "HOE", "WRENCH",
-			"TORCH", "GLOW_LAMP", "EMBER_TORCH", "ROOF_SLAB"],
+			"TORCH", "GLOW_LAMP", "EMBER_TORCH", "ROOF_SLAB", "HAMMER", "ANVIL",
+			"BAR", "SHEET", "SCRAP"],
 	}
 	for mat in t:
 		for nm in t[mat]:

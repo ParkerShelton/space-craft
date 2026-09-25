@@ -416,7 +416,8 @@ static func journal_text(planet: Planet) -> String:
 			lines.append("  it from across a cave.")
 		if burn == 0:
 			lines.append("  None of it burns well. Power will be the hard part.")
-		lines.append("Refine ore at a smelter before you can build with it.")
+		lines.append("Smelt ore into ingots, then beat an ingot flat on an")
+		lines.append("anvil: a bar, then a sheet, then plate. Not past it.")
 		lines.append("")
 	lines.append("IF THE LANDING GOES BADLY")
 	lines.append("Seal the ship before anything else: a metal plate in every")
