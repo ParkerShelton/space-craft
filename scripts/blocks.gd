@@ -210,6 +210,30 @@ static func fauna_name(r: RandomNumberGenerator, kind: String) -> String:
 	var suf: Array = FAUNA_NAME_SUF.get(kind, FAUNA_NAME_SUF["land"])
 	return FAUNA_NAME_PRE[r.randi() % FAUNA_NAME_PRE.size()] 		+ str(suf[r.randi() % suf.size()])
 
+## Planet families, and the ore each one alone holds. Every home system has at
+## least one world of each family (main.gd), and the Warp Drive needs a part
+## made from each signature ore -- so building one means visiting all four.
+const FAMILIES := ["verdant", "dust", "frozen", "scorched"]
+const FAMILY_NAMES := {"verdant": "Living world", "dust": "Dust world",
+	"frozen": "Frozen world", "scorched": "Scorched world"}
+const FAMILY_SIGNATURE := {
+	# Living worlds: the best conductor there is, for coils and batteries.
+	"verdant": {"prop": "e", "suffixes": ["volt", "flux", "spark"],
+		"color": Color(0.35, 0.85, 1.0)},
+	# Dust worlds: the fiercest fuel, black with soot.
+	"dust": {"prop": "c", "suffixes": ["pyre", "char", "cinder"],
+		"color": Color(0.95, 0.42, 0.12)},
+	# Frozen worlds: an ore that reacts at a touch, for coolant.
+	"frozen": {"prop": "r", "suffixes": ["rime", "quell", "frost"],
+		"color": Color(0.7, 0.9, 1.0)},
+	# Scorched worlds: metal so dense the heat of a warp cannot move it.
+	"scorched": {"prop": "d", "suffixes": ["slag", "mass", "plumb"],
+		"color": Color(0.45, 0.35, 0.3)},
+}
+## The ceiling on an ordinary ore's properties. Signature ores roll 88-100, so
+## anything asking for more than these can only be made from one.
+const ORDINARY_PROP_CAP := {"e": 74, "c": 82, "r": 74, "d": 80}
+
 const PROP_KEYS := ["h", "d", "e", "r", "c"]
 const PROP_LABELS := {"h": "Hardness", "d": "Density", "e": "Energy",
 	"r": "Reactivity", "c": "Combustion"}

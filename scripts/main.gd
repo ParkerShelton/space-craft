@@ -8,22 +8,22 @@ const SPACE_AMBIENT := Color(0.50, 0.55, 0.70)
 
 # Planet archetypes randomly assigned to generated planets (index 0 = home/verdant).
 const _ARCHETYPES := [
-	{"top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+	{"family": "verdant", "top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.45, 0.68, 1.0), "water": "liquid", "wmin": 0.15, "wmax": 0.4,
 		"tmin": 0.3, "tmax": 0.55, "moon": false, "hazard": "none", "hdps": 0.0},
-	{"top": Blocks.SNOW, "sub": Blocks.ICE, "rock": Blocks.ROCK, "core": Blocks.ICE,
+	{"family": "frozen", "top": Blocks.SNOW, "sub": Blocks.ICE, "rock": Blocks.ROCK, "core": Blocks.ICE,
 		"atmo": true, "atmo_color": Color(0.62, 0.76, 0.95), "water": "ice", "wmin": 0.3, "wmax": 0.6,
 		"tmin": 0.05, "tmax": 0.2, "moon": false, "hazard": "cold", "hdps": 3.5},
-	{"top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CORE,
+	{"family": "dust", "top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.85, 0.6, 0.4), "water": "none", "wmin": 0.0, "wmax": 0.0,
 		"tmin": 0.0, "tmax": 0.0, "moon": false, "hazard": "heat", "hdps": 2.0},
-	{"top": Blocks.CRYSTAL, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CRYSTAL,
+	{"family": "", "top": Blocks.CRYSTAL, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CRYSTAL,
 		"atmo": false, "atmo_color": Color(0.4, 0.85, 0.9), "water": "liquid", "wmin": 0.6, "wmax": 0.95,
 		"tmin": 0.0, "tmax": 0.0, "moon": true, "hazard": "none", "hdps": 0.0},
-	{"top": Blocks.ROCK, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CORE,
+	{"family": "", "top": Blocks.ROCK, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": false, "atmo_color": Color(0.6, 0.6, 0.65), "water": "none", "wmin": 0.0, "wmax": 0.0,
 		"tmin": 0.0, "tmax": 0.0, "moon": true, "hazard": "cold", "hdps": 3.0},
-	{"top": Blocks.ROCK, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+	{"family": "scorched", "top": Blocks.ROCK, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.9, 0.5, 0.35), "water": "none", "wmin": 0.0, "wmax": 0.0,
 		"tmin": 0.0, "tmax": 0.0, "moon": false, "hazard": "heat", "hdps": 4.5},
 	# --- dusty worlds ---------------------------------------------------------
@@ -34,31 +34,31 @@ const _ARCHETYPES := [
 	#
 	# A DUST MOON: airless, freezing, and nothing but dust. The moon you land on
 	# for its ores and leave again.
-	{"top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CORE,
+	{"family": "dust", "top": Blocks.REGOLITH, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": false, "atmo_color": Color(0.72, 0.68, 0.62), "water": "none", "wmin": 0.0, "wmax": 0.0,
 		"tmin": 0.0, "tmax": 0.0, "moon": true, "hazard": "cold", "hdps": 2.5},
 	# An ASH PLAIN: dust with a sky over it, and that sky is the problem.
-	{"top": Blocks.REGOLITH, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CORE,
+	{"family": "dust", "top": Blocks.REGOLITH, "sub": Blocks.ROCK, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.55, 0.38, 0.34), "water": "none", "wmin": 0.0, "wmax": 0.0,
 		"tmin": 0.0, "tmax": 0.05, "moon": false, "hazard": "heat", "hdps": 3.2},
 	# RUST BARRENS: dust you can stand on without a suit. Warm, dry, harmless --
 	# the desert you would actually build a base on.
-	{"top": Blocks.REGOLITH, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+	{"family": "dust", "top": Blocks.REGOLITH, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.86, 0.52, 0.30), "water": "none", "wmin": 0.0, "wmax": 0.0,
 		"tmin": 0.0, "tmax": 0.1, "moon": false, "hazard": "heat", "hdps": 1.2},
 	# A CRYSTAL DESERT: dust with something growing out of it that is not alive.
-	{"top": Blocks.CRYSTAL, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CRYSTAL,
+	{"family": "", "top": Blocks.CRYSTAL, "sub": Blocks.REGOLITH, "rock": Blocks.ROCK, "core": Blocks.CRYSTAL,
 		"atmo": true, "atmo_color": Color(0.72, 0.62, 0.92), "water": "none", "wmin": 0.0, "wmax": 0.0,
 		"tmin": 0.0, "tmax": 0.0, "moon": false, "hazard": "none", "hdps": 0.0},
 	# --- and two more worlds worth walking around -----------------------------
 	# TUNDRA: cold, but a cold you can live in, and the only frozen world with
 	# trees on it.
-	{"top": Blocks.SNOW, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+	{"family": "frozen", "top": Blocks.SNOW, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.70, 0.82, 0.92), "water": "liquid", "wmin": 0.1, "wmax": 0.3,
 		"tmin": 0.1, "tmax": 0.3, "moon": false, "hazard": "cold", "hdps": 1.5},
 	# ARCHIPELAGO: the temperate world, mostly drowned. Islands to find rather
 	# than a continent to walk across.
-	{"top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
+	{"family": "verdant", "top": Blocks.GRASS, "sub": Blocks.DIRT, "rock": Blocks.ROCK, "core": Blocks.CORE,
 		"atmo": true, "atmo_color": Color(0.40, 0.72, 0.95), "water": "liquid", "wmin": 0.72, "wmax": 0.92,
 		"tmin": 0.35, "tmax": 0.6, "moon": false, "hazard": "none", "hdps": 0.0},
 ]
@@ -2355,8 +2355,23 @@ func _generate_planets(world: WorldManager, sysdef: Dictionary) -> void:
 	var settled := _plan_settlements(rng, count, civ_tier)
 	var positions := []
 	var used_names := {}
+	# Every system holds at least one world of each family, because the Warp
+	# Drive needs something from all four. Home is always a living world; the
+	# other three families take random slots among the rest, and any slots left
+	# over are free to be anything.
+	var need: Array = ["dust", "frozen", "scorched"]
+	var slots: Array = range(1, count)
+	for k in range(slots.size() - 1, 0, -1):
+		var j := rng.randi_range(0, k)
+		var tmp = slots[k]
+		slots[k] = slots[j]
+		slots[j] = tmp
+	var fam_of := {0: "verdant"}
+	for k in mini(need.size(), slots.size()):
+		fam_of[slots[k]] = need[k]
 	for i in count:
-		var cfg := _make_planet_cfg(rng, i, master_seed, positions, settled[i])
+		var cfg := _make_planet_cfg(rng, i, master_seed, positions, settled[i],
+			str(fam_of.get(i, "")))
 		cfg["civ_tier"] = civ_tier  # drives settlement architecture, not just placement
 		# guarantee unique names (saves key planet edits by name)
 		var nm: String = cfg["name"]
@@ -2394,8 +2409,14 @@ func _plan_settlements(rng: RandomNumberGenerator, count: int, civ_tier: int) ->
 
 
 func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, used: Array,
-		settled_info: Dictionary) -> Dictionary:
-	var a: Dictionary = _ARCHETYPES[0] if index == 0 else _ARCHETYPES[rng.randi_range(0, _ARCHETYPES.size() - 1)]
+		settled_info: Dictionary, want_family := "") -> Dictionary:
+	var a: Dictionary = _ARCHETYPES[0]
+	if index != 0:
+		var pool: Array = []
+		for arch in _ARCHETYPES:
+			if want_family == "" or str(arch["family"]) == want_family:
+				pool.append(arch)
+		a = pool[rng.randi_range(0, pool.size() - 1)]
 	# home is always a big habitable world; others may be moons
 	var is_moon: bool = (index != 0) and bool(a["moon"]) and rng.randf() < 0.7
 	var radius := rng.randf_range(240.0, 420.0) if is_moon else rng.randf_range(1100.0, 1900.0)
@@ -2446,7 +2467,7 @@ func _make_planet_cfg(rng: RandomNumberGenerator, index: int, master_seed: int, 
 		"atmosphere": bool(a["atmo"]), "atmo_color": a["atmo_color"],
 		"atmo_height": rng.randf_range(600.0, 950.0),
 		"water_style": water, "water_amount": water_amount,
-		"hazard": a["hazard"], "hazard_dps": a["hdps"],
+		"hazard": a["hazard"], "hazard_dps": a["hdps"], "family": a["family"],
 		"settlements_enabled": settled_info["enabled"],
 		"force_settlement": settled_info["forced"],
 		"settlement_tier_cap": settled_info["tier_cap"],

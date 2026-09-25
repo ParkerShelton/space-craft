@@ -155,6 +155,9 @@ var atmo_height := 90.0  # how far above the surface the sky fades to space
 
 # --- environmental hazard (survival) ---
 var hazard := "none"     # "none" / "cold" / "heat"
+## Which of the four families this world belongs to ("verdant", "dust",
+## "frozen", "scorched"), or "" for a side world. Decides its signature ore.
+var family := ""
 
 # --- planet class -------------------------------------------------------------
 #
@@ -581,6 +584,7 @@ func configure(cfg: Dictionary) -> void:
 	atmo_height = cfg.get("atmo_height", atmo_height)
 	hazard = cfg.get("hazard", "none")
 	hazard_dps = cfg.get("hazard_dps", 0.0)
+	family = cfg.get("family", "")
 	shape_cube = cfg.get("cube", true)  # cube-planet-test branch: cubes by default
 
 	# 3 to 9 minutes per day, per planet.
@@ -1553,7 +1557,9 @@ func _max_reach() -> float:
 func _derive_ores() -> void:
 	var orng := RandomNumberGenerator.new()
 	orng.seed = _seed + 999
-	var richness := orng.randf_range(0.04, 0.11)  # fraction of rock that is ore
+	# Half what it was: ore every few blocks made mining a stroll rather than a
+	# search, and made a good seam nothing worth finding.
+	var richness := orng.randf_range(0.02, 0.055)  # fraction of rock that is ore
 	# Calibrated against the noise, not guessed at. The old mapping claimed the
 	# same thing and delivered a sixth of it: richness 0.04 set the threshold at
 	# 0.592, and only 0.65% of rock is above that -- which is how a home world
@@ -1561,7 +1567,10 @@ func _derive_ores() -> void:
 	# 200,000 samples of this exact noise: 4% of rock sits above 0.448, 7% above
 	# 0.386, 11% above 0.327, near enough a straight line between them.
 	ore_threshold = 0.517 - richness * 1.73
-	var n := orng.randi_range(2, 4)
+	# A world of one of the four families also holds its SIGNATURE ore (see
+	# Blocks.FAMILY_SIGNATURE), so it carries one fewer ordinary one.
+	var sig: Dictionary = Blocks.FAMILY_SIGNATURE.get(family, {})
+	var n := orng.randi_range(1, 2) if not sig.is_empty() else orng.randi_range(2, 3)
 	# tiers: guarantee at least one hand-mineable (tier 0/1) so a fresh planet is
 	# never a dead end, then spread the rest across all tiers.
 	var tiers: Array[int] = [orng.randi_range(0, 1)]
@@ -1572,8 +1581,44 @@ func _derive_ores() -> void:
 	for i in n:
 		var tier: int = tiers[i]
 		ore_defs.append(_make_ore(orng, i, tier, i == 0))
-		_ore_by_block[ore_defs[i]["block"]] = ore_defs[i]
-		_ore_wsum += ore_defs[i]["w"]
+	if not sig.is_empty():
+		ore_defs.append(_make_signature_ore(orng, n, sig))
+	for od in ore_defs:
+		_ore_by_block[od["block"]] = od
+		_ore_wsum += od["w"]
+
+
+## The ore only a world of this family holds: one property far beyond anything
+## an ordinary ore reaches. Its name comes from the family's own endings, so a
+## "-pyre" is always a dust world's fuel wherever you meet one, and the ore's
+## identity still follows from its name the way every other ore's does.
+func _make_signature_ore(orng: RandomNumberGenerator, slot: int, sig: Dictionary) -> Dictionary:
+	var tier := orng.randi_range(1, 2)
+	var sufs: Array = sig["suffixes"]
+	var name: String = Blocks.ORE_NAME_PRE[orng.randi() % Blocks.ORE_NAME_PRE.size()] \
+		+ str(sufs[orng.randi() % sufs.size()])
+	var irng := Blocks.identity_rng(name)
+	var sc: Color = sig["color"]
+	var color := Color.from_hsv(fposmod(sc.h + irng.randf_range(-0.04, 0.04), 1.0),
+		clampf(sc.s + irng.randf_range(-0.1, 0.1), 0.2, 1.0),
+		clampf(sc.v + irng.randf_range(-0.08, 0.08), 0.15, 0.95))
+	var base: Dictionary = Blocks.TIER_PROPS[tier]
+	var props := {}
+	for k in Blocks.PROP_KEYS:
+		props[k] = clampi(int(round(float(base[k]) * irng.randf_range(0.85, 1.15))), 1, 100)
+	props["c"] = clampi(int(round(irng.randf_range(4.0, 40.0))), 1, 100)
+	for k in Blocks.ORDINARY_PROP_CAP:
+		props[k] = mini(int(props[k]), int(Blocks.ORDINARY_PROP_CAP[k]))
+	var key: String = sig["prop"]
+	props[key] = irng.randi_range(88, 100)
+	var hardness: float = Blocks.TIER_HARDNESS[tier] * irng.randf_range(0.9, 1.1)
+	return {
+		"block": Blocks.ORE_SLOT_IDS[slot], "name": name, "color": color, "tier": tier,
+		"props": props, "hardness": hardness, "min_power": Blocks.TIER_MIN_POWER[tier],
+		# Scarce and a proper dig down: finding it is the point of the trip.
+		"w": orng.randf_range(0.35, 0.6), "mind": orng.randf_range(16.0, 40.0),
+		"signature": true,
+	}
 
 
 # Invent one ore: a unique name & color for this planet, with tier-derived stats.
@@ -1609,6 +1654,11 @@ func _make_ore(orng: RandomNumberGenerator, slot: int, tier: int,
 		props["c"] = clampi(int(round(irng.randf_range(62.0, 100.0))), 1, 100)
 	else:
 		props["c"] = clampi(int(round(irng.randf_range(4.0, 40.0))), 1, 100)
+	# Every property a family's signature ore is best at stops short of it on an
+	# ordinary ore, so the best fuel really is found on a dust world and the best
+	# conductor on a living one -- not on whichever planet rolled well.
+	for k in Blocks.ORDINARY_PROP_CAP:
+		props[k] = mini(int(props[k]), int(Blocks.ORDINARY_PROP_CAP[k]))
 	var hardness: float = Blocks.TIER_HARDNESS[tier] * irng.randf_range(0.9, 1.1)
 	var deep := not force_shallow and (tier >= 2 or orng.randf() < 0.4)
 	# A depth in BLOCKS, not a fraction of the planet. A quarter of the radius is
