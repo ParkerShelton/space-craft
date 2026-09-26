@@ -1264,22 +1264,50 @@ static func coupling_boxes(dir: Vector3, col: Color) -> Array:
 ## A Loader: a squat pump with a wide mouth on one side for the container it
 ## empties and a duct collar on the other for the run it feeds. Deliberately
 ## reads as having a direction, because it has one.
+## Where a pipe meets a machine, at the height a pipe's bore runs at.
+##
+## A station's origin is on the deck and the run goes through the middle of the
+## cell above it, so a fitting whose mouth is down at a third of a block does
+## not meet the pipe at all -- which is what a loader and a port both did. The
+## parcel came out of thin air beside one and vanished into thin air beside the
+## other.
+##
+## On all four sides, because which side you ran the pipe in on is your
+## business, and a junction box with a flange on every face is what a thing
+## that pipes plug into looks like anyway.
+const PIPE_BORE_Y := 0.5
+
+
+static func pipe_collar_boxes(case: Color, deep: Color) -> Array:
+	var out: Array = []
+	for d in [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)]:
+		var flat := Vector3(0.34, 0.34, 0.34)
+		var lip := Vector3(0.26, 0.26, 0.26)
+		if absf(d.x) > 0.5:
+			flat.x = 0.13
+			lip.x = 0.06
+		else:
+			flat.z = 0.13
+			lip.z = 0.06
+		out.append([Vector3(0, PIPE_BORE_Y, 0) + d * 0.40, flat, case])
+		out.append([Vector3(0, PIPE_BORE_Y, 0) + d * 0.47, lip, deep])
+	return out
+
+
 static func loader_boxes() -> Array:
 	const CASE := Color(0.44, 0.48, 0.38)
 	const DEEP := Color(0.16, 0.18, 0.15)
 	const TRIM := Color(0.66, 0.70, 0.58)
 	var out: Array = [
-		[Vector3(0, 0.30, 0), Vector3(0.74, 0.60, 0.74), CASE],
+		[Vector3(0, 0.30, 0), Vector3(0.66, 0.60, 0.66), CASE],
 		[Vector3(0, 0.05, 0), Vector3(0.86, 0.10, 0.86), DEEP],
-		# The mouth: a wide intake on -Z.
-		[Vector3(0, 0.32, -0.40), Vector3(0.62, 0.44, 0.10), DEEP],
-		[Vector3(0, 0.32, -0.44), Vector3(0.48, 0.30, 0.04), Color(0.07, 0.08, 0.07)],
-		# ...and the collar it pushes out of, on +Z.
-		[Vector3(0, 0.32, 0.40), Vector3(0.34, 0.34, 0.12), TRIM],
-		[Vector3(0, 0.32, 0.47), Vector3(0.26, 0.26, 0.06), DEEP],
+		# The mouth: a wide intake on -Z, low down where the container is.
+		[Vector3(0, 0.26, -0.40), Vector3(0.62, 0.36, 0.10), DEEP],
+		[Vector3(0, 0.26, -0.44), Vector3(0.48, 0.26, 0.04), Color(0.07, 0.08, 0.07)],
 	]
-	for sx in [-0.30, 0.30]:
-		out.append([Vector3(sx, 0.62, 0), Vector3(0.10, 0.06, 0.60), TRIM])
+	out.append_array(pipe_collar_boxes(TRIM, DEEP))
+	for sx in [-0.28, 0.28]:
+		out.append([Vector3(sx, 0.72, 0), Vector3(0.10, 0.06, 0.56), TRIM])
 	return out
 
 
@@ -1291,16 +1319,16 @@ static func filter_boxes(shown: Color) -> Array:
 	const DEEP := Color(0.18, 0.15, 0.10)
 	const TRIM := Color(0.74, 0.66, 0.44)
 	var out: Array = [
-		[Vector3(0, 0.34, 0), Vector3(0.44, 0.68, 0.70), CASE],
-		[Vector3(0, 0.05, 0), Vector3(0.60, 0.10, 0.80), DEEP],
-		[Vector3(0, 0.68, 0), Vector3(0.50, 0.08, 0.76), TRIM],
-		# The window, on both faces, so it reads the same from either side.
-		[Vector3(0.23, 0.38, 0), Vector3(0.04, 0.30, 0.34), DEEP],
-		[Vector3(-0.23, 0.38, 0), Vector3(0.04, 0.30, 0.34), DEEP],
+		[Vector3(0, 0.34, 0), Vector3(0.46, 0.68, 0.46), CASE],
+		[Vector3(0, 0.05, 0), Vector3(0.60, 0.10, 0.60), DEEP],
+		[Vector3(0, 0.70, 0), Vector3(0.52, 0.08, 0.52), TRIM],
 	]
-	if shown.a > 0.01:
-		out.append([Vector3(0.25, 0.38, 0), Vector3(0.03, 0.22, 0.26), shown])
-		out.append([Vector3(-0.25, 0.38, 0), Vector3(0.03, 0.22, 0.26), shown])
+	out.append_array(pipe_collar_boxes(TRIM, DEEP))
+	# The window, above the collars so the pipework does not sit across it.
+	for sx in [-0.235, 0.235]:
+		out.append([Vector3(sx, 0.20, 0), Vector3(0.04, 0.20, 0.30), DEEP])
+		if shown.a > 0.01:
+			out.append([Vector3(sx * 1.08, 0.20, 0), Vector3(0.03, 0.14, 0.22), shown])
 	return out
 
 

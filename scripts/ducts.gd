@@ -28,6 +28,11 @@ const REACH := 2048           # duct cells followed before giving up
 ## the narrowest pipe does.
 const SPEED := 3.0
 const PARCEL_SIZE := 0.22
+## Where the bore of a pipe is, measured up from the base of a station's cell.
+## A station's origin sits on the deck; the pipe runs through the middle of the
+## cell above it, and a parcel entering or leaving has to meet it there rather
+## than at the floor.
+const BORE_HEIGHT := 0.5
 
 var world: WorldManager
 var _t := 0.0
@@ -108,7 +113,7 @@ func _run_loader(loader: Station) -> void:
 					best_path = paths[cell] as Array
 		if best == null:
 			continue
-		_send(p, src, i, best, best_path)
+		_send(p, src, i, best, best_path, loader, best_port)
 		return
 
 
@@ -236,7 +241,8 @@ func _sources_on(p: Planet) -> Dictionary:
 
 # --- the parcel ---------------------------------------------------------------------
 
-func _send(p: Planet, src: Station, slot_i: int, dst: Station, path: Array) -> void:
+func _send(p: Planet, src: Station, slot_i: int, dst: Station, path: Array,
+		loader: Station = null, port: Station = null) -> void:
 	var slot: Dictionary = src.storage[slot_i]
 	var id := int(slot["id"])
 	var props: Dictionary = (slot.get("props", {}) as Dictionary).duplicate(true)
@@ -252,9 +258,28 @@ func _send(p: Planet, src: Station, slot_i: int, dst: Station, path: Array) -> v
 		slot["mat"] = {}
 	# ...and something to watch. The item is already delivered -- this is the
 	# picture of it going, which is allowed to be a moment behind.
-	var full: Array = path.duplicate()
-	full.append(dst.global_position + Vector3(0, 0.4, 0))
+	#
+	# It runs from the LOADER to the PORT, which are the two machines whose
+	# whole job is putting things in and taking them out. It used to run from
+	# the first pipe to a point four tenths of a block over the destination
+	# chest, so things appeared out of nowhere at one end and hung in the air
+	# above a box at the other, touching neither of the machines that were
+	# supposedly doing the work.
+	var full: Array = []
+	if loader != null and is_instance_valid(loader):
+		full.append(_mouth(loader))
+	full.append_array(path)
+	if port != null and is_instance_valid(port):
+		full.append(_mouth(port))
+	else:
+		full.append(dst.global_position + Vector3(0, 0.4, 0))
 	_spawn_parcel(id, mat, full)
+
+
+## Where a loader or a port meets the run: the middle of its own cell, which is
+## the height the bore of the pipe is at.
+func _mouth(st: Station) -> Vector3:
+	return st.global_position + st.global_transform.basis.y * BORE_HEIGHT
 
 
 ## A small one of whatever it is, sliding along the run.

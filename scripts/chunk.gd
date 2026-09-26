@@ -1033,7 +1033,13 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 			var conn := 0
 			for fi2 in 6:
 				var nraw := _id_at(planet, snap, gv + _WFACE[fi2])
-				if Blocks.bottom_of(nraw) != wbase:
+				# Pipe runs into pipe of ANY material -- a wooden length and a
+				# metal one are the same pipe at different speeds, and a run
+				# that changed material used to come apart at the joint.
+				if Blocks.is_duct(wbase):
+					if not Blocks.is_duct(Blocks.bottom_of(nraw)):
+						continue
+				elif Blocks.bottom_of(nraw) != wbase:
 					continue
 				conn |= 1 << fi2
 				# Turning a corner (floor run meeting a wall run) the two
@@ -1397,6 +1403,8 @@ static func shape_boxes(raw: int, up: Vector3, conn: int = 0x3F) -> Array:
 		if base == Blocks.DOOR:
 			return [_mid_slab(lo, hi, df, DOOR_THICK)]
 		return [_slab_toward(lo, hi, dh, DOOR_THICK)]
+	if Blocks.is_duct(base):
+		return duct_boxes(up, conn, base != Blocks.DUCT_GLASS)
 	if Blocks.is_wire(base):
 		var faces := Blocks.wire_faces_of(raw)
 		if faces == 0:
@@ -1422,6 +1430,88 @@ static func shape_boxes(raw: int, up: Vector3, conn: int = 0x3F) -> Array:
 	if Blocks.is_slab(base) or base == Blocks.ROOF_SLAB:
 		return [_half_toward(lo, hi, -up)]
 	return [[lo, hi]]
+
+
+## How wide the open channel down the middle of a pipe is, how thick the rails
+## around it are, and how much of each side a walled pipe covers over.
+##
+## The bore has to clear a parcel (Ducts.PARCEL_SIZE, drawn at 1.6x for items
+## that have a model) with room to spare, or the thing being carried clips
+## through the pipe carrying it.
+const DUCT_BORE := 0.20
+const DUCT_RAIL := 0.075
+## Half the slat down the middle of each side of a walled pipe, as a fraction
+## of the bore. Half on purpose: it leaves a slot either side of it about as
+## wide as itself, so what is inside a wooden or metal pipe is GLIMPSED going
+## past -- neither plainly visible nor completely hidden. Glass has no slats,
+## which is what you pay for it for.
+const DUCT_SLAT := 0.32
+
+
+## A pipe: a square tube down the MIDDLE of its cell, with an arm toward each
+## neighbour it joins.
+##
+## Ducts used to borrow the conduit shape, which is stapled to a wall -- so the
+## pipe was over here and the parcel sliding along it was over there, down the
+## middle of the cell, visibly outside the thing supposedly carrying it. A pipe
+## is a tube and what it carries goes through the middle of it.
+##
+## Built as rails and slats rather than a solid tube, because a solid one hides
+## its contents and watching the items go past is most of the point of having
+## pipes. `walled` closes most of each side in, leaving a slot at each corner:
+## that is wood, metal and reinforced. Glass gets the rails only, so what is in
+## it is plain to see -- which is what you paid for the glass for.
+static func duct_boxes(up: Vector3, conn: int, walled := true) -> Array:
+	var out: Array = []
+	var dirs := conn
+	if dirs == 0:
+		# A pipe joined to nothing still has to be visible. Lie it along the
+		# ground, which is how a length you had just put down would lie.
+		for fi in 6:
+			if absf(Vector3(_WFACE[fi]).dot(up)) < 0.5:
+				dirs |= 1 << fi
+	var off := DUCT_BORE + DUCT_RAIL
+	for fi in 6:
+		if (dirs & (1 << fi)) == 0:
+			continue
+		var d := Vector3(_WFACE[fi])
+		var ax: int = fi / 2
+		var pa: int = (ax + 1) % 3
+		var qa: int = (ax + 2) % 3
+		# Along the run: from the middle of the cell out to its face,
+		# overlapping the middle so a corner joins up instead of leaving a
+		# notch where two arms meet.
+		var a0: float = 0.5 - DUCT_RAIL if d[ax] > 0.0 else 0.0
+		var a1: float = 1.0 if d[ax] > 0.0 else 0.5 + DUCT_RAIL
+		for sp in [-1.0, 1.0]:
+			for sq in [-1.0, 1.0]:
+				out.append(_span(ax, a0, a1, pa, 0.5 + sp * off, DUCT_RAIL,
+					qa, 0.5 + sq * off, DUCT_RAIL))
+		if not walled:
+			continue
+		# Four slats, one down the middle of each side. Measured against the
+		# BORE, not the rail offset: it is the opening it is covering part of.
+		var half := DUCT_BORE * DUCT_SLAT
+		for sp2 in [-1.0, 1.0]:
+			out.append(_span(ax, a0, a1, pa, 0.5 + sp2 * off, DUCT_RAIL,
+				qa, 0.5, half))
+			out.append(_span(ax, a0, a1, qa, 0.5 + sp2 * off, DUCT_RAIL,
+				pa, 0.5, half))
+	return out
+
+
+## A box given a span on one axis and a centre+half-width on the other two.
+static func _span(ax: int, a0: float, a1: float, pa: int, pc: float, ph: float,
+		qa: int, qc: float, qh: float) -> Array:
+	var lo := Vector3.ZERO
+	var hi := Vector3.ZERO
+	lo[ax] = a0
+	hi[ax] = a1
+	lo[pa] = pc - ph
+	hi[pa] = pc + ph
+	lo[qa] = qc - qh
+	hi[qa] = qc + qh
+	return [lo, hi]
 
 
 ## One face's worth of conduit: a small junction on the mounting face plus an
