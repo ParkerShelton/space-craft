@@ -133,17 +133,10 @@ const CROUCH_EYE_MULT := 0.55
 ## of the lip and the body overhangs by most of its width, which is what makes
 ## looking down over a drop possible. The capsule still rests on what is left of
 ## the block, so you do not fall.
-const CROUCH_LOOKAHEAD := 0.08
-## How far past the edge your middle may get before crouching stops you.
-##
-## The probe used to go DOWN from a point slightly ahead of you, so you were
-## halted with your centre barely over the brink -- feet still flat on the
-## block, nothing hanging off, which is not what crouching at a ledge is for.
-## Pulling the probe back lets most of you out over the drop, the way it works
-## everywhere else that has this move, while still catching you before your
-## weight actually goes over.
-const CROUCH_OVERHANG := 0.34
-const CROUCH_PROBE := 1.25
+## How far out from the middle of your sole still counts as standing on
+## something. Bigger lets you hang further over a drop; too big and you are
+## held up by a block you are not really over.
+const CROUCH_GRIP := 0.30
 
 ## How long after walking off an edge a jump still counts.
 ##
@@ -3554,70 +3547,64 @@ func _align_up(up: Vector3, delta: float) -> void:
 		var step := Quaternion.IDENTITY.slerp(full, clampf(delta * ALIGN_SPEED, 0.0, 1.0))
 		global_transform.basis = Basis(step) * global_transform.basis
 	global_transform.basis = global_transform.basis.orthonormalized()
-
-
-## Trim a step that would take you off the edge.
+## Crouching will not let you walk off a block.
 ##
-## Each axis is tested on its own, not just the pair: walking diagonally at a
-## corner, the move as a whole leaves the ledge while one of its halves does
-## not, and stopping dead there feels like catching on nothing. Keeping the half
-## that still has ground under it is what lets you run a wall edge.
-func _hold_the_ledge(horiz: Vector3, up: Vector3, delta: float) -> Vector3:
-	if horiz.length_squared() < 0.0001:
-		return horiz
-	if _ground_ahead(horiz * delta, up):
-		return horiz
-	# Split along the two directions you are actually steering in.
-	var fwd := -global_transform.basis.z
-	fwd = (fwd - up * fwd.dot(up)).normalized()
-	var right := up.cross(fwd).normalized()
-	var a := fwd * horiz.dot(fwd)
-	var b := right * horiz.dot(right)
-	if a.length_squared() > 0.0001 and _ground_ahead(a * delta, up):
-		return a
-	if b.length_squared() > 0.0001 and _ground_ahead(b * delta, up):
-		return b
-	return Vector3.ZERO
-
-
-## Would any part of you still be held up after this step?
+## Three goes at predicting this failed, each in its own way, because a guess
+## made before you move has to agree with what the move then actually does --
+## floor snapping, sliding along walls, the step assists -- and it never quite
+## did. So this does not guess. You move, and if the move took you off the
+## edge, it is put back.
 ##
-## The question is about the BODY, not about the direction you are walking.
-## Both earlier goes at this got that wrong: they probed one point offset along
-## the way you were heading, which meant that once you were out over a drop,
-## stepping back toward the block tested a point even further over the void and
-## would not let you leave. You could reach the overhang you wanted and then
-## you were pinned there.
-##
-## So it probes a small cross: where your middle lands, and four points a third
-## of a block out from it. Ground under ANY of them is ground enough, because
-## that is what holding a body up means.
-##
-## The limit on how far you can lean falls out of it rather than being a rule.
-## Out past the brink, the only probe still finding floor is the one pointing
-## back at the block; once your middle is further out than that probe reaches,
-## nothing finds anything and you stop -- which is exactly the moment your
-## weight would really have gone over.
-func _ground_ahead(step: Vector3, up: Vector3) -> bool:
-	var space := get_world_3d().direct_space_state
-	if space == null:
-		return true
-	var dir := step
-	if dir.length() > 0.0001:
-		dir = dir.normalized()
-	var land: Vector3 = global_position + dir * maxf(step.length(), CROUCH_LOOKAHEAD)
-	# Two axes across the ground, taken from the body rather than the world, so
-	# this reads the same on the side of a planet as it does on the flat.
+## Undone one axis at a time, so shuffling ALONG an edge still works: keep the
+## part of the step that leaves you standing on something, drop the part that
+## does not. Nothing can slip through, because the test is on where you really
+## ended up.
+func _keep_on_the_ledge(before: Vector3, up: Vector3) -> void:
+	if _floor_under(global_position, up):
+		return
+	var moved := global_position - before
+	if moved.length_squared() < 1e-8:
+		return
 	var f := -global_transform.basis.z
 	f = f - up * f.dot(up)
 	if f.length() < 0.001:
 		f = global_transform.basis.x
 	f = f.normalized()
 	var r := up.cross(f).normalized()
-	for off in [Vector3.ZERO, f * CROUCH_OVERHANG, -f * CROUCH_OVERHANG,
-			r * CROUCH_OVERHANG, -r * CROUCH_OVERHANG]:
-		var from: Vector3 = land + off
-		var q := PhysicsRayQueryParameters3D.create(from, from - up * CROUCH_PROBE)
+	var vert: Vector3 = up * moved.dot(up)
+	# Along one axis or the other, then neither. Whichever first leaves you
+	# with something under your feet is where you end up.
+	for cand in [before + f * moved.dot(f) + vert, before + r * moved.dot(r) + vert,
+			before + vert, before]:
+		if _floor_under(cand, up):
+			global_position = cand
+			return
+	global_position = before
+
+
+## Is there something directly under the feet from here?
+##
+## The origin is the middle of the capsule and it is 1.8 tall, so the feet are
+## 0.9 below; anything within a short reach of THAT is what you are standing
+## on. Deliberately short: while crouching, a block one step down is not
+## support, it is a drop, and refusing to walk into it is the whole point.
+func _floor_under(at: Vector3, up: Vector3) -> bool:
+	var space := get_world_3d().direct_space_state
+	if space == null:
+		return true
+	var feet: Vector3 = at - up * 0.9
+	# A ring of probes round the sole rather than one down the middle, so you
+	# are held up by any part of your foot and can genuinely overhang.
+	var f := -global_transform.basis.z
+	f = f - up * f.dot(up)
+	if f.length() < 0.001:
+		f = global_transform.basis.x
+	f = f.normalized()
+	var r := up.cross(f).normalized()
+	for off in [Vector3.ZERO, f * CROUCH_GRIP, -f * CROUCH_GRIP,
+			r * CROUCH_GRIP, -r * CROUCH_GRIP]:
+		var from: Vector3 = feet + off + up * 0.1
+		var q := PhysicsRayQueryParameters3D.create(from, from - up * 0.35)
 		q.exclude = [get_rid()]
 		q.collide_with_areas = false
 		if not space.intersect_ray(q).is_empty():
@@ -3688,7 +3675,7 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	# Crouching: hold shift and you will not walk off what you are standing on.
 	crouching = not menu_open and not ui_typing and key_down("crouch") and is_on_floor()
 	if crouching:
-		horiz = _hold_the_ledge(horiz, up, delta) * CROUCH_SPEED_MULT
+		horiz *= CROUCH_SPEED_MULT
 
 	if not is_on_floor():
 		var flat_now := velocity - up * velocity.dot(up)
@@ -3696,9 +3683,13 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	velocity = horiz + up * v_up
 	up_direction = up
 	var was_floor := is_on_floor()
+	var before := global_position
 	move_and_slide()
 	_auto_step_up(up, horiz, delta)
-	if was_floor and v_up <= 0.1 and _jump_buffer <= 0.0:
+	if crouching:
+		# Crouching, a step that takes you off the block is simply undone.
+		_keep_on_the_ledge(before, up)
+	elif was_floor and v_up <= 0.1 and _jump_buffer <= 0.0:
 		_auto_step_down(up)
 
 
