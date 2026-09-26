@@ -2125,6 +2125,32 @@ func _wood_count() -> int:
 	return n
 
 
+## Dig out the ground and whatever was growing on it comes away too.
+##
+## A tuft of grass standing in mid-air over the hole you just dug is the same
+## wrong as the grass generation already refuses to leave over a cave -- it only
+## looked right because nothing had taken the ground out from under it yet.
+##
+## Grass is cleared rather than harvested, exactly as it is when you break it
+## yourself, seed chance and all: pulling the soil out from under a plant is not
+## a cleverer way of picking it.
+func _drop_the_grass(planet: Planet, v: Vector3i) -> void:
+	if planet == null or world == null:
+		return
+	var above: Vector3i = v + planet.voxel_up(v)
+	var id := planet.get_id(above)
+	if not Blocks.is_plant(id):
+		return
+	if Blocks.bottom_of(id) == Blocks.CROP:
+		# A crop is somebody's work. It comes up as a harvest if it is ready.
+		planet.clear_crop(above)
+		world.edit_block(planet, above, Blocks.AIR)
+		return
+	world.edit_block(planet, above, Blocks.AIR)
+	if randf() < Blocks.SEED_DROP_CHANCE:
+		_drop_flora_seed(planet, "grass", Blocks.SEEDS)
+
+
 ## The state-driven ones, polled rather than hooked into twenty call sites: a
 ## condition asked four times a second costs nothing and cannot be forgotten
 ## when the code around it moves.
@@ -5849,6 +5875,7 @@ func _process_mining(delta: float) -> void:
 		if planet != null:
 			world.edit_block(planet, v, Blocks.AIR)
 			_wear_from_block()
+			_drop_the_grass(planet, v)
 			# A doorway is two cells. Taking one and leaving the other floating
 			# is not a thing a door does.
 			if Blocks.is_door(id):
@@ -6759,7 +6786,24 @@ func _make_slot(parent: Node, index: int, mode: String, px: int = INV_CELL) -> D
 			_slot_get_drag.bind(dcont, index, root),
 			_slot_can_drop.bind(dcont, index),
 			_slot_do_drop.bind(dcont, index))
+		root.gui_input.connect(_slot_gui_input.bind(root, dcont, index))
 	return {"root": root, "swatch": swatch, "count": count, "selected": false}
+
+
+## Shift-click on any slot sends it across. Everything else about the click is
+## left alone -- a hotbar cell is a Button and still selects on a plain click.
+func _slot_gui_input(event: InputEvent, root: Control, cont: String, index: int) -> void:
+	var mb := event as InputEventMouseButton
+	if mb == null or not mb.pressed or mb.button_index != MOUSE_BUTTON_LEFT:
+		return
+	if not mb.shift_pressed:
+		return
+	# Stops the Button underneath treating it as a plain click as well, which
+	# would move the item AND change which slot is in your hand.
+	get_viewport().set_input_as_handled()
+	if root != null and is_instance_valid(root):
+		root.accept_event()
+	_quick_move(cont, index)
 
 
 ## A slot's frame. Buttons (the bag's slots) get the hover and pressed states
@@ -6997,21 +7041,180 @@ func _gen_bay_of(cont: String, index: int) -> int:
 	return int(_stor_map[index]["slot"])
 
 
-## May `item` go into this slot? Only ever says no for a generator's bays, and
-## says why when it does.
+## May `item` go into this slot? "" if it may, otherwise the reason it may not.
+##
+## Written once and asked by both the drag and the shift-click, because two
+## copies of "what fits where" is two copies that will disagree the first time
+## a machine grows a new bay -- and then dragging something in works while
+## shift-clicking it silently does nothing, which is the worst way for a rule
+## to be wrong.
+func _slot_refusal(cont: String, index: int, item: Dictionary) -> String:
+	if not _slot_holds(item):
+		return ""
+	var id := int(item["id"])
+	var props: Dictionary = item.get("props", {})
+	if cont == "equip":
+		return "" if id == Blocks.SUIT else "Only a Suit fits there"
+	if cont == "vanity":
+		return "" if _fits_vanity(id, index) else _vanity_refusal(index)
+	if cont == "stor" and index >= 0 and index < _stor_map.size():
+		var m: Dictionary = _stor_map[index]
+		var st: Station = m["st"]
+		if not is_instance_valid(st):
+			return "That is not there any more"
+		if m.get("fire", false):
+			if not Station.stokes(id, props):
+				return "The firebox burns wood, coal, or ore with Combustion"
+			return ""
+		# A generator's bays each take one kind of thing.
+		if Blocks.makes_power(st.kind):
+			if Station.gen_accepts(int(m["slot"]), id, props):
+				return ""
+			if int(m["slot"]) == 0:
+				return "The cradle takes a battery"
+			if int(m["slot"]) == 1:
+				return "The hopper takes ore with Combustion"
+			return "Take that out -- this generator only has a cradle and a hopper now"
+		if Blocks.is_smelter_kind(st.kind) and not (Blocks.is_ore(id) or Blocks.is_refined(id)
+				or id == Blocks.PLATE or id == Blocks.SCRAP or id == Blocks.REGOLITH):
+			return "Smelter takes raw ore, ingots, scrap, plates, or Regolith (sand)"
+		# A bench takes what its own recipes use -- see Blocks.station_accepts.
+		if (st.kind == Blocks.FABRICATOR or st.kind == Blocks.SHIPWORKS) \
+				and not Blocks.station_accepts(st.kind, id):
+			return "The %s has no use for that" % Blocks.name_of(st.kind)
+	return ""
+
+
+## The old name, kept because the drag path reads better asking it this way.
+## It toasts; _slot_refusal does not.
 func _gen_bay_allows(cont: String, index: int, item: Dictionary) -> bool:
-	var bay := _gen_bay_of(cont, index)
-	if bay < 0 or not _slot_holds(item):
+	var why := _slot_refusal(cont, index, item)
+	if why == "":
 		return true
-	if Station.gen_accepts(bay, int(item["id"]), item.get("props", {})):
-		return true
-	if bay == 0:
-		_toast("The cradle takes a battery")
-	elif bay == 1:
-		_toast("The hopper takes ore with Combustion")
-	else:
-		_toast("Take that out -- this generator only has a cradle and a hopper now")
+	_toast(why)
 	return false
+
+
+## Shift-click: send this somewhere sensible without dragging it there.
+##
+## Where "sensible" is the other half of whatever is on screen. With a machine
+## open, your bag and its store are the two halves and things go across; with
+## nothing open, the two halves are the hotbar and the rest of the bag, so a
+## rock you dug goes to hand and something you want out of the way goes back.
+##
+## It fills existing stacks before it opens new slots, which is the whole
+## reason to shift-click forty rocks rather than drag them, and it will split a
+## stack across several destinations rather than refusing because no single one
+## could take all of it.
+func _quick_move(cont: String, index: int) -> void:
+	if cont == "inv" and _cover_owner(index) >= 0:
+		index = _cover_owner(index)
+	var src := _slot_ref(cont, index)
+	if not _slot_holds(src):
+		return
+	var dests := _quick_targets(cont, index)
+	if dests.is_empty():
+		return
+	var moved := false
+	# Same thing first, empties second -- in that order over the WHOLE list, so
+	# a part-full stack at the end still beats an empty slot at the start.
+	for want_stack in [true, false]:
+		for d in dests:
+			if not _slot_holds(src):
+				break
+			var dc: String = d[0]
+			var di: int = d[1]
+			if dc == cont and di == index:
+				continue
+			var dst := _slot_ref(dc, di)
+			if dst.is_empty():
+				continue
+			var holds := _slot_holds(dst)
+			if want_stack != holds:
+				continue
+			if holds and not Blocks.same_stack(dst, src):
+				continue
+			if _slot_refusal(dc, di, src) != "":
+				continue
+			# A two-cell item needs the space under it wherever it lands.
+			if not holds and dc == "inv" \
+					and Blocks.item_cells_tall(int(src["id"])) > 1 \
+					and not _can_place_tall(di, index if cont == "inv" else -1):
+				continue
+			var cap: int = Blocks.stack_cap(int(src["id"]),
+				STACK_MAX if dc == "inv" else (1 if dc == "equip" or dc == "vanity"
+				else 100000))
+			if not holds:
+				var take: int = mini(cap, int(src["count"]))
+				if take <= 0:
+					continue
+				_copy_slot(src, dst)
+				dst["count"] = take
+				src["count"] = int(src["count"]) - take
+				# Change follows the last whole block, never half of it.
+				if int(src["count"]) <= 0:
+					dst["eighths"] = int(src.get("eighths", 0))
+					_clear_slot(src)
+				else:
+					dst["eighths"] = 0
+				moved = true
+				continue
+			var room: int = cap - int(dst["count"])
+			if room <= 0:
+				continue
+			var mv: int = mini(room, int(src["count"]))
+			if mv <= 0:
+				continue
+			dst["count"] = int(dst["count"]) + mv
+			src["count"] = int(src["count"]) - mv
+			if int(src["count"]) <= 0:
+				if int(src.get("eighths", 0)) > 0 and int(dst["count"]) < cap:
+					var e := int(dst.get("eighths", 0)) + int(src["eighths"])
+					if e >= 8:
+						dst["count"] = int(dst["count"]) + 1
+						e -= 8
+					dst["eighths"] = e
+					src["eighths"] = 0
+				if not _slot_holds(src):
+					_clear_slot(src)
+			moved = true
+	if not moved:
+		Audio.ui("ui_deny")
+		return
+	if cont == "inv":
+		_sync_cover(index)
+	Audio.ui("ui_click")
+	_refresh_slots()
+	_refresh_station_ui()
+
+
+## Where a shift-click from this slot is allowed to send things, best first.
+func _quick_targets(cont: String, index: int) -> Array:
+	var out: Array = []
+	if cont == "stor":
+		# Out of the machine and into your bag: hotbar first, because something
+		# you took out is usually something you are about to use.
+		for i in SLOTS:
+			out.append(["inv", i])
+		return out
+	if cont != "inv":
+		# Worn things come off into the bag.
+		for i in SLOTS:
+			out.append(["inv", i])
+		return out
+	if _station_open != null and is_instance_valid(_station_open):
+		for i in _stor_map.size():
+			out.append(["stor", i])
+		return out
+	# Nothing else open, so the two halves are the hotbar and the rest of the
+	# bag, and which one you are in decides which way this goes.
+	if index < HOTBAR_SLOTS:
+		for i in range(HOTBAR_SLOTS, SLOTS):
+			out.append(["inv", i])
+	else:
+		for i in HOTBAR_SLOTS:
+			out.append(["inv", i])
+	return out
 
 
 func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
@@ -7026,27 +7229,8 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 	var to := _slot_ref(tc, ti)
 	if to.is_empty() or not _slot_holds(from):
 		return
-	# dropping INTO a machine's storage must match what it accepts (chests and the
-	# Carpenter's Bench take any plain resource; the rest are picky by design so
-	# each station's recipes read as one cohesive idea)
-	if tc == "stor" and fc != "stor" and ti < _stor_map.size():
-		var tst: Station = _stor_map[ti]["st"]
-		var fid: int = from["id"]
-		if _stor_map[ti].get("fire", false):
-			if not Station.stokes(fid, from.get("props", {})):
-				_toast("The firebox burns wood, coal, or ore with Combustion")
-				return
-		elif Blocks.is_smelter_kind(tst.kind) and not (Blocks.is_ore(fid) or Blocks.is_refined(fid)
-				or fid == Blocks.PLATE or fid == Blocks.SCRAP or fid == Blocks.REGOLITH):
-			_toast("Smelter takes raw ore, ingots, scrap, plates, or Regolith (sand)")
-			return
-		# A bench takes what its own recipes use -- see Blocks.station_accepts.
-		if (tst.kind == Blocks.FABRICATOR or tst.kind == Blocks.SHIPWORKS) \
-				and not Blocks.station_accepts(tst.kind, fid):
-			_toast("The %s has no use for that" % Blocks.name_of(tst.kind))
-			return
-	# A generator's two bays each take one kind of thing, both ways round: what
-	# goes in has to fit, and so does whatever a swap sends back the other way.
+	# What goes in has to fit where it is going -- and so does whatever a swap
+	# sends back the other way. See _slot_refusal for the rules themselves.
 	if not _gen_bay_allows(tc, ti, from) or (_slot_holds(to) and not _gen_bay_allows(fc, fi, to)):
 		return
 	var gen_cradle := _gen_bay_of(tc, ti)
@@ -7069,25 +7253,14 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 		_refresh_slots()
 		_refresh_station_ui()
 		return
-	# the equip slot only ever holds a Suit -- that's what makes it worn, not just carried
-	if tc == "equip" and from["id"] != Blocks.SUIT:
-		_toast("Only a Suit fits there")
-		return
 	# Swapping puts what was at the far end back where this came from, so that
-	# has to fit there too -- or a rock ends up worn as a hat.
-	if fc == "equip" and _slot_holds(to) and to["id"] != Blocks.SUIT:
-		_toast("Only a Suit fits there")
+	# has to fit there too -- or a rock ends up worn as a hat. (Both directions
+	# were checked by _gen_bay_allows above; this is the one case it cannot
+	# cover, where the item coming BACK is more than one of something.)
+	if fc == "vanity" and _slot_holds(to) and int(to["id"]) != int(from["id"]) \
+			and int(to["count"]) > 1:
+		_toast("Wear one at a time -- move the rest out first")
 		return
-	if tc == "vanity" and not _fits_vanity(int(from["id"]), ti):
-		_toast(_vanity_refusal(ti))
-		return
-	if fc == "vanity" and _slot_holds(to) and int(to["id"]) != int(from["id"]):
-		if not _fits_vanity(int(to["id"]), fi):
-			_toast(_vanity_refusal(fi))
-			return
-		if int(to["count"]) > 1:
-			_toast("Wear one at a time -- move the rest out first")
-			return
 	# One of a stack is worn; the rest stay in the bag.
 	if tc == "vanity" and int(from["count"]) > 1:
 		if _slot_holds(to):

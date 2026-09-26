@@ -2249,11 +2249,22 @@ func remove_fire(v: Vector3i) -> void:
 ## of volume is a shape nobody builds.
 const CEILING_PROBE := 40
 
-func _has_ceiling(v: Vector3i) -> bool:
-	var up := _axis_of(Vector3(v) + Vector3(0.5, 0.5, 0.5))
+## One step "up" from this voxel, in grid cells.
+##
+## Which way that is depends on which face of the world you are standing on, so
+## it is not always +Y and nothing may assume it is. Generation already works
+## this out when it decides where to put grass (see generation_sample); this is
+## the same sum, named, so that anything asking "what is sitting on top of this
+## block?" gets the same answer as whatever put it there.
+func voxel_up(v: Vector3i) -> Vector3i:
+	var centre := Vector3(v) + Vector3(0.5, 0.5, 0.5)
+	var up := _axis_of(centre) if shape_cube else centre.normalized()
 	var step := Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
-	if step == Vector3i.ZERO:
-		step = Vector3i(0, 1, 0)
+	return Vector3i(0, 1, 0) if step == Vector3i.ZERO else step
+
+
+func _has_ceiling(v: Vector3i) -> bool:
+	var step := voxel_up(v)
 	var c := v
 	for i in CEILING_PROBE:
 		c += step

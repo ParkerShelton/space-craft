@@ -7,3 +7,7 @@ build/
 __pycache__/
 *.pyc
 debug.log
+
+# Throwaway test scripts and the .uid files Godot makes beside them.
+_shot.*
+_t.*
