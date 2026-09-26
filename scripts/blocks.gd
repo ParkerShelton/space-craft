@@ -1015,54 +1015,56 @@ const PIPE_BENCH := 229
 # The blade cuts: a log becomes flat stock. The rollers roll: flat stock
 # becomes pipe. Wood, glass and metal all go the same way through, which is why
 # there is one machine instead of three, and why a wooden pipe costs a log.
+## The bench has three places, each with one job, and they are not shared:
+##
+##   the SAW    takes logs, and only logs. Cut them and the plates land in the
+##              middle, where the only thing you would do with them next is.
+##   the BED    holds flat stock: wood plates, metal plates, glass, a bar.
+##   the ROLLERS take what is on the bed and make pipe of it.
+##
+## The bed used to be all three at once, which meant a log sat in the same
+## place a plate did and two logs stopped the saw working at all. One slot per
+## job is the whole fix.
+const PIPE_SAW_SLOT := 0          # logs waiting to be cut
+const PIPE_BED_0 := 1             # flat stock, four spots
 const PIPE_SPOTS := 4
-const PIPE_RECIPES := [
-	# At the blade.
-	{"label": "Wood Plates", "out": WOOD_PLATE, "n": 4, "at": "blade", "parts": [["wood", 1]]},
-	# At the rollers. The first part named is where the result takes its
-	# material from -- which is how a metal duct remembers the Hardness of the
-	# plate it was rolled from, and so how fast it carries.
-	{"label": "Wooden Duct", "out": DUCT_WOOD, "n": 4, "at": "roller",
-		"parts": [[WOOD_PLATE, 4]]},
-	{"label": "Reinforced Duct", "out": DUCT_REINFORCED, "n": 4, "at": "roller",
+const PIPE_OUT_SLOT := 5          # finished pipe, in the tray
+const PIPE_STORAGE := 6
+
+## How many plates one log gives.
+const SAW_YIELD := 4
+
+
+## Will the saw take this? Logs and nothing else.
+static func saw_takes(id: int) -> bool:
+	var b := bottom_of(id)
+	return b in WOOD_IDS or b in PLANK_IDS
+
+
+## Will the bed take this? Flat stock -- the things that roll.
+static func bed_takes(id: int) -> bool:
+	var b := bottom_of(id)
+	return b == WOOD_PLATE or b == PLATE or b == GLASS or b == BAR
+
+
+## What the rollers make of what is on the bed, or {} if it is not a set they
+## know. Exact: four plates make wooden duct, three and a bar make reinforced.
+const ROLL_RECIPES := [
+	{"label": "Wooden Duct", "out": DUCT_WOOD, "n": 4, "parts": [[WOOD_PLATE, 4]]},
+	{"label": "Reinforced Duct", "out": DUCT_REINFORCED, "n": 4,
 		"parts": [[WOOD_PLATE, 3], [BAR, 1]]},
-	{"label": "Metal Duct", "out": DUCT, "n": 4, "at": "roller",
-		"parts": [[PLATE, 1]]},
-	{"label": "Glass Duct", "out": DUCT_GLASS, "n": 4, "at": "roller",
-		"parts": [[GLASS, 2]]},
+	{"label": "Metal Duct", "out": DUCT, "n": 4, "parts": [[PLATE, 1]]},
+	{"label": "Glass Duct", "out": DUCT_GLASS, "n": 4, "parts": [[GLASS, 2]]},
 ]
 
 
-static func pipe_part_is(id: int, what) -> bool:
-	if typeof(what) == TYPE_STRING:
-		return bottom_of(id) in WOOD_IDS or bottom_of(id) in PLANK_IDS
-	return bottom_of(id) == int(what)
-
-
-## Can this go on the bench's bed at all?
-static func pipe_takes(id: int) -> bool:
-	for r in PIPE_RECIPES:
-		for part in r["parts"]:
-			if pipe_part_is(id, part[0]):
-				return true
-	return false
-
-
-## The recipe exactly matching what is on the bed, for the end you just
-## turned. `at` is "blade" or "roller".
-static func pipe_match(ids: Array, at: String) -> Dictionary:
-	for r in PIPE_RECIPES:
-		if str(r["at"]) != at:
-			continue
+static func roll_match(ids: Array) -> Dictionary:
+	for r in ROLL_RECIPES:
 		var left: Array = ids.duplicate()
 		var ok := true
 		for part in r["parts"]:
 			for i in int(part[1]):
-				var found := -1
-				for j in left.size():
-					if pipe_part_is(int(left[j]), part[0]):
-						found = j
-						break
+				var found := left.find(int(part[0]))
 				if found < 0:
 					ok = false
 					break
@@ -1873,6 +1875,10 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	ROCK_STAIR, DIRT_STAIR, GRASS_STAIR, REGOLITH_STAIR, ICE_STAIR, SNOW_STAIR,
 	CRYSTAL_STAIR, METAL_STAIR, WOOD_STAIR, GLASS_STAIR,
 	TORCH, GLOW_LAMP, EMBER_TORCH, MACHINE_CORE, WIRE,
+	# Every duct. They are surface-mounted runs exactly as conduit is, and
+	# leaving them off this list is why a pipe you had just rolled could not be
+	# put down anywhere.
+	DUCT, DUCT_WOOD, DUCT_REINFORCED, DUCT_GLASS,
 	PLANK, PLANK_PALE, PLANK_DARK,
 	PLANK_SLAB, PLANK_PALE_SLAB, PLANK_DARK_SLAB,
 	PLANK_STAIR, PLANK_PALE_STAIR, PLANK_DARK_STAIR,

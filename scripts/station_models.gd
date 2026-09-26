@@ -1175,8 +1175,17 @@ static func pipe_roller_boxes(spin: float) -> Array:
 
 ## The bench with what is lying on it: stock in the bays, and whatever came off
 ## the rollers in the tray past them.
-static func pipe_bench_mesh(parts: Array, out_item: Dictionary) -> ArrayMesh:
+static func pipe_bench_mesh(saw_log: Dictionary, parts: Array,
+		out_item: Dictionary) -> ArrayMesh:
 	var boxes := pipe_bench_boxes()
+	# Logs waiting under the saw, so the hopper is visibly loaded.
+	var waiting := int(saw_log.get("count", 0))
+	if waiting > 0:
+		var lc: Color = (saw_log.get("mat", {}) as Dictionary).get("color",
+			Blocks.color_of(int(saw_log["id"])))
+		for k in mini(waiting, 3):
+			boxes.append([Vector3(-0.70, BENCH_TOP + 0.10 + float(k) * 0.15, 0),
+				Vector3(0.26, 0.14, 0.42), lc])
 	for i in mini(parts.size(), BENCH_BAYS):
 		var it: Dictionary = parts[i]
 		var col: Color = (it.get("mat", {}) as Dictionary).get("color",
@@ -1191,6 +1200,40 @@ static func pipe_bench_mesh(parts: Array, out_item: Dictionary) -> ArrayMesh:
 			boxes.append([Vector3(0.94, BENCH_TOP + 0.05 + float(k % 2) * 0.09,
 				-0.16 + float(k) * 0.16), Vector3(0.20, 0.08, 0.08), oc])
 	return mesh_from_boxes(boxes)
+
+
+## The coupling a Loader or a Port puts out toward the container it works.
+##
+## Without it the two just stand next to each other and you have to take it on
+## faith that they are connected at all. A collar that visibly reaches across
+## the gap and clamps on says "these two are one thing" with no words -- and
+## when it is NOT attached to anything there is no collar, which is how you
+## find the one you put down facing the wrong way.
+static func coupling_boxes(dir: Vector3, col: Color) -> Array:
+	var out: Array = []
+	var d := dir.normalized()
+	var across := Vector3(1, 1, 1) - Vector3(absf(d.x), absf(d.y), absf(d.z))
+	# A neck out to the join, then a flange flat against the other machine.
+	var neck := Vector3(0.22, 0.22, 0.22) * across + Vector3(absf(d.x), absf(d.y),
+		absf(d.z)) * 0.34
+	out.append([Vector3(0, 0.36, 0) + d * 0.34, neck, col])
+	var flange := Vector3(0.44, 0.44, 0.44) * across + Vector3(absf(d.x), absf(d.y),
+		absf(d.z)) * 0.07
+	out.append([Vector3(0, 0.36, 0) + d * 0.50, flange, col.lightened(0.18)])
+	# Four bolts round the flange, so it reads as clamped on rather than
+	# resting against.
+	for a in [0.0, PI * 0.5, PI, PI * 1.5]:
+		var side := across.cross(d) if across.cross(d).length() > 0.01 else Vector3.UP
+		var p1 := Vector3(0, 0, 0)
+		if absf(d.x) > 0.5:
+			p1 = Vector3(0, cos(a), sin(a)) * 0.15
+		elif absf(d.y) > 0.5:
+			p1 = Vector3(cos(a), 0, sin(a)) * 0.15
+		else:
+			p1 = Vector3(cos(a), sin(a), 0) * 0.15
+		out.append([Vector3(0, 0.36, 0) + d * 0.50 + p1,
+			Vector3(0.07, 0.07, 0.07), col.darkened(0.35)])
+	return out
 
 
 ## A Loader: a squat pump with a wide mouth on one side for the container it

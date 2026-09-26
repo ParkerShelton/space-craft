@@ -90,9 +90,8 @@ func port_names(id: int) -> bool:
 
 
 func _refresh_port() -> void:
-	if kind != Blocks.DUCT_PORT or headless or _mi == null:
-		return
-	_mi.mesh = StationModels.filter_mesh(filter_colour())
+	_couple_shown = "-"
+	_refresh_coupling()
 
 # --- power ---
 ## The old single ceiling. Kept because the base-status readout still totals
@@ -163,7 +162,7 @@ static func capacity_of(k: int) -> int:
 	if k == Blocks.FABRICATOR:
 		return Blocks.PRESS_SPOTS + 1   # the bed's spots, and what the ram made
 	if k == Blocks.PIPE_BENCH:
-		return Blocks.PIPE_SPOTS + 1   # the bed, and what came off it
+		return Blocks.PIPE_STORAGE   # the saw, the bed's four spots, and the tray
 	if k == Blocks.OXYGEN_PLANT or k == Blocks.HEATER or k == Blocks.COOLER:
 		return 2   # spare filters / elements: no recipes, just somewhere to stash parts
 	if k == Blocks.BED:
@@ -327,7 +326,7 @@ func _build_visual() -> void:
 		_refresh_anvil.call_deferred()
 	elif kind == Blocks.PIPE_BENCH:
 		_bench_shown = "-"
-		_mi.mesh = StationModels.pipe_bench_mesh([], {})
+		_mi.mesh = StationModels.pipe_bench_mesh({}, [], {})
 		# The two moving parts are nodes of their own, so they can run without
 		# the bench being rebuilt sixty times a second.
 		if _rollers == null:
@@ -343,8 +342,9 @@ func _build_visual() -> void:
 			_blade.position = StationModels.BENCH_ARBOR + Vector3(0, -0.5, 0)
 			add_child(_blade)
 		_refresh_bench.call_deferred()
-	elif kind == Blocks.DUCT_PORT:
-		_mi.mesh = StationModels.filter_mesh(filter_colour())
+	elif kind == Blocks.DUCT_PORT or kind == Blocks.DUCT_LOADER:
+		_couple_shown = "-"
+		_refresh_coupling.call_deferred()
 	elif Blocks.makes_power(kind):
 		_gen_shown = gen_state()
 		_mi.mesh = _power_mesh(_gen_shown)
@@ -1023,6 +1023,7 @@ func net_refresh() -> void:
 	_refresh_anvil()
 	_refresh_press()
 	_refresh_bench()
+	_refresh_coupling()
 	_refresh_gen()
 	_refresh_bay()
 
@@ -1154,136 +1155,251 @@ func _refresh_smelter() -> void:
 
 # --- the pipe bench ---------------------------------------------------------------
 #
-# The same shape as the press: storage[0..3] are the spots on the bed, one
-# thing each, and storage[4] is what came off it waiting to be taken. What is
-# different is that there are TWO controls -- the blade and the rollers -- and
-# which one you turn decides which recipes are even considered.
+# Three places, one job each, and they do not share.
+#
+#   storage[0]       the saw: logs waiting to be cut
+#   storage[1..4]    the bed: flat stock
+#   storage[5]       the tray: finished pipe, waiting to be taken
+#
+# It used to be one bed doing all three, so a log sat where a plate should and
+# two logs stopped the saw working. What fixed it was giving each job a place.
 
 var _bench_shown := "-"
+var _couple_shown := "-"
 var _bench_busy := false
+
+
+func saw_item() -> Dictionary:
+	_ensure_storage()
+	return storage[Blocks.PIPE_SAW_SLOT]
 
 
 func bench_parts() -> Array:
 	var out: Array = []
-	for i in mini(Blocks.PIPE_SPOTS, storage.size()):
-		if int(storage[i].get("count", 0)) > 0:
-			out.append(storage[i])
+	_ensure_storage()
+	for i in Blocks.PIPE_SPOTS:
+		if int(storage[Blocks.PIPE_BED_0 + i].get("count", 0)) > 0:
+			out.append(storage[Blocks.PIPE_BED_0 + i])
 	return out
 
 
 func bench_output() -> Dictionary:
-	var i := Blocks.PIPE_SPOTS
-	if storage.size() <= i or int(storage[i].get("count", 0)) <= 0:
-		return {}
-	return storage[i]
+	_ensure_storage()
+	var o: Dictionary = storage[Blocks.PIPE_OUT_SLOT]
+	return {} if int(o.get("count", 0)) <= 0 else o
 
 
-## Lay one thing on the bed. Refused when the bed is full, when what came off
-## it is still sitting there, or when it is not something the bench works.
+## Put a log in the saw. It stacks, so you can load an armful and cut at will.
+func saw_add(item: Dictionary, n := 1) -> bool:
+	_ensure_storage()
+	if not Blocks.saw_takes(int(item.get("id", Blocks.AIR))):
+		return false
+	var slot: Dictionary = storage[Blocks.PIPE_SAW_SLOT]
+	if int(slot.get("count", 0)) > 0:
+		if not Blocks.same_stack(slot, item):
+			return false
+		slot["count"] = int(slot["count"]) + n
+		_refresh_bench()
+		return true
+	storage[Blocks.PIPE_SAW_SLOT] = item.duplicate(true)
+	storage[Blocks.PIPE_SAW_SLOT]["count"] = n
+	_refresh_bench()
+	return true
+
+
+## Lay one piece of flat stock on the bed.
 func bench_add(item: Dictionary) -> bool:
 	_ensure_storage()
-	if not Blocks.pipe_takes(int(item.get("id", Blocks.AIR))) or not bench_output().is_empty():
+	if not Blocks.bed_takes(int(item.get("id", Blocks.AIR))) or not bench_output().is_empty():
 		return false
 	for i in Blocks.PIPE_SPOTS:
-		if int(storage[i].get("count", 0)) <= 0:
-			storage[i] = item.duplicate(true)
-			storage[i]["count"] = 1
+		var at := Blocks.PIPE_BED_0 + i
+		if int(storage[at].get("count", 0)) <= 0:
+			storage[at] = item.duplicate(true)
+			storage[at]["count"] = 1
 			_refresh_bench()
 			return true
 	return false
 
 
-## Take the last thing laid back off the bed.
+## Take the last thing laid on the bed back off it.
 func bench_take_last() -> Dictionary:
+	_ensure_storage()
 	for i in range(Blocks.PIPE_SPOTS - 1, -1, -1):
-		if i < storage.size() and int(storage[i].get("count", 0)) > 0:
-			var out: Dictionary = storage[i].duplicate(true)
-			storage[i] = _empty_slot()
+		var at := Blocks.PIPE_BED_0 + i
+		if int(storage[at].get("count", 0)) > 0:
+			var out: Dictionary = storage[at].duplicate(true)
+			storage[at] = _empty_slot()
 			_refresh_bench()
 			return out
 	return {}
 
 
-func bench_take_output() -> Dictionary:
-	var o := bench_output()
-	if o.is_empty():
+func saw_take() -> Dictionary:
+	_ensure_storage()
+	var slot: Dictionary = storage[Blocks.PIPE_SAW_SLOT]
+	if int(slot.get("count", 0)) <= 0:
 		return {}
-	var out: Dictionary = o.duplicate(true)
-	storage[Blocks.PIPE_SPOTS] = _empty_slot()
+	var out: Dictionary = slot.duplicate(true)
+	storage[Blocks.PIPE_SAW_SLOT] = _empty_slot()
 	_refresh_bench()
 	return out
 
 
-## Turn one end of it. Returns what it made, or "" if that end had nothing to
-## do with what is on the bed.
-func bench_work(at: String) -> String:
+func bench_take_output() -> Dictionary:
+	_ensure_storage()
+	var o := bench_output()
+	if o.is_empty():
+		return {}
+	var out: Dictionary = o.duplicate(true)
+	storage[Blocks.PIPE_OUT_SLOT] = _empty_slot()
+	_refresh_bench()
+	return out
+
+
+## Cut one log. The plates go straight onto the bed, because rolling them is
+## the only thing anyone does next -- and if the bed is full they wait in the
+## saw rather than being lost.
+func saw_cut() -> String:
+	_ensure_storage()
+	var log_slot: Dictionary = storage[Blocks.PIPE_SAW_SLOT]
+	if int(log_slot.get("count", 0)) <= 0:
+		_animate_bench("blade", false)
+		return ""
+	var free := 0
+	for i in Blocks.PIPE_SPOTS:
+		if int(storage[Blocks.PIPE_BED_0 + i].get("count", 0)) <= 0:
+			free += 1
+	if free < Blocks.SAW_YIELD:
+		_animate_bench("blade", false)
+		return "full"
+	log_slot["count"] = int(log_slot["count"]) - 1
+	if int(log_slot["count"]) <= 0:
+		storage[Blocks.PIPE_SAW_SLOT] = _empty_slot()
+	var made := 0
+	for i2 in Blocks.PIPE_SPOTS:
+		if made >= Blocks.SAW_YIELD:
+			break
+		var at := Blocks.PIPE_BED_0 + i2
+		if int(storage[at].get("count", 0)) > 0:
+			continue
+		storage[at] = {"id": Blocks.WOOD_PLATE, "count": 1, "eighths": 0,
+			"props": {}, "src": "", "mat": {}}
+		made += 1
+	_animate_bench("blade", true)
+	_refresh_bench()
+	return "Wood Plates"
+
+
+## Roll what is on the bed. Nothing on it that makes a pipe, nothing happens.
+func bench_roll() -> String:
+	_ensure_storage()
 	if not bench_output().is_empty():
+		_animate_bench("roller", false)
 		return ""
 	var ids: Array = []
 	for p in bench_parts():
-		ids.append(int(p["id"]))
+		ids.append(Blocks.bottom_of(int(p["id"])))
 	if ids.is_empty():
+		_animate_bench("roller", false)
 		return ""
-	var r := Blocks.pipe_match(ids, at)
+	var r := Blocks.roll_match(ids)
 	if r.is_empty():
-		_animate_bench(at, false)
+		_animate_bench("roller", false)
 		return ""
-	# The first part named carries the material through, so a duct remembers
-	# the metal it was rolled from.
-	var mat := {}
+	# The first part named carries the material through, so a metal duct
+	# remembers the plate it was rolled from and keeps that plate's speed.
+	var want := int(r["parts"][0][0])
 	var props := {}
+	var mat := {}
 	var src := ""
-	var want = r["parts"][0][0]
 	for p2 in bench_parts():
-		if Blocks.pipe_part_is(int(p2["id"]), want):
+		if Blocks.bottom_of(int(p2["id"])) == want:
 			props = (p2.get("props", {}) as Dictionary).duplicate(true)
 			mat = (p2.get("mat", {}) as Dictionary).duplicate(true)
 			src = str(p2.get("src", ""))
 			break
 	for i in Blocks.PIPE_SPOTS:
-		storage[i] = _empty_slot()
-	var made := {"id": int(r["out"]), "count": int(r["n"]),
+		storage[Blocks.PIPE_BED_0 + i] = _empty_slot()
+	storage[Blocks.PIPE_OUT_SLOT] = {"id": int(r["out"]), "count": int(r["n"]),
 		"eighths": 0, "props": props, "src": src, "mat": mat}
-	if at == "blade":
-		# What the blade cuts stays ON THE BED, one to a spot, because the only
-		# thing anybody does with it next is roll it -- and making you take
-		# four plates off the machine and lay all four back on again was four
-		# clicks of nothing.
-		for i2 in mini(int(r["n"]), Blocks.PIPE_SPOTS):
-			storage[i2] = made.duplicate(true)
-			storage[i2]["count"] = 1
-		var over := int(r["n"]) - Blocks.PIPE_SPOTS
-		if over > 0:
-			storage[Blocks.PIPE_SPOTS] = made.duplicate(true)
-			storage[Blocks.PIPE_SPOTS]["count"] = over
-	else:
-		storage[Blocks.PIPE_SPOTS] = made
-	_animate_bench(at, true)
+	_animate_bench("roller", true)
 	_refresh_bench()
 	return str(r["label"])
 
 
-## The blade drops, or the rollers spin up. Nothing depends on it; it is how
-## you know the thing did something.
+## Which way a Loader or a Port should reach: toward the container beside it,
+## in this station's own space. ZERO when there is nothing there, which draws
+## no coupling at all -- and that is the tell for one you have put down facing
+## nothing.
+func coupling_dir() -> Vector3:
+	if world == null:
+		return Vector3.ZERO
+	var p: Planet = world.nearest_planet(global_position)
+	if p == null:
+		return Vector3.ZERO
+	var here := p.world_to_voxel(global_position)
+	for st in world._stations:
+		var s2: Station = st
+		if not is_instance_valid(s2) or s2 == self or s2.storage.is_empty():
+			continue
+		if s2.kind == Blocks.DUCT_PORT or s2.kind == Blocks.DUCT_LOADER:
+			continue
+		var there := p.world_to_voxel(s2.global_position)
+		var d := there - here
+		if absf(d.x) + absf(d.y) + absf(d.z) != 1:
+			continue
+		# Into this station's own frame, so a machine put down turned still
+		# reaches the right way.
+		return global_transform.basis.inverse() * (
+			p.to_global(Vector3(there)) - p.to_global(Vector3(here))).normalized()
+	return Vector3.ZERO
+
+
+## Redraw a Loader or Port, coupling and all. Cheap, and only when what it
+## would show has changed.
+func _refresh_coupling() -> void:
+	if headless or _mi == null:
+		return
+	if kind != Blocks.DUCT_LOADER and kind != Blocks.DUCT_PORT:
+		return
+	var d := coupling_dir()
+	var sig := "%d,%d,%d|%s" % [roundi(d.x), roundi(d.y), roundi(d.z),
+		str(port_filter)]
+	if sig == _couple_shown:
+		return
+	_couple_shown = sig
+	var boxes: Array = []
+	if kind == Blocks.DUCT_LOADER:
+		boxes = StationModels.loader_boxes()
+		if d != Vector3.ZERO:
+			boxes.append_array(StationModels.coupling_boxes(d, Color(0.52, 0.58, 0.44)))
+	else:
+		boxes = StationModels.filter_boxes(filter_colour())
+		if d != Vector3.ZERO:
+			boxes.append_array(StationModels.coupling_boxes(d, Color(0.60, 0.50, 0.30)))
+	_mi.mesh = StationModels.mesh_from_boxes(boxes)
+
+
+## The saw drops, or the rollers run. Nothing depends on it; it is how you
+## know from across the room that the thing did something -- and a refusal
+## looks different from a success on purpose, so being told no is something
+## you can see rather than only read.
 func _animate_bench(at: String, good: bool) -> void:
 	if headless or _bench_busy:
 		return
 	_bench_busy = true
 	var tw := create_tween()
 	if at == "blade":
-		# Spin up, drop through the work, lift off. A refused cut spins and
-		# stops without ever coming down, which is a different thing to watch
-		# and so a different thing to understand.
 		_blade_t = 26.0 if good else 9.0
 		var up: float = StationModels.BENCH_ARBOR.y - 0.5
-		if good and _blade != null:
-			tw.tween_property(_blade, "position:y", up - 0.20, 0.10).set_ease(Tween.EASE_IN)
-			tw.tween_interval(0.14)
+		if good and _blade != null and is_instance_valid(_blade):
+			tw.tween_property(_blade, "position:y", up - 0.22, 0.10).set_ease(Tween.EASE_IN)
+			tw.tween_interval(0.12)
 			tw.tween_property(_blade, "position:y", up, 0.22).set_ease(Tween.EASE_OUT)
 		else:
 			tw.tween_interval(0.16)
 	else:
-		# The rollers wind up, run, and coast down on their own.
 		_roll_t = 16.0 if good else 5.0
 		tw.tween_interval(0.30 if good else 0.12)
 	tw.tween_callback(func(): _bench_busy = false)
@@ -1292,7 +1408,7 @@ func _animate_bench(at: String, good: bool) -> void:
 func _refresh_bench() -> void:
 	if kind != Blocks.PIPE_BENCH or headless or _mi == null:
 		return
-	var sig := ""
+	var sig := "%d:" % int(saw_item().get("count", 0))
 	for p in bench_parts():
 		sig += "%d," % int(p["id"])
 	var o := bench_output()
@@ -1300,7 +1416,7 @@ func _refresh_bench() -> void:
 	if sig == _bench_shown:
 		return
 	_bench_shown = sig
-	_mi.mesh = StationModels.pipe_bench_mesh(bench_parts(), o)
+	_mi.mesh = StationModels.pipe_bench_mesh(saw_item(), bench_parts(), o)
 
 
 # --- the press -------------------------------------------------------------------

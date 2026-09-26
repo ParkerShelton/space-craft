@@ -4511,6 +4511,51 @@ func _tdelta(d: float) -> float:
 	return INF if absf(d) < 1e-9 else absf(1.0 / d)
 
 
+## The part of a machine under the crosshair, as a box to draw round: its
+## centre and size in the station's own space, and whether it is something you
+## OPERATE (a lever, a blade) rather than somewhere you put things.
+##
+## Everything a player works by hand is here. A machine with three jobs on it
+## has to say which one your crosshair has found, and it has to say it the way
+## blocks already do, because that is the language the game has taught.
+func _station_part_box(st: Station) -> Dictionary:
+	if not is_instance_valid(st) or st.headless:
+		return {}
+	match st.kind:
+		Blocks.PIPE_BENCH:
+			var z := str(_bench_zone(st).get("zone", ""))
+			if z == "blade":
+				return {"c": Vector3(-0.70, 0.86, 0.0), "s": Vector3(0.56, 0.68, 0.62),
+					"act": true}
+			if z == "roller":
+				return {"c": Vector3(0.68, 0.86, 0.0), "s": Vector3(0.66, 0.66, 0.92),
+					"act": true}
+			if z == "bed":
+				return {"c": Vector3(-0.10, 0.66, 0.0), "s": Vector3(0.80, 0.22, 0.60),
+					"act": false}
+		Blocks.GENERATOR, Blocks.SOLAR_ARRAY, Blocks.REACTOR, Blocks.CAPACITOR:
+			var p: Vector3 = st.to_local(_ray.get_collision_point()) + Vector3(0, 0.5, 0) \
+				if _ray.is_colliding() else Vector3.ZERO
+			if p.z < -0.42 and p.x > 0.12 and p.y > 0.08:
+				return {"c": st._lever_at(), "s": Vector3(0.26, 0.40, 0.22), "act": true}
+			if st.kind == Blocks.GENERATOR and p.y >= StationModels.GEN_TOP - 0.03:
+				if p.x < 0.0:
+					return {"c": StationModels.GEN_CRADLE + Vector3(0, 0.16, 0),
+						"s": Vector3(0.52, 0.44, 0.52), "act": false}
+				return {"c": StationModels.GEN_HOPPER + Vector3(0, 0.06, 0),
+					"s": Vector3(0.48, 0.28, 0.48), "act": false}
+		Blocks.POWER_BAY:
+			return {"c": Vector3(0, 0.42, 0), "s": Vector3(0.84, 0.84, 0.84), "act": false}
+		Blocks.DUCT_PORT:
+			return {"c": Vector3(0, 0.38, 0), "s": Vector3(0.50, 0.74, 0.76), "act": true}
+		Blocks.DUCT_LOADER:
+			return {"c": Vector3(0, 0.34, 0), "s": Vector3(0.80, 0.68, 0.92), "act": false}
+		Blocks.ANVIL:
+			return {"c": Vector3(0.02, StationModels.ANVIL_FACE + 0.04, 0),
+				"s": Vector3(0.62, 0.20, 0.36), "act": false}
+	return {}
+
+
 func _update_outline(tgt: Dictionary) -> void:
 	if _outline == null:
 		return
@@ -4547,6 +4592,23 @@ func _update_outline(tgt: Dictionary) -> void:
 			var sb: Basis = st.global_transform.basis
 			_outline.global_transform = Transform3D(sb.scaled(sz),
 				st.to_global(c - sz * 0.5 + Vector3(0, -0.5, 0)))
+			_outline.visible = true
+			if _ghost != null:
+				_ghost.visible = false
+			return
+		# Every other machine you work by hand outlines the PART under your
+		# crosshair, the same way a block does. A colour tells you nothing
+		# until you already know the code; a box drawn round the thing needs
+		# no explaining at all.
+		var part := _station_part_box(st)
+		if not part.is_empty():
+			if _outline_mat != null:
+				_outline_mat.albedo_color = OUTLINE_LEVER if bool(part["act"]) else OUTLINE_SPOT
+			var pc: Vector3 = part["c"]
+			var ps: Vector3 = part["s"]
+			var pb: Basis = st.global_transform.basis
+			_outline.global_transform = Transform3D(pb.scaled(ps),
+				st.to_global(pc - ps * 0.5 + Vector3(0, -0.5, 0)))
 			_outline.visible = true
 			if _ghost != null:
 				_ghost.visible = false
@@ -9001,51 +9063,84 @@ func _bench_zone(st: Station) -> Dictionary:
 
 
 func _use_bench(st: Station) -> void:
-	var zone := {} if st.headless else _bench_zone(st)
-	var where := str(zone.get("zone", "bed"))
-	# Holding something the bench works? Then you are loading it, wherever on
-	# the machine you happened to be pointing. Hunting for the right third of
-	# a bench to click is not a puzzle worth having.
+	var where := str(({} if st.headless else _bench_zone(st)).get("zone", "bed"))
 	var held: Dictionary = _active_item()
 	var hid := int(held.get("id", Blocks.AIR))
-	if hid != Blocks.AIR and int(held.get("count", 0)) > 0 and Blocks.pipe_takes(hid):
+	var holding: bool = hid != Blocks.AIR and int(held.get("count", 0)) > 0
+
+	# --- the saw: logs in, and the blade that cuts them ----------------------
+	if where == "blade":
+		if holding and Blocks.saw_takes(hid):
+			var n := int(held.get("count", 0))
+			if st.saw_add(held, n):
+				_take_from_active(n)
+				_refresh_slots()
+				Audio.at("place_rock", st.global_position)
+			else:
+				_toast("There is a different wood in the saw already")
+			return
+		if holding:
+			_toast("The saw only takes logs. Flat stock goes on the bed.")
+			Audio.ui("ui_deny")
+			return
+		var cut := st.saw_cut()
+		if cut == "full":
+			_toast("The bed is full -- roll it or take it off first")
+			Audio.ui("ui_deny")
+		elif cut == "":
+			var got := st.saw_take()
+			if got.is_empty():
+				_toast("Put logs in the saw")
+			else:
+				_add_item(int(got["id"]), int(got["count"]), got.get("props", {}),
+					str(got.get("src", "")), got.get("mat", {}))
+				_refresh_slots()
+		else:
+			_toast("Cut %d Wood Plates onto the bed" % Blocks.SAW_YIELD)
+			Audio.at("place_rock", st.global_position)
+		return
+
+	# --- the rollers: take the pipe, or roll what is on the bed --------------
+	if where == "roller":
+		if not st.bench_output().is_empty():
+			var out := st.bench_take_output()
+			var left := _add_item(int(out["id"]), int(out["count"]), out.get("props", {}),
+				str(out.get("src", "")), out.get("mat", {}))
+			if left > 0:
+				st.storage[Blocks.PIPE_OUT_SLOT] = out
+				_toast("No room for that")
+				return
+			_toast("Took %d %s" % [int(out["count"]), Blocks.name_of(int(out["id"]))])
+			Audio.at("place_rock", st.global_position)
+			_refresh_slots()
+			return
+		var made := st.bench_roll()
+		if made == "":
+			_toast("Nothing on the bed that rolls into pipe")
+			Audio.ui("ui_deny")
+		else:
+			_toast("Rolled %s" % made)
+			Audio.at("place_rock", st.global_position)
+		return
+
+	# --- the bed: flat stock -------------------------------------------------
+	if holding and Blocks.bed_takes(hid):
 		if st.bench_add(held):
 			_take_one_from_active()
 			_refresh_slots()
 			Audio.at("place_rock", st.global_position)
 		elif not st.bench_output().is_empty():
-			_toast("Take what it made off the rollers first")
+			_toast("Take the pipe off the rollers first")
 		else:
 			_toast("The bed is full")
 		return
-	if where == "blade" or where == "roller":
-		# What came off it is taken from the rollers, since that is where it
-		# is sitting.
-		if where == "roller" and not st.bench_output().is_empty():
-			var got := st.bench_take_output()
-			var left := _add_item(int(got["id"]), int(got["count"]), got.get("props", {}),
-				str(got.get("src", "")), got.get("mat", {}))
-			if left > 0:
-				st.storage[Blocks.PIPE_SPOTS] = got
-				_toast("No room for that")
-				return
-			_toast("Took %d %s" % [int(got["count"]), Blocks.name_of(int(got["id"]))])
-			Audio.at("place_rock", st.global_position)
-			_refresh_slots()
-			return
-		var made := st.bench_work(where)
-		if made == "":
-			_toast("The blade has nothing to cut" if where == "blade"
-				else "Nothing on the bed that rolls into pipe")
-			Audio.ui("ui_deny")
-			return
-		_toast("%s" % made)
-		Audio.at("place_rock", st.global_position)
+	if holding and Blocks.saw_takes(hid):
+		_toast("Logs go in the saw, at the other end")
+		Audio.ui("ui_deny")
 		return
-	# Empty-handed on the bed: take the last thing laid back off it.
 	var back := st.bench_take_last()
 	if back.is_empty():
-		_toast("Hold wood, a wood plate, a metal plate or glass and right-click to load it")
+		_toast("The bed takes flat stock: wood plates, a metal plate, glass, a bar")
 		return
 	_add_item(int(back["id"]), int(back.get("count", 1)), back.get("props", {}),
 		str(back.get("src", "")), back.get("mat", {}))
@@ -9208,27 +9303,28 @@ func _pull_press(st: Station) -> void:
 func _process_bench_look(st: Station) -> bool:
 	if not is_instance_valid(st) or st.kind != Blocks.PIPE_BENCH:
 		return false
-	var z := {} if st.headless else _bench_zone(st)
-	var where := str(z.get("zone", "bed"))
-	var out := st.bench_output()
-	var ids: Array = []
-	for p in st.bench_parts():
-		ids.append(int(p["id"]))
+	var where := str(({} if st.headless else _bench_zone(st)).get("zone", "bed"))
 	if where == "blade":
-		var rb := Blocks.pipe_match(ids, "blade")
-		_look_name = "Blade  (right-click to cut%s)" % (
-			(" -- makes %s" % str(rb["label"])) if not rb.is_empty() else "")
+		var waiting := int(st.saw_item().get("count", 0))
+		_look_name = ("Saw  (%d log%s -- right-click to cut %d plates onto the bed)"
+			% [waiting, "" if waiting == 1 else "s", Blocks.SAW_YIELD]) if waiting > 0 \
+			else "Saw  (right-click holding logs to load it)"
 		return true
 	if where == "roller":
-		if not out.is_empty():
+		var o := st.bench_output()
+		if not o.is_empty():
 			_look_name = "%s x%d  (right-click to take it)" % [
-				Blocks.name_of(int(out["id"])), int(out["count"])]
+				Blocks.name_of(int(o["id"])), int(o["count"])]
 			return true
-		var rr := Blocks.pipe_match(ids, "roller")
-		_look_name = "Rollers  (right-click to roll%s)" % (
-			(" -- makes %s" % str(rr["label"])) if not rr.is_empty() else "")
+		var ids: Array = []
+		for pp in st.bench_parts():
+			ids.append(Blocks.bottom_of(int(pp["id"])))
+		var r := Blocks.roll_match(ids)
+		_look_name = "Rollers  (right-click to roll -- makes %s)" % str(r["label"]) \
+			if not r.is_empty() else "Rollers  (nothing on the bed that rolls)"
 		return true
-	_look_name = "Pipe Bench  (%d on the bed -- right-click holding stock to load it)" % ids.size()
+	var on := st.bench_parts().size()
+	_look_name = "Bed  (%d of 4 -- flat stock goes here)" % on
 	return true
 
 
