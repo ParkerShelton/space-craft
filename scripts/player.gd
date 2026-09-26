@@ -4726,6 +4726,12 @@ func _station_part_box(st: Station) -> Dictionary:
 			if z == "bed":
 				return {"c": Vector3(-0.10, 0.66, 0.0), "s": Vector3(0.80, 0.22, 0.60),
 					"act": false}
+		Blocks.SMELTER:
+			if _smelt_zone(st) == "fire":
+				return {"c": Vector3(0, 0.25, -0.1), "s": Vector3(0.94, 0.34, 0.92),
+					"act": false}
+			return {"c": Vector3(0, StationModels.SMELT_HEARTH.y + 0.2, 0),
+				"s": Vector3(0.94, 0.5, 0.94), "act": false}
 		Blocks.GENERATOR, Blocks.SOLAR_ARRAY, Blocks.REACTOR, Blocks.CAPACITOR:
 			var p: Vector3 = st.to_local(_ray.get_collision_point()) + Vector3(0, 0.5, 0) \
 				if _ray.is_colliding() else Vector3.ZERO
@@ -6804,7 +6810,11 @@ func _slot_ref(cont: String, index: int) -> Dictionary:
 	if cont == "stor" and index >= 0 and index < _stor_map.size():
 		var m: Dictionary = _stor_map[index]
 		var st: Station = m["st"]
-		if is_instance_valid(st) and int(m["slot"]) < st.storage.size():
+		if not is_instance_valid(st):
+			return {}
+		if m.get("fire", false):
+			return st.fire_slot()
+		if int(m["slot"]) < st.storage.size():
 			return st.storage[int(m["slot"])]
 	return {}
 
@@ -6951,7 +6961,8 @@ func _gen_bay_of(cont: String, index: int) -> int:
 	if cont != "stor" or index < 0 or index >= _stor_map.size():
 		return -1
 	var st: Station = _stor_map[index]["st"]
-	if not is_instance_valid(st) or not Blocks.makes_power(st.kind):
+	if not is_instance_valid(st) or not Blocks.makes_power(st.kind) \
+			or _stor_map[index].get("fire", false):
 		return -1
 	return int(_stor_map[index]["slot"])
 
@@ -6991,7 +7002,11 @@ func _transfer(fc: String, fi: int, tc: String, ti: int) -> void:
 	if tc == "stor" and fc != "stor" and ti < _stor_map.size():
 		var tst: Station = _stor_map[ti]["st"]
 		var fid: int = from["id"]
-		if Blocks.is_smelter_kind(tst.kind) and not (Blocks.is_ore(fid) or Blocks.is_refined(fid)
+		if _stor_map[ti].get("fire", false):
+			if not Station.stokes(fid, from.get("props", {})):
+				_toast("The firebox burns wood, coal, or ore with Combustion")
+				return
+		elif Blocks.is_smelter_kind(tst.kind) and not (Blocks.is_ore(fid) or Blocks.is_refined(fid)
 				or fid == Blocks.PLATE or fid == Blocks.SCRAP or fid == Blocks.REGOLITH):
 			_toast("Smelter takes raw ore, ingots, scrap, plates, or Regolith (sand)")
 			return
@@ -8362,7 +8377,36 @@ func _open_station(st: Station) -> void:
 	if st.kind == Blocks.SMELTER:
 		var held: Dictionary = _active_item()
 		var hid := int(held.get("id", Blocks.AIR))
-		if int(held.get("count", 0)) > 0 and Station.smelts(hid):
+		var hprops: Dictionary = held.get("props", {})
+		var holding: bool = int(held.get("count", 0)) > 0
+		# The grate and the chamber are two different places on the same
+		# machine, and which one you get is decided by where you aimed -- the
+		# same way the bench's blade and rollers are.
+		if _smelt_zone(st) == "fire":
+			if not holding:
+				_toast("Feed the fire: wood, coal, or ore that burns")
+				Audio.ui("ui_deny")
+				return
+			if not Station.stokes(hid, hprops):
+				_toast("That will not burn. The grate takes wood, coal or fuel ore.")
+				Audio.ui("ui_deny")
+				return
+			var fed := st.stoke(held, int(held["count"]))
+			if fed <= 0:
+				Audio.ui("ui_deny")
+				_toast("The grate is full")
+				return
+			_take_from_active(fed)
+			Audio.at("place_rock", st.global_position)
+			_toast("Stoked: %d %s" % [fed, Blocks.name_of(hid)])
+			_refresh_slots()
+			return
+		if holding and Station.stokes(hid, hprops) and not Station.smelts(hid):
+			# Wood aimed at the chamber. Say where it actually goes.
+			_toast("Wood goes in the grate, down at the front")
+			Audio.ui("ui_deny")
+			return
+		if holding and Station.smelts(hid):
 			var what := str((held.get("mat", {}) as Dictionary).get("name", Blocks.name_of(hid)))
 			var put := st.smelt_load(held, int(held["count"]))
 			if put <= 0:
@@ -8482,15 +8526,17 @@ func _build_storage_cells(st: Station) -> Vector2i:
 		var idx := _stor_map.size()
 		var cell := _make_stor_cell(idx, pl["cx"], pl["cy"])
 		_station_cells.append(cell)
-		if Blocks.makes_power(st.kind) and int(pl["slot"]) < 2:
+		if pl.get("fire", false) or (Blocks.makes_power(st.kind) and int(pl["slot"]) < 2):
 			var cap := Label.new()
-			cap.text = "BATTERY" if int(pl["slot"]) == 0 else (
-				"FUEL ROD" if st.kind == Blocks.REACTOR else "FUEL")
+			cap.text = "FIREBOX" if pl.get("fire", false) else (
+				"BATTERY" if int(pl["slot"]) == 0 else (
+				"FUEL ROD" if st.kind == Blocks.REACTOR else "FUEL"))
 			cap.modulate = Color(1, 1, 1, 0.7)
 			cap.position = Vector2(0, -22)
 			cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			(cell["root"] as Control).add_child(cap)
-		_stor_map.append({"st": pl["st"], "slot": pl["slot"]})
+		_stor_map.append({"st": pl["st"], "slot": pl["slot"],
+			"fire": pl.get("fire", false)})
 		maxc = maxi(maxc, int(pl["cx"]) + 1)
 		maxr = maxi(maxr, int(pl["cy"]) + 1)
 	return Vector2i(maxc, maxr)
@@ -8525,6 +8571,12 @@ func _storage_placements(st: Station) -> Array:
 	else:
 		for slot in st.storage.size():
 			out.append({"st": st, "slot": slot, "cx": slot % _STORE_COLS, "cy": slot / _STORE_COLS})
+		if st.kind == Blocks.SMELTER:
+			# The grate, on a row of its own below the chamber. Some people want
+			# to drag wood into a window rather than walk up and right-click the
+			# front of a furnace, and both should work.
+			var rows: int = maxi((st.storage.size() + _STORE_COLS - 1) / _STORE_COLS, 1)
+			out.append({"st": st, "slot": -1, "fire": true, "cx": 0, "cy": rows})
 	return out
 
 
@@ -9284,6 +9336,18 @@ func _smith_name(d: Dictionary) -> String:
 ## Two controls, not one: the blade at the near end and the rollers at the far
 ## end, so the machine tells you what it does by having two obviously different
 ## ends rather than by a list of recipes on a panel.
+## Grate or chamber?
+##
+## The furnace has had a firebox course modelled into it since it was built --
+## a grate at the front, below the hearth -- so the split is a line that was
+## already drawn on the thing. Below the hearth stone is the fire.
+func _smelt_zone(st: Station) -> String:
+	if st.headless or not _ray.is_colliding():
+		return "chamber"
+	var p: Vector3 = st.to_local(_ray.get_collision_point()) + Vector3(0, 0.5, 0)
+	return "fire" if p.y < StationModels.SMELT_HEARTH.y - 0.05 else "chamber"
+
+
 func _bench_zone(st: Station) -> Dictionary:
 	if not _ray.is_colliding():
 		return {}

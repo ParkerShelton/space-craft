@@ -33,6 +33,16 @@ var _job_total := 0.0
 var _job_craft := {}
 var _job_times := 1              # how many of _job_craft this job makes
 
+## The smelter's FIREBOX: what is in it, and how many seconds of fire are left.
+##
+## A furnace that smelted ore out of thin air was the one machine in the game
+## that asked nothing of you. Now the fire is a thing you keep: wood in the
+## grate, and the ore only cooks while something under it is burning.
+##
+## One slot. A furnace has one fire.
+var firebox: Array = []
+var fire_t := 0.0
+
 var _mi: MeshInstance3D
 var _col: CollisionShape3D
 
@@ -586,6 +596,10 @@ func job_text() -> String:
 	if _job == "":
 		return ""
 	var pct := int(job_progress() * 100.0)
+	if kind == Blocks.SMELTER and fire_t <= 0.0:
+		# The job is loaded and going nowhere. Say which, or a smelter that had
+		# run out of wood looked like a smelter that was broken.
+		return "Cold — stoke the fire (%d%%)" % pct
 	return ("Refining… %d%%" % pct) if _job == "refine" else ("Crafting… %d%%" % pct)
 
 
@@ -1055,6 +1069,98 @@ var _smelt_light: OmniLight3D
 var _smelt_shown := "-"
 
 
+## How long one of a thing burns in a hearth.
+##
+## Wood is flat -- a log is a log -- and anything that already counts as fuel
+## asks its own Combustion, through the same figure a generator uses, doubled.
+## A hearth is only making heat; a generator is turning heat into electricity
+## and losing most of it on the way, so the same log goes further here.
+const FIRE_LOG := 16.0
+const FIRE_PLANK := 6.0
+const FIRE_PLATE := 3.0
+const FIRE_FUEL_MULT := 2.0
+
+
+## Will the grate take this? Wood in any of its forms, coal, and ore that
+## burns -- which is the same ore the chamber above bakes down INTO coal, so a
+## fuel seam is worth carrying either way.
+static func stokes(id: int, props: Dictionary = {}) -> bool:
+	if id == Blocks.COAL or Blocks.saw_takes(id) or Blocks.bottom_of(id) == Blocks.WOOD_PLATE:
+		return true
+	return Blocks.is_ore(id) and Blocks.is_fuel_grade(props)
+
+
+static func fire_time(id: int, props: Dictionary) -> float:
+	if id == Blocks.COAL or Blocks.is_ore(id):
+		return Blocks.fuel_burn_time(props, id) * FIRE_FUEL_MULT
+	if Blocks.bottom_of(id) == Blocks.WOOD_PLATE:
+		return FIRE_PLATE
+	if Blocks.bottom_of(id) in Blocks.PLANK_IDS:
+		return FIRE_PLANK
+	return FIRE_LOG
+
+
+## The one slot in the grate, made on demand so every smelter ever saved has
+## one without a migration.
+func fire_slot() -> Dictionary:
+	if firebox.is_empty():
+		firebox.append({"id": Blocks.AIR, "count": 0, "props": {}, "src": "", "mat": {}})
+	return firebox[0]
+
+
+func fire_lit() -> bool:
+	return fire_t > 0.0
+
+
+## Put `n` of `item` in the grate. Returns how many went in.
+func stoke(item: Dictionary, n: int) -> int:
+	var id := int(item.get("id", Blocks.AIR))
+	var props: Dictionary = item.get("props", {})
+	if n <= 0 or not stokes(id, props):
+		return 0
+	var sl := fire_slot()
+	if int(sl.get("count", 0)) > 0 and not Blocks.same_stack(sl, item):
+		return 0
+	var room: int = Blocks.stack_cap(id, 99) - int(sl.get("count", 0))
+	var put: int = mini(n, room)
+	if put <= 0:
+		return 0
+	sl["id"] = id
+	sl["count"] = int(sl.get("count", 0)) + put
+	sl["props"] = props.duplicate(true)
+	sl["src"] = str(item.get("src", ""))
+	sl["mat"] = (item.get("mat", {}) as Dictionary).duplicate(true)
+	return put
+
+
+## Burn down the fire, and light the next thing when it goes out.
+##
+## Only while there is WORK. A banked fire with nothing to cook sits there
+## glowing until you bring it something: coming back to a smelter you stoked
+## and finding the wood gone for nothing would teach you not to stoke it early,
+## which is the opposite of the lesson.
+func _tick_fire(delta: float) -> void:
+	if kind != Blocks.SMELTER:
+		return
+	if _job == "":
+		return
+	if fire_t > 0.0:
+		fire_t = maxf(fire_t - delta, 0.0)
+		if fire_t > 0.0:
+			return
+	var sl := fire_slot()
+	if int(sl.get("count", 0)) <= 0:
+		return
+	var props: Dictionary = sl.get("props", {})
+	fire_t = fire_time(int(sl["id"]), props)
+	sl["count"] = int(sl["count"]) - 1
+	if int(sl["count"]) <= 0:
+		sl["id"] = Blocks.AIR
+		sl["props"] = {}
+		sl["src"] = ""
+		sl["mat"] = {}
+
+
 ## Whether a smelter takes this by the handful: ore, scrap to remelt, sand.
 static func smelts(id: int) -> bool:
 	# Coal is not on this list: it has already been through, and a furnace that
@@ -1137,16 +1243,16 @@ func _refresh_smelter() -> void:
 		return
 	var pieces := _smelt_pieces()
 	var heat := job_progress() if _job != "" else 0.0
-	var key := "%s|%s|%d" % [_job, str(pieces), int(heat * 12.0)]
+	var lit := fire_lit()
+	var key := "%s|%s|%d|%d" % [_job, str(pieces), int(heat * 12.0), int(lit)]
 	if key != _smelt_shown:
-		var was_lit := _smelt_shown.begins_with("refine") or _smelt_shown.begins_with("craft")
+		var was_lit: bool = _smelt_shown.ends_with("|1")
 		_smelt_shown = key
-		var lit := _job != ""
 		if lit != was_lit or _mi.mesh == null:
 			_mi.mesh = StationModels.smelter_mesh(lit)
 		_smelt_mi.mesh = StationModels.smelter_content_mesh(pieces, heat if lit else 0.0)
 	if _smelt_light != null:
-		_smelt_light.visible = _job != ""
+		_smelt_light.visible = lit
 		if _smelt_light.visible:
 			# A fire, not a bulb: it breathes.
 			var t := Time.get_ticks_msec() * 0.001
@@ -1904,6 +2010,7 @@ func bay_swap(incoming: Dictionary) -> Dictionary:
 
 
 func _process(delta: float) -> void:
+	_tick_fire(delta)
 	_refresh_smelter()
 	_tick_lid(delta)
 	_tick_lever(delta)
@@ -1921,6 +2028,10 @@ func _process(delta: float) -> void:
 	# Both refreshes early-out when nothing would look different.
 	_refresh_bay()
 	if _job == "":
+		return
+	# A smelter only makes progress while something under it is burning. Every
+	# other station works as it always did.
+	if kind == Blocks.SMELTER and fire_t <= 0.0:
 		return
 	_job_t += delta
 	if _job_t < _job_total:

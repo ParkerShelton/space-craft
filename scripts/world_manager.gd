@@ -466,6 +466,11 @@ func save_game() -> bool:
 			entry["on"] = st.switched_on
 			entry["power"] = st.power
 			entry["burn"] = [st.burn_t, st.burn_rate]
+		if st.kind == Blocks.SMELTER:
+			# What is in the grate and how much of it is still alight. A fire
+			# you built is work you did.
+			entry["fire"] = st.firebox
+			entry["fire_t"] = st.fire_t
 		var par := st.get_parent()
 		if par is Ship and ship_index.has(par):
 			entry["ship"] = ship_index[par]   # mounted -> save relative to its ship
@@ -607,6 +612,9 @@ func load_game() -> bool:
 		station.port_filter = std.get("pf", [])
 		station.port_priority = int(std.get("pp", 0))
 		station.net_id = str(std.get("nid", ""))
+		if skind == Blocks.SMELTER:
+			station.firebox = (std.get("fire", []) as Array).duplicate(true)
+			station.fire_t = float(std.get("fire_t", 0.0))
 		if skind == Blocks.ANVIL:
 			station._refresh_anvil()   # whatever was left on it, drawn there
 		if Blocks.makes_power(skind):

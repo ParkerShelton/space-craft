@@ -23,7 +23,7 @@ signal done
 const FALL_SPIN := Vector3(0.9, 0.35, 1.7)   # radians/sec of tumble, per axis
 const GROUND_Y := -260.0                     # how far below the ship the ground starts
 const IMPACT_TIME := 3.0                     # seconds from "world is ready" to black
-const CONTACT := 0.58                        # fraction of that at which she lands
+const CONTACT := 0.58                        # fraction of that at which it lands
 const SHIP_SCALE := 0.80
 
 var _vp: SubViewport
@@ -152,7 +152,7 @@ func _build_sky() -> void:
 	_vp.add_child(sun)
 
 
-## What she is falling toward. A long way down for most of it, and then not.
+## What the ship is falling toward. A long way down for most of it, and then not.
 func _build_ground() -> void:
 	_ground = MeshInstance3D.new()
 	var bm := BoxMesh.new()
@@ -180,7 +180,7 @@ func _build_ground() -> void:
 		lump.position = Vector3(_rng.randf_range(-700.0, 700.0),
 			4.0 + (lm.size.y * 0.5), _rng.randf_range(-700.0, 700.0))
 		_ground.add_child(lump)
-	# Cloud decks between her and it. Nothing is moving the camera downward --
+	# Cloud decks between the ship and it. Nothing is moving the camera downward --
 	# the sky is empty and a fall through empty sky looks like hanging still --
 	# so these stream past instead, and that is the whole sensation of speed.
 	for i in 26:
@@ -198,9 +198,9 @@ func _build_ground() -> void:
 		_clouds.append(deck)
 
 
-## The ship, as she was before -- built from the same plan the wreck is torn
+## The ship, as it was before -- built from the same plan the wreck is torn
 ## from, so what comes down is recognisably what you wake up in. A few pieces
-## are already gone: she is coming apart, not arriving.
+## are already gone: it is coming apart, not arriving.
 func _build_ship() -> void:
 	_ship = Node3D.new()
 	_ship.scale = Vector3.ONE * SHIP_SCALE
@@ -255,7 +255,7 @@ func _hull_mesh(cells: Dictionary) -> ArrayMesh:
 	return m
 
 
-## Something burning, trailing off her. CPU particles rather than GPU ones --
+## Something burning, trailing off it. CPU particles rather than GPU ones --
 ## this project runs the Compatibility renderer.
 func _add_fire(at: Vector3) -> void:
 	var p := CPUParticles3D.new()
@@ -295,7 +295,7 @@ func _add_fire(at: Vector3) -> void:
 
 
 ## Somewhere out to one side at this height. Held clear of the middle, because
-## a deck that wraps in directly under her slaps the camera rather than sliding
+## a deck that wraps in directly under the ship slaps the camera rather than sliding
 ## past it.
 func _deck_spot(y: float) -> Vector3:
 	var a := _rng.randf_range(0.0, TAU)
@@ -304,7 +304,7 @@ func _deck_spot(y: float) -> Vector3:
 
 
 ## The blast itself, held ready and fired once. Three bursts at the same spot:
-## the fireball, the pieces of her thrown out of it, and the smoke that stays.
+## the fireball, the pieces of it thrown out, and the smoke that stays.
 func _build_blast() -> void:
 	_boom = _burst(240, 1.6, 34.0, Vector3(2.6, 2.6, 2.6),
 		Color(1.0, 0.95, 0.6, 1.0), Color(0.9, 0.22, 0.05, 0.0), 80.0)
@@ -406,7 +406,7 @@ func _beep_stream() -> AudioStreamWAV:
 
 
 ## Two beeps, a short gap, repeat, and faster than is comfortable. Stops the
-## moment she hits -- after that there is nothing left to warn anybody about.
+## moment it hits -- after that there is nothing left to warn anybody about.
 func _tick_alarm(delta: float) -> void:
 	if _alarm == null or _blew:
 		return
@@ -425,30 +425,30 @@ func _tick_alarm(delta: float) -> void:
 ## accumulated state so the loop can run for four seconds or forty and look the
 ## same either way.
 func _pose(t: float) -> void:
-	# The fall itself: she drops, tumbles, and drifts sideways a little. The
+	# The fall itself: it drops, tumbles, and drifts sideways a little. The
 	# drop is wrapped, so the loop never runs out of sky.
 	var drop: float = fposmod(t * 26.0, 150.0)
 	var y: float = 40.0 - drop
 	@warning_ignore("unassigned_variable")
 	if _impacting:
-		# Once the world is ready she stops looping and goes in. She holds her
-		# height and the ground comes up to meet her -- which looks identical
+		# Once the world is ready it stops looping and goes in. It holds its
+		# height and the ground comes up to meet it -- which looks identical
 		# from the camera and keeps everything in frame.
 		y = 0.0
 		if _blew:
 			# Nothing tumbles after it lands.
 			_ship.rotation = _ship.rotation
 	_ship.position = Vector3(sin(t * 0.35) * 7.0, y, cos(t * 0.27) * 5.0)
-	# The ground is kept a fixed way below her while she is falling -- so it is
-	# a floor a long way down, not something she is approaching -- and then
-	# closes on her once she is going in. Moving IT is what makes the last two
+	# The ground is kept a fixed way below the ship while it is falling -- so it
+	# is a floor a long way down, not something it is approaching -- and then
+	# closes in once it is going in. Moving IT is what makes the last two
 	# seconds read as ground rushing up rather than a ship shrinking into haze.
 	var gap: float = 260.0
 	if _impacting:
 		var kg: float = clampf((_ending / IMPACT_TIME) / CONTACT, 0.0, 1.0)
 		gap = lerpf(260.0, 3.0, kg * kg)
 	_ground.position = Vector3(0, _ship.position.y - gap, 0)
-	# The decks rise past her at a fixed rate and wrap round underneath, so
+	# The decks rise past it at a fixed rate and wrap round underneath, so
 	# there is always something streaming up through the shot.
 	for cd in _clouds:
 		var d: MeshInstance3D = cd
@@ -458,8 +458,8 @@ func _pose(t: float) -> void:
 			pz = _deck_spot(_ship.position.y - 170.0)
 		d.position = pz
 	_ship.rotation = Vector3(t * FALL_SPIN.x, t * FALL_SPIN.y, t * FALL_SPIN.z)
-	# The camera hangs off her at an angle, swinging slowly round, always
-	# looking at her -- a chase plane that cannot keep up.
+	# The camera hangs off it at an angle, swinging slowly round, always
+	# looking at it -- a chase plane that cannot keep up.
 	var ang: float = t * 0.33
 	var dist: float = 24.0 - 4.0 * sin(t * 0.2)
 	var high: float = 7.5 + 3.0 * sin(t * 0.45)
@@ -471,9 +471,9 @@ func _pose(t: float) -> void:
 		high = lerpf(high, 22.0, k2)
 	var eye: Vector3 = _ship.position + Vector3(
 		cos(ang) * dist, high, sin(ang) * dist)
-	# Aimed a little BELOW her, so the horizon sits high in the frame and what
-	# is under the shot is the ground she is going to meet.
-	# Buffeting all the way down: she is coming apart in atmosphere, and a
+	# Aimed a little BELOW it, so the horizon sits high in the frame and what
+	# is under the shot is the ground it is going to meet.
+	# Buffeting all the way down: it is coming apart in atmosphere, and a
 	# camera that holds perfectly still says none of that. Small, constant, and
 	# on three different frequencies so it never settles into a rhythm.
 	var buffet: float = 0.10 + 0.05 * sin(t * 0.7)
@@ -492,8 +492,8 @@ func _process(delta: float) -> void:
 	_tick_alarm(delta)
 	_shake = maxf(_shake - delta * 1.6, 0.0)
 	if _red != null:
-		# In time with the beeps, and harder the longer she has been falling --
-		# then held at full while she goes in.
+		# In time with the beeps, and harder the longer it has been falling --
+		# then held at full while it goes in.
 		var beat: float = 0.5 + 0.5 * sin(_t * 9.5)
 		var lvl: float = lerpf(0.30, 0.75, beat)
 		if _impacting:
@@ -521,7 +521,7 @@ func _process(delta: float) -> void:
 		done.emit()
 
 
-## She lands. The hull goes, three bursts go off where she was, the camera is
+## It lands. The hull goes, three bursts go off where it was, the camera is
 ## thrown about, and the alarm has nothing left to say.
 func _blow_up() -> void:
 	_blew = true

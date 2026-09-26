@@ -411,13 +411,14 @@ func _follow_poses(delta: float) -> void:
 static func station_hash(st: Station) -> int:
 	var par := st.get_parent()
 	return hash([st.kind, st.storage, st.switched_on, st._job, st._job_craft,
-		st._job_times, (par as Ship).net_id if par is Ship else ""])
+		st._job_times, st.firebox, st.fire_t > 0.0, (par as Ship).net_id if par is Ship else ""])
 
 
 static func station_snap(st: Station) -> Dictionary:
 	var d := {"nid": st.net_id, "kind": st.kind, "storage": st.storage,
 		"on": st.switched_on, "power": st.power, "burn": [st.burn_t, st.burn_rate],
-		"job": [st._job, st._job_t, st._job_total, st._job_craft, st._job_times]}
+		"job": [st._job, st._job_t, st._job_total, st._job_craft, st._job_times],
+		"fire": st.firebox, "fire_t": st.fire_t}
 	var par := st.get_parent()
 	if par is Ship:
 		d["ship"] = (par as Ship).net_id
@@ -462,6 +463,9 @@ func apply_station(d: Dictionary) -> void:
 	# Filled in place, not swapped for a new array: an open chest window is
 	# looking at this one.
 	st.storage.assign((d.get("storage", []) as Array).duplicate(true))
+	# Same in-place rule for the grate: somebody may be looking at that slot.
+	st.firebox.assign((d.get("fire", []) as Array).duplicate(true))
+	st.fire_t = float(d.get("fire_t", st.fire_t))
 	if Blocks.makes_power(st.kind):
 		if st.switched_on != bool(d.get("on", true)):
 			st.set_switched(bool(d.get("on", true)))

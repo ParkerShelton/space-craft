@@ -418,6 +418,12 @@ static func journal_text(planet: Planet) -> String:
 			lines.append("  out from across a cave.")
 		if burn == 0:
 			lines.append("  None of it burns well. Power will be the hard part.")
+		lines.append("A furnace is a fire with a chamber over it, and the fire")
+		lines.append("is the part I have to keep. Wood in the grate at the front,")
+		lines.append("ore in the chamber above it. No fire, no smelt -- it will")
+		lines.append("sit there cold with the ore in it and wait for me. Coal")
+		lines.append("and any ore that burns go in the grate too, and last far")
+		lines.append("longer than wood does.")
 		lines.append("Smelt ore into ingots, then hammer an ingot flat on an")
 		lines.append("anvil to get different things. Too much hammering ruins the metal.")
 		lines.append("The ore that burns has no metal in it -- the same furnace")
