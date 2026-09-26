@@ -139,10 +139,10 @@ const CROUCH_EYE_MULT := 0.55
 ## of the lip and the body overhangs by most of its width, which is what makes
 ## looking down over a drop possible. The capsule still rests on what is left of
 ## the block, so you do not fall.
-## How far the body is dropped when asking whether it is standing on anything.
-## Short: a block one step below is a drop, not support, and refusing to walk
-## into it is the whole point of crouching at an edge.
-const FLOOR_REACH := 0.12
+## How far below the sole still counts as floor. Short on purpose: a block one
+## step down is a drop, not support, and refusing to walk into it is the whole
+## point of crouching at an edge.
+const FLOOR_REACH := 0.30
 
 ## How long after walking off an edge a jump still counts.
 ##
@@ -3598,23 +3598,46 @@ func _keep_on_the_ledge(before: Vector3, up: Vector3) -> void:
 	velocity = up * velocity.dot(up)
 
 
-## Would the body be standing on something here?
+## Is there floor under the SOLE here?
 ##
-## Asked with the CAPSULE, not with rays. Rays round the sole are a guess at
-## what the body is resting on, and a guess that disagrees with the physics by
-## even a little is the difference between "crouching holds me" and "crouching
-## holds me and then sometimes does not" -- which is no good at all if falling
-## is going to start costing health.
+## Not test_move with the whole capsule, which is what this was and which is
+## exactly how you could walk clean off a block. Once your middle is past the
+## brink, the lower half of the capsule is alongside the block rather than on
+## top of it -- so a downward test hits the block's SIDE, reports a collision,
+## and cheerfully calls that standing on something. You could keep walking out
+## on the strength of scraping the wall you had just left.
 ##
-## test_move slides the real collision shape down a short way and says whether
-## it hits. That is the same shape, the same world and the same solver that
-## decide is_on_floor(), so the two cannot disagree. It also gives the overhang
-## for free: the capsule is 0.4 across, so you can hang out over a drop until
-## the last of it leaves the block, and not one step further.
+## So: rays, and only ever downward, from a disc the size of the sole. Nine of
+## them -- the middle, four at the rim and four on the diagonals -- because a
+## body is held up by any part of its foot and the corners are where you are
+## standing when you shuffle out to one.
+const SOLE := 0.36        # how far the sole reaches from the middle
+const SOLE_DIAG := 0.26   # ...and on the diagonals, inside the same circle
+
+
 func _floor_under(at: Vector3, up: Vector3) -> bool:
-	var xf := global_transform
-	xf.origin = at
-	return test_move(xf, -up * FLOOR_REACH)
+	var space := get_world_3d().direct_space_state
+	if space == null:
+		return true
+	var f := -global_transform.basis.z
+	f = f - up * f.dot(up)
+	if f.length() < 0.001:
+		f = global_transform.basis.x
+	f = f.normalized()
+	var r := up.cross(f).normalized()
+	var feet: Vector3 = at - up * 0.9 + up * 0.06
+	var offs: Array = [Vector3.ZERO,
+		f * SOLE, -f * SOLE, r * SOLE, -r * SOLE,
+		(f + r).normalized() * SOLE_DIAG, (f - r).normalized() * SOLE_DIAG,
+		(-f + r).normalized() * SOLE_DIAG, (-f - r).normalized() * SOLE_DIAG]
+	for off in offs:
+		var from: Vector3 = feet + off
+		var q := PhysicsRayQueryParameters3D.create(from, from - up * FLOOR_REACH)
+		q.exclude = [get_rid()]
+		q.collide_with_areas = false
+		if not space.intersect_ray(q).is_empty():
+			return true
+	return false
 
 
 func _walk(delta: float, up: Vector3, gmag: float) -> void:
@@ -3691,8 +3714,11 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	var before := global_position
 	move_and_slide()
 	_auto_step_up(up, horiz, delta)
-	if crouching:
-		# Crouching, a step that takes you off the block is simply undone.
+	# Holding crouch and standing on something when the frame began is enough.
+	# Keying this off `crouching` meant the protection switched itself off in
+	# the very frame it was needed: the step took you off the block, is_on_floor
+	# went false, crouching went false with it, and nothing put you back.
+	if was_floor and not menu_open and not ui_typing and key_down("crouch"):
 		_keep_on_the_ledge(before, up)
 	elif was_floor and not is_on_floor() and v_up <= 0.1:
 		# You have just WALKED off something rather than jumped off it. Most of
@@ -7311,11 +7337,25 @@ func _tick_reading(delta: float) -> void:
 	_read_t = move_toward(_read_t, want, delta * 2.6)
 	var e: float = _read_t * _read_t * (3.0 - 2.0 * _read_t)
 	ItemModels.set_book_open(_held_book, e)
-	# Brought up and turned square to you as it opens, so you are reading it
-	# rather than holding it out at your side.
-	_held_book.position = Vector3(0.04 - 0.04 * e, -0.06 + 0.05 * e, 0.10 * e)
-	_held_book.rotation = Vector3(-0.25 - 0.35 * e, 0.6 - 0.6 * e, 0.0)
-	_held_book.scale = Vector3.ONE * (0.55 + 0.18 * e)
+	# Turned to face YOU as it opens.
+	#
+	# It used to end up held out flat with the pages pointing away, as though
+	# you were showing it to somebody across the table. Two reasons, and both
+	# are fixed here. The tilt only reached 0.6 of a radian, which leaves an
+	# open book nearly face-up and seen edge-on; a book you are reading is
+	# canted back most of a right angle so the pages look at your face. And it
+	# never undid the hand's own pose -- the hand it hangs off sits turned
+	# 0.35 out and rolled 0.12 over, so even square to the hand it was angled
+	# away from the eye.
+	var yaw: float = lerpf(0.6, -HAND_IDLE_ROT.y, e)
+	var roll: float = lerpf(0.0, -HAND_IDLE_ROT.z, e)
+	# Canted BACK toward your face. The sign of this was the whole bug: tilting
+	# the other way is what had you holding it out for somebody else to read.
+	_held_book.rotation = Vector3(lerpf(-0.25, 1.30, e), yaw, roll)
+	# ...and brought in front of you rather than left down at your side.
+	_held_book.position = Vector3(lerpf(0.04, -0.26, e), lerpf(-0.06, 0.06, e),
+		lerpf(0.0, 0.14, e))
+	_held_book.scale = Vector3.ONE * lerpf(0.55, 0.92, e)
 
 
 func _mk_view_box(size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
