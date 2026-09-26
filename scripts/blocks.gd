@@ -422,12 +422,28 @@ const TORCH_TIER_SHIFT := 16
 const TORCH_TIER_MASK := 0x3
 
 
-static func make_torch(id: int, tier: int) -> int:
-	return (id & ID_MASK) | ((tier & TORCH_TIER_MASK) << TORCH_TIER_SHIFT)
+## Which wall a torch is bracketed to, as an index into Chunk._WFACE -- the
+## direction it leans OUT, away from the wall. Stored as index+1 so that zero
+## means "standing on the ground", which is what every torch already saved in
+## every world reads as without having to be migrated.
+const TORCH_FACE_SHIFT := 18
+const TORCH_FACE_MASK := 0x7
+const TORCH_STANDING := -1
+
+
+static func make_torch(id: int, tier: int, face: int = TORCH_STANDING) -> int:
+	var f: int = 0 if face < 0 else (face + 1) & TORCH_FACE_MASK
+	return (id & ID_MASK) | ((tier & TORCH_TIER_MASK) << TORCH_TIER_SHIFT) \
+		| (f << TORCH_FACE_SHIFT)
 
 
 static func torch_tier_of(v: int) -> int:
 	return (v >> TORCH_TIER_SHIFT) & TORCH_TIER_MASK
+
+
+## The face it hangs off, or TORCH_STANDING if it is stood on the floor.
+static func torch_face_of(v: int) -> int:
+	return (((v >> TORCH_FACE_SHIFT) & TORCH_FACE_MASK) - 1)
 
 
 static func is_light(id: int) -> bool:
@@ -464,6 +480,13 @@ static func light_def(raw: int) -> Dictionary:
 			"color": Color(1.0, 0.66, 0.30).lerp(Color(1.0, 0.93, 0.72), t / 3.0)}
 	if id == TORCH:
 		return {"range": 14.0, "energy": 1.6, "color": Color(1.0, 0.72, 0.38)}
+	if id == GLOW_LAMP:
+		# A made thing beats a burning stick, and visibly: half again a torch's
+		# reach and half again its strength, in a cold white rather than
+		# firelight. The BAKED reach (see light_level) can only be 15, which is
+		# the ceiling the flood fill carries, so the difference a player
+		# actually feels walking around one has to come from here.
+		return {"range": 21.0, "energy": 2.5, "color": Color(0.92, 0.95, 1.0)}
 	if id == AURORA_BLOOM:
 		# Bright, and the colour of the sky that grew it. Most players will be
 		# indoors or asleep, so a bloom has to be worth noticing through a

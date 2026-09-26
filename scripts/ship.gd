@@ -1211,6 +1211,11 @@ func rebuild() -> void:
 	if _mi == null:
 		_mi = MeshInstance3D.new()
 		add_child(_mi)
+	# Before anything is emitted: the faces carry it. And the real lights go up
+	# with it, because a block map that just changed is exactly when a lamp
+	# could have been bolted on or cut off.
+	_bake_light()
+	_apply_ship_lights()
 
 	var verts := PackedVector3Array()   # opaque hull (surface 0)
 	var normals := PackedVector3Array()
@@ -1286,7 +1291,7 @@ func rebuild() -> void:
 			else:
 				verts.append(p0); verts.append(p1); verts.append(p2)
 				verts.append(p0); verts.append(p2); verts.append(p3)
-				_face_attrs(id, s, uvs, uv2s)
+				_face_attrs(id, s, uvs, uv2s, _face_light(v, face["n"]))
 				for _k in 6:
 					normals.append(nrm)
 					colors.append(col)
@@ -1342,14 +1347,118 @@ func _fills_cell(id: int) -> bool:
 
 ## The two shader attributes, six times -- once per vertex of the quad.
 func _face_attrs(id: int, shade: float, uvs: PackedVector2Array,
-		uv2s: PackedVector2Array) -> void:
+		uv2s: PackedVector2Array, light := 0.0) -> void:
 	var base := Blocks.bottom_of(id)
 	var la: int = Blocks.log_axis_of(id) if Blocks.is_wood(base) else -1
 	var a := Vector2(float(base) / Chunk.ID_SCALE, shade)
-	var b := Vector2(float(la) if la >= 0 else 3.0, 0.0)
+	# UV2.y is the baked block light for this face, exactly as a chunk feeds it
+	# (see Chunk.build_mesh_data). It was hard-coded to zero here, which is why
+	# a lamp bolted inside a ship lit nothing at all: the flood fill that makes
+	# a torch light a cave is terrain-only, and the hull had no equivalent, so
+	# every ship face told the shader it was in the dark.
+	var b := Vector2(float(la) if la >= 0 else 3.0, light)
 	for _k in 6:
 		uvs.append(a)
 		uv2s.append(b)
+
+
+## How bright it is in each open cell of this hull.
+##
+## The same idea as Chunk._compute_block_light and a great deal smaller: a ship
+## is a couple of hundred cells, so this walks its own block map rather than a
+## padded volume. Light spreads through the cells you could walk or see
+## through and stops at plate, which is what makes a lamp light the cabin it is
+## in and not the wing on the other side of a bulkhead.
+func _bake_light() -> void:
+	_block_light.clear()
+	var frontier: Array = []
+	for v in blocks:
+		var lvl := Blocks.light_level(int(blocks[v]))
+		if lvl > 0:
+			_block_light[v] = lvl
+			frontier.append(v)
+	if frontier.is_empty():
+		return
+	var nb := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+		Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
+	while not frontier.is_empty():
+		var nxt: Array = []
+		for c in frontier:
+			var here: int = int(_block_light[c])
+			if here <= 1:
+				continue
+			for d in nb:
+				var n: Vector3i = c + d
+				if int(_block_light.get(n, 0)) >= here - 1:
+					continue
+				if not _lets_light_through(n):
+					continue
+				_block_light[n] = here - 1
+				nxt.append(n)
+		frontier = nxt
+
+
+## Can light pass into this cell? Open space and the things you can see
+## through -- and out of the hull entirely, which is how a lamp by an open
+## doorway spills onto the ground outside.
+func _lets_light_through(v: Vector3i) -> bool:
+	if not blocks.has(v):
+		return true
+	var id := int(blocks[v])
+	var b := Blocks.bottom_of(id)
+	return b == Blocks.AIR or b == Blocks.GLASS or b == Blocks.DOOR_OPEN \
+		or Blocks.is_light(b)
+
+
+## The light just outside a face, 0..1 -- the open cell it looks into, which is
+## where the lamp's light actually is.
+func _face_light(v: Vector3i, n: Vector3i) -> float:
+	return float(int(_block_light.get(v + n, 0))) / 15.0
+
+
+## Real lights on this hull's lamps, so the player and anything else moving
+## about is lit by them and not only the walls. Dimmed with the ship's power,
+## the same way the baked light is.
+func _apply_ship_lights() -> void:
+	for l in _hull_lights:
+		if is_instance_valid(l):
+			l.queue_free()
+	_hull_lights.clear()
+	for v in blocks:
+		var id := int(blocks[v])
+		if not Blocks.is_light(Blocks.bottom_of(id)):
+			continue
+		var def := Blocks.light_def(id)
+		var om := OmniLight3D.new()
+		# Modest, like a chunk's: the baked light does most of the work and
+		# these are here to catch what moves.
+		om.omni_range = float(def["range"]) * 0.8
+		om.light_energy = float(def["energy"]) * 0.7
+		om.light_color = def["color"]
+		om.shadow_enabled = false
+		add_child(om)
+		om.position = Vector3(v) + Vector3(0.5, 0.5, 0.5)
+		_hull_lights.append(om)
+	_dim_hull_lights()
+
+
+func _dim_hull_lights() -> void:
+	for l in _hull_lights:
+		if not is_instance_valid(l):
+			continue
+		var om := l as OmniLight3D
+		# A torch is fire, not wiring: it does not care what the battery says.
+		var wired: bool = Blocks.bottom_of(int(blocks.get(_cell_of(om), Blocks.AIR))) \
+			== Blocks.GLOW_LAMP
+		om.visible = not wired or lamp_power > 0.02
+		if wired:
+			om.light_energy = float(Blocks.light_def(Blocks.GLOW_LAMP)["energy"]) \
+				* 0.7 * lamp_power
+
+
+func _cell_of(n: Node3D) -> Vector3i:
+	var p: Vector3 = n.position - Vector3(0.5, 0.5, 0.5)
+	return Vector3i(roundi(p.x), roundi(p.y), roundi(p.z))
 
 
 ## What the hull is drawn with. The planet's own voxel material where there is
@@ -1386,12 +1495,16 @@ func _hull_material() -> Material:
 
 ## How lit her lamps are, 0 (dark) to 1. Driven by ShipWake from her power.
 var lamp_power := 1.0
+## Baked block light for this hull: cell -> 0..15. See _bake_light.
+var _block_light := {}
+var _hull_lights: Array = []
 var _mat: ShaderMaterial
 var _mat_src: ShaderMaterial
 
 
 func set_lamp_power(v: float) -> void:
 	lamp_power = clampf(v, 0.0, 1.0)
+	_dim_hull_lights()
 	if _mat != null:
 		_mat.set_shader_parameter("lamp_power", lamp_power)
 
@@ -1438,7 +1551,8 @@ func _emit_shape(v: Vector3i, id: int, boxes: Array, verts: PackedVector3Array,
 			var q := Chunk._box_face(lo, hi, fi)
 			verts.append(q[0]); verts.append(q[1]); verts.append(q[2])
 			verts.append(q[0]); verts.append(q[2]); verts.append(q[3])
-			_face_attrs(id, sh, uvs, uv2s)
+			_face_attrs(id, sh, uvs, uv2s,
+				_face_light(v, Chunk._WFACE[fi] as Vector3i))
 			for _k in 6:
 				normals.append(nrm)
 				colors.append(col)

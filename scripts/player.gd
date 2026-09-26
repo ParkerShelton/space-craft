@@ -4898,10 +4898,27 @@ func _update_outline(tgt: Dictionary) -> void:
 			lo = cb[0]
 			hi = cb[1]
 		elif Blocks.is_light(Blocks.bottom_of(raw)) 				and Blocks.bottom_of(raw) != Blocks.GLOW_LAMP:
-			# A torch is a post on a wall, not a cube.
-			var tb: Array = Chunk.torch_box(up)
-			lo = tb[0]
-			hi = tb[1]
+			# A torch is a stick with a flame on it, not a cube -- and one
+			# bracketed to a wall hangs out from it, so the outline has to be
+			# drawn round wherever it actually is.
+			var fi := Blocks.torch_face_of(raw)
+			var tout := Vector3(Chunk._WFACE[fi]) if fi >= 0 and fi < 6 else Vector3.ZERO
+			# The parts are oriented boxes now, so the outline is the box round
+			# their rotated corners rather than round their extents.
+			lo = Vector3(9.0, 9.0, 9.0)
+			hi = Vector3(-9.0, -9.0, -9.0)
+			for tp in Chunk.torch_parts(up, tout):
+				var pb: Basis = tp["b"]
+				var ph: Vector3 = tp["h"]
+				for sx in [-1.0, 1.0]:
+					for sy in [-1.0, 1.0]:
+						for sz in [-1.0, 1.0]:
+							var corner: Vector3 = (tp["c"] as Vector3) \
+								+ pb * Vector3(ph.x * sx, ph.y * sy, ph.z * sz)
+							lo = Vector3(minf(lo.x, corner.x), minf(lo.y, corner.y),
+								minf(lo.z, corner.z))
+							hi = Vector3(maxf(hi.x, corner.x), maxf(hi.y, corner.y),
+								maxf(hi.z, corner.z))
 		else:
 			var boxes: Array = Chunk.shape_boxes(raw, up)
 			if not boxes.is_empty():
@@ -5577,11 +5594,22 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 				return {}   # that face already has cable on it
 			return {"voxel": pv, "value": Blocks.wire_add_face(here, fi)}
 		return {"voxel": pv, "value": Blocks.wire_with_faces(1 << fi)}
-	if place_id == Blocks.EMBER_TORCH:
+	if Blocks.is_light(place_id) and place_id != Blocks.GLOW_LAMP:
 		# A placed voxel is a bare int and can't carry item properties, so the
 		# brightness step is baked in here from the ore it was crafted with.
 		var pr: Dictionary = inv[active_slot].get("props", {}) if active_slot < inv.size() else {}
-		return {"voxel": pv, "value": Blocks.make_torch(place_id, Blocks.torch_tier_for(pr))}
+		var tier: int = Blocks.torch_tier_for(pr) if place_id == Blocks.EMBER_TORCH else 0
+		# Put one against a wall and it hangs off the wall. Which way is "up"
+		# depends on the face of the world you are on, so the test is whether
+		# the surface you clicked faces sideways -- not whether its normal
+		# happens to be Y.
+		var tn: Vector3i = tgt.get("normal", Vector3i(0, 1, 0))
+		var tface := -1
+		if obj is Planet:
+			var tup: Vector3 = (obj as Planet)._axis_of(Vector3(pv) + Vector3(0.5, 0.5, 0.5))
+			if absf(Vector3(tn).normalized().dot(tup)) < 0.5:
+				tface = Chunk._WFACE.find(tn)
+		return {"voxel": pv, "value": Blocks.make_torch(place_id, tier, tface)}
 	if Blocks.is_leaf(place_id):
 		# Marked as placed, so it neither withers nor comes down with a tree.
 		return {"voxel": pv, "value": Blocks.placed_leaf(place_id)}

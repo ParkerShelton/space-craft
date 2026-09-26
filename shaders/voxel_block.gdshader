@@ -87,11 +87,21 @@ uniform float ore_glow[4];
 // Chunk._block_color) and textured here as grimy rather than calm.
 uniform float ore_soot[4];
 uniform float ore_chunk_id = 63.0;
-// Light-emitting blocks (torch / lamp / ember torch) occupy a contiguous id
-// range. They must GLOW rather than merely be a bright colour, or in daylight
-// they read as a painted cube and in a dark cave they vanish into the wall.
-uniform float light_lo = 91.0;
-uniform float light_hi = 93.0;
+// Light-emitting blocks. They must GLOW rather than merely be a bright colour,
+// or in daylight they read as a painted cube and in a dark cave they vanish
+// into the wall.
+//
+// The EXACT ids, not the range they span. This used to be a lo..hi pair fed
+// from LIGHT_IDS.min() and .max(), which was true while the lights were the
+// three consecutive ids 91-93 and quietly stopped being true the day an
+// Aurora Bloom was added at 221: the band became 91..221 and seventy-two
+// innocent blocks -- planks, slabs, chests, ducts, and the cracked plate a
+// torn-off wing is made of -- started drawing flat and fully emissive. A ship
+// looked like it had lamps buried in its wings, and the real lamp did not
+// stand out because most of the hull was glowing too.
+const int MAX_LIGHT_IDS = 8;
+uniform int light_id_count = 3;
+uniform float light_ids[MAX_LIGHT_IDS];
 // How lit a SHIP's lamps are, 0..1. A ship draws with its own copy of this
 // material (see Ship._hull_material), so a wreck with no power can go dark --
 // lamp and the light it throws on the walls both -- without touching the
@@ -99,6 +109,19 @@ uniform float light_hi = 93.0;
 // stay lit whatever it says.
 uniform float lamp_power = 1.0;
 uniform float glow_lamp_id = -1.0;
+
+
+// Is this one of the light-emitting blocks? A short loop over the real ids
+// rather than a range test -- see the note on light_ids above for what a range
+// cost the last time the set stopped being contiguous.
+bool is_light_id(float id) {
+	for (int i = 0; i < light_id_count; i++) {
+		if (abs(id - light_ids[i]) < 0.5) {
+			return true;
+		}
+	}
+	return false;
+}
 // A campfire's flames are their own geometry (see Chunk.build_mesh_data), drawn
 // with the campfire's id so they can burn rather than sit there as orange boxes.
 uniform float flame_id = 111.0;
@@ -314,7 +337,7 @@ void fragment() {
 		shade = 1.0;
 		emit = flick;
 
-	} else if (id >= light_lo - 0.5 && id <= light_hi + 0.5) {
+	} else if (is_light_id(id)) {
 		// A light source is the one thing that should NOT be shaded down by the
 		// scene: it makes its own light. Kept flat and emissive so it stays
 		// legible in a black cave and still reads as burning in full daylight.

@@ -113,8 +113,14 @@ static func _get_material(p: Planet) -> ShaderMaterial:
 	m.set_shader_parameter("ground_contrast", p.ground_contrast)
 	m.set_shader_parameter("rock_grain", p.rock_grain)
 	m.set_shader_parameter("rock_contrast", p.rock_contrast)
-	m.set_shader_parameter("light_lo", float(Blocks.LIGHT_IDS.min()))
-	m.set_shader_parameter("light_hi", float(Blocks.LIGHT_IDS.max()))
+	# The ids themselves. Handing over min() and max() described the set as the
+	# range it happened to span, which was a different set the moment a light
+	# was added anywhere but next door -- see the note in the shader.
+	var lids := PackedFloat32Array()
+	for lid in Blocks.LIGHT_IDS:
+		lids.append(float(lid))
+	m.set_shader_parameter("light_id_count", lids.size())
+	m.set_shader_parameter("light_ids", lids)
 	m.set_shader_parameter("glow_lamp_id", float(Blocks.GLOW_LAMP))
 	m.set_shader_parameter("rock_id", float(Blocks.ROCK))
 	# Worked metal gets panels and a sheen rather than stone speckle.
@@ -433,6 +439,10 @@ const CS_MASK := CS - 1
 ## How far a campfire throws light. A shade under a torch: it is a hearth, not
 ## a lamp on a pole.
 const FIRE_LIGHT := 10
+
+## The stick a torch is bound to. Dark, so the flame on the end of it is the
+## bright part -- which is the whole difference between a torch and a lamp.
+const TORCH_HANDLE := Color(0.31, 0.22, 0.13)
 
 const LIGHT_PAD := 15
 const LIGHT_DIM := CS + LIGHT_PAD * 2
@@ -979,11 +989,22 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 			var lo := Vector3(x, y, z)
 			if Blocks.bottom_of(lid) != Blocks.GLOW_LAMP:
 				var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
-				var tb := torch_box(up)
-				var mid: Vector3 = lo + (tb[0] as Vector3)
-				var thin: Vector3 = lo + (tb[1] as Vector3)
-				_emit_free_box(mid, thin, planet.color_of(lid),
-					lid, verts, normals, colors, uvs, uv2s, 1.0)
+				var fi := Blocks.torch_face_of(lid)
+				var out := Vector3(_WFACE[fi]) if fi >= 0 and fi < 6 else Vector3.ZERO
+				# A torch bracketed to a wall whose wall has since been dug out
+				# would hang in the air. Stand it up instead.
+				if out != Vector3.ZERO \
+						and planet.get_id(gv - Vector3i(out)) == Blocks.AIR:
+					out = Vector3.ZERO
+				for tp in torch_parts(up, out):
+					var burning: bool = bool(tp["burn"])
+					# The handle is a stick and is shaded like one. Only the
+					# head is the light -- the whole thing glowing was most of
+					# why it read as a brick rather than a torch.
+					_emit_rot_box(lo + (tp["c"] as Vector3), tp["h"], tp["b"],
+						planet.color_of(lid) if burning else TORCH_HANDLE,
+						lid if burning else Blocks.PLANK,
+						verts, normals, colors, uvs, uv2s, 1.0 if burning else 0.72)
 			else:
 				_emit_solid_box_cell(lo, lo + Vector3.ONE, gv, lid,
 					planet, snap, verts, normals, colors, uvs, uv2s, cverts)
@@ -1444,16 +1465,85 @@ static func _wire_boxes(lo: Vector3, hi: Vector3, mount: Vector3, arms: int,
 ## Shared with the selection outline so the highlight hugs the post rather than
 ## the cell it stands in -- and shared rather than copied, because two
 ## descriptions of the same stick drift apart the first time one is tuned.
-static func torch_box(up: Vector3) -> Array:
-	var a := _half_toward(Vector3.ZERO, Vector3.ONE, -up)
-	var a0: Vector3 = a[0]
-	var a1: Vector3 = a[1]
-	var mid: Vector3 = (a0 + a1) * 0.5
-	var thin := Vector3(0.16, 0.16, 0.16)
-	if absf(up.x) > 0.5: thin.x = (a1.x - a0.x) * 0.5
-	elif absf(up.y) > 0.5: thin.y = (a1.y - a0.y) * 0.5
-	else: thin.z = (a1.z - a0.z) * 0.5
-	return [mid - thin, mid + thin]
+## A torch: a handle with the burning end on top of it.
+##
+## It was one box -- a stubby post in the bottom half of the cell -- which read
+## as a small bright brick rather than a torch. And it was always upright, so
+## one you had just put on a wall stood on the floor in front of it instead of
+## hanging off it.
+##
+## `out` is the direction away from the wall it is bracketed to, or
+## Vector3.ZERO for one standing on the ground. A wall torch genuinely LEANS:
+## three stepped boxes were tried first and read as three separate blocks
+## floating off the wall, because a diagonal made of axis-aligned boxes only
+## looks like a diagonal at the scale a staircase is built at, not at the
+## thickness of a stick.
+##
+## Each part is {c, h, b, burn}: centre, half-extents, orientation, and whether
+## it is the flame -- the handle is wood and shades like wood, only the head
+## glows.
+static func torch_parts(up: Vector3, out: Vector3) -> Array:
+	var c := Vector3(0.5, 0.5, 0.5)
+	if out.length_squared() < 0.25:
+		# Stood on the floor: straight up, no rotation needed.
+		var b := _upright_basis(up)
+		return [
+			{"c": c - up * 0.20, "h": Vector3(0.055, 0.30, 0.055), "b": b, "burn": false},
+			{"c": c + up * 0.17, "h": Vector3(0.085, 0.085, 0.085), "b": b, "burn": true}]
+	# Bracketed to a wall. The stick is tilted out of vertical, about the axis
+	# that is perpendicular to both "up" and "out".
+	var side: Vector3 = up.cross(out).normalized()
+	var tilt := Basis(side, deg_to_rad(36.0))
+	var dir: Vector3 = (tilt * up).normalized()
+	var rb := Basis(side, dir, side.cross(dir).normalized())
+	var foot: Vector3 = c - out * 0.40 - up * 0.26
+	var half_len := 0.30
+	var mid: Vector3 = foot + dir * half_len
+	return [
+		# A short collar where it meets the wall, so it is fixed to something.
+		{"c": c - out * 0.44 - up * 0.20, "h": Vector3(0.085, 0.085, 0.06),
+			"b": _upright_basis(up), "burn": false},
+		{"c": mid, "h": Vector3(0.055, half_len, 0.055), "b": rb, "burn": false},
+		{"c": foot + dir * (half_len * 2.0 + 0.06),
+			"h": Vector3(0.085, 0.085, 0.085), "b": rb, "burn": true}]
+
+
+## An orientation whose local Y is `up`, for the parts that do not tilt.
+static func _upright_basis(up: Vector3) -> Basis:
+	var any := Vector3(1, 0, 0) if absf(up.x) < 0.5 else Vector3(0, 0, 1)
+	var x: Vector3 = any.cross(up).normalized()
+	return Basis(x, up, x.cross(up).normalized())
+
+
+## One box with an orientation. The plain emitter only does axis-aligned boxes,
+## which is every other thing in this world and not a torch on a wall.
+static func _emit_rot_box(centre: Vector3, half: Vector3, b: Basis, base_col: Color,
+		bid: int, verts: PackedVector3Array, normals: PackedVector3Array,
+		colors: PackedColorArray, uvs: PackedVector2Array, uv2s: PackedVector2Array,
+		light: float = 0.0) -> void:
+	for fi in 6:
+		var ax: int = fi / 2
+		var sg: float = 1.0 if (fi % 2) == 0 else -1.0
+		var nl := Vector3.ZERO
+		nl[ax] = sg
+		var u := Vector3.ZERO
+		var v := Vector3.ZERO
+		u[(ax + 1) % 3] = half[(ax + 1) % 3]
+		v[(ax + 2) % 3] = half[(ax + 2) % 3]
+		var cf: Vector3 = nl * half[ax]
+		var p0: Vector3 = centre + b * (cf - u - v)
+		var p1: Vector3 = centre + b * (cf + u - v)
+		var p2: Vector3 = centre + b * (cf + u + v)
+		var p3: Vector3 = centre + b * (cf - u + v)
+		var n: Vector3 = (b * nl).normalized()
+		var sh := _face_shade(ax, 1 if sg > 0.0 else -1)
+		var col := Color(base_col.r * sh, base_col.g * sh, base_col.b * sh, base_col.a)
+		# Wound the other way on the negative faces, or half the box is inside
+		# out and disappears.
+		if sg > 0.0:
+			_quad(p0, p1, p2, p3, n, col, verts, normals, colors, uvs, uv2s, bid, sh, light)
+		else:
+			_quad(p0, p3, p2, p1, n, col, verts, normals, colors, uvs, uv2s, bid, sh, light)
 
 
 ## A thin slice down the MIDDLE of a cell, across the given axis.
