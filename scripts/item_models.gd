@@ -119,6 +119,17 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 				rod.append([Vector3(0, -0.12 + float(i) * 0.24, 0),
 					Vector3(0.18, 0.04, 0.18), BAND])
 			return rod
+		Blocks.STAVE:
+			# A few flat boards off a log, stacked and slightly out of true --
+			# shaved, not sawn.
+			const BOARD := Color(0.66, 0.50, 0.28)
+			const BOARD_D := Color(0.52, 0.38, 0.20)
+			var st: Array = []
+			for i in 3:
+				st.append([Vector3(float(i) * 0.012 - 0.012, -0.06 + float(i) * 0.055,
+					float(i) * 0.02 - 0.02), Vector3(0.52, 0.05, 0.22),
+					BOARD if (i % 2) == 0 else BOARD_D])
+			return st
 		Blocks.SOLAR_PANEL:
 			# A dark cell behind glass, with a bright bus bar down the middle
 			# and a tab at one corner -- small, flat, and obviously a part of

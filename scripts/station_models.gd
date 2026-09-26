@@ -25,6 +25,7 @@ const FOOTPRINT := {
 	Blocks.SOLAR_ARRAY: Vector3i(2, 1, 1),
 	Blocks.REACTOR: Vector3i(1, 2, 1),
 	Blocks.CAPACITOR: Vector3i(1, 1, 1),
+	Blocks.PIPE_BENCH: Vector3i(2, 1, 1),
 	Blocks.DUCT_LOADER: Vector3i(1, 1, 1),
 	Blocks.DUCT_PORT: Vector3i(1, 1, 1),
 	Blocks.POWER_BAY: Vector3i(1, 1, 1),
@@ -101,6 +102,8 @@ static func boxes_for(kind: int) -> Array:
 			return reactor_boxes(false, 0.0, false, 0.0)
 		Blocks.CAPACITOR:
 			return capacitor_boxes(false, 0.0, 0.0)
+		Blocks.PIPE_BENCH:
+			return pipe_bench_boxes() + pipe_roller_boxes(0.0)
 		Blocks.DUCT_LOADER:
 			return loader_boxes()
 		Blocks.DUCT_PORT:
@@ -1062,6 +1065,79 @@ static func capacitor_lit(power: float, has_battery: bool, charge: float) -> Arr
 static func capacitor_mesh(has_battery: bool, charge: float, power: float) -> ArrayMesh:
 	return _lit_mesh(capacitor_boxes(has_battery, charge, power),
 		capacitor_lit(power, has_battery, charge))
+
+
+## The Pipe Bench: a blade at one end, a pair of rollers at the other, and a
+## trough between them. Two cells wide, because it is visibly two machines
+## sharing a frame -- which is exactly what it is.
+const ROLLER_AT := Vector3(0.62, 0.72, 0.0)
+
+
+static func pipe_bench_boxes() -> Array:
+	const FRAME := Color(0.40, 0.34, 0.24)
+	const TOP := Color(0.52, 0.44, 0.30)
+	const IRON := Color(0.34, 0.36, 0.40)
+	const EDGE := Color(0.78, 0.80, 0.84)
+	var out: Array = [
+		[Vector3(0, 0.46, 0), Vector3(1.94, 0.16, 0.88), TOP],
+		[Vector3(0, 0.20, 0), Vector3(1.80, 0.36, 0.72), FRAME],
+	]
+	for sx in [-0.86, 0.86]:
+		for sz in [-0.34, 0.34]:
+			out.append([Vector3(sx, 0.20, sz), Vector3(0.14, 0.40, 0.14), FRAME])
+	# The blade end: a saw standing proud of the bed with its guard behind it,
+	# and the trough the shavings fall into.
+	out.append([Vector3(-0.62, 0.70, 0.22), Vector3(0.10, 0.34, 0.34), IRON])
+	out.append([Vector3(-0.62, 0.74, 0.0), Vector3(0.04, 0.42, 0.42), EDGE])
+	out.append([Vector3(-0.62, 0.58, -0.28), Vector3(0.42, 0.10, 0.22), IRON])
+	out.append([Vector3(-0.20, 0.56, 0), Vector3(0.34, 0.06, 0.60), IRON])
+	# ...and the roller end: two posts for the rollers to turn between.
+	for sz2 in [-0.30, 0.30]:
+		out.append([Vector3(0.62, 0.70, sz2), Vector3(0.22, 0.44, 0.10), IRON])
+	out.append([Vector3(0.92, 0.60, 0), Vector3(0.10, 0.28, 0.50), IRON])
+	return out
+
+
+## The rollers themselves, turned by `spin`. Their own boxes so the bench can
+## run them without rebuilding the frame every frame.
+static func pipe_roller_boxes(spin: float) -> Array:
+	const IRON := Color(0.46, 0.48, 0.54)
+	const DARK := Color(0.24, 0.26, 0.30)
+	var out: Array = []
+	for i in 2:
+		var y: float = ROLLER_AT.y + (0.13 if i == 0 else -0.13)
+		# Boxes cannot turn, so the roller is a short stack of bars offset
+		# round its axis -- at any angle it reads as something round in motion.
+		for k in 3:
+			var a: float = spin + float(k) * PI / 3.0 + (0.0 if i == 0 else 0.5)
+			var dy: float = cos(a) * 0.055
+			var dz: float = sin(a) * 0.055
+			out.append([Vector3(ROLLER_AT.x, y + dy, dz),
+				Vector3(0.40, 0.055, 0.055), IRON if (k % 2) == 0 else DARK])
+	return out
+
+
+## The bench with what is lying on it: the stock along the bed, and whatever
+## came off the rollers sitting at the far end where you take it from.
+static func pipe_bench_mesh(parts: Array, out_item: Dictionary) -> ArrayMesh:
+	var boxes := pipe_bench_boxes()
+	boxes.append_array(pipe_roller_boxes(0.0))
+	for i in parts.size():
+		var it: Dictionary = parts[i]
+		var col: Color = (it.get("mat", {}) as Dictionary).get("color",
+			Blocks.color_of(int(it["id"])))
+		# Laid along the bed between the blade and the rollers, in the order
+		# they went on, so you can see what the machine has to work with.
+		boxes.append([Vector3(-0.42 + float(i) * 0.26, 0.60, 0),
+			Vector3(0.20, 0.10, 0.40), col])
+	if not out_item.is_empty():
+		var oc: Color = (out_item.get("mat", {}) as Dictionary).get("color",
+			Blocks.color_of(int(out_item["id"])))
+		# What it made, standing at the roller end.
+		for k in 2:
+			boxes.append([Vector3(0.92, 0.62 + float(k) * 0.12, -0.10 + float(k) * 0.20),
+				Vector3(0.34, 0.09, 0.09), oc])
+	return mesh_from_boxes(boxes)
 
 
 ## A Loader: a squat pump with a wide mouth on one side for the container it

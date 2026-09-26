@@ -5419,6 +5419,8 @@ func _process_mining(delta: float) -> void:
 			return
 		if _process_press_look(tgt["obj"]):
 			return
+		if _process_bench_look(tgt["obj"]):
+			return
 		_process_station_mining(delta, tgt["obj"])
 		return
 	if tgt.get("kind", "") == "creature":
@@ -8056,6 +8058,8 @@ func _open_station(st: Station) -> void:
 	# And the press: parts go on its bed by hand and the lever does the work.
 	if st.kind == Blocks.FABRICATOR:
 		_use_press(st)
+	elif st.kind == Blocks.PIPE_BENCH:
+		_use_bench(st)
 		return
 	# A smelter fed straight from the hand: right-click it holding ore (or
 	# scrap, or sand) and the whole stack goes in and starts cooking.
@@ -8979,6 +8983,70 @@ func _smith_name(d: Dictionary) -> String:
 ## what the ram made if something is waiting; otherwise lay what you are
 ## holding on the next spot of the bed, or with an empty hand take the last
 ## part back off.
+## Which end of the Pipe Bench you are looking at, and where on it.
+##
+## Two controls, not one: the blade at the near end and the rollers at the far
+## end, so the machine tells you what it does by having two obviously different
+## ends rather than by a list of recipes on a panel.
+func _bench_zone(st: Station) -> Dictionary:
+	if not _ray.is_colliding():
+		return {}
+	var p: Vector3 = st.to_local(_ray.get_collision_point()) + Vector3(0, 0.5, 0)
+	if p.x < -0.42:
+		return {"zone": "blade"}
+	if p.x > 0.42:
+		return {"zone": "roller"}
+	return {"zone": "bed"}
+
+
+func _use_bench(st: Station) -> void:
+	var zone := {} if st.headless else _bench_zone(st)
+	var where := str(zone.get("zone", "bed"))
+	if where == "blade" or where == "roller":
+		# What came off it is taken from the rollers, since that is where it
+		# is sitting.
+		if where == "roller" and not st.bench_output().is_empty():
+			var got := st.bench_take_output()
+			var left := _add_item(int(got["id"]), int(got["count"]), got.get("props", {}),
+				str(got.get("src", "")), got.get("mat", {}))
+			if left > 0:
+				st.storage[Blocks.PIPE_SPOTS] = got
+				_toast("No room for that")
+				return
+			_toast("Took %d %s" % [int(got["count"]), Blocks.name_of(int(got["id"]))])
+			Audio.at("place_rock", st.global_position)
+			_refresh_slots()
+			return
+		var made := st.bench_work(where)
+		if made == "":
+			_toast("The blade has nothing to cut" if where == "blade"
+				else "Nothing on the bed that rolls into pipe")
+			Audio.ui("ui_deny")
+			return
+		_toast("%s" % made)
+		Audio.at("place_rock", st.global_position)
+		return
+	# The bed: lay something on it, or take the last thing back.
+	var held: Dictionary = _active_item()
+	var hid := int(held.get("id", Blocks.AIR))
+	if hid != Blocks.AIR and int(held.get("count", 0)) > 0 and Blocks.pipe_takes(hid):
+		if st.bench_add(held):
+			_take_one_from_active()
+			_refresh_slots()
+			Audio.at("place_rock", st.global_position)
+		else:
+			_toast("The bed is full" if st.bench_output().is_empty()
+				else "Take what it made off first")
+		return
+	var back := st.bench_take_last()
+	if back.is_empty():
+		_toast("Lay wood, staves, plate or glass on the bed")
+		return
+	_add_item(int(back["id"]), int(back.get("count", 1)), back.get("props", {}),
+		str(back.get("src", "")), back.get("mat", {}))
+	_refresh_slots()
+
+
 func _use_press(st: Station) -> void:
 	# A press that used to be a Fabricator may still be holding what went into
 	# its hopper. That comes back first, all of it.
@@ -9131,6 +9199,34 @@ func _pull_press(st: Station) -> void:
 ## What the look line says over a press: what is on the bed and what it would
 ## make. Returns true when there is something on it, which also stops a held
 ## click from taking the press apart with parts still on it.
+## Looking at the Pipe Bench: which end, and what turning it would do.
+func _process_bench_look(st: Station) -> bool:
+	if not is_instance_valid(st) or st.kind != Blocks.PIPE_BENCH:
+		return false
+	var z := {} if st.headless else _bench_zone(st)
+	var where := str(z.get("zone", "bed"))
+	var out := st.bench_output()
+	var ids: Array = []
+	for p in st.bench_parts():
+		ids.append(int(p["id"]))
+	if where == "blade":
+		var rb := Blocks.pipe_match(ids, "blade")
+		_look_name = "Blade  (right-click to cut%s)" % (
+			(" -- makes %s" % str(rb["label"])) if not rb.is_empty() else "")
+		return true
+	if where == "roller":
+		if not out.is_empty():
+			_look_name = "%s x%d  (right-click to take it)" % [
+				Blocks.name_of(int(out["id"])), int(out["count"])]
+			return true
+		var rr := Blocks.pipe_match(ids, "roller")
+		_look_name = "Rollers  (right-click to roll%s)" % (
+			(" -- makes %s" % str(rr["label"])) if not rr.is_empty() else "")
+		return true
+	_look_name = "Pipe Bench bed  (%d on it -- right-click to lay stock, or take it back)" % ids.size()
+	return true
+
+
 func _process_press_look(st: Station) -> bool:
 	if not is_instance_valid(st) or st.kind != Blocks.FABRICATOR:
 		return false

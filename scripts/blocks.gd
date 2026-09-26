@@ -989,6 +989,88 @@ const DUCT_REINFORCED := 226
 const DUCT_GLASS := 227
 const DUCT_IDS := [DUCT, DUCT_WOOD, DUCT_REINFORCED, DUCT_GLASS]
 
+## A stave: flat wooden stock, shaved off a log. Wood's answer to a plate.
+##
+## Everything that becomes a pipe is flat stock first, and this is what makes
+## that true of wood as well as metal -- so one machine rolls all of it and a
+## wooden pipe stays as cheap as the log it came off.
+const STAVE := 228
+
+## The Pipe Bench: a blade at one end and a pair of rollers at the other.
+##
+## It cuts and it rolls, and it does both itself -- there is no pipe hammer and
+## no pipe chisel, because a bench you load and set going is the right amount
+## of ceremony for something you are going to make two hundred of.
+const PIPE_BENCH := 229
+
+
+# --- the pipe bench ---------------------------------------------------------------
+#
+# A bed with four spots, like the Press, and TWO things to work it: a blade at
+# one end and a pair of rollers at the other. No panel and no recipe list --
+# you put stock on the bed and turn whichever end you meant.
+#
+# The blade cuts: a log becomes flat stock. The rollers roll: flat stock
+# becomes pipe. Wood, glass and metal all go the same way through, which is why
+# there is one machine instead of three, and why a wooden pipe costs a log.
+const PIPE_SPOTS := 4
+const PIPE_RECIPES := [
+	# At the blade.
+	{"label": "Staves", "out": STAVE, "n": 4, "at": "blade", "parts": [["wood", 1]]},
+	# At the rollers. The first part named is where the result takes its
+	# material from -- which is how a metal duct remembers the Hardness of the
+	# plate it was rolled from, and so how fast it carries.
+	{"label": "Wooden Duct", "out": DUCT_WOOD, "n": 4, "at": "roller",
+		"parts": [[STAVE, 4]]},
+	{"label": "Reinforced Duct", "out": DUCT_REINFORCED, "n": 4, "at": "roller",
+		"parts": [[STAVE, 3], [BAR, 1]]},
+	{"label": "Metal Duct", "out": DUCT, "n": 4, "at": "roller",
+		"parts": [[PLATE, 1]]},
+	{"label": "Glass Duct", "out": DUCT_GLASS, "n": 4, "at": "roller",
+		"parts": [[GLASS, 2]]},
+]
+
+
+static func pipe_part_is(id: int, what) -> bool:
+	if typeof(what) == TYPE_STRING:
+		return bottom_of(id) in WOOD_IDS or bottom_of(id) in PLANK_IDS
+	return bottom_of(id) == int(what)
+
+
+## Can this go on the bench's bed at all?
+static func pipe_takes(id: int) -> bool:
+	for r in PIPE_RECIPES:
+		for part in r["parts"]:
+			if pipe_part_is(id, part[0]):
+				return true
+	return false
+
+
+## The recipe exactly matching what is on the bed, for the end you just
+## turned. `at` is "blade" or "roller".
+static func pipe_match(ids: Array, at: String) -> Dictionary:
+	for r in PIPE_RECIPES:
+		if str(r["at"]) != at:
+			continue
+		var left: Array = ids.duplicate()
+		var ok := true
+		for part in r["parts"]:
+			for i in int(part[1]):
+				var found := -1
+				for j in left.size():
+					if pipe_part_is(int(left[j]), part[0]):
+						found = j
+						break
+				if found < 0:
+					ok = false
+					break
+				left.remove_at(found)
+			if not ok:
+				break
+		if ok and left.is_empty():
+			return r
+	return {}
+
 const DUCT_LOADER := 223   # station: empties its container into the run
 ## Station: where things may ENTER a container, and optionally what.
 ##
@@ -1254,6 +1336,8 @@ const STATION_BUILDS := [
 	# stack, and every generator on the grid fills all of them.
 	{"kind": CAPACITOR, "reqs": [{"id": PLATE, "n": 8}, {"id": WIRE, "n": 6},
 		{"id": CIRCUIT, "n": 1}]},
+	{"kind": PIPE_BENCH, "reqs": [{"any": WOOD_IDS, "n": 10, "label": "Wood"},
+		{"any": STONE_IDS, "n": 4, "label": "Rock"}]},
 	{"kind": DUCT_LOADER, "reqs": [{"id": PLATE, "n": 4}, {"id": WIRE, "n": 2}]},
 	{"kind": DUCT_PORT, "reqs": [{"id": PLATE, "n": 3}, {"id": CIRCUIT, "n": 1}]},
 	{"kind": HEATER, "reqs": [{"any": STONE_IDS, "n": 10, "label": "Rock"},
@@ -1276,7 +1360,7 @@ const STATION_BUILDS := [
 const STATION_CATEGORIES := [
 	{"name": "Camp", "icon": CAMPFIRE, "kinds": [CAMPFIRE, BED]},
 	{"name": "Containers", "icon": CHEST, "kinds": [CHEST, CHEST_WIDE, CARGO_MODULE]},
-	{"name": "Ducts", "icon": DUCT_LOADER, "kinds": [DUCT_LOADER, DUCT_PORT]},
+	{"name": "Ducts", "icon": PIPE_BENCH, "kinds": [PIPE_BENCH, DUCT_LOADER, DUCT_PORT]},
 	{"name": "Crafters", "icon": CARPENTER, "kinds": [CARPENTER, SHAPER, FABRICATOR, SHIPWORKS]},
 	{"name": "Smelters", "icon": SMELTER, "kinds": [SMELTER]},
 	{"name": "Power", "icon": GENERATOR,
@@ -1532,11 +1616,6 @@ const PRESS_RECIPES := [
 	{"label": "Wire", "out": WIRE, "n": 8, "yield_from_material": true, "parts": [[BAR, 1]]},
 	# Duct is wide-bore: a sheet rolled round instead of a bar drawn out, so it
 	# costs more metal per length than wiring does.
-	{"label": "Metal Duct x6", "out": DUCT, "n": 6, "parts": [[SHEET, 1]]},
-	{"label": "Reinforced Duct x6", "out": DUCT_REINFORCED, "n": 6,
-		"parts": [[DUCT_WOOD, 6], [PLATE, 1]]},
-	{"label": "Glass Duct x6", "out": DUCT_GLASS, "n": 6,
-		"parts": [[DUCT_WOOD, 6], [GLASS, 2]]},
 	{"label": "Battery", "out": BATTERY, "n": 1, "parts": [["ingot", 1], [SHEET, 2]]},
 	{"label": "Machine Core", "out": MACHINE_CORE, "n": 1, "parts": [[BAR, 2], [PLATE, 2]]},
 	# Reactor fuel. The ingots go first so the rod takes THEIR material: how
@@ -1704,12 +1783,6 @@ const STATION_CRAFTS := {
 		# putting it behind rare drops would just make the early game dark.
 		{"label": "Hoe", "out": HOE, "n": 1,
 			"reqs": [{"any": WOOD_IDS, "n": 3, "label": "Wood"}]},
-		# Wooden duct belongs here rather than at the Press: a run of pipe is
-		# the first thing anybody wants to automate, and putting the cheapest
-		# one behind smithing meant nobody saw ducts until they no longer
-		# needed the help.
-		{"label": "Wooden Duct x4", "out": DUCT_WOOD, "n": 4,
-			"reqs": [{"any": WOOD_IDS, "n": 2, "label": "Wood"}]},
 		# The three that come before anything is smelted. The Pick is the one
 		# that opens the game -- nothing else gets you rock -- so it is made of
 		# the two things you can gather with your hands, and the other two cost
@@ -1891,6 +1964,8 @@ const NAMES := {
 	DUCT_GLASS: "Glass Duct",
 	DUCT_LOADER: "Loader",
 	DUCT_PORT: "Port",
+	STAVE: "Stave",
+	PIPE_BENCH: "Pipe Bench",
 	CARGO_MODULE: "Cargo Module",
 	OXYGEN_PLANT: "Oxygen Plant",
 	HEATER: "Heater",
@@ -2084,6 +2159,8 @@ const COLORS := {
 	DUCT_WOOD: Color(0.48, 0.34, 0.19),
 	DUCT_REINFORCED: Color(0.44, 0.38, 0.28),
 	DUCT_GLASS: Color(0.62, 0.80, 0.86, 0.55),
+	STAVE: Color(0.66, 0.50, 0.28),
+	PIPE_BENCH: Color(0.50, 0.42, 0.30),
 	DUCT_LOADER: Color(0.52, 0.58, 0.44),
 	DUCT_PORT: Color(0.60, 0.50, 0.30),
 	CARGO_MODULE: Color(0.42, 0.52, 0.58),

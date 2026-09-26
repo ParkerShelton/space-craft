@@ -122,6 +122,9 @@ var _bay_shown := Vector2(-1, -1)
 var _gen_shown := Color(-1, -1, -1, -1)
 var _lever: MeshInstance3D
 var _lever_t := 0.0
+## The Pipe Bench's rollers, and how far round they have turned.
+var _rollers: MeshInstance3D
+var _roll_t := 0.0
 ## A chest's lid, and how far open it is (0 shut, 1 wide). Set lid_open and it
 ## swings; nothing else has to be told.
 var _lid: MeshInstance3D
@@ -155,6 +158,8 @@ static func capacity_of(k: int) -> int:
 		return 2   # the workpiece on its face, and the pile waiting beside it
 	if k == Blocks.FABRICATOR:
 		return Blocks.PRESS_SPOTS + 1   # the bed's spots, and what the ram made
+	if k == Blocks.PIPE_BENCH:
+		return Blocks.PIPE_SPOTS + 1   # the bed, and what came off it
 	if k == Blocks.OXYGEN_PLANT or k == Blocks.HEATER or k == Blocks.COOLER:
 		return 2   # spare filters / elements: no recipes, just somewhere to stash parts
 	if k == Blocks.BED:
@@ -316,6 +321,16 @@ func _build_visual() -> void:
 		_anvil_shown = "-"
 		_mi.mesh = StationModels.anvil_mesh("", Color.WHITE)
 		_refresh_anvil.call_deferred()
+	elif kind == Blocks.PIPE_BENCH:
+		_mi.mesh = StationModels.mesh_from_boxes(StationModels.pipe_bench_boxes())
+		if _rollers == null:
+			# A node of their own so they can turn without the bench being
+			# rebuilt sixty times a second.
+			_rollers = MeshInstance3D.new()
+			_rollers.mesh = StationModels.mesh_from_boxes(
+				StationModels.pipe_roller_boxes(0.0))
+			_rollers.position = Vector3(0, -0.5, 0)
+			add_child(_rollers)
 	elif kind == Blocks.DUCT_PORT:
 		_mi.mesh = StationModels.filter_mesh(filter_colour())
 	elif Blocks.makes_power(kind):
@@ -995,6 +1010,7 @@ func anvil_take() -> Array:
 func net_refresh() -> void:
 	_refresh_anvil()
 	_refresh_press()
+	_refresh_bench()
 	_refresh_gen()
 	_refresh_bay()
 
@@ -1122,6 +1138,133 @@ func _refresh_smelter() -> void:
 			# A fire, not a bulb: it breathes.
 			var t := Time.get_ticks_msec() * 0.001
 			_smelt_light.light_energy = 1.1 + 0.25 * sin(t * 7.3) + 0.15 * sin(t * 13.1)
+
+
+# --- the pipe bench ---------------------------------------------------------------
+#
+# The same shape as the press: storage[0..3] are the spots on the bed, one
+# thing each, and storage[4] is what came off it waiting to be taken. What is
+# different is that there are TWO controls -- the blade and the rollers -- and
+# which one you turn decides which recipes are even considered.
+
+var _bench_shown := "-"
+var _bench_busy := false
+
+
+func bench_parts() -> Array:
+	var out: Array = []
+	for i in mini(Blocks.PIPE_SPOTS, storage.size()):
+		if int(storage[i].get("count", 0)) > 0:
+			out.append(storage[i])
+	return out
+
+
+func bench_output() -> Dictionary:
+	var i := Blocks.PIPE_SPOTS
+	if storage.size() <= i or int(storage[i].get("count", 0)) <= 0:
+		return {}
+	return storage[i]
+
+
+## Lay one thing on the bed. Refused when the bed is full, when what came off
+## it is still sitting there, or when it is not something the bench works.
+func bench_add(item: Dictionary) -> bool:
+	_ensure_storage()
+	if not Blocks.pipe_takes(int(item.get("id", Blocks.AIR))) or not bench_output().is_empty():
+		return false
+	for i in Blocks.PIPE_SPOTS:
+		if int(storage[i].get("count", 0)) <= 0:
+			storage[i] = item.duplicate(true)
+			storage[i]["count"] = 1
+			_refresh_bench()
+			return true
+	return false
+
+
+## Take the last thing laid back off the bed.
+func bench_take_last() -> Dictionary:
+	for i in range(Blocks.PIPE_SPOTS - 1, -1, -1):
+		if i < storage.size() and int(storage[i].get("count", 0)) > 0:
+			var out: Dictionary = storage[i].duplicate(true)
+			storage[i] = _empty_slot()
+			_refresh_bench()
+			return out
+	return {}
+
+
+func bench_take_output() -> Dictionary:
+	var o := bench_output()
+	if o.is_empty():
+		return {}
+	var out: Dictionary = o.duplicate(true)
+	storage[Blocks.PIPE_SPOTS] = _empty_slot()
+	_refresh_bench()
+	return out
+
+
+## Turn one end of it. Returns what it made, or "" if that end had nothing to
+## do with what is on the bed.
+func bench_work(at: String) -> String:
+	if not bench_output().is_empty():
+		return ""
+	var ids: Array = []
+	for p in bench_parts():
+		ids.append(int(p["id"]))
+	if ids.is_empty():
+		return ""
+	var r := Blocks.pipe_match(ids, at)
+	if r.is_empty():
+		_animate_bench(at, false)
+		return ""
+	# The first part named carries the material through, so a duct remembers
+	# the metal it was rolled from.
+	var mat := {}
+	var props := {}
+	var src := ""
+	var want = r["parts"][0][0]
+	for p2 in bench_parts():
+		if Blocks.pipe_part_is(int(p2["id"]), want):
+			props = (p2.get("props", {}) as Dictionary).duplicate(true)
+			mat = (p2.get("mat", {}) as Dictionary).duplicate(true)
+			src = str(p2.get("src", ""))
+			break
+	for i in Blocks.PIPE_SPOTS:
+		storage[i] = _empty_slot()
+	storage[Blocks.PIPE_SPOTS] = {"id": int(r["out"]), "count": int(r["n"]),
+		"eighths": 0, "props": props, "src": src, "mat": mat}
+	_animate_bench(at, true)
+	_refresh_bench()
+	return str(r["label"])
+
+
+## The blade drops, or the rollers spin up. Nothing depends on it; it is how
+## you know the thing did something.
+func _animate_bench(at: String, good: bool) -> void:
+	if headless or _bench_busy:
+		return
+	_bench_busy = true
+	if at == "roller":
+		_roll_t = 9.0 if good else 3.0
+	var tw := create_tween()
+	tw.tween_interval(0.26 if good else 0.12)
+	tw.tween_callback(func():
+		_bench_busy = false
+		if at == "roller":
+			_roll_t = 0.0)
+
+
+func _refresh_bench() -> void:
+	if kind != Blocks.PIPE_BENCH or headless or _mi == null:
+		return
+	var sig := ""
+	for p in bench_parts():
+		sig += "%d," % int(p["id"])
+	var o := bench_output()
+	sig += "|%d:%d" % [int(o.get("id", 0)), int(o.get("count", 0))]
+	if sig == _bench_shown:
+		return
+	_bench_shown = sig
+	_mi.mesh = StationModels.pipe_bench_mesh(bench_parts(), o)
 
 
 # --- the press -------------------------------------------------------------------
@@ -1327,6 +1470,18 @@ func _refresh_press() -> void:
 
 
 ## Swing the lever toward where the switch is set.
+## The rollers turn while there is a job on, and coast to a stop after it.
+## Nothing depends on them -- they are how you tell from across the room that
+## the bench is doing something.
+func _tick_rollers(delta: float) -> void:
+	if _rollers == null or not is_instance_valid(_rollers):
+		return
+	if _roll_t <= 0.001:
+		return
+	_rollers.mesh = StationModels.mesh_from_boxes(
+		StationModels.pipe_roller_boxes(Time.get_ticks_msec() * 0.001 * _roll_t))
+
+
 func _tick_lever(delta: float) -> void:
 	if _lever == null or not is_instance_valid(_lever):
 		return
@@ -1591,6 +1746,7 @@ func _process(delta: float) -> void:
 	_refresh_smelter()
 	_tick_lid(delta)
 	_tick_lever(delta)
+	_tick_rollers(delta)
 	_tick_generator(delta)
 	_tick_solar(delta)
 	_tick_capacitor(delta)
