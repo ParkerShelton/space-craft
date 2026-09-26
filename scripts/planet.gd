@@ -2989,8 +2989,14 @@ func _derive_flora(density: float) -> void:
 		var vd: Dictionary = v
 		reach_max = maxf(reach_max,
 			float(int(vd["trunk_max"])) + float(vd["canopy_max"]) * 2.0 + 2.0)
+		# The jitter has to be paid for here: a tree that may stand a third of
+		# a cell off centre can reach that much further than its canopy alone
+		# says, and a scan that does not allow for it clips the far side off
+		# the occasional crown.
 		scan_max = maxi(scan_max,
-			int(ceil(float(vd["canopy_max"]) * 1.15 / float(int(vd["cell"])))))
+			int(ceil((float(vd["canopy_max"]) * 1.15
+				+ float(int(vd["cell"])) * TREE_JITTER * 0.5)
+				/ float(int(vd["cell"])))))
 	tree_reach = reach_max
 	_tree_scan = scan_max
 
@@ -3661,8 +3667,26 @@ func _dist_to_segment(p: Vector3, a: Vector3, b: Vector3) -> float:
 
 ## The tree, if any, rooted in one cell. Empty array means none. Split out of
 ## _tree_at so it can be memoised per chunk build (see the tcache argument).
+## How far across its own cell a tree may stand from the middle, as a fraction
+## of the cell.
+##
+## Trees stood at the EXACT centre of their cell, which is a lattice: perfectly
+## even rows you can sight down, and the one thing a wood never looks like. The
+## grid was always there -- it is what guarantees one tree per cell and makes
+## the canopy lookup cheap -- it was just being stood on in the most visible
+## possible way.
+##
+## Not the whole cell: the base still has to land back in its own cell (see
+## below) or the tree is dropped, so a tree allowed right to the edge would
+## thin the woods every time the surface projection nudged it over the line.
+const TREE_JITTER := 0.66
+
+
 func _tree_in_cell(cc: Vector3i, c: float) -> Array:
-	var cdir := (Vector3(cc) * c + Vector3(c * 0.5, c * 0.5, c * 0.5)).normalized()
+	var jit := Vector3(_hash01(cc, 31), _hash01(cc, 37), _hash01(cc, 41))
+	var off: Vector3 = (jit - Vector3(0.5, 0.5, 0.5)) * (c * TREE_JITTER) \
+		+ Vector3(c * 0.5, c * 0.5, c * 0.5)
+	var cdir := (Vector3(cc) * c + off).normalized()
 	# The region the tree is ROOTED in decides whether it is there at all, which
 	# is what makes a forest a forest and the plain beside it a plain. Tested
 	# here rather than per voxel: a tree that half exists because its canopy

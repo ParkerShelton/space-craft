@@ -2726,7 +2726,13 @@ static func max_tier_for_power(power: float) -> int:
 	return t
 
 static func is_placeable_block(id: int) -> bool:
-	return id in PLACEABLE
+	# bottom_of, not the raw value. Every other item is stripped of its packed
+	# bits on the way into the bag -- a stair loses its facing, a log its axis
+	# -- so an exact match worked for all of them. A plant is the one thing
+	# that KEEPS its bits there, because the species is the item, and a
+	# bluebell came out as some number in the thousands that was in no list.
+	# You could pick one and never put it down.
+	return bottom_of(id) in PLACEABLE
 
 # raw ore slot id -> its refined counterpart (same slot index)
 static func refined_of(ore_id: int) -> int:
