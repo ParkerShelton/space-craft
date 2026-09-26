@@ -5001,6 +5001,23 @@ func _edits_snapshot(cc: Vector3i) -> Dictionary:
 			var q: Vector3i = cv
 			if q.x >= clo.x and q.y >= clo.y and q.z >= clo.z 					and q.x < chi.x and q.y < chi.y and q.z < chi.z:
 				crops[q] = (_crops[q] as Dictionary).duplicate()
+	# Loaders and ports near this chunk, so a pipe beside one grows an arm into
+	# it instead of stopping in mid-air half a block short.
+	var fittings: Array = []
+	if _world_ref != null:
+		var flo := (cc - Vector3i.ONE) * CS
+		var fhi := (cc + Vector3i.ONE * 2) * CS
+		for st in _world_ref._stations:
+			var s2: Station = st
+			if not is_instance_valid(s2):
+				continue
+			if s2.kind != Blocks.DUCT_LOADER and s2.kind != Blocks.DUCT_PORT:
+				continue
+			var fv: Vector3i = world_to_voxel(s2.global_position)
+			if fv.x >= flo.x and fv.y >= flo.y and fv.z >= flo.z \
+					and fv.x < fhi.x and fv.y < fhi.y and fv.z < fhi.z:
+				fittings.append(fv)
+	snap[Chunk.FITTING_KEY] = fittings
 	snap[Chunk.CROP_KEY] = crops
 	snap[Chunk.FIRE_KEY] = fires
 	snap[Chunk.PARTS_KEY] = parts

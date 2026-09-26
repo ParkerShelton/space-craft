@@ -27,12 +27,9 @@ const REACH := 2048           # duct cells followed before giving up
 ## Blocks.duct_speed), and the slowest length in a run sets the pace, the way
 ## the narrowest pipe does.
 const SPEED := 3.0
-const PARCEL_SIZE := 0.22
-## Where the bore of a pipe is, measured up from the base of a station's cell.
-## A station's origin sits on the deck; the pipe runs through the middle of the
-## cell above it, and a parcel entering or leaving has to meet it there rather
-## than at the floor.
-const BORE_HEIGHT := 0.5
+## Small. It rides inside a pipe, and the pipe has to be a pipe rather than a
+## tunnel: the bore is sized to clear this, so the two numbers move together.
+const PARCEL_SIZE := 0.15
 
 var world: WorldManager
 var _t := 0.0
@@ -277,9 +274,14 @@ func _send(p: Planet, src: Station, slot_i: int, dst: Station, path: Array,
 
 
 ## Where a loader or a port meets the run: the middle of its own cell, which is
-## the height the bore of the pipe is at.
+## exactly where the bore of the pipe runs.
+##
+## A station's ORIGIN is the middle of its cell -- the model hangs half a block
+## below it (see Station._mi.position) so its feet land on the deck. Adding
+## half a block on top of that put the mouth at the ceiling of the cell, and
+## parcels came out of the air above the machine instead of out of it.
 func _mouth(st: Station) -> Vector3:
-	return st.global_position + st.global_transform.basis.y * BORE_HEIGHT
+	return st.global_position
 
 
 ## A small one of whatever it is, sliding along the run.

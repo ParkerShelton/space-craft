@@ -132,6 +132,29 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 				rod.append([Vector3(0, -0.12 + float(i) * 0.24, 0),
 					Vector3(0.18, 0.04, 0.18), BAND])
 			return rod
+		Blocks.DUCT, Blocks.DUCT_WOOD, Blocks.DUCT_REINFORCED, Blocks.DUCT_GLASS:
+			# A short length of pipe, held across you: four rails round an
+			# opening, which is what the thing actually is. The icon used to be
+			# the plain block colour, so all four materials were a brown or
+			# grey square and none of them read as pipe.
+			var pc: Color = Blocks.color_of(Blocks.bottom_of(id))
+			var pd: Color = pc.darkened(0.25)
+			var pipe: Array = []
+			const PB := 0.13     # half the opening
+			const PR := 0.055    # rail
+			for sy in [-1.0, 1.0]:
+				for sz in [-1.0, 1.0]:
+					pipe.append([Vector3(0, sy * (PB + PR), sz * (PB + PR)),
+						Vector3(0.74, PR * 2.0, PR * 2.0), pc])
+			# A band at each end, so it reads as a cut length rather than a
+			# bundle of sticks.
+			for sx in [-0.33, 0.33]:
+				for sy2 in [-1.0, 1.0]:
+					pipe.append([Vector3(sx, sy2 * (PB + PR), 0),
+						Vector3(0.08, PR * 2.0, (PB + PR) * 2.0), pd])
+					pipe.append([Vector3(sx, 0, sy2 * (PB + PR)),
+						Vector3(0.08, (PB + PR) * 2.0, PR * 2.0), pd])
+			return pipe
 		Blocks.WOOD_PLATE:
 			# A few flat boards off a log, stacked and slightly out of true --
 			# shaved, not sawn.

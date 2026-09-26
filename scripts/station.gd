@@ -1294,6 +1294,7 @@ func _refresh_smelter() -> void:
 
 var _bench_shown := "-"
 var _couple_shown := "-"
+var _couple_t := 0.0
 var _bench_busy := false
 
 
@@ -1492,21 +1493,44 @@ func _refresh_coupling() -> void:
 	if kind != Blocks.DUCT_LOADER and kind != Blocks.DUCT_PORT:
 		return
 	var d := coupling_dir()
-	var sig := "%d,%d,%d|%s" % [roundi(d.x), roundi(d.y), roundi(d.z),
-		str(port_filter)]
+	var pipes := pipe_dirs()
+	var sig := "%d,%d,%d|%s|%s" % [roundi(d.x), roundi(d.y), roundi(d.z),
+		str(port_filter), str(pipes)]
 	if sig == _couple_shown:
 		return
 	_couple_shown = sig
 	var boxes: Array = []
 	if kind == Blocks.DUCT_LOADER:
-		boxes = StationModels.loader_boxes()
+		boxes = StationModels.loader_boxes(pipes)
 		if d != Vector3.ZERO:
 			boxes.append_array(StationModels.coupling_boxes(d, Color(0.52, 0.58, 0.44)))
 	else:
-		boxes = StationModels.filter_boxes(filter_colour())
+		boxes = StationModels.filter_boxes(filter_colour(), pipes)
 		if d != Vector3.ZERO:
 			boxes.append_array(StationModels.coupling_boxes(d, Color(0.60, 0.50, 0.30)))
 	_mi.mesh = StationModels.mesh_from_boxes(boxes)
+
+
+## Which way the pipes actually run out of this fitting, in its own frame.
+##
+## Only the sides that HAVE one: a flange on every face made a loader look like
+## a junction box with three fittings connected to nothing.
+func pipe_dirs() -> Array:
+	var out: Array = []
+	if world == null:
+		return out
+	var p: Planet = world.nearest_planet(global_position)
+	if p == null:
+		return out
+	var here := p.world_to_voxel(global_position)
+	var inv := global_transform.basis.inverse()
+	for n in [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
+			Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]:
+		if not Blocks.is_duct(p.get_id(here + n)):
+			continue
+		var w: Vector3 = (p.to_global(Vector3(here + n)) - p.to_global(Vector3(here)))
+		out.append((inv * w.normalized()).round())
+	return out
 
 
 ## The saw drops, or the rollers run. Nothing depends on it; it is how you
@@ -2032,6 +2056,14 @@ func bay_swap(incoming: Dictionary) -> Dictionary:
 
 
 func _process(delta: float) -> void:
+	# A fitting has to notice a pipe being laid beside it. Twice a second, not
+	# every frame: it asks the planet about six cells and walks the station
+	# list, and _refresh_coupling early-outs unless the answer changed.
+	if kind == Blocks.DUCT_LOADER or kind == Blocks.DUCT_PORT:
+		_couple_t -= delta
+		if _couple_t <= 0.0:
+			_couple_t = 0.5
+			_refresh_coupling()
 	_tick_fire(delta)
 	_refresh_smelter()
 	_tick_lid(delta)

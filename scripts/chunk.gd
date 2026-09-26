@@ -413,6 +413,10 @@ static func _id_at(planet: Planet, snap: Dictionary, v: Vector3i) -> int:
 ## Planet._edits_snapshot). A fire is not a block, so it cannot be found by
 ## walking block ids the way a torch can.
 const FIRE_KEY := "fires"
+## Cells holding a Loader or a Port. They are stations, not blocks, so the
+## mesher cannot find them by asking the planet what is in a cell -- and a pipe
+## that cannot see one stops half a block short of the machine it feeds.
+const FITTING_KEY := "fittings"
 ## Planted cells near this chunk: voxel -> {key, stage, tree}. A crop's height
 ## comes from how far along it is, and that is not in its block id.
 const CROP_KEY := "crops"
@@ -1018,6 +1022,9 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 
 	# conduit: thin surface-mounted runs. Free boxes, so they are not culled
 	# against the wall they hug and carry no collision -- you walk through wiring.
+	var fittings := {}
+	for fv2 in snap.get(FITTING_KEY, []):
+		fittings[fv2] = true
 	for idx in special:
 		var x: int = idx & CS_MASK
 		var y: int = (idx >> CS_SHIFT) & CS_MASK
@@ -1037,7 +1044,12 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 				# metal one are the same pipe at different speeds, and a run
 				# that changed material used to come apart at the joint.
 				if Blocks.is_duct(wbase):
-					if not Blocks.is_duct(Blocks.bottom_of(nraw)):
+					# ...and into a loader or a port, which is the whole
+					# reason a run exists. Those are stations rather than
+					# blocks, so they arrive as a list of cells (see
+					# Planet.edit_snapshot) the way campfires do.
+					if not Blocks.is_duct(Blocks.bottom_of(nraw)) \
+							and not fittings.has(gv + _WFACE[fi2]):
 						continue
 				elif Blocks.bottom_of(nraw) != wbase:
 					continue
@@ -1438,8 +1450,8 @@ static func shape_boxes(raw: int, up: Vector3, conn: int = 0x3F) -> Array:
 ## The bore has to clear a parcel (Ducts.PARCEL_SIZE, drawn at 1.6x for items
 ## that have a model) with room to spare, or the thing being carried clips
 ## through the pipe carrying it.
-const DUCT_BORE := 0.20
-const DUCT_RAIL := 0.075
+const DUCT_BORE := 0.155
+const DUCT_RAIL := 0.05
 ## Half the slat down the middle of each side of a walled pipe, as a fraction
 ## of the bore. Half on purpose: it leaves a slot either side of it about as
 ## wide as itself, so what is inside a wooden or metal pipe is GLIMPSED going
