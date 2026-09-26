@@ -2375,6 +2375,8 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 		_place_crash_site(ground, player)
 		if TEST_SMITHING_KIT:
 			_give_smithing_kit(ground, player)
+		if TEST_DUCT_KIT:
+			_give_duct_kit(ground, player)
 		# She goes in, the screen goes white and then black -- and the wake picks
 		# up from that black, so there is no seam between the two.
 		if _reel != null:
@@ -2440,6 +2442,12 @@ const CRASH_REEL := true
 ## below) before shipping.
 const TEST_SMITHING_KIT := false
 
+## TESTING ONLY: start every NEW world with what it takes to try the ducts --
+## a generator, a pipe bench, wood to cut into staves, a pair of chests to move
+## things between, and a stack of this world's fuel ore to burn. Set false (or
+## delete this and the function below) before shipping.
+const TEST_DUCT_KIT := true
+
 
 func _give_smithing_kit(ground: Planet, player: Player) -> void:
 	player.grant_item(Blocks.HAMMER, 1)
@@ -2453,6 +2461,40 @@ func _give_smithing_kit(ground: Planet, player: Player) -> void:
 		player.call("_add_item", int(od["block"]), 10, od["props"], ground.planet_name,
 			{"name": od["name"], "color": od["color"], "tier": od["tier"]})
 	player.call("_refresh_slots")
+## Everything needed to see a duct network work, in the bag on the first
+## morning: a bench to make pipe on, wood to make it out of, two containers to
+## move things between, a generator, and fuel for it.
+func _give_duct_kit(ground: Planet, player: Player) -> void:
+	player.grant_item(Blocks.PIPE_BENCH, 1)
+	player.grant_item(Blocks.GENERATOR, 1)
+	player.grant_item(Blocks.DUCT_LOADER, 2)
+	player.grant_item(Blocks.DUCT_PORT, 2)
+	player.grant_item(Blocks.CHEST, 2)
+	player.grant_item(Blocks.WOOD, 24)
+	# This world's own fuel ore, carrying its real identity, so it burns in the
+	# generator and bakes down to coal exactly as a dug one would. If nothing
+	# here burns well, the best of a bad lot goes in instead -- a kit that
+	# silently handed over nothing would look like a bug.
+	var best := {}
+	var best_c := -1
+	for od in ground.ore_defs:
+		var props: Dictionary = od["props"]
+		var c := int(props.get("c", 0))
+		if Blocks.is_fuel_grade(props) and c > best_c:
+			best = od
+			best_c = c
+	if best.is_empty():
+		for od2 in ground.ore_defs:
+			var c2 := int((od2["props"] as Dictionary).get("c", 0))
+			if c2 > best_c:
+				best = od2
+				best_c = c2
+	if not best.is_empty():
+		player.call("_add_item", int(best["block"]), 32, best["props"], ground.planet_name,
+			{"name": best["name"], "color": best["color"], "tier": best["tier"]})
+	player.call("_refresh_slots")
+
+
 var _reel: CrashReel
 
 var _loading_layer: CanvasLayer
