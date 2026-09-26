@@ -4842,6 +4842,27 @@ func _edit_block(_break_it: bool) -> void:
 	elif tgt["kind"] == "ship":
 		if obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5)).distance_to(global_position) > 1.1:
 			var props: Dictionary = _held_tag()
+			# Ground is ground, whichever side of the hull you were looking at
+			# when you put it down.
+			#
+			# Aiming at the ground beside a landed ship already did this: dirt
+			# went into the planet and only built things joined themselves to
+			# the hull. Aiming at the HULL did not, so the same shovelful of
+			# dirt became part of the ship depending on which face your
+			# crosshair had found -- and then it was drawn in the generic
+			# colour instead of this world's, which is how you noticed.
+			#
+			# A ship in flight is different: up there a block against the hull
+			# has nothing else to be part of.
+			if not (obj as Ship).flying and Blocks.is_natural(placed_value):
+				var mid: Vector3 = obj.to_global(Vector3(pv) + Vector3(0.5, 0.5, 0.5))
+				var gp: Planet = world.nearest_planet(mid)
+				if gp != null:
+					var wv := gp.world_to_voxel(mid)
+					if gp.get_id(wv) == Blocks.AIR:
+						world.edit_block(gp, wv, placed_value, props)
+						_consume_active()
+						return
 			if place_id == Blocks.DOOR:
 				# A door is two cells tall on a ship exactly as it is on the
 				# ground. Placing one cell of it left a lone half in the wall --
@@ -7037,7 +7058,9 @@ func _update_held_item(active: Dictionary) -> void:
 		_held_item.rotation = Vector3(-0.2, 0.5, 0.15)
 		_held_root.add_child(_held_item)
 	elif Blocks.is_placeable_block(id) or Blocks.is_ore(id) or Blocks.is_refined(id) or Blocks.is_intermediate(id):
-		_build_held_block(mat.get("color", Blocks.color_of(id)))
+		# This world's colour for it, not the generic one, so what is in your
+		# hand is the colour of what it will be when you put it down.
+		_build_held_block(mat.get("color", _world_tint(id)))
 	# other gear (the Suit) is worn, not wielded -- nothing shown in hand
 
 
@@ -7152,6 +7175,13 @@ static func _tool_tint(id: int) -> Color:
 		Blocks.PULSE_PISTOL:
 			return Color(0.3, 0.75, 0.85)
 	return Color(0.7, 0.7, 0.75)
+
+
+## What a block looks like ON THIS WORLD. Every planet tints its own materials,
+## so asking Blocks directly gives you a colour that belongs to no world.
+func _world_tint(id: int) -> Color:
+	var p: Planet = world.nearest_planet(global_position) if world != null else null
+	return p.color_of(id) if p != null else Blocks.color_of(id)
 
 
 func _build_held_block(color: Color) -> void:

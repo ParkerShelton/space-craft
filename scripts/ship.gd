@@ -1165,7 +1165,7 @@ func rebuild() -> void:
 		if Blocks.bottom_of(id) == Blocks.DOOR_OPEN:
 			continue  # open doorways render as an empty gap
 		var is_glass: bool = id == Blocks.GLASS
-		var base := Blocks.color_of(id)
+		var base := _tint_of(id)
 		var origin := Vector3(v)
 		for face in FACES:
 			var nid: int = blocks.get(v + face["n"], Blocks.AIR)
@@ -1275,6 +1275,19 @@ func _face_attrs(id: int, shade: float, uvs: PackedVector2Array,
 ## a planet, so a block looks the same bolted to a ship as it does lying in the
 ## ground -- which is the whole point. Out in deep space there is no planet to
 ## ask, and the flat material is the honest fallback.
+## What colour a block is ON THIS WORLD.
+##
+## Every planet tints its own materials -- this world's dirt is its dirt, and a
+## block of it carries that colour wherever it goes. The hull was asking
+## Blocks.color_of, which is the generic colour with no world behind it, so a
+## block of dirt set against a ship came out a different colour from the dirt
+## it was touching. Same block, two colours, which is the one thing a block
+## must never do.
+func _tint_of(id: int) -> Color:
+	var p: Planet = world.nearest_planet(global_position) if world != null else null
+	return p.color_of(id) if p != null else Blocks.color_of(id)
+
+
 func _hull_material() -> Material:
 	var p: Planet = world.nearest_planet(global_position) if world != null else null
 	var m := Chunk._get_material(p)
@@ -1332,7 +1345,7 @@ func _shape_of(v: Vector3i, id: int) -> Array:
 func _emit_shape(v: Vector3i, id: int, boxes: Array, verts: PackedVector3Array,
 		normals: PackedVector3Array, colors: PackedColorArray,
 		uvs: PackedVector2Array, uv2s: PackedVector2Array) -> void:
-	var base := Blocks.color_of(id)
+	var base := _tint_of(id)
 	var origin := Vector3(v)
 	for b in boxes:
 		var lo: Vector3 = origin + (b[0] as Vector3)
