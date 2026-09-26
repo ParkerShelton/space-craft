@@ -1065,6 +1065,26 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 					col, wbase, verts, normals, colors, uvs, uv2s,
 					_face_light(snap, gv, Vector3i.ZERO))
 
+	# the rest of the ground cover: flowers, tufts, scrub and the things with
+	# no name. Free boxes like the pipework -- they hug nothing, collide with
+	# nothing, and are drawn with their own species' colours rather than the
+	# block's.
+	for idx in special:
+		var x: int = idx & CS_MASK
+		var y: int = (idx >> CS_SHIFT) & CS_MASK
+		var z: int = idx >> (CS_SHIFT * 2)
+		var fid := ids[idx]
+		if not Blocks.is_foliage(Blocks.bottom_of(fid)):
+			continue
+		var fgv := Vector3i(base.x + x, base.y + y, base.z + z)
+		var fup := planet._axis_of(Vector3(fgv) + Vector3(0.5, 0.5, 0.5))
+		var flit := _face_light(snap, fgv, Vector3i.ZERO)
+		for fb in foliage_boxes(fid, fup, planet._hash01(fgv, 771)):
+			var fc: Vector3 = fb[0]
+			var fs: Vector3 = fb[1]
+			_emit_free_box(Vector3(x, y, z) + fc - fs, Vector3(x, y, z) + fc + fs,
+				fb[2], Blocks.PLANK, verts, normals, colors, uvs, uv2s, flit)
+
 	# tall grass: two quads crossed in an X per cell, the way every block game
 	# draws ground cover. Its own arrays, its own surface, no collision.
 	for idx in special:
@@ -1573,6 +1593,93 @@ static func _wire_boxes(lo: Vector3, hi: Vector3, mount: Vector3, arms: int,
 ## Shared with the selection outline so the highlight hugs the post rather than
 ## the cell it stands in -- and shared rather than copied, because two
 ## descriptions of the same stick drift apart the first time one is tuned.
+## A plant, as boxes: [centre, half-size, colour].
+##
+## Five forms between them cover a couple of dozen species (see
+## Blocks.FOLIAGE) -- the shape is the block and which plant it is rides in the
+## value, so a foxglove and a cinder cup are the same geometry in different
+## colours and heights, which is what they are.
+##
+## `up` is which way is up on this face of the world, and `salt` is the cell's
+## own hash, so no two tufts in a field stand in exactly the same place.
+static func foliage_boxes(raw: int, up: Vector3, salt: float) -> Array:
+	var d := Blocks.foliage_def(raw)
+	if d.is_empty():
+		return []
+	var form := Blocks.bottom_of(raw)
+	var col: Color = d["col"]
+	var col2: Color = d["col2"]
+	var h: float = float(d["h"])
+	var n: int = int(d["n"])
+	var c := Vector3(0.5, 0.5, 0.5) - up * 0.5      # the middle of the floor
+	var f := Vector3(1, 0, 0) if absf(up.x) < 0.5 else Vector3(0, 0, 1)
+	var r := up.cross(f).normalized()
+	var out: Array = []
+	match form:
+		Blocks.SHORT_GRASS:
+			# A handful of blades, leaning different ways.
+			for i in n:
+				var a: float = TAU * (float(i) / float(n) + salt * 0.37)
+				var off: Vector3 = (f * cos(a) + r * sin(a)) * (0.10 + 0.14 * _f01(salt, i))
+				var bh: float = h * (0.55 + 0.45 * _f01(salt, i + 7))
+				out.append([c + off + up * bh * 0.5,
+					Vector3(0.035, 0.035, 0.035) + up.abs() * (bh * 0.5 - 0.035),
+					col.lerp(col2, _f01(salt, i + 3) * 0.6)])
+		Blocks.FLOWER:
+			var st: float = h * 0.72
+			out.append([c + up * st * 0.5,
+				Vector3(0.03, 0.03, 0.03) + up.abs() * (st * 0.5 - 0.03), col])
+			# A head of a few petals, and a middle.
+			var hd: Vector3 = c + up * (st + h * 0.14)
+			for i in maxi(n, 3):
+				var a2: float = TAU * float(i) / float(maxi(n, 3)) + salt
+				out.append([hd + (f * cos(a2) + r * sin(a2)) * 0.085,
+					Vector3(0.055, 0.055, 0.055) - up.abs() * 0.03, col2])
+			out.append([hd, Vector3(0.05, 0.05, 0.05) - up.abs() * 0.022,
+				col2.lightened(0.3)])
+		Blocks.SHRUB:
+			# A clump: a stubby trunk and a scatter of foliage over it.
+			out.append([c + up * h * 0.2,
+				Vector3(0.05, 0.05, 0.05) + up.abs() * (h * 0.2 - 0.05),
+				col.darkened(0.3)])
+			for i in n:
+				var a3: float = TAU * (float(i) / float(n) + salt * 0.21)
+				var rad: float = 0.10 + 0.13 * _f01(salt, i + 11)
+				out.append([c + (f * cos(a3) + r * sin(a3)) * rad
+					+ up * (h * (0.42 + 0.42 * _f01(salt, i + 5))),
+					Vector3.ONE * (0.07 + 0.05 * _f01(salt, i + 2)),
+					col.lerp(col2, _f01(salt, i) * 0.7)])
+		Blocks.FROND:
+			# A bare stalk with a fan off the top of it, all to one side --
+			# which is the thing that makes it read as not-from-here.
+			var sh: float = h * 0.62
+			out.append([c + up * sh * 0.5,
+				Vector3(0.04, 0.04, 0.04) + up.abs() * (sh * 0.5 - 0.04), col])
+			var lean: Vector3 = (f * cos(salt * TAU) + r * sin(salt * TAU)).normalized()
+			for i in n:
+				var t: float = float(i + 1) / float(n)
+				out.append([c + up * (sh + h * 0.30 * t) + lean * (0.06 + 0.22 * t),
+					Vector3.ONE * 0.055 + lean.abs() * (0.10 * t),
+					col.lerp(col2, t)])
+		Blocks.POD:
+			# A stem with a bulb on it, and a smaller one beside.
+			for i in maxi(n, 2):
+				var a4: float = TAU * float(i) / float(maxi(n, 2)) + salt * 2.1
+				var base: Vector3 = c + (f * cos(a4) + r * sin(a4)) * (0.09 * float(i))
+				var ph: float = h * (1.0 - 0.28 * float(i))
+				out.append([base + up * ph * 0.42,
+					Vector3(0.028, 0.028, 0.028) + up.abs() * (ph * 0.42 - 0.028), col])
+				out.append([base + up * (ph * 0.86),
+					Vector3.ONE * (0.085 - 0.018 * float(i)), col2])
+	return out
+
+
+## A stable little number from a cell's hash and an index, so the scatter in a
+## plant is the same every time that cell is meshed.
+static func _f01(salt: float, i: int) -> float:
+	return fposmod(salt * 97.13 + float(i) * 31.7, 1.0)
+
+
 ## A torch: a handle with the burning end on top of it.
 ##
 ## It was one box -- a stubby post in the bottom half of the cell -- which read

@@ -2147,6 +2147,14 @@ func _drop_the_grass(planet: Planet, v: Vector3i) -> void:
 		planet.clear_crop(above)
 		world.edit_block(planet, above, Blocks.AIR)
 		return
+	if Blocks.is_foliage(id):
+		# A flower that loses the ground under it is a flower you now have,
+		# the same as one you picked -- digging a bed out from under a plant
+		# should not destroy the plant.
+		world.edit_block(planet, above, Blocks.AIR)
+		_add_item(id, 1)
+		_refresh_slots()
+		return
 	world.edit_block(planet, above, Blocks.AIR)
 	if randf() < Blocks.SEED_DROP_CHANCE:
 		_drop_flora_seed(planet, "grass", Blocks.SEEDS)
@@ -5595,6 +5603,28 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 				return {}   # that face already has cable on it
 			return {"voxel": pv, "value": Blocks.wire_add_face(here, fi)}
 		return {"voxel": pv, "value": Blocks.wire_with_faces(1 << fi)}
+	if Blocks.is_foliage(place_id):
+		# The same rule the crops and the trees live by: a plant belongs to the
+		# classes of world it evolved on, and carrying a frost flower to a
+		# desert does not make it grow there. The species rides in the item, so
+		# what goes back in the ground is the one that came out of it.
+		var held_raw: int = int(inv[active_slot].get("id", Blocks.AIR)) \
+			if active_slot >= 0 and active_slot < inv.size() else place_id
+		if obj is Planet:
+			var fd := Blocks.foliage_def(held_raw)
+			if not fd.is_empty() \
+					and not ((obj as Planet).planet_class() in (fd["classes"] as Array)):
+				_toast("%s will not take on this world" % str(fd["name"]))
+				return {}
+		# It has to stand ON something, like everything else that grows.
+		if obj is Planet:
+			var fup := (obj as Planet)._axis_of(Vector3(pv) + Vector3(0.5, 0.5, 0.5))
+			var below := pv - Vector3i(roundi(fup.x), roundi(fup.y), roundi(fup.z))
+			var bid := Blocks.bottom_of((obj as Planet).get_id(below))
+			if bid == Blocks.AIR or bid == Blocks.WATER or Blocks.is_plant(bid):
+				_toast("Nothing for it to root in")
+				return {}
+		return {"voxel": pv, "value": held_raw}
 	if Blocks.is_light(place_id) and place_id != Blocks.GLOW_LAMP:
 		# A placed voxel is a bare int and can't carry item properties, so the
 		# brightness step is baked in here from the ore it was crafted with.
@@ -5938,6 +5968,12 @@ func _process_mining(delta: float) -> void:
 					if (fm & (1 << f)) != 0:
 						runs += 1
 				_add_item(Blocks.WIRE, maxi(runs, 1), mi["props"], mi["src"], mi["mat"])
+			elif Blocks.is_foliage(id):
+				# A flower comes up as a flower. Every one of these is a thing
+				# somebody might want a bed of outside their door, and the
+				# packed value carries which species it is, so what you plant
+				# is exactly what you dug up.
+				_add_item(id, 1)
 			elif Blocks.is_plant(id):
 				# Grass is cleared, not harvested: a handful of blades is not a
 				# thing to carry around. What it sometimes leaves is a seed.

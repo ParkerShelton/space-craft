@@ -1031,6 +1031,126 @@ const WOOD_PLATE := 228
 ## of ceremony for something you are going to make two hundred of.
 const PIPE_BENCH := 229
 
+# --- ground cover ------------------------------------------------------------
+#
+# FIVE forms, not one id per plant. A world grows a couple of dozen different
+# things and each of them is a shape and a colour, so the shape is the block
+# and WHICH plant it is rides in the value (see FOLIAGE_SHIFT) -- the same
+# arrangement an ore uses, and for the same reason: sixty plants would
+# otherwise be sixty block ids for things that are never really different
+# blocks.
+const SHORT_GRASS := 230   # low tufts, ankle deep
+const FLOWER := 231        # a stem with a head on it
+const SHRUB := 232         # a low woody clump
+const FROND := 233         # a tall fan on a stalk -- nothing on Earth
+const POD := 234           # a bulb on a stem, and no, nobody has named it
+const FOLIAGE_IDS := [SHORT_GRASS, FLOWER, SHRUB, FROND, POD]
+
+
+## What one is called. A "Flower" in the abstract; a Foxglove in your hand.
+static func foliage_name(v: int) -> String:
+	var d := foliage_def(v)
+	return str(d["name"]) if not d.is_empty() else name_of(bottom_of(v))
+
+
+static func is_foliage(id: int) -> bool:
+	return bottom_of(id) in FOLIAGE_IDS
+
+
+## Which plant this is, packed into the block. Six bits, above the id: enough
+## for the whole FOLIAGE table with room to grow it.
+const FOLIAGE_SHIFT := 16
+const FOLIAGE_MASK := 0x3F
+
+
+static func make_foliage(form: int, species: int) -> int:
+	return (form & ID_MASK) | ((species & FOLIAGE_MASK) << FOLIAGE_SHIFT)
+
+
+static func foliage_species_of(v: int) -> int:
+	return (v >> FOLIAGE_SHIFT) & FOLIAGE_MASK
+
+
+## The plant itself, or {} if the index is not one.
+static func foliage_def(v: int) -> Dictionary:
+	var i := foliage_species_of(v)
+	if i < 0 or i >= FOLIAGE.size():
+		return {}
+	return FOLIAGE[i]
+
+
+## Every decorative plant in the game: what it looks like, and where it lives.
+##
+## `form` is which of the five blocks draws it. `classes` is the same planet
+## classes the crops and trees use (see FLORA), so a thing that grows on ice
+## worlds can only ever be planted on one -- you cannot carry a frost flower
+## to a desert and expect it to take.
+##
+## `col` and `col2` are its colours, `h` how tall it stands as a fraction of a
+## block, and `n` how many pieces it is made of where that means anything.
+## None of them do anything but grow. That is allowed: a world with nothing in
+## it but useful plants is a warehouse.
+const FOLIAGE := [
+	# --- class M, temperate ------------------------------------------------
+	{"key": "fescue", "name": "Fescue", "form": SHORT_GRASS, "classes": ["M"],
+		"col": Color(0.42, 0.62, 0.26), "col2": Color(0.52, 0.70, 0.30), "h": 0.34, "n": 5},
+	{"key": "cottongrass", "name": "Cotton Grass", "form": SHORT_GRASS, "classes": ["M", "P"],
+		"col": Color(0.60, 0.68, 0.44), "col2": Color(0.90, 0.92, 0.86), "h": 0.46, "n": 4},
+	{"key": "bluebell", "name": "Bluebell", "form": FLOWER, "classes": ["M"],
+		"col": Color(0.36, 0.56, 0.26), "col2": Color(0.36, 0.34, 0.82), "h": 0.44, "n": 3},
+	{"key": "kingcup", "name": "Kingcup", "form": FLOWER, "classes": ["M"],
+		"col": Color(0.34, 0.54, 0.24), "col2": Color(0.98, 0.82, 0.18), "h": 0.40, "n": 3},
+	{"key": "foxglove", "name": "Foxglove", "form": FLOWER, "classes": ["M"],
+		"col": Color(0.30, 0.48, 0.22), "col2": Color(0.80, 0.34, 0.66), "h": 0.62, "n": 5},
+	{"key": "gorse", "name": "Gorse", "form": SHRUB, "classes": ["M", "H"],
+		"col": Color(0.28, 0.42, 0.20), "col2": Color(0.92, 0.78, 0.20), "h": 0.62, "n": 6},
+	{"key": "heather", "name": "Heather", "form": SHRUB, "classes": ["M", "P"],
+		"col": Color(0.36, 0.34, 0.28), "col2": Color(0.62, 0.34, 0.60), "h": 0.44, "n": 7},
+	# --- class P, frozen ----------------------------------------------------
+	{"key": "rimegrass", "name": "Rime Grass", "form": SHORT_GRASS, "classes": ["P"],
+		"col": Color(0.60, 0.72, 0.72), "col2": Color(0.78, 0.88, 0.90), "h": 0.30, "n": 5},
+	{"key": "glasswort", "name": "Glasswort", "form": FLOWER, "classes": ["P"],
+		"col": Color(0.54, 0.66, 0.66), "col2": Color(0.86, 0.94, 1.00), "h": 0.38, "n": 3},
+	{"key": "lantern", "name": "Lantern Pod", "form": POD, "classes": ["P"],
+		"col": Color(0.46, 0.56, 0.58), "col2": Color(0.96, 0.80, 0.42), "h": 0.56, "n": 3},
+	{"key": "icemoss", "name": "Ice Moss", "form": SHRUB, "classes": ["P"],
+		"col": Color(0.52, 0.64, 0.62), "col2": Color(0.70, 0.82, 0.82), "h": 0.34, "n": 8},
+	# --- class H, arid ------------------------------------------------------
+	{"key": "bunchgrass", "name": "Bunch Grass", "form": SHORT_GRASS, "classes": ["H"],
+		"col": Color(0.66, 0.60, 0.32), "col2": Color(0.78, 0.72, 0.42), "h": 0.40, "n": 4},
+	{"key": "sunwheel", "name": "Sunwheel", "form": FLOWER, "classes": ["H", "Y"],
+		"col": Color(0.52, 0.50, 0.26), "col2": Color(0.98, 0.58, 0.14), "h": 0.50, "n": 3},
+	{"key": "saltbush", "name": "Saltbush", "form": SHRUB, "classes": ["H"],
+		"col": Color(0.54, 0.54, 0.40), "col2": Color(0.72, 0.74, 0.62), "h": 0.54, "n": 6},
+	{"key": "spinefan", "name": "Spine Fan", "form": FROND, "classes": ["H", "Y"],
+		"col": Color(0.46, 0.40, 0.22), "col2": Color(0.70, 0.58, 0.28), "h": 0.86, "n": 5},
+	# --- class Y, scorched --------------------------------------------------
+	{"key": "emberlash", "name": "Ember Lash", "form": SHORT_GRASS, "classes": ["Y"],
+		"col": Color(0.42, 0.24, 0.18), "col2": Color(0.80, 0.34, 0.16), "h": 0.36, "n": 5},
+	{"key": "cindercup", "name": "Cinder Cup", "form": FLOWER, "classes": ["Y"],
+		"col": Color(0.34, 0.22, 0.18), "col2": Color(0.94, 0.42, 0.12), "h": 0.42, "n": 3},
+	{"key": "slagpod", "name": "Slag Pod", "form": POD, "classes": ["Y"],
+		"col": Color(0.30, 0.24, 0.22), "col2": Color(0.88, 0.30, 0.10), "h": 0.50, "n": 3},
+	# --- class O, ocean -----------------------------------------------------
+	{"key": "saltgrass", "name": "Salt Grass", "form": SHORT_GRASS, "classes": ["O"],
+		"col": Color(0.34, 0.58, 0.44), "col2": Color(0.46, 0.70, 0.52), "h": 0.42, "n": 5},
+	{"key": "tidelily", "name": "Tide Lily", "form": FLOWER, "classes": ["O"],
+		"col": Color(0.28, 0.52, 0.42), "col2": Color(0.92, 0.90, 0.96), "h": 0.38, "n": 3},
+	{"key": "glassfrond", "name": "Glass Frond", "form": FROND, "classes": ["O", "M"],
+		"col": Color(0.26, 0.54, 0.50), "col2": Color(0.52, 0.80, 0.76), "h": 0.90, "n": 6},
+	{"key": "brinepod", "name": "Brine Pod", "form": POD, "classes": ["O"],
+		"col": Color(0.24, 0.46, 0.44), "col2": Color(0.64, 0.86, 0.78), "h": 0.48, "n": 4},
+]
+
+
+## Every plant of this world's class, as indices into FOLIAGE.
+static func foliage_for_class(cls: String) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for i in FOLIAGE.size():
+		if cls in (FOLIAGE[i]["classes"] as Array):
+			out.append(i)
+	return out
+
 
 # --- the pipe bench ---------------------------------------------------------------
 #
@@ -1892,7 +2012,8 @@ const STATION_CRAFTS := {
 
 # Everything the player can place (scroll-wheel cycles this list). Ores are now raw
 # materials for crafting, not placeable blocks.
-const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
+const PLACEABLE := [SHORT_GRASS, FLOWER, SHRUB, FROND, POD,
+	ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 	WOOD, WOOD_PALE, WOOD_DARK,
 	16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
 	COCKPIT, THRUSTER, LIFE_SUPPORT, GLASS, DOOR, INTERFACE, WARP_DRIVE,
@@ -1914,6 +2035,11 @@ const PLACEABLE := [ROCK, DIRT, GRASS, REGOLITH, ICE, SNOW, CRYSTAL, METAL,
 
 const NAMES := {
 	TALL_GRASS: "Tall Grass",
+	SHORT_GRASS: "Grass Tuft",
+	FLOWER: "Flower",
+	SHRUB: "Shrub",
+	FROND: "Frond",
+	POD: "Pod",
 	SEEDS: "Seeds",
 	SAPLING: "Sapling",
 	TILLED: "Tilled Soil",
@@ -2091,6 +2217,7 @@ const HARDNESS := {
 	# Faster than leaves: grass is the one thing you brush aside constantly, and
 	# anything you touch that often should not cost you a mining animation.
 	TALL_GRASS: 0.05,
+	SHORT_GRASS: 0.05, FLOWER: 0.05, SHRUB: 0.12, FROND: 0.1, POD: 0.08,
 	CROP: 0.05,
 	TILLED: 0.4,
 	TORCH: 0.1, GLOW_LAMP: 0.3, EMBER_TORCH: 0.1, MACHINE_CORE: 1.2,
@@ -2105,6 +2232,12 @@ const HARDNESS := {
 
 const COLORS := {
 	TALL_GRASS: Color(0.42, 0.66, 0.28),
+	# Only a fallback: a real one is coloured by its species (see FOLIAGE).
+	SHORT_GRASS: Color(0.44, 0.64, 0.28),
+	FLOWER: Color(0.74, 0.46, 0.62),
+	SHRUB: Color(0.32, 0.46, 0.24),
+	FROND: Color(0.34, 0.60, 0.52),
+	POD: Color(0.56, 0.66, 0.40),
 	SEEDS: Color(0.78, 0.70, 0.34),
 	SAPLING: Color(0.36, 0.58, 0.30),
 	TILLED: Color(0.30, 0.21, 0.14),
@@ -2253,7 +2386,7 @@ static func use_of(id: int) -> String:
 ## Plants you walk through: no collision, and they never hide the block behind.
 static func is_plant(id: int) -> bool:
 	var b := bottom_of(id)
-	return b == TALL_GRASS or b == CROP
+	return b == TALL_GRASS or b == CROP or b in FOLIAGE_IDS
 
 
 ## Swept away by water rather than left standing in it: the things you walk
@@ -2652,6 +2785,13 @@ static func name_of(raw: int) -> String:
 	if is_stacked_slab(raw):
 		return "%s + %s" % [name_of(bottom_of(raw)), name_of(top_slab_of(raw))]
 	var id := bottom_of(raw)
+	# A plant is named for its species, not its shape. Done here rather than at
+	# each label, because "Flower" in your hand, in a toast and in a tooltip
+	# while the thing is a Foxglove is three places to have to remember.
+	if id in FOLIAGE_IDS:
+		var fd := foliage_def(raw)
+		if not fd.is_empty():
+			return str(fd["name"])
 	if SLAB_MATERIAL.has(id):
 		return "%s Slab" % shape_prefix(int(SLAB_MATERIAL[id]))
 	if STAIR_MATERIAL.has(id):

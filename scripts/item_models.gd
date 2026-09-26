@@ -132,6 +132,16 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 				rod.append([Vector3(0, -0.12 + float(i) * 0.24, 0),
 					Vector3(0.18, 0.04, 0.18), BAND])
 			return rod
+		Blocks.SHORT_GRASS, Blocks.FLOWER, Blocks.SHRUB, Blocks.FROND, Blocks.POD:
+			# The plant itself, standing up, so the icon is the thing you dug
+			# up rather than a green square. Same builder the world uses, so a
+			# Foxglove in your bag is the Foxglove you were looking at.
+			var fb := Chunk.foliage_boxes(id, Vector3.UP, 0.41)
+			var fo: Array = []
+			for b in fb:
+				fo.append([(b[0] as Vector3) - Vector3(0.5, 0.5, 0.5),
+					(b[1] as Vector3) * 2.0, b[2]])
+			return fo
 		Blocks.DUCT, Blocks.DUCT_WOOD, Blocks.DUCT_REINFORCED, Blocks.DUCT_GLASS:
 			# A short length of pipe, held across you: four rails round an
 			# opening, which is what the thing actually is. The icon used to be

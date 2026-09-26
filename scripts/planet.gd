@@ -315,6 +315,16 @@ func class_title() -> String:
 
 var hazard_dps := 0.0    # health/sec when exposed on the surface without protection
 var _flora_here: Array = []   # memo for flora_here()
+## Which decorative plants this world grows, as indices into Blocks.FOLIAGE.
+##
+## Worked out ONCE when the world is configured rather than on first use,
+## because generation reads it from worker threads and a memo filled lazily
+## from several of them at once is a race with a very quiet failure mode.
+var foliage_ids := PackedInt32Array()
+## ...and how thickly, before the biome has its say. Some worlds are covered
+## and some have three flowers on them, which is most of what makes one green
+## planet different from the next.
+var foliage_density := 0.0
 var _flora_rolled := false
 var _flora_names: Dictionary = {}   # species key -> the name IT has HERE
 
@@ -392,14 +402,19 @@ const BIOME_SCALE := 3.2
 ## than a world with places in it. Two regions at the dry end still do it,
 ## because a barrens should exist; the rest are all the same soil, told apart by
 ## what colour it is and what is standing on it.
+## `bloom` is how much of the other stuff -- the flowers, the shrubs, the
+## things with no name -- a region carries, quite apart from how much plain
+## grass it has. They are separate on purpose: a meadow is grass with flowers
+## in it, a heath is sparse grass with a great deal of low scrub, and a steppe
+## is thin grass and nothing else. One number could not say that.
 const BIOME_KINDS := [
-	{"name": "Wetland",   "top": 0, "trees": 0.90, "grass": 1.60, "amp": 0.40, "lift": -0.45},
-	{"name": "Meadow",    "top": 0, "trees": 0.20, "grass": 1.90, "amp": 0.60, "lift": -0.10},
-	{"name": "Woodland",  "top": 0, "trees": 2.60, "grass": 1.00, "amp": 0.90, "lift": 0.00},
-	{"name": "Heath",     "top": 0, "trees": 0.35, "grass": 0.70, "amp": 1.00, "lift": 0.12},
-	{"name": "Highland",  "top": 0, "trees": 0.55, "grass": 0.50, "amp": 1.90, "lift": 0.50},
-	{"name": "Steppe",    "top": 1, "trees": 0.15, "grass": 0.30, "amp": 0.80, "lift": 0.16},
-	{"name": "Barrens",   "top": 2, "trees": 0.00, "grass": 0.00, "amp": 1.35, "lift": 0.30},
+	{"name": "Wetland",   "top": 0, "trees": 0.90, "grass": 1.60, "bloom": 1.30, "amp": 0.40, "lift": -0.45},
+	{"name": "Meadow",    "top": 0, "trees": 0.20, "grass": 1.90, "bloom": 2.20, "amp": 0.60, "lift": -0.10},
+	{"name": "Woodland",  "top": 0, "trees": 2.60, "grass": 1.00, "bloom": 0.90, "amp": 0.90, "lift": 0.00},
+	{"name": "Heath",     "top": 0, "trees": 0.35, "grass": 0.70, "bloom": 1.70, "amp": 1.00, "lift": 0.12},
+	{"name": "Highland",  "top": 0, "trees": 0.55, "grass": 0.50, "bloom": 0.55, "amp": 1.90, "lift": 0.50},
+	{"name": "Steppe",    "top": 1, "trees": 0.15, "grass": 0.30, "bloom": 0.20, "amp": 0.80, "lift": 0.16},
+	{"name": "Barrens",   "top": 2, "trees": 0.00, "grass": 0.00, "bloom": 0.00, "amp": 1.35, "lift": 0.30},
 ]
 
 ## The biomes this world actually has, as parallel arrays rather than an array of
@@ -410,6 +425,7 @@ var biome_names: Array = []
 var _b_top := PackedInt32Array()
 var _b_trees := PackedFloat32Array()
 var _b_grass := PackedFloat32Array()
+var _b_bloom := PackedFloat32Array()
 var _b_amp := PackedFloat32Array()
 var _b_lift := PackedFloat32Array()
 ## How each region colours the ground it carpets. A hue turn, and a pull on how
@@ -658,6 +674,12 @@ func configure(cfg: Dictionary) -> void:
 	_derive_ores()
 	_derive_caves(cfg.get("cave_amount", -1.0))
 	_derive_water(cfg)
+	# AFTER the water and the hazard: planet_class() is worked out from those,
+	# and asking which plants this world's class allows before they are set
+	# gets the answer for a world this is not. It was rolled inside
+	# _derive_biomes, ten lines too early, and temperate planets came up
+	# covered in desert scrub.
+	_derive_foliage()
 	_derive_fauna(cfg.get("force_hostile_enemy", false))  # after water: fish generation depends on water_style
 	# after flora/water: siting depends on both. A system's civilization tier
 	# (see galaxy.gd) decides whether THIS planet is allowed settlements at all,
@@ -2717,11 +2739,44 @@ func color_of(id: int) -> Color:
 ## put a cliff of dead rock straight against a lake. Where the run starts and how
 ## long it is are the roll, so one world is basins-through-scrub and the next is
 ## forest-through-barrens.
+## Which of its class's plants this world actually grows, and how thickly.
+##
+## A subset, not the lot: two worlds of the same class should not be the same
+## world, and the quickest way to tell them apart from the doorway is that one
+## is knee-deep in yellow flowers and the other has grey tufts and nothing
+## else. A world can also draw NONE, and then it has bare ground -- which is
+## the other half of the same idea.
+func _derive_foliage() -> void:
+	foliage_ids = PackedInt32Array()
+	foliage_density = 0.0
+	var pool := Blocks.foliage_for_class(planet_class())
+	if pool.is_empty():
+		return
+	var r := RandomNumberGenerator.new()
+	r.seed = _seed + 5521
+	# A fifth of worlds grow nothing but the plain grass they already had.
+	if r.randf() < 0.2:
+		return
+	var order: Array = []
+	for i in pool:
+		order.append(int(i))
+	for i in range(order.size() - 1, 0, -1):
+		var j := r.randi() % (i + 1)
+		var t = order[i]
+		order[i] = order[j]
+		order[j] = t
+	var keep: int = r.randi_range(2, mini(5, order.size()))
+	for i in keep:
+		foliage_ids.append(int(order[i]))
+	foliage_density = r.randf_range(0.28, 1.0)
+
+
 func _derive_biomes() -> void:
 	biome_names.clear()
 	_b_top.clear()
 	_b_trees.clear()
 	_b_grass.clear()
+	_b_bloom.clear()
 	_b_amp.clear()
 	_b_lift.clear()
 	_b_hue.clear()
@@ -2741,6 +2796,9 @@ func _derive_biomes() -> void:
 		# still not the same planet.
 		_b_trees.append(float(b["trees"]) * r.randf_range(0.75, 1.3))
 		_b_grass.append(float(b["grass"]) * r.randf_range(0.75, 1.3))
+		# Wider jitter than the grass: one region being conspicuously the
+		# flowery one is the point of having it.
+		_b_bloom.append(float(b["bloom"]) * r.randf_range(0.5, 1.6))
 		_b_amp.append(float(b["amp"]) * r.randf_range(0.85, 1.15))
 		_b_lift.append(float(b["lift"]) * r.randf_range(0.8, 1.2))
 		# Spread ACROSS the run rather than rolled independently, so neighbouring
@@ -3446,6 +3504,7 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 	var top := pal_top
 	var sub := pal_sub
 	var grass_here := grass_density
+	var bloom_here := foliage_density
 	if bpos >= 0.0:
 		var slot := _biome_slot(bpos)
 		match _b_top[slot]:
@@ -3453,6 +3512,7 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 			2: top = pal_rock
 		sub = pal_sub if _b_top[slot] < 2 else pal_rock
 		grass_here = grass_density * _b_grass[slot]
+		bloom_here = foliage_density * _b_bloom[slot]
 
 	# A settlement grades its own ground: each building sits on a small flat pad
 	# at ITS OWN local terrain height (not a single height for the whole
@@ -3498,6 +3558,32 @@ func generation_sample(gx: int, gy: int, gz: int, tcache = null) -> int:
 					gz - roundi(gup.z), tcache)
 			if under != Blocks.AIR and under != Blocks.WATER:
 				return Blocks.TALL_GRASS
+		# ...and the rest of what grows here: flowers, scrub, and whatever the
+		# things with no name are. Its own roll, on its own hash, so a region
+		# can be thick with flowers and thin on grass or the other way about --
+		# and a world that drew no species of its own simply has none of this.
+		#
+		# Anything but bare ROCK takes it, rather than grass specifically:
+		# snow, sand and dust all have things that grow on them, and keying it
+		# to the green stuff left every frozen and arid world bare. A region
+		# whose topsoil IS rock -- the Barrens -- grows nothing, which is the
+		# empty biome the rest of the variety gets read against.
+		if bloom_here > 0.0 and not foliage_ids.is_empty() and d - surf <= 1.0 \
+				and top != pal_rock \
+				and (water_style == WATER_NONE or surf > water_level + 0.5):
+			var fh := _hash01(Vector3i(gx, gy, gz), 5522)
+			if fh < bloom_here * 0.55:
+				var fup := _axis_of(dir) if shape_cube else dir
+				var funder := generation_sample(gx - roundi(fup.x), gy - roundi(fup.y),
+						gz - roundi(fup.z), tcache)
+				if funder != Blocks.AIR and funder != Blocks.WATER:
+					# Which of this world's plants, from a second hash: one
+					# roll deciding both whether and which would tie how
+					# common a thing is to where it sits in the list.
+					var pick := int(_hash01(Vector3i(gx, gy, gz), 5523)
+						* float(foliage_ids.size())) % foliage_ids.size()
+					var sp := int(foliage_ids[pick])
+					return Blocks.make_foliage(int(Blocks.FOLIAGE[sp]["form"]), sp)
 		return Blocks.AIR
 
 	var depth := surf - d
