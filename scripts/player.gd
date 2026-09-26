@@ -7340,7 +7340,7 @@ func _update_held_item(active: Dictionary) -> void:
 		# match, which is most of why holding it looked wrong.
 		_held_book.scale = Vector3.ONE * 0.55
 		_held_book.position = Vector3(0.02, -0.08, 0.0)
-		_held_book.rotation = Vector3(-0.10, -HAND_IDLE_ROT.y, -HAND_IDLE_ROT.z)
+		_held_book.rotation = Vector3(-0.95, -HAND_IDLE_ROT.y + PI, -HAND_IDLE_ROT.z)
 		ItemModels.set_book_open(_held_book, 0.0)
 		_read_t = 0.0
 	elif ItemModels.has_model(id):
@@ -7447,9 +7447,16 @@ func _tick_reading(delta: float) -> void:
 	# opening it made no sense to watch. Closed and open now differ in a single
 	# axis, so what you see is a book being raised, and the only other thing
 	# moving is the cover.
-	var yaw: float = -HAND_IDLE_ROT.y
+	# Half a turn on top of undoing the hand: the rig's halves reach out along
+	# its own +X, which put the spine down the LEFT edge. Turned about, the
+	# spine sits on the right and the pages open away from it.
+	var yaw: float = -HAND_IDLE_ROT.y + PI
 	var roll: float = -HAND_IDLE_ROT.z
-	_held_book.rotation = Vector3(lerpf(-0.10, 1.30, e), yaw, roll)
+	# Shut, it is canted toward you rather than lying face-up: a book in your
+	# hand shows you its cover, it does not show it to the ceiling.
+	# Negative, because the half turn above puts the pitch axis the other way
+	# round: with the book turned about, tipping it "up" tips it away from you.
+	_held_book.rotation = Vector3(lerpf(-0.95, -1.30, e), yaw, roll)
 	_held_book.position = Vector3(lerpf(0.02, -0.26, e), lerpf(-0.08, 0.06, e),
 		lerpf(0.0, 0.14, e))
 	_held_book.scale = Vector3.ONE * lerpf(0.55, 0.92, e)
