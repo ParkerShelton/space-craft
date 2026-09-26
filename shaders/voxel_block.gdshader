@@ -319,18 +319,12 @@ void fragment() {
 		emit = abs(id - glow_lamp_id) < 0.5 ? lamp_power : 1.0;
 
 	} else if (abs(id - thruster_id) < 0.5) {
-		// Measured from the planet's centre rather than the world origin, so
-		// the nozzle sits in the middle of ITS block whatever odd offset the
-		// planet happens to sit at.
-		vec2 bc = fract(face_coord(v_world - planet_center, n)) - vec2(0.5);
-		float r = length(bc);
-		float rim = smoothstep(0.30, 0.33, r) * (1.0 - smoothstep(0.40, 0.43, r));
-		float throat = 1.0 - smoothstep(0.28, 0.31, r);
-		float edge = max(abs(bc.x), abs(bc.y));
-		// Grey casing; the vertex colour (the thruster's orange) survives only
-		// on the nozzle's rim, where the burn has coloured it.
-		base = mix(vec3(0.34, 0.36, 0.40), base, rim);
-		shade = 1.0 - throat * 0.8 + rim * 0.15 - smoothstep(0.44, 0.49, edge) * 0.3;
+		// Plain dark casing. The nozzle used to be a ring painted on the cube
+		// face, which is why a thruster in the ground looked nothing like the
+		// ones bolted to a hull -- the real model stands over this now (see
+		// Chunk._apply_fittings), and all this has to be is the block it sits
+		// in, dark enough not to show around the edges of it.
+		base = vec3(0.26, 0.28, 0.31);
 		metalish = 1.0;
 
 	} else if (abs(id - metal_id) < 0.5 || abs(id - alloy_id) < 0.5

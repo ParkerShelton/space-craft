@@ -21,6 +21,7 @@ var cc: Vector3i  # chunk coordinate (in chunk units)
 var _mesh_instance: MeshInstance3D
 var _collision: CollisionShape3D
 var _lights: Array = []      # OmniLight3D nodes for this chunk's light blocks
+var _fitting_props: Array = []  # MeshInstance3D models for thrusters etc.
 var _collision_sig := 0  # hash of the opaque verts the current shape was cooked from
 
 ## Block texturing is per PLANET, not shared: each planet seeds its own
@@ -163,6 +164,46 @@ func _ensure_children() -> void:
 ## Real OmniLight3D nodes for the light blocks in this chunk. Rebuilt whenever
 ## the chunk re-meshes, which is also when a torch could have been placed or
 ## broken. Kept as children of the chunk so they stream in and out with it.
+## Thrusters and life support units standing in the ground, drawn with the very
+## model a ship uses for them.
+##
+## The shader used to fake a thruster with a ring painted on a cube face, which
+## is why one lying in the wreckage looked nothing like the ones bolted to the
+## hull -- same block, two completely different things. A block should look the
+## same wherever it is.
+func _apply_fittings() -> void:
+	for f in _fitting_props:
+		if is_instance_valid(f):
+			f.queue_free()
+	_fitting_props.clear()
+	if planet == null:
+		return
+	# Its own cells, asked of the planet, rather than threaded out through the
+	# mesher: four thousand lookups against a rebuild that has just walked the
+	# same cells emitting geometry is nothing, and it keeps the worker thread
+	# and its data untouched.
+	var base := cc * CS
+	for x in CS:
+		for y in CS:
+			for z in CS:
+				var gv := Vector3i(base.x + x, base.y + y, base.z + z)
+				var id := Blocks.bottom_of(planet.get_id(gv))
+				if not Ship.FITTINGS.has(id):
+					continue
+				var mi := MeshInstance3D.new()
+				mi.mesh = Ship._fitting_mesh(id)
+				mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				add_child(mi)
+				# The model is built in a ship frame, where -Z is the nose and
+				# a thruster fires aft. In the ground there is no nose, so it
+				# is stood on end with the bell at the sky -- which is the view
+				# you get of one dropped in a hole, and the one the painted
+				# ring was imitating.
+				mi.position = Vector3(x, y, z)
+				mi.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
+				_fitting_props.append(mi)
+
+
 func _apply_lights(positions: PackedVector3Array) -> void:
 	for l in _lights:
 		if is_instance_valid(l):
@@ -234,6 +275,7 @@ func apply_mesh_data(data: Dictionary) -> void:
 	_mesh_instance.mesh = m
 	_mesh_instance.material_override = null
 	_apply_lights(data.get("lights", PackedVector3Array()))
+	_apply_fittings()
 
 	# Collision uses the COLLIDABLE opaque geometry: you pass through water, and
 	# through leaves (which render but are deliberately non-solid). Cooking a
