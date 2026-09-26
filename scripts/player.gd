@@ -9002,6 +9002,21 @@ func _bench_zone(st: Station) -> Dictionary:
 func _use_bench(st: Station) -> void:
 	var zone := {} if st.headless else _bench_zone(st)
 	var where := str(zone.get("zone", "bed"))
+	# Holding something the bench works? Then you are loading it, wherever on
+	# the machine you happened to be pointing. Hunting for the right third of
+	# a bench to click is not a puzzle worth having.
+	var held: Dictionary = _active_item()
+	var hid := int(held.get("id", Blocks.AIR))
+	if hid != Blocks.AIR and int(held.get("count", 0)) > 0 and Blocks.pipe_takes(hid):
+		if st.bench_add(held):
+			_take_one_from_active()
+			_refresh_slots()
+			Audio.at("place_rock", st.global_position)
+		elif not st.bench_output().is_empty():
+			_toast("Take what it made off the rollers first")
+		else:
+			_toast("The bed is full")
+		return
 	if where == "blade" or where == "roller":
 		# What came off it is taken from the rollers, since that is where it
 		# is sitting.
@@ -9026,21 +9041,10 @@ func _use_bench(st: Station) -> void:
 		_toast("%s" % made)
 		Audio.at("place_rock", st.global_position)
 		return
-	# The bed: lay something on it, or take the last thing back.
-	var held: Dictionary = _active_item()
-	var hid := int(held.get("id", Blocks.AIR))
-	if hid != Blocks.AIR and int(held.get("count", 0)) > 0 and Blocks.pipe_takes(hid):
-		if st.bench_add(held):
-			_take_one_from_active()
-			_refresh_slots()
-			Audio.at("place_rock", st.global_position)
-		else:
-			_toast("The bed is full" if st.bench_output().is_empty()
-				else "Take what it made off first")
-		return
+	# Empty-handed on the bed: take the last thing laid back off it.
 	var back := st.bench_take_last()
 	if back.is_empty():
-		_toast("Lay wood, staves, plate or glass on the bed")
+		_toast("Hold wood, a wood plate, a metal plate or glass and right-click to load it")
 		return
 	_add_item(int(back["id"]), int(back.get("count", 1)), back.get("props", {}),
 		str(back.get("src", "")), back.get("mat", {}))
@@ -9223,7 +9227,7 @@ func _process_bench_look(st: Station) -> bool:
 		_look_name = "Rollers  (right-click to roll%s)" % (
 			(" -- makes %s" % str(rr["label"])) if not rr.is_empty() else "")
 		return true
-	_look_name = "Pipe Bench bed  (%d on it -- right-click to lay stock, or take it back)" % ids.size()
+	_look_name = "Pipe Bench  (%d on the bed -- right-click holding stock to load it)" % ids.size()
 	return true
 
 

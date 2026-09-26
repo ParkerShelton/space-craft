@@ -119,7 +119,7 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 				rod.append([Vector3(0, -0.12 + float(i) * 0.24, 0),
 					Vector3(0.18, 0.04, 0.18), BAND])
 			return rod
-		Blocks.STAVE:
+		Blocks.WOOD_PLATE:
 			# A few flat boards off a log, stacked and slightly out of true --
 			# shaved, not sawn.
 			const BOARD := Color(0.66, 0.50, 0.28)

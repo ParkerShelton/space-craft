@@ -1230,8 +1230,22 @@ func bench_work(at: String) -> String:
 			break
 	for i in Blocks.PIPE_SPOTS:
 		storage[i] = _empty_slot()
-	storage[Blocks.PIPE_SPOTS] = {"id": int(r["out"]), "count": int(r["n"]),
+	var made := {"id": int(r["out"]), "count": int(r["n"]),
 		"eighths": 0, "props": props, "src": src, "mat": mat}
+	if at == "blade":
+		# What the blade cuts stays ON THE BED, one to a spot, because the only
+		# thing anybody does with it next is roll it -- and making you take
+		# four plates off the machine and lay all four back on again was four
+		# clicks of nothing.
+		for i2 in mini(int(r["n"]), Blocks.PIPE_SPOTS):
+			storage[i2] = made.duplicate(true)
+			storage[i2]["count"] = 1
+		var over := int(r["n"]) - Blocks.PIPE_SPOTS
+		if over > 0:
+			storage[Blocks.PIPE_SPOTS] = made.duplicate(true)
+			storage[Blocks.PIPE_SPOTS]["count"] = over
+	else:
+		storage[Blocks.PIPE_SPOTS] = made
 	_animate_bench(at, true)
 	_refresh_bench()
 	return str(r["label"])

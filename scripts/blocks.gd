@@ -989,12 +989,14 @@ const DUCT_REINFORCED := 226
 const DUCT_GLASS := 227
 const DUCT_IDS := [DUCT, DUCT_WOOD, DUCT_REINFORCED, DUCT_GLASS]
 
-## A stave: flat wooden stock, shaved off a log. Wood's answer to a plate.
+## A wood plate: flat wooden stock, cut off a log. Exactly what a metal plate
+## is, in wood -- and named that way because "stave" is a word you have to
+## already know, and this is the first thing a new player meets on the bench.
 ##
 ## Everything that becomes a pipe is flat stock first, and this is what makes
 ## that true of wood as well as metal -- so one machine rolls all of it and a
 ## wooden pipe stays as cheap as the log it came off.
-const STAVE := 228
+const WOOD_PLATE := 228
 
 ## The Pipe Bench: a blade at one end and a pair of rollers at the other.
 ##
@@ -1016,14 +1018,14 @@ const PIPE_BENCH := 229
 const PIPE_SPOTS := 4
 const PIPE_RECIPES := [
 	# At the blade.
-	{"label": "Staves", "out": STAVE, "n": 4, "at": "blade", "parts": [["wood", 1]]},
+	{"label": "Wood Plates", "out": WOOD_PLATE, "n": 4, "at": "blade", "parts": [["wood", 1]]},
 	# At the rollers. The first part named is where the result takes its
 	# material from -- which is how a metal duct remembers the Hardness of the
 	# plate it was rolled from, and so how fast it carries.
 	{"label": "Wooden Duct", "out": DUCT_WOOD, "n": 4, "at": "roller",
-		"parts": [[STAVE, 4]]},
+		"parts": [[WOOD_PLATE, 4]]},
 	{"label": "Reinforced Duct", "out": DUCT_REINFORCED, "n": 4, "at": "roller",
-		"parts": [[STAVE, 3], [BAR, 1]]},
+		"parts": [[WOOD_PLATE, 3], [BAR, 1]]},
 	{"label": "Metal Duct", "out": DUCT, "n": 4, "at": "roller",
 		"parts": [[PLATE, 1]]},
 	{"label": "Glass Duct", "out": DUCT_GLASS, "n": 4, "at": "roller",
@@ -1964,7 +1966,7 @@ const NAMES := {
 	DUCT_GLASS: "Glass Duct",
 	DUCT_LOADER: "Loader",
 	DUCT_PORT: "Port",
-	STAVE: "Stave",
+	WOOD_PLATE: "Wood Plate",
 	PIPE_BENCH: "Pipe Bench",
 	CARGO_MODULE: "Cargo Module",
 	OXYGEN_PLANT: "Oxygen Plant",
@@ -2159,7 +2161,7 @@ const COLORS := {
 	DUCT_WOOD: Color(0.48, 0.34, 0.19),
 	DUCT_REINFORCED: Color(0.44, 0.38, 0.28),
 	DUCT_GLASS: Color(0.62, 0.80, 0.86, 0.55),
-	STAVE: Color(0.66, 0.50, 0.28),
+	WOOD_PLATE: Color(0.66, 0.50, 0.28),
 	PIPE_BENCH: Color(0.50, 0.42, 0.30),
 	DUCT_LOADER: Color(0.52, 0.58, 0.44),
 	DUCT_PORT: Color(0.60, 0.50, 0.30),
