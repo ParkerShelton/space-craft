@@ -4625,15 +4625,12 @@ func _station_part_box(st: Station) -> Dictionary:
 						"s": Vector3(0.52, 0.44, 0.52), "act": false}
 				return {"c": StationModels.GEN_HOPPER + Vector3(0, 0.06, 0),
 					"s": Vector3(0.48, 0.28, 0.48), "act": false}
-		Blocks.POWER_BAY:
-			return {"c": Vector3(0, 0.42, 0), "s": Vector3(0.84, 0.84, 0.84), "act": false}
-		Blocks.DUCT_PORT:
-			return {"c": Vector3(0, 0.38, 0), "s": Vector3(0.50, 0.74, 0.76), "act": true}
-		Blocks.DUCT_LOADER:
-			return {"c": Vector3(0, 0.34, 0), "s": Vector3(0.80, 0.68, 0.92), "act": false}
-		Blocks.ANVIL:
-			return {"c": Vector3(0.02, StationModels.ANVIL_FACE + 0.04, 0),
-				"s": Vector3(0.62, 0.20, 0.36), "act": false}
+		# Nothing else gets one. An outline is worth drawing where a machine
+		# has SEVERAL parts and you need telling which one your crosshair has
+		# found -- a battery cradle, a port, a loader and an anvil each do one
+		# thing wherever you click them, so a box round the whole machine says
+		# nothing you did not already know and is just something large and
+		# white in the way.
 	return {}
 
 
