@@ -6782,12 +6782,23 @@ func _make_slot(parent: Node, index: int, mode: String, px: int = INV_CELL) -> D
 	elif mode == "vanity":
 		dcont = "vanity"
 	if dcont != "":
-		root.set_drag_forwarding(
-			_slot_get_drag.bind(dcont, index, root),
-			_slot_can_drop.bind(dcont, index),
-			_slot_do_drop.bind(dcont, index))
-		root.gui_input.connect(_slot_gui_input.bind(root, dcont, index))
+		_wire_slot(root, dcont, index)
 	return {"root": root, "swatch": swatch, "count": count, "selected": false}
+
+
+## Make a cell live: draggable, droppable, and shift-clickable.
+##
+## One call, because there are three places that build cells -- the bag, a
+## machine's store, and the Suit slot -- and they each used to set up dragging
+## on their own. Shift-click went into the first of them only, so it worked in
+## your bag and did nothing at all in a chest, which is exactly the half-wired
+## feature you get when the same setup is written out three times.
+func _wire_slot(root: Control, cont: String, index: int) -> void:
+	root.set_drag_forwarding(
+		_slot_get_drag.bind(cont, index, root),
+		_slot_can_drop.bind(cont, index),
+		_slot_do_drop.bind(cont, index))
+	root.gui_input.connect(_slot_gui_input.bind(root, cont, index))
 
 
 ## Shift-click on any slot sends it across. Everything else about the click is
@@ -6860,10 +6871,7 @@ func _make_equip_slot(parent: Node, pos: Vector2) -> Dictionary:
 	count.offset_left = -30; count.offset_top = -22
 	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(count)
-	root.set_drag_forwarding(
-		_slot_get_drag.bind("equip", 0, root),
-		_slot_can_drop.bind("equip", 0),
-		_slot_do_drop.bind("equip", 0))
+	_wire_slot(root, "equip", 0)
 	return {"root": root, "swatch": swatch, "count": count}
 
 
@@ -7192,8 +7200,9 @@ func _quick_move(cont: String, index: int) -> void:
 func _quick_targets(cont: String, index: int) -> Array:
 	var out: Array = []
 	if cont == "stor":
-		# Out of the machine and into your bag: hotbar first, because something
-		# you took out is usually something you are about to use.
+		# Out of the machine and into your bag, hotbar first: something you have
+		# just taken out of a chest is usually something you are about to use,
+		# and having it land in the back of the bag means going looking for it.
 		for i in SLOTS:
 			out.append(["inv", i])
 		return out
@@ -8799,10 +8808,7 @@ func _make_stor_cell(index: int, cx: int, cy: int) -> Dictionary:
 	count.position = Vector2(28, 34)
 	count.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(count)
-	root.set_drag_forwarding(
-		_slot_get_drag.bind("stor", index, root),
-		_slot_can_drop.bind("stor", index),
-		_slot_do_drop.bind("stor", index))
+	_wire_slot(root, "stor", index)
 	return {"root": root, "swatch": swatch, "count": count}
 
 
