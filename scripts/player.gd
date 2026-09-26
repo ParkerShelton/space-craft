@@ -3580,24 +3580,35 @@ func _hold_the_ledge(horiz: Vector3, up: Vector3, delta: float) -> Vector3:
 	return Vector3.ZERO
 
 
-## Is there something to stand on a step from here?
+## Would you still be held up after this step?
 ##
-## Probed a little PAST where the step lands, because the check has to fail
-## while there is still floor under your feet -- testing the exact landing spot
-## lets you creep out to the very edge and then stop with your heels over
-## nothing, which reads as a bug rather than as caution.
+## Not "is there floor directly under my middle", which is what this used to
+## ask. A body is held up by whatever is under ANY of it, so crouching at a
+## ledge should let most of you out over the drop and still let you walk about
+## -- and, above all, always let you walk back.
+##
+## Two probes: where the step lands, and a third of a block back toward where
+## you came from. Ground under either is ground enough. Walking outward, the
+## second probe is the one that holds you, and it runs out exactly when your
+## weight would really go over. Walking back inward it is trivially satisfied,
+## which is the part that was broken: the old single probe was offset AGAINST
+## the direction of travel, so stepping away from a ledge tested a point even
+## further over the void and refused to let you leave.
 func _ground_ahead(step: Vector3, up: Vector3) -> bool:
 	var space := get_world_3d().direct_space_state
 	if space == null:
 		return true
-	var lead: Vector3 = step
-	if lead.length() > 0.0001:
-		lead = lead.normalized() * (maxf(lead.length(), CROUCH_LOOKAHEAD) - CROUCH_OVERHANG)
-	var from: Vector3 = global_position + lead
-	var q := PhysicsRayQueryParameters3D.create(from, from - up * CROUCH_PROBE)
-	q.exclude = [get_rid()]
-	q.collide_with_areas = false
-	return not space.intersect_ray(q).is_empty()
+	var dir := step
+	if dir.length() > 0.0001:
+		dir = dir.normalized()
+	var land: Vector3 = global_position + dir * maxf(step.length(), CROUCH_LOOKAHEAD)
+	for from in [land, land - dir * CROUCH_OVERHANG]:
+		var q := PhysicsRayQueryParameters3D.create(from, from - up * CROUCH_PROBE)
+		q.exclude = [get_rid()]
+		q.collide_with_areas = false
+		if not space.intersect_ray(q).is_empty():
+			return true
+	return false
 
 
 func _walk(delta: float, up: Vector3, gmag: float) -> void:
