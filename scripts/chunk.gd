@@ -996,16 +996,17 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 		var y: int = (idx >> CS_SHIFT) & CS_MASK
 		var z: int = idx >> (CS_SHIFT * 2)
 		var wid := ids[idx]
-		if Blocks.bottom_of(wid) == Blocks.WIRE:
+		if Blocks.is_wire(Blocks.bottom_of(wid)):
 			var gv := Vector3i(base.x + x, base.y + y, base.z + z)
 			var up := planet._axis_of(Vector3(gv) + Vector3(0.5, 0.5, 0.5))
-			var col := planet.color_of(Blocks.WIRE)
+			var wbase := Blocks.bottom_of(wid)
+			var col := planet.color_of(wbase)
 			# Reach toward neighbouring conduit only, so arms never
 			# poke into the wall the run is stapled to.
 			var conn := 0
 			for fi2 in 6:
 				var nraw := _id_at(planet, snap, gv + _WFACE[fi2])
-				if Blocks.bottom_of(nraw) != Blocks.WIRE:
+				if Blocks.bottom_of(nraw) != wbase:
 					continue
 				conn |= 1 << fi2
 				# Turning a corner (floor run meeting a wall run) the two
@@ -1016,7 +1017,7 @@ static func build_mesh_data(planet: Planet, cc: Vector3i, snap: Dictionary, wsna
 			for bx in shape_boxes(wid, up, conn):
 				_emit_free_box(Vector3(x, y, z) + (bx[0] as Vector3),
 					Vector3(x, y, z) + (bx[1] as Vector3),
-					col, Blocks.WIRE, verts, normals, colors, uvs, uv2s,
+					col, wbase, verts, normals, colors, uvs, uv2s,
 					_face_light(snap, gv, Vector3i.ZERO))
 
 	# tall grass: two quads crossed in an X per cell, the way every block game
@@ -1369,7 +1370,7 @@ static func shape_boxes(raw: int, up: Vector3, conn: int = 0x3F) -> Array:
 		if base == Blocks.DOOR:
 			return [_mid_slab(lo, hi, df, DOOR_THICK)]
 		return [_slab_toward(lo, hi, dh, DOOR_THICK)]
-	if base == Blocks.WIRE:
+	if Blocks.is_wire(base):
 		var faces := Blocks.wire_faces_of(raw)
 		if faces == 0:
 			# Never placed against anything (hand-given): lie it on the floor.
@@ -1384,8 +1385,10 @@ static func shape_boxes(raw: int, up: Vector3, conn: int = 0x3F) -> Array:
 			# Reach toward neighbouring cells AND toward the other faces wired in
 			# THIS cell -- that second part is what joins a floor run to a wall
 			# run inside a single block.
+			# A duct is the same run, bored out: thicker, and standing
+			# further off the wall, so a pipe never reads as a cable.
 			out.append_array(_wire_boxes(lo, hi, Vector3(_WFACE[f]),
-				(conn | faces) & ~(1 << f)))
+				(conn | faces) & ~(1 << f), base == Blocks.DUCT))
 		return out
 	if Blocks.is_stacked_slab(raw):
 		return [_half_toward(lo, hi, -up), _half_toward(lo, hi, up)]
@@ -1396,9 +1399,10 @@ static func shape_boxes(raw: int, up: Vector3, conn: int = 0x3F) -> Array:
 
 ## One face's worth of conduit: a small junction on the mounting face plus an
 ## arm toward each direction in `arms`.
-static func _wire_boxes(lo: Vector3, hi: Vector3, mount: Vector3, arms: int) -> Array:
-	const T := 0.05    # how far it stands off the surface
-	const W := 0.10    # how thick the cable is
+static func _wire_boxes(lo: Vector3, hi: Vector3, mount: Vector3, arms: int,
+		fat := false) -> Array:
+	var T := 0.18 if fat else 0.05    # how far it stands off the surface
+	var W := 0.30 if fat else 0.10    # how thick it is
 	const E := 0.004   # held just clear of the wall, so the two never z-fight
 	var a := lo
 	var b := hi

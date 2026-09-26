@@ -8031,6 +8031,12 @@ func _open_station(st: Station) -> void:
 	if st.kind == Blocks.POWER_BAY:
 		_swap_bay_battery(st)
 		return
+	if st.kind == Blocks.DUCT_FILTER:
+		_set_filter(st)
+		return
+	if st.kind == Blocks.DUCT_LOADER:
+		_toast("A loader empties the container behind it into the duct it faces")
+		return
 	# A bed is got into, not opened. Its long side runs along its own Z.
 	if st.kind == Blocks.BED:
 		_use_bed(st, st.global_transform.basis.z.normalized())
@@ -9204,6 +9210,30 @@ func _spark_burst(where: Vector3, count: int, col: Color, big: bool = false) -> 
 	var tw := fl.create_tween()
 	tw.tween_property(fl, "light_energy", 0.0, 0.14)
 	tw.tween_callback(fl.queue_free)
+
+
+## Show a Filter what to let through. One right-click, like a battery cradle:
+## hold the thing you want through it and click, click again empty-handed to
+## take the example back and open the gate.
+func _set_filter(f: Station) -> void:
+	var held: Dictionary = inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
+	var id := int(held.get("id", Blocks.AIR))
+	var giving := {}
+	if id != Blocks.AIR and int(held.get("count", 0)) > 0:
+		giving = held.duplicate(true)
+		giving["count"] = 1
+	var back := f.filter_swap(giving)
+	if not giving.is_empty():
+		_take_one_from_active()
+	if not back.is_empty():
+		_add_item(int(back["id"]), int(back.get("count", 1)), back.get("props", {}),
+			str(back.get("src", "")), back.get("mat", {}))
+	if giving.is_empty():
+		_toast("Filter opened -- anything may pass")
+	else:
+		_toast("Filter set to %s" % Blocks.name_of(int(giving["id"])))
+	Audio.ui("ui_toggle_on" if not giving.is_empty() else "ui_toggle_off")
+	_refresh_slots()
 
 
 ## Take one off the stack in your hand, clearing the slot when it runs out.

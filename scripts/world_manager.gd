@@ -29,6 +29,9 @@ var net: Net
 var avatars: Dictionary = {}
 var _ships: Array[Ship] = []
 var _stations: Array[Station] = []
+## Runs the duct network (see ducts.gd). Its own node, made on first tick, so
+## the whole system is one file that can be deleted.
+var ducts: Ducts
 ## Boats set down on water. They move, so they are their own nodes.
 var _boats: Array[Boat] = []
 
@@ -1056,6 +1059,11 @@ static func perf_report() -> Array:
 
 
 func _physics_process(delta: float) -> void:
+	if ducts == null or not is_instance_valid(ducts):
+		ducts = Ducts.new()
+		ducts.world = self
+		ducts.name = "Ducts"
+		add_child(ducts)
 	if player == null:
 		return
 	var here := player.global_position

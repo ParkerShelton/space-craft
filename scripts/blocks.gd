@@ -632,18 +632,27 @@ const WIRE_FACE_SHIFT := 24
 const WIRE_FACE_MASK := 0x3F
 
 static func is_wire(id: int) -> bool:
-	return id == WIRE
+	return id == WIRE or id == DUCT
+
+
+## Which of the two a cell is. They share every bit of their shaping, their
+## packing and their placement -- a duct is a fatter conduit that carries
+## things instead of current -- so everything about HOW they are drawn asks
+## is_wire, and only the handful of places that care what runs through them
+## ask this.
+static func is_duct(id: int) -> bool:
+	return bottom_of(id) == DUCT
 
 ## Bitmask over Chunk._WFACE indices; 0 when unset.
 static func wire_faces_of(v: int) -> int:
 	return int((v >> WIRE_FACE_SHIFT) & WIRE_FACE_MASK)
 
-static func wire_with_faces(mask: int) -> int:
-	return WIRE | ((mask & WIRE_FACE_MASK) << WIRE_FACE_SHIFT)
+static func wire_with_faces(mask: int, base: int = WIRE) -> int:
+	return base | ((mask & WIRE_FACE_MASK) << WIRE_FACE_SHIFT)
 
 ## Add one face to whatever this cell already carries.
 static func wire_add_face(v: int, face: int) -> int:
-	return wire_with_faces(wire_faces_of(v) | (1 << face))
+	return wire_with_faces(wire_faces_of(v) | (1 << face), bottom_of(v))
 
 
 const LOG_AXIS_SHIFT := 16
@@ -945,6 +954,31 @@ const CAPACITOR := 220
 ## a hillside. Cut them while they are up; by dawn there is nothing there.
 const AURORA_BLOOM := 221
 
+# --- ducts -----------------------------------------------------------------------
+#
+# Moving things from one box to another without building a computer to do it.
+#
+# The whole system is three pieces and no logic. A DUCT is a run of pipe, the
+# same surface-mounted shape the power conduit uses. A LOADER empties whatever
+# container it is bolted to into the run. Everything else on the run RECEIVES,
+# and where a thing ends up is decided by one rule:
+#
+#   a container that already holds some of it wants it more than one that does
+#   not.
+#
+# That is the whole of sorting. Put one plank in the plank chest, walk away,
+# and planks find it forever after -- the setup is tidying up once, which you
+# were going to do anyway. A FILTER on a container overrides that for the cases
+# where being told is better than being guessed at, and an unfiltered empty
+# chest at the end of the line catches whatever nothing else claimed.
+#
+# Nothing here has a signal, a delay or a state you have to reason about. That
+# is deliberate: two blocks whose interaction you have to work out is where
+# this stops being pipes and starts being redstone.
+const DUCT := 222
+const DUCT_LOADER := 223   # station: empties its container into the run
+const DUCT_FILTER := 224   # station: only its example item may pass into that container
+
 
 ## Does this station make power? Anything here feeds a base and charges a
 ## battery in its cradle; nothing else needs to know which kind it is.
@@ -1181,6 +1215,8 @@ const STATION_BUILDS := [
 	# stack, and every generator on the grid fills all of them.
 	{"kind": CAPACITOR, "reqs": [{"id": PLATE, "n": 8}, {"id": WIRE, "n": 6},
 		{"id": CIRCUIT, "n": 1}]},
+	{"kind": DUCT_LOADER, "reqs": [{"id": PLATE, "n": 4}, {"id": WIRE, "n": 2}]},
+	{"kind": DUCT_FILTER, "reqs": [{"id": PLATE, "n": 3}, {"id": CIRCUIT, "n": 1}]},
 	{"kind": HEATER, "reqs": [{"any": STONE_IDS, "n": 10, "label": "Rock"},
 		{"id": PLATE, "n": 6}]},
 	{"kind": COOLER, "reqs": [{"id": GLASS, "n": 6}, {"id": PLATE, "n": 10}]},
@@ -1201,6 +1237,7 @@ const STATION_BUILDS := [
 const STATION_CATEGORIES := [
 	{"name": "Camp", "icon": CAMPFIRE, "kinds": [CAMPFIRE, BED]},
 	{"name": "Containers", "icon": CHEST, "kinds": [CHEST, CHEST_WIDE, CARGO_MODULE]},
+	{"name": "Ducts", "icon": DUCT_LOADER, "kinds": [DUCT_LOADER, DUCT_FILTER]},
 	{"name": "Crafters", "icon": CARPENTER, "kinds": [CARPENTER, SHAPER, FABRICATOR, SHIPWORKS]},
 	{"name": "Smelters", "icon": SMELTER, "kinds": [SMELTER]},
 	{"name": "Power", "icon": GENERATOR,
@@ -1454,6 +1491,9 @@ const PRESS_RECIPES := [
 	# The base's nervous system: how much comes off one bar is the bar's
 	# Reactivity (wire_yield), so a conductive ore still goes further.
 	{"label": "Wire", "out": WIRE, "n": 8, "yield_from_material": true, "parts": [[BAR, 1]]},
+	# Duct is wide-bore: a sheet rolled round instead of a bar drawn out, so it
+	# costs more metal per length than wiring does.
+	{"label": "Duct x6", "out": DUCT, "n": 6, "parts": [[SHEET, 1]]},
 	{"label": "Battery", "out": BATTERY, "n": 1, "parts": [["ingot", 1], [SHEET, 2]]},
 	{"label": "Machine Core", "out": MACHINE_CORE, "n": 1, "parts": [[BAR, 2], [PLATE, 2]]},
 	# Reactor fuel. The ingots go first so the rod takes THEIR material: how
@@ -1796,6 +1836,9 @@ const NAMES := {
 	SOLAR_PANEL: "Solar Panel",
 	CAPACITOR: "Capacitor Bank",
 	AURORA_BLOOM: "Aurora Bloom",
+	DUCT: "Duct",
+	DUCT_LOADER: "Loader",
+	DUCT_FILTER: "Filter",
 	CARGO_MODULE: "Cargo Module",
 	OXYGEN_PLANT: "Oxygen Plant",
 	HEATER: "Heater",
@@ -1985,6 +2028,9 @@ const COLORS := {
 	SOLAR_PANEL: Color(0.19, 0.25, 0.42),
 	CAPACITOR: Color(0.30, 0.33, 0.40),
 	AURORA_BLOOM: Color(0.55, 0.95, 0.90),
+	DUCT: Color(0.58, 0.60, 0.66),
+	DUCT_LOADER: Color(0.52, 0.58, 0.44),
+	DUCT_FILTER: Color(0.60, 0.50, 0.30),
 	CARGO_MODULE: Color(0.42, 0.52, 0.58),
 	OXYGEN_PLANT: Color(0.42, 0.68, 0.78),
 	HEATER: Color(0.74, 0.40, 0.26),

@@ -103,6 +103,10 @@ static func capacity_of(k: int) -> int:
 		return CARGO_SLOTS
 	if k == Blocks.SOLAR_ARRAY or k == Blocks.CAPACITOR:
 		return 1   # the battery cradle, and nothing to feed it
+	if k == Blocks.DUCT_FILTER:
+		return 1   # the example item, which is never consumed
+	if k == Blocks.DUCT_LOADER:
+		return 0   # it moves things; it does not hold them
 	if k == Blocks.REACTOR:
 		return 2   # cradle and rod bay, the same two bays a Generator has
 	if k == Blocks.POWER_BAY:
@@ -272,6 +276,8 @@ func _build_visual() -> void:
 		_anvil_shown = "-"
 		_mi.mesh = StationModels.anvil_mesh("", Color.WHITE)
 		_refresh_anvil.call_deferred()
+	elif kind == Blocks.DUCT_FILTER:
+		_mi.mesh = StationModels.filter_mesh(filter_colour())
 	elif Blocks.makes_power(kind):
 		_gen_shown = gen_state()
 		_mi.mesh = _power_mesh(_gen_shown)
@@ -670,6 +676,33 @@ func gen_state() -> Color:
 			0.0, 1.0)
 	return Color(1.0 if seated else 0.0, snappedf(f, 0.04),
 		1.0 if burn_t > 0.0 else 0.0, snappedf(power / power_cap(), 0.04))
+
+
+## What a Filter is showing in its window: the colour of the one item it lets
+## past, or nothing at all when it has been left open.
+func filter_colour() -> Color:
+	if storage.is_empty():
+		return Color(0, 0, 0, 0)
+	var slot: Dictionary = storage[0]
+	var id := int(slot.get("id", Blocks.AIR))
+	if id == Blocks.AIR or int(slot.get("count", 0)) <= 0:
+		return Color(0, 0, 0, 0)
+	var mat: Dictionary = slot.get("mat", {})
+	return mat.get("color", Blocks.color_of(id))
+
+
+## Set the example, handing back whatever was in there. The item is NEVER
+## consumed -- it is a sample, not a fee -- so it comes straight back out when
+## you change your mind.
+func filter_swap(incoming: Dictionary) -> Dictionary:
+	_ensure_storage()
+	var was: Dictionary = storage[0].duplicate(true)
+	storage[0] = incoming.duplicate(true)
+	if not headless and _mi != null:
+		_mi.mesh = StationModels.filter_mesh(filter_colour())
+	if int(was.get("id", Blocks.AIR)) == Blocks.AIR or int(was.get("count", 0)) <= 0:
+		return {}
+	return was
 
 
 ## The model for whichever power station this is. They share a cradle, a lever

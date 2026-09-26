@@ -25,6 +25,8 @@ const FOOTPRINT := {
 	Blocks.SOLAR_ARRAY: Vector3i(2, 1, 1),
 	Blocks.REACTOR: Vector3i(1, 2, 1),
 	Blocks.CAPACITOR: Vector3i(1, 1, 1),
+	Blocks.DUCT_LOADER: Vector3i(1, 1, 1),
+	Blocks.DUCT_FILTER: Vector3i(1, 1, 1),
 	Blocks.POWER_BAY: Vector3i(1, 1, 1),
 	Blocks.OXYGEN_PLANT: Vector3i(1, 2, 1),
 	Blocks.HEATER: Vector3i(1, 1, 1),
@@ -99,6 +101,10 @@ static func boxes_for(kind: int) -> Array:
 			return reactor_boxes(false, 0.0, false, 0.0)
 		Blocks.CAPACITOR:
 			return capacitor_boxes(false, 0.0, 0.0)
+		Blocks.DUCT_LOADER:
+			return loader_boxes()
+		Blocks.DUCT_FILTER:
+			return filter_boxes(Color(0, 0, 0, 0))
 		Blocks.POWER_BAY:
 			return power_bay_boxes(false, 0.0)
 		Blocks.ANVIL:
@@ -1056,6 +1062,53 @@ static func capacitor_lit(power: float, has_battery: bool, charge: float) -> Arr
 static func capacitor_mesh(has_battery: bool, charge: float, power: float) -> ArrayMesh:
 	return _lit_mesh(capacitor_boxes(has_battery, charge, power),
 		capacitor_lit(power, has_battery, charge))
+
+
+## A Loader: a squat pump with a wide mouth on one side for the container it
+## empties and a duct collar on the other for the run it feeds. Deliberately
+## reads as having a direction, because it has one.
+static func loader_boxes() -> Array:
+	const CASE := Color(0.44, 0.48, 0.38)
+	const DEEP := Color(0.16, 0.18, 0.15)
+	const TRIM := Color(0.66, 0.70, 0.58)
+	var out: Array = [
+		[Vector3(0, 0.30, 0), Vector3(0.74, 0.60, 0.74), CASE],
+		[Vector3(0, 0.05, 0), Vector3(0.86, 0.10, 0.86), DEEP],
+		# The mouth: a wide intake on -Z.
+		[Vector3(0, 0.32, -0.40), Vector3(0.62, 0.44, 0.10), DEEP],
+		[Vector3(0, 0.32, -0.44), Vector3(0.48, 0.30, 0.04), Color(0.07, 0.08, 0.07)],
+		# ...and the collar it pushes out of, on +Z.
+		[Vector3(0, 0.32, 0.40), Vector3(0.34, 0.34, 0.12), TRIM],
+		[Vector3(0, 0.32, 0.47), Vector3(0.26, 0.26, 0.06), DEEP],
+	]
+	for sx in [-0.30, 0.30]:
+		out.append([Vector3(sx, 0.62, 0), Vector3(0.10, 0.06, 0.60), TRIM])
+	return out
+
+
+## A Filter: a narrow gate with a window in it showing the one thing it lets
+## through. The window is the entire interface -- what you can see in it is
+## what gets past.
+static func filter_boxes(shown: Color) -> Array:
+	const CASE := Color(0.54, 0.46, 0.30)
+	const DEEP := Color(0.18, 0.15, 0.10)
+	const TRIM := Color(0.74, 0.66, 0.44)
+	var out: Array = [
+		[Vector3(0, 0.34, 0), Vector3(0.44, 0.68, 0.70), CASE],
+		[Vector3(0, 0.05, 0), Vector3(0.60, 0.10, 0.80), DEEP],
+		[Vector3(0, 0.68, 0), Vector3(0.50, 0.08, 0.76), TRIM],
+		# The window, on both faces, so it reads the same from either side.
+		[Vector3(0.23, 0.38, 0), Vector3(0.04, 0.30, 0.34), DEEP],
+		[Vector3(-0.23, 0.38, 0), Vector3(0.04, 0.30, 0.34), DEEP],
+	]
+	if shown.a > 0.01:
+		out.append([Vector3(0.25, 0.38, 0), Vector3(0.03, 0.22, 0.26), shown])
+		out.append([Vector3(-0.25, 0.38, 0), Vector3(0.03, 0.22, 0.26), shown])
+	return out
+
+
+static func filter_mesh(shown: Color) -> ArrayMesh:
+	return mesh_from_boxes(filter_boxes(shown))
 
 
 ## The four-armed cradle every power station holds a battery in, at `at`. One
