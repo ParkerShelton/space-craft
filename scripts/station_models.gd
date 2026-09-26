@@ -17,6 +17,8 @@ const FOOTPRINT := {
 	Blocks.CARPENTER: Vector3i(2, 1, 1),
 	Blocks.BED: Vector3i(1, 1, 2),
 	Blocks.CHEST: Vector3i(1, 1, 1),
+	Blocks.CHEST_WIDE: Vector3i(2, 1, 1),
+	Blocks.CARGO_MODULE: Vector3i(1, 1, 1),
 	Blocks.SHAPER: Vector3i(2, 1, 1),
 	Blocks.SMELTER: Vector3i(1, 2, 1),
 	Blocks.GENERATOR: Vector3i(1, 1, 1),
@@ -72,6 +74,10 @@ static func boxes_for(kind: int) -> Array:
 				[Vector3(0, 0.3, -0.95), Vector3(0.9, 0.6, 0.12), WOOD]]
 		Blocks.CHEST:
 			return chest_body_boxes() + chest_lid_boxes(Vector3.ZERO)
+		Blocks.CHEST_WIDE:
+			return chest_body_boxes(2.0) + chest_lid_boxes(Vector3.ZERO, 2.0)
+		Blocks.CARGO_MODULE:
+			return cargo_module_boxes()
 		Blocks.SHAPER:
 			var out2: Array = []
 			for sx2 in [-0.78, 0.78]:
@@ -846,20 +852,63 @@ const CHEST_HINGE := Vector3(0, 0.54, 0.37)
 
 ## The chest without its lid. Split out because the lid is a separate node that
 ## turns on a hinge -- a lid that opens is worth more than a lid drawn open.
-static func chest_body_boxes() -> Array:
-	return [
-		[Vector3(0, 0.28, 0), Vector3(0.84, 0.56, 0.7), WOOD],
+##
+## `wide` stretches it along X, which is the whole of the Wide Chest: the same
+## box built to two cells, with one lid over the pair of them.
+static func chest_body_boxes(wide := 1.0) -> Array:
+	var out: Array = [
+		[Vector3(0, 0.28, 0), Vector3(0.84 * wide, 0.56, 0.7), WOOD],
 	]
+	if wide > 1.5:
+		# Banded, because a box that long with no bracing reads as a crate that
+		# would come apart the first time you filled it.
+		for sx in [-0.46, 0.46]:
+			out.append([Vector3(sx, 0.28, 0), Vector3(0.07, 0.58, 0.72), DARK_WOOD])
+	return out
 
 
 ## The lid and its clasp, given where the hinge sits. Pass CHEST_HINGE to get
 ## them in the lid node's own space (hinge at the origin), or ZERO to get the
 ## whole chest in one piece, shut, for the icon and the placement ghost.
-static func chest_lid_boxes(origin: Vector3) -> Array:
+static func chest_lid_boxes(origin: Vector3, wide := 1.0) -> Array:
 	return [
-		[Vector3(0, 0.62, 0) - origin, Vector3(0.88, 0.16, 0.74), DARK_WOOD],
+		[Vector3(0, 0.62, 0) - origin, Vector3(0.88 * wide, 0.16, 0.74), DARK_WOOD],
 		[Vector3(0, 0.44, -0.37) - origin, Vector3(0.18, 0.18, 0.06), METAL],
 	]
+
+
+## A Cargo Module: a metal crate with a recessed face, corner posts and a
+## coupling plate on each of its four sides. The couplings are what say, without
+## a word of UI, that these are meant to be stacked against each other -- and
+## they line up with the neighbour's, so a bank reads as one machine.
+static func cargo_module_boxes() -> Array:
+	const SHELL := Color(0.40, 0.46, 0.52)
+	const DEEP := Color(0.16, 0.19, 0.22)
+	const TRIM := Color(0.62, 0.68, 0.74)
+	const PORT := Color(0.35, 0.78, 0.92)
+	var out: Array = [
+		[Vector3(0, 0.46, 0), Vector3(0.92, 0.92, 0.92), SHELL],
+		# The face you open, sunk into the shell so it reads as a hatch.
+		[Vector3(0, 0.46, -0.44), Vector3(0.66, 0.66, 0.08), DEEP],
+		[Vector3(0, 0.46, -0.47), Vector3(0.54, 0.54, 0.04), SHELL],
+		[Vector3(0, 0.20, -0.49), Vector3(0.30, 0.05, 0.03), PORT],
+	]
+	# Corner posts, so a stack of them has visible joins rather than being one
+	# undifferentiated wall of metal.
+	for sx in [-0.44, 0.44]:
+		for sz in [-0.44, 0.44]:
+			out.append([Vector3(sx, 0.46, sz), Vector3(0.10, 0.94, 0.10), TRIM])
+	# The couplings: one centred on each side it can join along.
+	for d in [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 1, 0),
+			Vector3(0, -1, 0)]:
+		var dir: Vector3 = d
+		var thin := Vector3(absf(dir.x), absf(dir.y), absf(dir.z)) * 0.86
+		var flat := Vector3(0.34, 0.34, 0.34) - Vector3(absf(dir.x), absf(dir.y),
+			absf(dir.z)) * 0.30
+		out.append([Vector3(0, 0.46, 0) + dir * 0.47,
+			Vector3(maxf(flat.x, thin.x * 0.06), maxf(flat.y, thin.y * 0.06),
+				maxf(flat.z, thin.z * 0.06)), TRIM])
+	return out
 
 
 ## A mesh from an arbitrary box list, for the parts of a station that move.

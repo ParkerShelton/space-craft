@@ -8,7 +8,12 @@ extends StaticBody3D
 ## ore into an identified refined material).
 
 const STORAGE_SLOTS := 8      # machines
-const CHEST_SLOTS := 24       # chests hold more
+## A wooden chest is deliberately small. It is eight wood and an afternoon, and
+## it should feel like the answer to "where do I put this" rather than the
+## answer to storage -- which is what a bank of Cargo Modules is for.
+const CHEST_SLOTS := 12
+const CHEST_WIDE_SLOTS := 24  # two chests in one box, and one lid to lift
+const CARGO_SLOTS := 16       # ...each, and they JOIN (see MAX_BANK in player.gd)
 const MAX_SLOTS := 24         # UI builds this many cells
 
 var kind: int = Blocks.SMELTER
@@ -78,6 +83,10 @@ static func capacity_of(k: int) -> int:
 		return 2
 	if k == Blocks.CHEST:
 		return CHEST_SLOTS
+	if k == Blocks.CHEST_WIDE:
+		return CHEST_WIDE_SLOTS
+	if k == Blocks.CARGO_MODULE:
+		return CARGO_SLOTS
 	if k == Blocks.POWER_BAY:
 		return 1   # one battery, seated in the cradle -- no inventory to open
 	if k == Blocks.ANVIL:
@@ -197,14 +206,15 @@ func _build_visual() -> void:
 		add_child(_col)
 	# The station's own model, standing on the ground its footprint covers.
 	var fp := StationModels.footprint(kind)
-	if kind == Blocks.CHEST:
+	if kind == Blocks.CHEST or kind == Blocks.CHEST_WIDE:
 		# The lid is a node of its own, hinged at the back, so it can actually
 		# swing rather than be drawn in two states.
-		_mi.mesh = StationModels.mesh_from_boxes(StationModels.chest_body_boxes())
+		var wide: float = 2.0 if kind == Blocks.CHEST_WIDE else 1.0
+		_mi.mesh = StationModels.mesh_from_boxes(StationModels.chest_body_boxes(wide))
 		if _lid == null:
 			_lid = MeshInstance3D.new()
 			_lid.mesh = StationModels.mesh_from_boxes(
-				StationModels.chest_lid_boxes(StationModels.CHEST_HINGE))
+				StationModels.chest_lid_boxes(StationModels.CHEST_HINGE, wide))
 			_lid.position = StationModels.CHEST_HINGE + Vector3(0, -0.5, 0)
 			add_child(_lid)
 	elif kind == Blocks.POWER_BAY:

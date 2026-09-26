@@ -860,6 +860,20 @@ const WARP_COIL := 209          # bars of a conductor (Energy) wound round with 
 const IGNITION_CHARGE := 210    # ingots of a fierce fuel (Combustion) in a sheet casing
 const COOLANT_JACKET := 211     # a reactive sheet (Reactivity), glass and ice
 const CONTAINMENT_SHELL := 212  # plates of a very dense metal (Density)
+
+# --- containers -----------------------------------------------------------------
+#
+# Three of them, and the difference between them is the whole point. A wooden
+# chest is a box: it holds what it holds, and two of them side by side are two
+# boxes, not a bigger one. A Wide Chest is the same idea built properly, for
+# when one box is not enough and you do not yet have metal to spare.
+#
+# A Cargo Module is the sci-fi answer, and it is the only one that JOINS: set
+# them against each other and the bank opens as one store. On its own it barely
+# beats a chest. Four of them together beat everything, which is what you are
+# paying plate, wire and a circuit for.
+const CHEST_WIDE := 213    # carpenter's bench: two chests' worth, one lid
+const CARGO_MODULE := 214  # press + fabricator stock: banks with its neighbours
 ## How good the ore has to be. Signature ores roll 88-100; ordinary ores stop
 ## at ORDINARY_PROP_CAP.
 const WARP_GRADE := {"e": 80, "c": 85, "r": 80, "d": 85}
@@ -1019,6 +1033,12 @@ const STATION_BUILDS := [
 		{"any": STONE_IDS, "n": 4, "label": "Rock"}]},
 	{"kind": CARPENTER, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
 	{"kind": CHEST, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
+	{"kind": CHEST_WIDE, "reqs": [{"any": WOOD_IDS, "n": 18, "label": "Wood"}]},
+	# Plate for the shell, wire for the rails it joins along, and one circuit
+	# for the thing that makes a row of them read as one store. Deliberately
+	# past the Fabricator: it is a chest, and it should not arrive before metal.
+	{"kind": CARGO_MODULE, "reqs": [{"id": PLATE, "n": 5}, {"id": WIRE, "n": 3},
+		{"id": CIRCUIT, "n": 1}]},
 	{"kind": BED, "reqs": [{"any": WOOD_IDS, "n": 6, "label": "Wood"},
 		{"any": [CLOTH, LEATHER], "n": 4, "label": "Cloth or Leather"}]},
 	{"kind": SHAPER, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"},
@@ -1045,7 +1065,8 @@ const STATION_BUILDS := [
 ## benches and the like join their family rather than crowding the ring.
 ## "icon" is the station whose picture stands for the whole family.
 const STATION_CATEGORIES := [
-	{"name": "Camp", "icon": CAMPFIRE, "kinds": [CAMPFIRE, BED, CHEST]},
+	{"name": "Camp", "icon": CAMPFIRE, "kinds": [CAMPFIRE, BED]},
+	{"name": "Containers", "icon": CHEST, "kinds": [CHEST, CHEST_WIDE, CARGO_MODULE]},
 	{"name": "Crafters", "icon": CARPENTER, "kinds": [CARPENTER, SHAPER, FABRICATOR, SHIPWORKS]},
 	{"name": "Smelters", "icon": SMELTER, "kinds": [SMELTER]},
 	{"name": "Power", "icon": GENERATOR, "kinds": [GENERATOR, POWER_BAY]},
@@ -1625,6 +1646,8 @@ const NAMES := {
 	BOAT: "Wooden Boat",
 	JOURNAL: "Salvaged Journal",
 	GENERATOR: "Generator",
+	CHEST_WIDE: "Wide Chest",
+	CARGO_MODULE: "Cargo Module",
 	OXYGEN_PLANT: "Oxygen Plant",
 	HEATER: "Heater",
 	COOLER: "Cooler",
@@ -1805,6 +1828,8 @@ const COLORS := {
 	BOAT: Color(0.58, 0.42, 0.26),
 	JOURNAL: Color(0.52, 0.40, 0.30),
 	GENERATOR: Color(0.62, 0.45, 0.28),
+	CHEST_WIDE: Color(0.46, 0.31, 0.17),
+	CARGO_MODULE: Color(0.42, 0.52, 0.58),
 	OXYGEN_PLANT: Color(0.42, 0.68, 0.78),
 	HEATER: Color(0.74, 0.40, 0.26),
 	COOLER: Color(0.36, 0.62, 0.86),

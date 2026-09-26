@@ -429,6 +429,8 @@ var adv_open := false
 var _adv_panel: Panel
 var _adv_body: Control
 var _adv_sig := ""
+var _adv_tab := "survival"
+var _adv_tabs: Array = []
 var _adv_t := 0.0
 ## World-space teaching markers, by id, so one is never raised twice and any
 ## of them can be taken away when what it teaches has been done.
@@ -2061,6 +2063,18 @@ func _check_advancements() -> void:
 			grant("charged")
 		elif Blocks.REFINED_SLOT_IDS.has(sid):
 			grant("ingot")
+		elif sid == Blocks.BAR:
+			grant("bar")
+		elif sid == Blocks.SHEET:
+			grant("sheet")
+		elif sid == Blocks.SCRAP:
+			grant("scrap")
+		elif sid == Blocks.WIRE:
+			grant("wire")
+		elif sid == Blocks.CIRCUIT:
+			grant("circuit")
+		elif sid == Blocks.ALLOY:
+			grant("alloy")
 	if world != null:
 		for st in world._stations:
 			if not is_instance_valid(st) or st.global_position.distance_to(global_position) > 64.0:
@@ -2071,6 +2085,20 @@ func _check_advancements() -> void:
 				Blocks.ANVIL: grant("anvil")
 				Blocks.GENERATOR: grant("generator")
 				Blocks.BED: grant("bed")
+				Blocks.CAMPFIRE: grant("fire")
+				Blocks.SHAPER: grant("shaper")
+				Blocks.FABRICATOR: grant("fabricator")
+				Blocks.SHIPWORKS: grant("shipworks")
+				Blocks.CLIMATE_UNIT: grant("climate")
+				Blocks.OXYGEN_PLANT: grant("o2plant")
+				Blocks.CHEST: grant("chest")
+				Blocks.CHEST_WIDE: grant("widechest")
+				Blocks.CARGO_MODULE:
+					grant("cargo")
+					# ...and the whole point of them: four standing together
+					# opening as one store.
+					if _bank_group(st).size() >= MAX_BANK:
+						grant("bank")
 	var sh: Ship = piloting if piloting != null else aboard
 	if sh != null and is_instance_valid(sh):
 		var st2 := sh.get_status()
@@ -2080,8 +2108,15 @@ func _check_advancements() -> void:
 			grant("thruster")
 		if sh.charge > 0.0:
 			grant("shippower")
+		if bool(st2.get("life_support", false)) and bool(st2.get("habitable", false)):
+			grant("lifesupport")
+		if int(st2.get("thrusters", 0)) > 0 and sh.trim_error() <= 0.0:
+			grant("trim")
 	if piloting != null and not piloting.landed:
 		grant("flew")
+		# A hull with no log never came down here -- you built it.
+		if piloting.ship_log.is_empty():
+			grant("built")
 
 
 ## The one marker a world always raises: over the console, with a line down to
@@ -2220,6 +2255,25 @@ func _build_advancements_ui(layer: CanvasLayer) -> void:
 	sb.set_corner_radius_all(5)
 	_adv_panel.add_theme_stylebox_override("panel", sb)
 	layer.add_child(_adv_panel)
+	# One button per tree. The tutorial is a single line and the rest are trees
+	# of their own, so they do not belong on one canvas together.
+	var tx := 300.0
+	for t in Advancements.TABS:
+		var tb := Button.new()
+		tb.text = str(t["name"])
+		tb.toggle_mode = true
+		tb.add_theme_font_size_override("font_size", 12)
+		tb.position = Vector2(tx, 12)
+		tb.custom_minimum_size = Vector2(142, 30)
+		tb.size = tb.custom_minimum_size
+		tb.button_pressed = str(t["id"]) == _adv_tab
+		tb.pressed.connect(func():
+			_adv_tab = str(t["id"])
+			_adv_sig = ""
+			_rebuild_advancements())
+		_adv_panel.add_child(tb)
+		_adv_tabs.append({"id": str(t["id"]), "node": tb})
+		tx += 148.0
 	var title := Label.new()
 	title.position = Vector2(16, 10)
 	title.text = "Advancements"
@@ -2238,10 +2292,17 @@ const ADV_ROW := 62.0     # down, per entry sharing a column
 const ADV_CARD := Vector2(158, 52)
 
 
+func _adv_tab_name(id: String) -> String:
+	for t in Advancements.TABS:
+		if str(t["id"]) == id:
+			return str(t["name"])
+	return id
+
+
 func _rebuild_advancements() -> void:
 	if _adv_panel == null:
 		return
-	var sig := "%d" % earned.size()
+	var sig := "%s:%d" % [_adv_tab, earned.size()]
 	if _adv_body != null and is_instance_valid(_adv_body) and sig == _adv_sig:
 		return
 	_adv_sig = sig
@@ -2249,14 +2310,28 @@ func _rebuild_advancements() -> void:
 		_adv_body.queue_free()
 	# Work out where every visible entry sits first, so the lines between them
 	# can be drawn before the cards go on top.
+	for t in _adv_tabs:
+		var tn := t["node"] as Button
+		if is_instance_valid(tn):
+			tn.button_pressed = str(t["id"]) == _adv_tab
+			var pr := Advancements.tab_progress(str(t["id"]), earned)
+			tn.text = "%s  %d/%d" % [_adv_tab_name(str(t["id"])), pr.x, pr.y]
 	var shown: Array = []
-	for d in Advancements.DEFS:
+	for d in Advancements.in_tab(_adv_tab):
 		if Advancements.visible_to(str(d["id"]), earned):
 			shown.append(d)
+	# Columns are counted from the world's first step, so a tree that only opens
+	# after the tutorial would start ten empty columns in. Slide the whole tab
+	# back so its own first step is against the left edge.
+	var base := 1 << 20
+	for d in shown:
+		base = mini(base, Advancements.depth_of(str(d["id"])))
+	if base == 1 << 20:
+		base = 0
 	var used := {}          # column -> how many rows are taken
 	var at := {}            # id -> position
 	for d in shown:
-		var col := Advancements.depth_of(str(d["id"]))
+		var col := Advancements.depth_of(str(d["id"])) - base
 		var row := int(used.get(col, 0))
 		used[col] = row + 1
 		at[str(d["id"])] = Vector2(col * ADV_COL, row * ADV_ROW)
@@ -2282,11 +2357,11 @@ func _rebuild_advancements() -> void:
 	field.add_child(wires)
 	var links: Array = []
 	for d in shown:
-		var parent := str(d["parent"])
-		if parent == "" or not at.has(parent):
-			continue
-		links.append([at[parent] as Vector2, at[str(d["id"])] as Vector2,
-			earned.has(str(d["id"]))])
+		for parent in Advancements.parents_of(d):
+			if not at.has(str(parent)):
+				continue
+			links.append([at[str(parent)] as Vector2, at[str(d["id"])] as Vector2,
+				earned.has(str(d["id"]))])
 	wires.draw.connect(func() -> void:
 		for l in links:
 			var a: Vector2 = (l[0] as Vector2) + Vector2(ADV_CARD.x, ADV_CARD.y * 0.5)
@@ -4937,8 +5012,8 @@ func _place_station(id: int) -> void:
 		var corner: Vector3 = obj.to_global(Vector3(pv))
 		if corner.distance_to(global_position) < 1.1:
 			return  # don't place inside yourself
-		if id == Blocks.CHEST and _chest_cluster_size_at(world, Vector3i(corner.round())) > MAX_CHEST_GROUP:
-			_toast("Chest cluster is full (max %d)" % MAX_CHEST_GROUP)
+		if id == Blocks.CARGO_MODULE and _bank_cluster_size_at(world, Vector3i(corner.round())) > MAX_BANK:
+			_toast("That bank is full -- %d modules join at most" % MAX_BANK)
 			return
 		var g := world.gravity_at(corner)
 		var up := (-g).normalized() if g.length() > 0.01 else Vector3.UP
@@ -4946,8 +5021,8 @@ func _place_station(id: int) -> void:
 		_consume_active()
 		_toast(Blocks.name_of(id) + " placed")
 	elif tgt["kind"] == "ship":
-		if id == Blocks.CHEST and _chest_cluster_size_at(obj, pv) > MAX_CHEST_GROUP:
-			_toast("Chest cluster is full (max %d)" % MAX_CHEST_GROUP)
+		if id == Blocks.CARGO_MODULE and _bank_cluster_size_at(obj, pv) > MAX_BANK:
+			_toast("That bank is full -- %d modules join at most" % MAX_BANK)
 			return
 		world.spawn_station_on_ship(id, obj, pv)
 		_consume_active()
@@ -7730,13 +7805,19 @@ func _build_storage_cells(st: Station) -> Vector2i:
 # Where each (station, slot) sits in the combined grid: {st, slot, cx, cy}.
 func _storage_placements(st: Station) -> Array:
 	var out := []
-	if st.kind == Blocks.CHEST:
-		for blk in _chest_layout(st):
+	if st.kind == Blocks.CARGO_MODULE:
+		# A bank of modules opens as ONE store: each module's slots laid out in
+		# its own block of the grid, in the arrangement they are actually
+		# standing in. A wooden chest never comes through here -- two chests
+		# side by side are two chests, which is the difference you are paying
+		# plate and a circuit for.
+		var rows: int = maxi(Station.CARGO_SLOTS / _STORE_COLS, 1)
+		for blk in _bank_layout(st):
 			var cst: Station = blk["st"]
 			for slot in cst.storage.size():
 				out.append({"st": cst, "slot": slot,
 					"cx": int(blk["cb"]) * _STORE_COLS + slot % _STORE_COLS,
-					"cy": int(blk["rb"]) * 3 + slot / _STORE_COLS})
+					"cy": int(blk["rb"]) * rows + slot / _STORE_COLS})
 	elif st.kind == Blocks.GENERATOR:
 		# The cradle and the hopper, set apart so they read as two bays with a
 		# job each rather than a row of storage. Anything left over from when
@@ -7776,23 +7857,27 @@ func _make_stor_cell(index: int, cx: int, cy: int) -> Dictionary:
 	return {"root": root, "swatch": swatch, "count": count}
 
 
-const MAX_CHEST_GROUP := 4   # chests won't combine into a cluster bigger than this
+## How many Cargo Modules will join into one store. A cap, because a bank is
+## laid out as a grid of its members and an unbounded one is a panel wider than
+## the screen -- and because "storage, solved, forever" is not an upgrade, it is
+## the end of a problem worth having.
+const MAX_BANK := 4
 const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
 	Vector3i(0, -1, 0), Vector3i(0, 0, 1), Vector3i(0, 0, -1)]
 
 
-func _chest_posmap(parent: Node) -> Dictionary:
+func _bank_posmap(parent: Node) -> Dictionary:
 	var m := {}
 	if world != null:
 		for s in world._stations:
-			if is_instance_valid(s) and s.kind == Blocks.CHEST and s.get_parent() == parent:
+			if is_instance_valid(s) and s.kind == Blocks.CARGO_MODULE and s.get_parent() == parent:
 				m[Vector3i(s.position.round())] = s
 	return m
 
 
-# All chests connected (face-adjacent, same frame) to `chest`.
-func _chest_group(chest: Station) -> Array:
-	var posmap := _chest_posmap(chest.get_parent())
+# Every module joined (face-adjacent, same frame) to this one.
+func _bank_group(chest: Station) -> Array:
+	var posmap := _bank_posmap(chest.get_parent())
 	var seen := {}
 	var stack := [Vector3i(chest.position.round())]
 	var group := []
@@ -7812,8 +7897,8 @@ func _chest_group(chest: Station) -> Array:
 
 # Size of the chest cluster that would form if a chest were placed at `cell` in
 # `parent`'s frame (existing connected chests + the new one).
-func _chest_cluster_size_at(parent: Node, cell: Vector3i) -> int:
-	var posmap := _chest_posmap(parent)
+func _bank_cluster_size_at(parent: Node, cell: Vector3i) -> int:
+	var posmap := _bank_posmap(parent)
 	var seen := {}
 	var stack := []
 	for n in _NEIGH6:
@@ -7836,7 +7921,7 @@ func _chest_cluster_size_at(parent: Node, cell: Vector3i) -> int:
 
 # The chest's local up axis (snapped) -- stacking along it grows the grid taller;
 # spreading perpendicular to it grows the grid wider.
-func _chest_up_axis(c: Station) -> Vector3i:
+func _bank_up_axis(c: Station) -> Vector3i:
 	var y := c.transform.basis.y
 	var ax := absf(y.x)
 	var ay := absf(y.y)
@@ -7865,11 +7950,11 @@ func _horiz_less(a: Station, b: Station, up: Vector3i) -> bool:
 
 # Assign each chest in the group a (col-block, row-block): rows = vertical levels
 # (higher chests on top), columns = ordering within a level.
-func _chest_layout(chest: Station) -> Array:
-	var group := _chest_group(chest)
+func _bank_layout(chest: Station) -> Array:
+	var group := _bank_group(chest)
 	if group.size() <= 1:
 		return [{"st": chest, "cb": 0, "rb": 0}]
-	var up := _chest_up_axis(chest)
+	var up := _bank_up_axis(chest)
 	var levels := {}
 	for c in group:
 		var d := Vector3i(c.position.round())
