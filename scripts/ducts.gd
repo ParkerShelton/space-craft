@@ -23,12 +23,16 @@ extends Node
 
 const TICK := 0.55            # seconds between one loader and its next parcel
 const REACH := 2048           # duct cells followed before giving up
-const SPEED := 5.5            # cells per second a parcel travels
+## Fallback only: a run carries at the speed of its own pipe (see
+## Blocks.duct_speed), and the slowest length in a run sets the pace, the way
+## the narrowest pipe does.
+const SPEED := 3.0
 const PARCEL_SIZE := 0.22
 
 var world: WorldManager
 var _t := 0.0
-var _flying: Array = []       # parcels in the air: {node, path, at}
+var _flying: Array = []       # parcels in the air: {node, path, at, pace}
+var _pace := 0.0              # the slowest pipe in the run just walked
 
 
 func _process(delta: float) -> void:
@@ -52,7 +56,7 @@ func _run_loader(loader: Station) -> void:
 	if p == null:
 		return
 	var here := p.world_to_voxel(loader.global_position)
-	var boxes := _containers_on(p)
+	var boxes := _sources_on(p)
 	# What it is emptying: a container against the loader itself.
 	var src: Station = null
 	for n in _NEIGH6:
@@ -62,10 +66,10 @@ func _run_loader(loader: Station) -> void:
 			break
 	if src == null:
 		return
-	# Everything the run can reach, and how to get there.
 	var paths := _reachable(p, here)
 	if paths.is_empty():
 		return
+	var ports := _ports_on(p)
 	# Take the first thing in the source that somewhere else wants more than
 	# the source does.
 	for i in src.storage.size():
@@ -73,23 +77,38 @@ func _run_loader(loader: Station) -> void:
 		var id := int(slot.get("id", Blocks.AIR))
 		if id == Blocks.AIR or int(slot.get("count", 0)) <= 0:
 			continue
-		var mine := _want(src, id)
+		var mine := _want_src(src, id)
 		var best: Station = null
+		var best_port: Station = null
 		var best_score := mine
-		var best_cell := here
+		var best_prio := -99
+		var best_path: Array = []
 		for cell in paths:
 			for n2 in _NEIGH6:
-				var dst = boxes.get((cell as Vector3i) + n2)
-				if dst == null or dst == src or dst == loader:
+				var entry = ports.get((cell as Vector3i) + n2)
+				if entry == null:
 					continue
-				var w := _want(dst, id)
-				if w > best_score and _has_room(dst, slot):
+				var port: Station = entry["port"]
+				var dst: Station = entry["box"]
+				if dst == src or dst == loader:
+					continue
+				var w := _want(port, dst, id)
+				if w < 0:
+					continue
+				# Better wanting wins; a tie goes to the higher priority, which
+				# is the only number in the whole system and does nothing else.
+				if w > best_score or (w == best_score and w > mine
+						and port.port_priority > best_prio):
+					if not _has_room(dst, slot):
+						continue
 					best = dst
+					best_port = port
 					best_score = w
-					best_cell = cell
+					best_prio = port.port_priority
+					best_path = paths[cell] as Array
 		if best == null:
 			continue
-		_send(p, src, i, best, paths[best_cell] as Array)
+		_send(p, src, i, best, best_path)
 		return
 
 
@@ -99,43 +118,27 @@ func _run_loader(loader: Station) -> void:
 ##   2  it already holds some -- the whole of sort-by-example
 ##   1  it has room and nothing to say about what goes in it
 ##  -1  a filter on it names something else
-func _want(box: Station, id: int) -> int:
-	var f := _filter_on(box)
-	if f != Blocks.AIR:
-		return 3 if f == id else -1
+func _want(port: Station, box: Station, id: int) -> int:
+	if not port.port_allows(id):
+		return -1
+	if port.port_names(id):
+		return 3
 	for slot in box.storage:
 		if int(slot.get("id", Blocks.AIR)) == id and int(slot.get("count", 0)) > 0:
 			return 2
 	return 1
 
 
-## The filter guarding this container, or AIR. A Filter station standing
-## against a container speaks for it.
-func _filter_on(box: Station) -> int:
-	if world == null:
-		return Blocks.AIR
-	var p: Planet = world.nearest_planet(box.global_position)
-	if p == null:
-		return Blocks.AIR
-	var at := p.world_to_voxel(box.global_position)
-	for n in _NEIGH6:
-		for st in world._stations:
-			var s: Station = st
-			if not is_instance_valid(s) or s.kind != Blocks.DUCT_FILTER:
-				continue
-			if p.world_to_voxel(s.global_position) != at + n:
-				continue
-			if s.storage.is_empty():
-				continue
-			return int(s.storage[0].get("id", Blocks.AIR))
-	return Blocks.AIR
+## How much the SOURCE wants to keep it, on the same scale -- a parcel only
+## moves somewhere that wants it more than where it already is, which is what
+## stops two chests holding the same thing passing it back and forth forever.
+func _want_src(box: Station, id: int) -> int:
+	for slot in box.storage:
+		if int(slot.get("id", Blocks.AIR)) == id and int(slot.get("count", 0)) > 0:
+			return 1     # a loader is there to empty it; holding some is not a claim
+	return 1
 
 
-## Whether store_add would actually take one. Asked the way the store itself
-## answers it: a station slot has no ceiling, so there is room if some slot
-## already holds this very stack, or if any slot is genuinely empty -- empty
-## meaning no count AND no loose eighths, because a slot holding change is not
-## a free slot.
 func _has_room(box: Station, slot: Dictionary) -> bool:
 	for s in box.storage:
 		if int(s.get("count", 0)) > 0 and Blocks.same_stack(s, slot):
@@ -161,12 +164,14 @@ const _NEIGH6 := [Vector3i(1, 0, 0), Vector3i(-1, 0, 0), Vector3i(0, 1, 0),
 ## Every duct cell the run reaches from `from`, with the way back to it. The
 ## loader itself is the start, so a loader has to be touching its own pipe.
 func _reachable(p: Planet, from: Vector3i) -> Dictionary:
+	_pace = 1e9
 	var seen := {}
 	var q: Array[Vector3i] = []
 	for n in _NEIGH6:
 		var a: Vector3i = from + n
 		if Blocks.is_duct(p.get_id(a)):
 			seen[a] = [p.to_global(Vector3(a) + Vector3(0.5, 0.5, 0.5))]
+			_pace = minf(_pace, Blocks.duct_speed(p.get_id(a), p.block_tags.get(a, {})))
 			q.append(a)
 	var head := 0
 	while head < q.size() and seen.size() < REACH:
@@ -179,21 +184,46 @@ func _reachable(p: Planet, from: Vector3i) -> Dictionary:
 			var path: Array = (seen[c] as Array).duplicate()
 			path.append(p.to_global(Vector3(b) + Vector3(0.5, 0.5, 0.5)))
 			seen[b] = path
+			_pace = minf(_pace, Blocks.duct_speed(p.get_id(b), p.block_tags.get(b, {})))
 			q.append(b)
 	return seen
 
 
-## Every container on this world that a run could feed, by cell.
-func _containers_on(p: Planet) -> Dictionary:
-	var out := {}
+## Every PORT on this world, by cell, with the container it speaks for.
+##
+## A run used to feed anything it happened to touch, which meant a pipe could
+## not be taken past a chest without filling it. Things enter a container
+## through a Port and nowhere else now, so a network says plainly where things
+## go in and where they come out, and a line can cross a room without leaking
+## into it.
+func _ports_on(p: Planet) -> Dictionary:
+	var boxes := {}
 	for st in world._stations:
 		var s: Station = st
-		if not is_instance_valid(s) or s.storage.is_empty():
+		if is_instance_valid(s) and not s.storage.is_empty() and s.kind != Blocks.DUCT_PORT:
+			boxes[p.world_to_voxel(s.global_position)] = s
+	var out := {}
+	for st2 in world._stations:
+		var port: Station = st2
+		if not is_instance_valid(port) or port.kind != Blocks.DUCT_PORT:
 			continue
-		if s.kind == Blocks.DUCT_FILTER:
-			continue     # it speaks for its neighbour; it is not a destination
-		out[p.world_to_voxel(s.global_position)] = s
+		var at := p.world_to_voxel(port.global_position)
+		for n in _NEIGH6:
+			var box = boxes.get(at + n)
+			if box != null:
+				out[at] = {"port": port, "box": box}
+				break
 	return out
+
+
+## Everything that could give things up: a container with a Loader on it.
+func _sources_on(p: Planet) -> Dictionary:
+	var boxes := {}
+	for st in world._stations:
+		var s: Station = st
+		if is_instance_valid(s) and not s.storage.is_empty() and s.kind != Blocks.DUCT_PORT:
+			boxes[p.world_to_voxel(s.global_position)] = s
+	return boxes
 
 
 # --- the parcel ---------------------------------------------------------------------
@@ -239,7 +269,8 @@ func _spawn_parcel(id: int, mat: Dictionary, path: Array) -> void:
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(mi)
 	mi.global_position = path[0]
-	_flying.append({"node": mi, "path": path, "at": 0.0})
+	_flying.append({"node": mi, "path": path, "at": 0.0,
+		"pace": SPEED if _pace > 1e8 else _pace})
 
 
 func _move_parcels(delta: float) -> void:
@@ -252,7 +283,7 @@ func _move_parcels(delta: float) -> void:
 		if mi == null or not is_instance_valid(mi):
 			continue
 		var path: Array = p["path"]
-		var at: float = float(p["at"]) + delta * SPEED
+		var at: float = float(p["at"]) + delta * float(p.get("pace", SPEED))
 		if at >= float(path.size() - 1):
 			mi.queue_free()
 			continue

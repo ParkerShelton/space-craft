@@ -632,7 +632,7 @@ const WIRE_FACE_SHIFT := 24
 const WIRE_FACE_MASK := 0x3F
 
 static func is_wire(id: int) -> bool:
-	return id == WIRE or id == DUCT
+	return id == WIRE or id in DUCT_IDS
 
 
 ## Which of the two a cell is. They share every bit of their shaping, their
@@ -641,7 +641,7 @@ static func is_wire(id: int) -> bool:
 ## is_wire, and only the handful of places that care what runs through them
 ## ask this.
 static func is_duct(id: int) -> bool:
-	return bottom_of(id) == DUCT
+	return bottom_of(id) in DUCT_IDS
 
 ## Bitmask over Chunk._WFACE indices; 0 when unset.
 static func wire_faces_of(v: int) -> int:
@@ -975,9 +975,48 @@ const AURORA_BLOOM := 221
 # Nothing here has a signal, a delay or a state you have to reason about. That
 # is deliberate: two blocks whose interaction you have to work out is where
 # this stops being pipes and starts being redstone.
-const DUCT := 222
+# Four of them, and what a run is made of is how fast it carries.
+#
+#   Wooden      slow, and available before you own any metal at all
+#   Glass       the same speed, and you can watch the things go by
+#   Reinforced  wood bound with metal: quicker
+#   Metal       quickest, and how quick depends on the ORE -- a harder metal
+#               takes a smoother bore, so Hardness stops being only a count of
+#               hammer blows
+const DUCT := 222          # metal
+const DUCT_WOOD := 225
+const DUCT_REINFORCED := 226
+const DUCT_GLASS := 227
+const DUCT_IDS := [DUCT, DUCT_WOOD, DUCT_REINFORCED, DUCT_GLASS]
+
 const DUCT_LOADER := 223   # station: empties its container into the run
-const DUCT_FILTER := 224   # station: only its example item may pass into that container
+## Station: where things may ENTER a container, and optionally what.
+##
+## Without one, any container a run happened to touch was a destination, so a
+## pipe could not be run past a chest without filling it. A Port is the other
+## half of a Loader: one marks the way out of a box, one marks the way in, and
+## a network is readable because every place things move is a block you can see.
+##
+## Its filter slots hold EXAMPLES, not items -- you never give up the plank --
+## and an empty Port takes anything, which leaves sort-by-example doing the
+## work exactly as before.
+const DUCT_PORT := 224
+
+
+## How fast a run of this carries, in cells per second. `tag` is what the duct
+## was made of, which only the metal one cares about.
+static func duct_speed(id: int, tag: Dictionary = {}) -> float:
+	match bottom_of(id):
+		DUCT_WOOD, DUCT_GLASS:
+			return 3.0
+		DUCT_REINFORCED:
+			return 5.5
+		DUCT:
+			# Hardness, as a second job: the harder the metal the smoother the
+			# bore it takes, so a good ore is a faster pipe.
+			var h := float((tag.get("props", {}) as Dictionary).get("h", 40))
+			return 7.0 + h / 100.0 * 7.0      # 7 .. 14
+	return 3.0
 
 
 ## Does this station make power? Anything here feeds a base and charges a
@@ -1216,7 +1255,7 @@ const STATION_BUILDS := [
 	{"kind": CAPACITOR, "reqs": [{"id": PLATE, "n": 8}, {"id": WIRE, "n": 6},
 		{"id": CIRCUIT, "n": 1}]},
 	{"kind": DUCT_LOADER, "reqs": [{"id": PLATE, "n": 4}, {"id": WIRE, "n": 2}]},
-	{"kind": DUCT_FILTER, "reqs": [{"id": PLATE, "n": 3}, {"id": CIRCUIT, "n": 1}]},
+	{"kind": DUCT_PORT, "reqs": [{"id": PLATE, "n": 3}, {"id": CIRCUIT, "n": 1}]},
 	{"kind": HEATER, "reqs": [{"any": STONE_IDS, "n": 10, "label": "Rock"},
 		{"id": PLATE, "n": 6}]},
 	{"kind": COOLER, "reqs": [{"id": GLASS, "n": 6}, {"id": PLATE, "n": 10}]},
@@ -1237,7 +1276,7 @@ const STATION_BUILDS := [
 const STATION_CATEGORIES := [
 	{"name": "Camp", "icon": CAMPFIRE, "kinds": [CAMPFIRE, BED]},
 	{"name": "Containers", "icon": CHEST, "kinds": [CHEST, CHEST_WIDE, CARGO_MODULE]},
-	{"name": "Ducts", "icon": DUCT_LOADER, "kinds": [DUCT_LOADER, DUCT_FILTER]},
+	{"name": "Ducts", "icon": DUCT_LOADER, "kinds": [DUCT_LOADER, DUCT_PORT]},
 	{"name": "Crafters", "icon": CARPENTER, "kinds": [CARPENTER, SHAPER, FABRICATOR, SHIPWORKS]},
 	{"name": "Smelters", "icon": SMELTER, "kinds": [SMELTER]},
 	{"name": "Power", "icon": GENERATOR,
@@ -1493,7 +1532,11 @@ const PRESS_RECIPES := [
 	{"label": "Wire", "out": WIRE, "n": 8, "yield_from_material": true, "parts": [[BAR, 1]]},
 	# Duct is wide-bore: a sheet rolled round instead of a bar drawn out, so it
 	# costs more metal per length than wiring does.
-	{"label": "Duct x6", "out": DUCT, "n": 6, "parts": [[SHEET, 1]]},
+	{"label": "Metal Duct x6", "out": DUCT, "n": 6, "parts": [[SHEET, 1]]},
+	{"label": "Reinforced Duct x6", "out": DUCT_REINFORCED, "n": 6,
+		"parts": [[DUCT_WOOD, 6], [PLATE, 1]]},
+	{"label": "Glass Duct x6", "out": DUCT_GLASS, "n": 6,
+		"parts": [[DUCT_WOOD, 6], [GLASS, 2]]},
 	{"label": "Battery", "out": BATTERY, "n": 1, "parts": [["ingot", 1], [SHEET, 2]]},
 	{"label": "Machine Core", "out": MACHINE_CORE, "n": 1, "parts": [[BAR, 2], [PLATE, 2]]},
 	# Reactor fuel. The ingots go first so the rod takes THEIR material: how
@@ -1661,6 +1704,12 @@ const STATION_CRAFTS := {
 		# putting it behind rare drops would just make the early game dark.
 		{"label": "Hoe", "out": HOE, "n": 1,
 			"reqs": [{"any": WOOD_IDS, "n": 3, "label": "Wood"}]},
+		# Wooden duct belongs here rather than at the Press: a run of pipe is
+		# the first thing anybody wants to automate, and putting the cheapest
+		# one behind smithing meant nobody saw ducts until they no longer
+		# needed the help.
+		{"label": "Wooden Duct x4", "out": DUCT_WOOD, "n": 4,
+			"reqs": [{"any": WOOD_IDS, "n": 2, "label": "Wood"}]},
 		# The three that come before anything is smelted. The Pick is the one
 		# that opens the game -- nothing else gets you rock -- so it is made of
 		# the two things you can gather with your hands, and the other two cost
@@ -1836,9 +1885,12 @@ const NAMES := {
 	SOLAR_PANEL: "Solar Panel",
 	CAPACITOR: "Capacitor Bank",
 	AURORA_BLOOM: "Aurora Bloom",
-	DUCT: "Duct",
+	DUCT: "Metal Duct",
+	DUCT_WOOD: "Wooden Duct",
+	DUCT_REINFORCED: "Reinforced Duct",
+	DUCT_GLASS: "Glass Duct",
 	DUCT_LOADER: "Loader",
-	DUCT_FILTER: "Filter",
+	DUCT_PORT: "Port",
 	CARGO_MODULE: "Cargo Module",
 	OXYGEN_PLANT: "Oxygen Plant",
 	HEATER: "Heater",
@@ -2029,8 +2081,11 @@ const COLORS := {
 	CAPACITOR: Color(0.30, 0.33, 0.40),
 	AURORA_BLOOM: Color(0.55, 0.95, 0.90),
 	DUCT: Color(0.58, 0.60, 0.66),
+	DUCT_WOOD: Color(0.48, 0.34, 0.19),
+	DUCT_REINFORCED: Color(0.44, 0.38, 0.28),
+	DUCT_GLASS: Color(0.62, 0.80, 0.86, 0.55),
 	DUCT_LOADER: Color(0.52, 0.58, 0.44),
-	DUCT_FILTER: Color(0.60, 0.50, 0.30),
+	DUCT_PORT: Color(0.60, 0.50, 0.30),
 	CARGO_MODULE: Color(0.42, 0.52, 0.58),
 	OXYGEN_PLANT: Color(0.42, 0.68, 0.78),
 	HEATER: Color(0.74, 0.40, 0.26),

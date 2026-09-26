@@ -459,7 +459,7 @@ func save_game() -> bool:
 		if not is_instance_valid(st):
 			continue
 		var entry := {"kind": st.kind, "storage": st.storage, "nid": st.net_id,
-			"mat": st.build_mat}
+			"mat": st.build_mat, "pf": st.port_filter, "pp": st.port_priority}
 		if Blocks.makes_power(st.kind):
 			# Which way the lever is thrown and what it had banked, or every
 			# load would switch your generators back on and empty them.
@@ -604,6 +604,8 @@ func load_game() -> bool:
 		if std.has("storage"):
 			station.storage = std["storage"]
 		station.build_mat = std.get("mat", {})
+		station.port_filter = std.get("pf", [])
+		station.port_priority = int(std.get("pp", 0))
 		station.net_id = str(std.get("nid", ""))
 		if skind == Blocks.ANVIL:
 			station._refresh_anvil()   # whatever was left on it, drawn there

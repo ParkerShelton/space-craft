@@ -26,7 +26,7 @@ const FOOTPRINT := {
 	Blocks.REACTOR: Vector3i(1, 2, 1),
 	Blocks.CAPACITOR: Vector3i(1, 1, 1),
 	Blocks.DUCT_LOADER: Vector3i(1, 1, 1),
-	Blocks.DUCT_FILTER: Vector3i(1, 1, 1),
+	Blocks.DUCT_PORT: Vector3i(1, 1, 1),
 	Blocks.POWER_BAY: Vector3i(1, 1, 1),
 	Blocks.OXYGEN_PLANT: Vector3i(1, 2, 1),
 	Blocks.HEATER: Vector3i(1, 1, 1),
@@ -103,7 +103,7 @@ static func boxes_for(kind: int) -> Array:
 			return capacitor_boxes(false, 0.0, 0.0)
 		Blocks.DUCT_LOADER:
 			return loader_boxes()
-		Blocks.DUCT_FILTER:
+		Blocks.DUCT_PORT:
 			return filter_boxes(Color(0, 0, 0, 0))
 		Blocks.POWER_BAY:
 			return power_bay_boxes(false, 0.0)

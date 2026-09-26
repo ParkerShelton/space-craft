@@ -54,6 +54,46 @@ var switched_on := true
 ## good stock worth pressing. Empty for everything that does not care.
 var build_mat := {}
 
+# --- a Port's settings ------------------------------------------------------------
+#
+# The examples are GHOSTS: ids only, no items. You show a Port a plank, you do
+# not give it one -- which means setting a filter costs nothing, changing your
+# mind costs nothing, and breaking the block cannot eat anything.
+const PORT_SLOTS := 5
+## Item ids this Port will let into its container. Empty means anything.
+var port_filter: Array = []
+## Which of two equally willing containers wins. Higher goes first; the only
+## thing in the whole system that is a number you set, and it does nothing
+## except break ties.
+var port_priority := 0
+
+
+func port_set(i: int, id: int) -> void:
+	while port_filter.size() < PORT_SLOTS:
+		port_filter.append(Blocks.AIR)
+	if i < 0 or i >= PORT_SLOTS:
+		return
+	port_filter[i] = id
+	_refresh_port()
+
+
+func port_allows(id: int) -> bool:
+	for f in port_filter:
+		if int(f) != Blocks.AIR:
+			return port_filter.has(id)
+	return true      # nothing set: anything may pass
+
+
+## Does this Port name the item outright, rather than merely not minding?
+func port_names(id: int) -> bool:
+	return port_filter.has(id)
+
+
+func _refresh_port() -> void:
+	if kind != Blocks.DUCT_PORT or headless or _mi == null:
+		return
+	_mi.mesh = StationModels.filter_mesh(filter_colour())
+
 # --- power ---
 ## The old single ceiling. Kept because the base-status readout still totals
 ## against it; a station's real limit is Blocks.power_store of its kind.
@@ -103,7 +143,7 @@ static func capacity_of(k: int) -> int:
 		return CARGO_SLOTS
 	if k == Blocks.SOLAR_ARRAY or k == Blocks.CAPACITOR:
 		return 1   # the battery cradle, and nothing to feed it
-	if k == Blocks.DUCT_FILTER:
+	if k == Blocks.DUCT_PORT:
 		return 1   # the example item, which is never consumed
 	if k == Blocks.DUCT_LOADER:
 		return 0   # it moves things; it does not hold them
@@ -276,7 +316,7 @@ func _build_visual() -> void:
 		_anvil_shown = "-"
 		_mi.mesh = StationModels.anvil_mesh("", Color.WHITE)
 		_refresh_anvil.call_deferred()
-	elif kind == Blocks.DUCT_FILTER:
+	elif kind == Blocks.DUCT_PORT:
 		_mi.mesh = StationModels.filter_mesh(filter_colour())
 	elif Blocks.makes_power(kind):
 		_gen_shown = gen_state()
@@ -681,28 +721,11 @@ func gen_state() -> Color:
 ## What a Filter is showing in its window: the colour of the one item it lets
 ## past, or nothing at all when it has been left open.
 func filter_colour() -> Color:
-	if storage.is_empty():
-		return Color(0, 0, 0, 0)
-	var slot: Dictionary = storage[0]
-	var id := int(slot.get("id", Blocks.AIR))
-	if id == Blocks.AIR or int(slot.get("count", 0)) <= 0:
-		return Color(0, 0, 0, 0)
-	var mat: Dictionary = slot.get("mat", {})
-	return mat.get("color", Blocks.color_of(id))
-
-
-## Set the example, handing back whatever was in there. The item is NEVER
-## consumed -- it is a sample, not a fee -- so it comes straight back out when
-## you change your mind.
-func filter_swap(incoming: Dictionary) -> Dictionary:
-	_ensure_storage()
-	var was: Dictionary = storage[0].duplicate(true)
-	storage[0] = incoming.duplicate(true)
-	if not headless and _mi != null:
-		_mi.mesh = StationModels.filter_mesh(filter_colour())
-	if int(was.get("id", Blocks.AIR)) == Blocks.AIR or int(was.get("count", 0)) <= 0:
-		return {}
-	return was
+	for f in port_filter:
+		var id := int(f)
+		if id != Blocks.AIR:
+			return Blocks.color_of(id)
+	return Color(0, 0, 0, 0)
 
 
 ## The model for whichever power station this is. They share a cradle, a lever

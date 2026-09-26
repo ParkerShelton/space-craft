@@ -433,6 +433,10 @@ var adv_open := false
 var _adv_panel: Panel
 var _adv_body: Control
 var _adv_sig := ""
+var _port_panel: Panel
+var _port_open: Station
+var _port_cells: Array = []
+var _port_prio: Label
 var _adv_card: Panel
 var _adv_card_t := 0.0
 const ADV_GOLD := Color(1.0, 0.80, 0.32)
@@ -2846,6 +2850,9 @@ func _rebuild_book() -> void:
 ## that some keys close and others do not -- and never two of them open at
 ## once, because opening one comes through here first.
 func close_open_menu() -> bool:
+	if _port_panel != null:
+		_close_port()
+		return true
 	if adv_open:
 		_toggle_advancements()
 		return true
@@ -8031,8 +8038,8 @@ func _open_station(st: Station) -> void:
 	if st.kind == Blocks.POWER_BAY:
 		_swap_bay_battery(st)
 		return
-	if st.kind == Blocks.DUCT_FILTER:
-		_set_filter(st)
+	if st.kind == Blocks.DUCT_PORT:
+		_open_port(st)
 		return
 	if st.kind == Blocks.DUCT_LOADER:
 		_toast("A loader empties the container behind it into the duct it faces")
@@ -9212,28 +9219,140 @@ func _spark_burst(where: Vector3, count: int, col: Color, big: bool = false) -> 
 	tw.tween_callback(fl.queue_free)
 
 
-## Show a Filter what to let through. One right-click, like a battery cradle:
-## hold the thing you want through it and click, click again empty-handed to
-## take the example back and open the gate.
-func _set_filter(f: Station) -> void:
-	var held: Dictionary = inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
+## A Port's panel: which things may enter the container behind it, and who
+## wins a tie.
+##
+## The slots hold EXAMPLES, not items. Click one holding a plank and it learns
+## "plank"; click it empty-handed and it forgets. You never hand anything over,
+## so setting a filter costs nothing and changing your mind costs nothing --
+## which is the difference between a filter you use and one you set up once and
+## never dare touch again.
+const PORT_CELL := 54
+
+
+func _open_port(port: Station) -> void:
+	_close_port()
+	_port_open = port
+	_port_panel = Panel.new()
+	_port_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_port_panel.custom_minimum_size = Vector2(360, 216)
+	_port_panel.size = _port_panel.custom_minimum_size
+	_port_panel.position = -_port_panel.size * 0.5
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.07, 0.06, 0.04, 0.97)
+	sb.border_color = Color(0.74, 0.62, 0.36, 0.9)
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(6)
+	_port_panel.add_theme_stylebox_override("panel", sb)
+	_ui_layer.add_child(_port_panel)
+	menu_open = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	Audio.ui("ui_open")
+	var title := Label.new()
+	title.position = Vector2(16, 12)
+	title.text = "Port"
+	title.add_theme_font_size_override("font_size", 18)
+	_port_panel.add_child(title)
+	var hint := Label.new()
+	hint.position = Vector2(16, 36)
+	hint.text = "click a slot holding something to let it through; empty-handed to clear"
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.modulate = Color(1, 1, 1, 0.55)
+	_port_panel.add_child(hint)
+	_port_cells.clear()
+	for i in Station.PORT_SLOTS:
+		var cell := Panel.new()
+		cell.position = Vector2(18 + i * (PORT_CELL + 10), 66)
+		cell.custom_minimum_size = Vector2(PORT_CELL, PORT_CELL)
+		cell.size = cell.custom_minimum_size
+		_style_slot(cell, false)
+		_port_panel.add_child(cell)
+		var pic := TextureRect.new()
+		pic.position = Vector2(5, 5)
+		pic.custom_minimum_size = Vector2(PORT_CELL - 10, PORT_CELL - 10)
+		pic.size = pic.custom_minimum_size
+		pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		pic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		cell.add_child(pic)
+		var btn := Button.new()
+		btn.flat = true
+		btn.position = Vector2.ZERO
+		btn.custom_minimum_size = cell.custom_minimum_size
+		btn.size = cell.custom_minimum_size
+		btn.pressed.connect(_port_slot_clicked.bind(i))
+		cell.add_child(btn)
+		_port_cells.append(pic)
+	# The one number in the whole system, and it only breaks ties.
+	var pl := Label.new()
+	pl.position = Vector2(18, 138)
+	pl.text = "Priority (only decides between two that both want it)"
+	pl.add_theme_font_size_override("font_size", 11)
+	pl.modulate = Color(1, 1, 1, 0.55)
+	_port_panel.add_child(pl)
+	for spec in [[-1, "-", 18.0], [1, "+", 64.0]]:
+		var b := Button.new()
+		b.text = str(spec[1])
+		b.position = Vector2(float(spec[2]), 156)
+		b.custom_minimum_size = Vector2(34, 30)
+		b.pressed.connect(func():
+			if _port_open != null and is_instance_valid(_port_open):
+				_port_open.port_priority = clampi(_port_open.port_priority + int(spec[0]), -9, 9)
+				_refresh_port_panel())
+		_port_panel.add_child(b)
+	_port_prio = Label.new()
+	_port_prio.position = Vector2(108, 160)
+	_port_prio.add_theme_font_size_override("font_size", 16)
+	_port_panel.add_child(_port_prio)
+	var close := Button.new()
+	close.text = "Close"
+	close.custom_minimum_size = Vector2(100, 30)
+	close.position = Vector2(240, 156)
+	close.pressed.connect(_close_port)
+	_port_panel.add_child(close)
+	_refresh_port_panel()
+	_fit_panel(_port_panel)
+
+
+func _port_slot_clicked(i: int) -> void:
+	if _port_open == null or not is_instance_valid(_port_open):
+		return
+	var held: Dictionary = _active_item()
 	var id := int(held.get("id", Blocks.AIR))
-	var giving := {}
-	if id != Blocks.AIR and int(held.get("count", 0)) > 0:
-		giving = held.duplicate(true)
-		giving["count"] = 1
-	var back := f.filter_swap(giving)
-	if not giving.is_empty():
-		_take_one_from_active()
-	if not back.is_empty():
-		_add_item(int(back["id"]), int(back.get("count", 1)), back.get("props", {}),
-			str(back.get("src", "")), back.get("mat", {}))
-	if giving.is_empty():
-		_toast("Filter opened -- anything may pass")
-	else:
-		_toast("Filter set to %s" % Blocks.name_of(int(giving["id"])))
-	Audio.ui("ui_toggle_on" if not giving.is_empty() else "ui_toggle_off")
-	_refresh_slots()
+	# Holding something sets the slot to it; holding nothing clears the slot.
+	# Nothing changes hands either way.
+	_port_open.port_set(i, id if int(held.get("count", 0)) > 0 else Blocks.AIR)
+	Audio.ui("ui_toggle_on" if id != Blocks.AIR else "ui_toggle_off")
+	_refresh_port_panel()
+
+
+func _refresh_port_panel() -> void:
+	if _port_open == null or not is_instance_valid(_port_open):
+		return
+	while _port_open.port_filter.size() < Station.PORT_SLOTS:
+		_port_open.port_filter.append(Blocks.AIR)
+	for i in _port_cells.size():
+		var pic := _port_cells[i] as TextureRect
+		var id := int(_port_open.port_filter[i])
+		if id == Blocks.AIR:
+			pic.texture = null
+		else:
+			pic.texture = ItemIcon.of(id, _world_tint(id),
+				world.nearest_planet(global_position) if world != null else null)
+	if _port_prio != null:
+		_port_prio.text = str(_port_open.port_priority)
+
+
+func _close_port() -> void:
+	if _port_panel != null:
+		_port_panel.queue_free()
+		_port_panel = null
+	_port_open = null
+	_port_cells.clear()
+	_port_prio = null
+	if not (inv_open or book_open or adv_open or _station_open != null):
+		menu_open = false
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 ## Take one off the stack in your hand, clearing the slot when it runs out.
