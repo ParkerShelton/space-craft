@@ -393,6 +393,7 @@ func save_game() -> bool:
 			"pos": pl.global_position,
 			"basis": pl.global_transform.basis,
 			"inv": pl.inv,
+			"earned": pl.earned, "hints_done": pl._hints_done,
 			"active_slot": pl.active_slot,
 			"suit_slot": pl.suit_slot,
 			"vanity": pl.vanity,
@@ -624,6 +625,10 @@ func load_game() -> bool:
 			pl.global_transform = t
 		if pd.has("inv"):
 			pl.inv = pd["inv"]
+		# What you had worked out, and which markers you have already been
+		# shown. A hint you have seen must not come back on every load.
+		pl.earned = pd.get("earned", {})
+		pl._hints_done = pd.get("hints_done", {})
 		if pd.has("suit_slot"):
 			pl.suit_slot = pd["suit_slot"]
 		if pd.has("vanity"):

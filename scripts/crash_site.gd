@@ -316,9 +316,11 @@ static func _fit_systems(ship: Ship, world: WorldManager, planet: Planet,
 		locker.store_add(Blocks.TORCH, 3, {})
 		locker.store_add(Blocks.WOOD, 6, {})
 		locker.store_add(Blocks.ROCK, 6, {})
-		# The journal carries its own page, written from THIS planet when the
-		# wreck is placed, so it stays true wherever it is carried afterwards.
-		locker.store_add(Blocks.JOURNAL, 1, {"text": journal_text(planet)})
+		# The journal is NOT in here. It goes into your hands (see
+		# Main._place_crash_site): the whole of this game's teaching was sitting
+		# inside a box you had to notice, open and then read, and a player who
+		# climbed out of the hole and walked off had nothing at all. It points
+		# back at this locker instead, which is the right way round.
 	var has_ls := rng.randf() < 0.55
 	var thr := {-1: rng.randf() < 0.45, 1: rng.randf() < 0.45}
 	# A FLOOR: something aboard is always missing. A wreck that came down with
@@ -438,6 +440,10 @@ static func journal_text(planet: Planet) -> String:
 	lines.append("Bare hands will not get ore or metal out of anything. They")
 	lines.append("will get wood, and wood makes the bench, and the bench makes")
 	lines.append("the pick.")
+	lines.append("")
+	lines.append("There is a locker bolted down beside the console with enough")
+	lines.append("in it for the first day: something cooked, torches, and a")
+	lines.append("little wood and rock to start with.")
 	return "
 ".join(PackedStringArray(lines))
 

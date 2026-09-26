@@ -51,19 +51,19 @@ const DEFAULT_BINDS := {
 	"jump": KEY_SPACE, "crouch": KEY_SHIFT,
 	"inventory": KEY_E, "recipes": KEY_B, "stations": KEY_C,
 	"rotate": KEY_R, "pilot": KEY_F, "eva": KEY_T, "starmap": KEY_M,
-	"board": KEY_G,
+	"board": KEY_G, "advancements": KEY_L,
 }
 ## What each one is called on the settings page, in the order they show there.
 const BIND_ORDER := ["forward", "back", "left", "right", "jump", "crouch",
 	"inventory", "recipes", "stations", "rotate", "pilot", "board", "eva",
-	"starmap"]
+	"starmap", "advancements"]
 const BIND_NAMES := {
 	"forward": "Walk forward", "back": "Walk back", "left": "Strafe left",
 	"right": "Strafe right", "jump": "Jump / ascend", "crouch": "Crouch / descend",
 	"inventory": "Inventory", "recipes": "Recipe book",
 	"stations": "Station ring (hold)", "rotate": "Rotate what you are placing",
 	"pilot": "Take the controls", "board": "Build a ship", "eva": "EVA suit",
-	"starmap": "Star map",
+	"starmap": "Star map", "advancements": "Advancements",
 }
 var binds := DEFAULT_BINDS.duplicate()
 
@@ -422,6 +422,22 @@ var _book_query := ""
 var _book_src := "All"
 var _book_src_btns: Array = []
 var book_open := false
+## What you have worked out how to do (see scripts/advancements.gd), and the
+## screen that shows it. Saved with the world.
+var earned := {}
+var adv_open := false
+var _adv_panel: Panel
+var _adv_body: Control
+var _adv_sig := ""
+var _adv_t := 0.0
+## World-space teaching markers, by id, so one is never raised twice and any
+## of them can be taken away when what it teaches has been done.
+var _hints := {}
+var _hints_done := {}
+## Passing thoughts -- your own voice, not the game's. Shown apart from toasts
+## because they are not telling you that something happened.
+var _thought: Label
+var _thought_t := 0.0
 
 # Which recipes you have learned. Progression will gate this later -- unlocking
 # is already a matter of remembering a stable key, so it needs no new plumbing.
@@ -690,6 +706,14 @@ func _sync_cover(i: int) -> void:
 		_free_cover(i)
 
 
+## Hand something over from outside -- the world putting a thing in your bag
+## rather than you picking it up. Returns how many would not fit.
+func give_item(id: int, n: int, props: Dictionary = {}) -> int:
+	var left := _add_item(id, n, props)
+	_refresh_slots()
+	return left
+
+
 func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: Dictionary = {}) -> int:
 	if id == Blocks.AIR or n <= 0:
 		return n
@@ -867,7 +891,7 @@ func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		_look += event.relative
 	elif event is InputEventMouseButton and event.pressed:
-		if inv_open or book_open or _station_open != null or menu_open or ui_typing:
+		if inv_open or book_open or adv_open or _station_open != null or menu_open or ui_typing:
 			return  # a panel is open: clicks go to the UI
 		# The ring has the mouse OUT on purpose, so it has to be asked before the
 		# click that takes the mouse back -- that branch was eating every click
@@ -963,7 +987,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		_close_ring()
 	elif event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			if _journal_panel != null:
+			if adv_open:
+				_toggle_advancements()
+			elif _journal_panel != null:
 				_close_journal()
 			elif _sys_panel != null:
 				_close_fitting_panel()
@@ -998,6 +1024,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				_toast("Loaded")
 			else:
 				_toast("No save found")
+		elif key_is(event, "advancements"):
+			_toggle_advancements()
 		elif key_is(event, "inventory"):
 			if piloting != null:
 				pass  # E rolls the ship while piloting -- not the inventory
@@ -1072,7 +1100,7 @@ var _place_from_item := false      # holding one in your bag rather than buildin
 
 
 func _open_ring() -> void:
-	if _ring != null or menu_open or inv_open or book_open:
+	if _ring != null or menu_open or inv_open or book_open or adv_open:
 		return
 	_place_kind = Blocks.AIR
 	_clear_ghost_model()
@@ -1194,7 +1222,7 @@ func _close_ring() -> void:
 	_ring_items.clear()
 	_ring_cat = -1
 	_ring_card = null
-	if not (menu_open or inv_open or book_open):
+	if not (menu_open or inv_open or book_open or adv_open):
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -1615,6 +1643,7 @@ func _try_ship_computer() -> bool:
 func _open_ship_computer(ship: Ship) -> void:
 	if ship == null or not is_instance_valid(ship):
 		return
+	clear_hint("console")
 	_close_ship_computer()
 	_ship_panel_ship = ship
 	_ship_panel = Panel.new()
@@ -1719,7 +1748,7 @@ func _close_fitting_panel() -> void:
 	_sys_body = null
 	_sys_ship = null
 	_sys_sig = ""
-	if not (inv_open or book_open or _station_open != null or _ship_panel != null):
+	if not (inv_open or book_open or adv_open or _station_open != null or _ship_panel != null):
 		menu_open = false
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
@@ -1753,7 +1782,7 @@ func _close_ship_computer() -> void:
 	_ship_panel_body = null
 	_ship_panel_sig = ""
 	menu_open = false
-	if not (inv_open or book_open or _station_open != null):
+	if not (inv_open or book_open or adv_open or _station_open != null):
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
@@ -1942,6 +1971,8 @@ func _watch_repairs(delta: float) -> void:
 	if _ship_panel_t > 0.0:
 		return
 	_ship_panel_t = 0.75
+	_check_advancements()
+	_check_thoughts()
 	if _ship_panel != null:
 		_refresh_ship_computer()
 	if _sys_panel != null:
@@ -1983,6 +2014,181 @@ func _apply_place_mode_ui() -> void:
 	_apply_ghost_alpha()
 
 
+# --- advancements, world hints, and your own voice ----------------------------
+#
+# Three small systems that exist for one reason: this game refuses to hand out
+# objectives, and "there is nothing to do next" and "I cannot work out what to
+# do next" look the same from the inside. None of them tell you what to do.
+# They tell you what you have DONE, point at the thing you are looking at, and
+# occasionally say out loud what you were probably already thinking.
+
+
+## Mark something as worked out. Safe to call as often as you like.
+func grant(id: String) -> void:
+	if earned.has(id):
+		return
+	var d := Advancements.by_id(id)
+	if d.is_empty():
+		return
+	earned[id] = true
+	Audio.ui("ui_toggle_on")
+	_toast("%s  --  %s" % [str(d["name"]), str(d["desc"])])
+	_adv_sig = ""
+	if adv_open:
+		_rebuild_advancements()
+
+
+## The state-driven ones, polled rather than hooked into twenty call sites: a
+## condition asked four times a second costs nothing and cannot be forgotten
+## when the code around it moves.
+func _check_advancements() -> void:
+	grant("crash")
+	if _count_item(Blocks.WOOD) > 0 or _count_item(Blocks.WOOD_PALE) > 0 			or _count_item(Blocks.WOOD_DARK) > 0:
+		grant("wood")
+	for s3 in inv:
+		var sid := int(s3.get("id", Blocks.AIR))
+		if int(s3.get("count", 0)) <= 0:
+			continue
+		if sid == Blocks.PICK:
+			grant("pick")
+		elif Blocks.is_ore(Blocks.bottom_of(sid)):
+			grant("ore")
+		elif sid == Blocks.PLATE:
+			grant("plate")
+		elif sid == Blocks.METAL:
+			grant("hull")
+		elif sid == Blocks.BATTERY 				and float((s3.get("props", {}) as Dictionary).get("charge", 0.0)) > 1.0:
+			grant("charged")
+		elif Blocks.REFINED_SLOT_IDS.has(sid):
+			grant("ingot")
+	if world != null:
+		for st in world._stations:
+			if not is_instance_valid(st) or st.global_position.distance_to(global_position) > 64.0:
+				continue
+			match st.kind:
+				Blocks.CARPENTER: grant("bench")
+				Blocks.SMELTER: grant("smelter")
+				Blocks.ANVIL: grant("anvil")
+				Blocks.GENERATOR: grant("generator")
+				Blocks.BED: grant("bed")
+	var sh: Ship = piloting if piloting != null else aboard
+	if sh != null and is_instance_valid(sh):
+		var st2 := sh.get_status()
+		if bool(st2.get("sealed", false)):
+			grant("sealed")
+		if int(st2.get("thrusters", 0)) > 0:
+			grant("thruster")
+		if sh.charge > 0.0:
+			grant("shippower")
+	if piloting != null and not piloting.landed:
+		grant("flew")
+
+
+## The one marker a world always raises: over the console, with a line down to
+## it, staying put until you actually open the computer. Everything else this
+## game says about what to do next is either in your own handwriting or on that
+## screen, so it cannot be a hint you might blink and miss.
+func raise_console_hint() -> void:
+	var sh: Ship = aboard
+	if sh == null and world != null:
+		for s2 in world._ships:
+			if is_instance_valid(s2) and not s2.ship_log.is_empty():
+				sh = s2
+				break
+	if sh == null or not is_instance_valid(sh):
+		return
+	for v in sh.blocks:
+		if Blocks.bottom_of(int(sh.blocks[v])) != Blocks.COCKPIT:
+			continue
+		world_hint("console", sh, Vector3(v as Vector3i) + Vector3(0.5, 1.05, 0.5),
+			"Right-click", -1.0)
+		return
+
+
+## Raise a marker in the world at `at`, parented to `holder` so it rides
+## whatever it is stuck to. `seconds` negative means it stays until dismissed.
+func world_hint(id: String, holder: Node3D, at: Vector3, text: String,
+		seconds := 14.0) -> void:
+	if _hints_done.has(id) or _hints.has(id) or holder == null 			or not is_instance_valid(holder):
+		return
+	var h := WorldHint.new()
+	h.hint_id = id
+	holder.add_child(h)
+	h.position = at
+	h.setup(text, seconds)
+	_hints[id] = h
+
+
+## The thing it was teaching has been done. It goes, and never comes back.
+func clear_hint(id: String) -> void:
+	_hints_done[id] = true
+	var h = _hints.get(id)
+	if h != null and is_instance_valid(h):
+		h.dismiss()
+	_hints.erase(id)
+
+
+func _tick_hints(delta: float) -> void:
+	for k in _hints.keys():
+		if not is_instance_valid(_hints[k]):
+			_hints.erase(k)
+	if _thought_t > 0.0:
+		_thought_t -= delta
+		if _thought_t <= 0.0 and _thought != null:
+			_thought.visible = false
+		elif _thought != null:
+			_thought.modulate.a = clampf(_thought_t / 1.2, 0.0, 1.0)
+
+
+## The moments worth saying something about. Each fires once, ever, and only
+## when it is actually true of you right now -- a line about the dark closing in
+## is worth hearing on the evening you have nowhere to sleep, and is noise on
+## every evening after that.
+func _check_thoughts() -> void:
+	if world == null or _thought == null:
+		return
+	var p := world.nearest_planet(global_position)
+	if p == null:
+		return
+	# Dusk: the sun is down the far side of the sky and going.
+	var ph: float = fposmod(p.day_phase, 1.0)
+	var dusk: bool = ph > 0.40 and ph < 0.52
+	if dusk and not _hints_done.has("t_night") and not earned.has("bed"):
+		_hints_done["t_night"] = true
+		think("It is getting dark. I should work out how to make a bed -- I could sleep this one out.", 8.0)
+		return
+	if not _hints_done.has("t_hungry") and hunger < MAX_HUNGER * 0.3:
+		_hints_done["t_hungry"] = true
+		think("I am getting hungry. There was food in the locker.", 6.0)
+		return
+	if not _hints_done.has("t_pick") and earned.has("bench") and not earned.has("pick"):
+		_hints_done["t_pick"] = true
+		think("My hands will not get ore out of stone. The bench can make a pick.", 7.0)
+
+
+## Your own voice. Deliberately not a toast: a toast reports that the game did
+## something, and this is you noticing something.
+func think(msg: String, seconds := 6.0) -> void:
+	if _thought == null:
+		return
+	_thought.text = msg
+	_thought.visible = true
+	_thought.modulate.a = 1.0
+	_thought_t = seconds
+
+
+func _toggle_advancements() -> void:
+	adv_open = not adv_open
+	if _adv_panel != null:
+		_adv_panel.visible = adv_open
+		if adv_open:
+			_adv_sig = ""
+			_rebuild_advancements()
+			_fit_panel(_adv_panel)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if adv_open else Input.MOUSE_MODE_CAPTURED
+	Audio.ui("ui_open" if adv_open else "ui_back")
+
+
 func _toggle_book() -> void:
 	book_open = not book_open
 	if _book_panel != null:
@@ -1996,6 +2202,145 @@ func _toggle_book() -> void:
 ## The Recipe Book: everything you know how to make, in one place. The game
 ## teaches almost none of this anywhere else -- multiblock patterns especially
 ## were unguessable without it.
+## The advancements screen: a tree laid out left to right, with a line drawn
+## from each step to the one it came from. Done is lit, the next thing to try
+## is outlined, and anything past that is not drawn at all -- the tree is a
+## light held up one step ahead, not a plan handed over.
+func _build_advancements_ui(layer: CanvasLayer) -> void:
+	_adv_panel = Panel.new()
+	_adv_panel.set_anchors_preset(Control.PRESET_CENTER)
+	_adv_panel.custom_minimum_size = Vector2(900, 600)
+	_adv_panel.size = _adv_panel.custom_minimum_size
+	_adv_panel.position = -_adv_panel.size * 0.5
+	_adv_panel.visible = false
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.05, 0.06, 0.09, 0.97)
+	sb.border_color = Color(0.45, 0.60, 0.70, 0.9)
+	sb.set_border_width_all(1)
+	sb.set_corner_radius_all(5)
+	_adv_panel.add_theme_stylebox_override("panel", sb)
+	layer.add_child(_adv_panel)
+	var title := Label.new()
+	title.position = Vector2(16, 10)
+	title.text = "Advancements"
+	title.add_theme_font_size_override("font_size", 18)
+	_adv_panel.add_child(title)
+	var hint := Label.new()
+	hint.position = Vector2(16, 34)
+	hint.text = "%s to close" % OS.get_keycode_string(binds.get("advancements", KEY_L))
+	hint.add_theme_font_size_override("font_size", 12)
+	hint.modulate = Color(1, 1, 1, 0.5)
+	_adv_panel.add_child(hint)
+
+
+const ADV_COL := 176.0    # across, per step of the chain
+const ADV_ROW := 62.0     # down, per entry sharing a column
+const ADV_CARD := Vector2(158, 52)
+
+
+func _rebuild_advancements() -> void:
+	if _adv_panel == null:
+		return
+	var sig := "%d" % earned.size()
+	if _adv_body != null and is_instance_valid(_adv_body) and sig == _adv_sig:
+		return
+	_adv_sig = sig
+	if _adv_body != null and is_instance_valid(_adv_body):
+		_adv_body.queue_free()
+	# Work out where every visible entry sits first, so the lines between them
+	# can be drawn before the cards go on top.
+	var shown: Array = []
+	for d in Advancements.DEFS:
+		if Advancements.visible_to(str(d["id"]), earned):
+			shown.append(d)
+	var used := {}          # column -> how many rows are taken
+	var at := {}            # id -> position
+	for d in shown:
+		var col := Advancements.depth_of(str(d["id"]))
+		var row := int(used.get(col, 0))
+		used[col] = row + 1
+		at[str(d["id"])] = Vector2(col * ADV_COL, row * ADV_ROW)
+	var total := Vector2(float(used.size()) * ADV_COL, 0)
+	for c in used:
+		total.y = maxf(total.y, float(int(used[c])) * ADV_ROW)
+
+	var scroll := ScrollContainer.new()
+	scroll.position = Vector2(16, 62)
+	scroll.custom_minimum_size = Vector2(868, 520)
+	scroll.size = scroll.custom_minimum_size
+	_adv_body = scroll
+	_adv_panel.add_child(scroll)
+	var field := Control.new()
+	field.custom_minimum_size = total + Vector2(24, 24)
+	scroll.add_child(field)
+
+	# The joins, drawn under everything: an elbow from the right edge of a
+	# parent to the left edge of its child.
+	var wires := Control.new()
+	wires.custom_minimum_size = field.custom_minimum_size
+	wires.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	field.add_child(wires)
+	var links: Array = []
+	for d in shown:
+		var parent := str(d["parent"])
+		if parent == "" or not at.has(parent):
+			continue
+		links.append([at[parent] as Vector2, at[str(d["id"])] as Vector2,
+			earned.has(str(d["id"]))])
+	wires.draw.connect(func() -> void:
+		for l in links:
+			var a: Vector2 = (l[0] as Vector2) + Vector2(ADV_CARD.x, ADV_CARD.y * 0.5)
+			var b: Vector2 = (l[1] as Vector2) + Vector2(0, ADV_CARD.y * 0.5)
+			var col: Color = Color(0.55, 0.85, 1.0, 0.75) if bool(l[2]) 				else Color(1, 1, 1, 0.20)
+			var mid := (a.x + b.x) * 0.5
+			wires.draw_line(a, Vector2(mid, a.y), col, 2.0)
+			wires.draw_line(Vector2(mid, a.y), Vector2(mid, b.y), col, 2.0)
+			wires.draw_line(Vector2(mid, b.y), b, col, 2.0)
+	)
+
+	for d in shown:
+		var id := str(d["id"])
+		var done: bool = earned.has(id)
+		var card := Panel.new()
+		card.position = at[id]
+		card.custom_minimum_size = ADV_CARD
+		card.size = ADV_CARD
+		var cs := StyleBoxFlat.new()
+		cs.bg_color = Color(0.10, 0.16, 0.20, 0.95) if done 			else Color(0.08, 0.08, 0.10, 0.85)
+		cs.border_color = Color(0.45, 0.85, 1.0, 0.9) if done 			else Color(1.0, 0.80, 0.45, 0.8)
+		cs.set_border_width_all(2 if done else 1)
+		cs.set_corner_radius_all(4)
+		card.add_theme_stylebox_override("panel", cs)
+		field.add_child(card)
+		var pic := TextureRect.new()
+		pic.position = Vector2(7, 9)
+		pic.custom_minimum_size = Vector2(34, 34)
+		pic.size = pic.custom_minimum_size
+		pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		var iid := Advancements.icon_id(d)
+		pic.texture = ItemIcon.of(iid, Blocks.color_of(iid),
+			world.nearest_planet(global_position) if world != null else null)
+		pic.modulate = Color(1, 1, 1, 1) if done else Color(1, 1, 1, 0.38)
+		card.add_child(pic)
+		var nm := Label.new()
+		nm.position = Vector2(47, 6)
+		nm.custom_minimum_size = Vector2(ADV_CARD.x - 52, 0)
+		nm.text = str(d["name"])
+		nm.add_theme_font_size_override("font_size", 13)
+		nm.modulate = Color(0.75, 0.95, 1.0) if done else Color(1.0, 0.88, 0.70)
+		card.add_child(nm)
+		var ds := Label.new()
+		ds.position = Vector2(47, 24)
+		ds.custom_minimum_size = Vector2(ADV_CARD.x - 52, 0)
+		ds.text = str(d["desc"])
+		ds.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		ds.add_theme_font_size_override("font_size", 10)
+		ds.modulate = Color(1, 1, 1, 0.55)
+		card.add_child(ds)
+		card.tooltip_text = "Done" if done else "Not yet: %s" % str(d["desc"])
+
+
 func _build_book_ui(layer: CanvasLayer) -> void:
 	_book_panel = Panel.new()
 	_book_panel.set_anchors_preset(Control.PRESET_CENTER)
@@ -2342,6 +2687,7 @@ func _physics_process(delta: float) -> void:
 	_tick_web(delta)
 	_tick_dread(delta)
 	_tick_held_anim(delta)
+	_tick_hints(delta)
 	if _trail != null:
 		_trail.emitting = velocity.length() > 0.8
 	if _toast_time > 0.0:
@@ -5118,7 +5464,7 @@ func _update_markers() -> void:
 	# are drawn as flat HUD text with no depth test, so without this they hang in
 	# front of solid rock like the planets are inside the cave with you.
 	# ...and not over a menu, which they used to be drawn straight across.
-	var menu := inv_open or book_open or _station_open != null
+	var menu := inv_open or book_open or adv_open or _station_open != null
 	if underground or menu:
 		for m in _markers:
 			m.visible = false
@@ -5289,6 +5635,7 @@ func _build_ui() -> void:
 	_build_station_ui(layer)
 	_build_starmap_ui(layer)
 	_build_book_ui(layer)
+	_build_advancements_ui(layer)
 	_apply_place_mode_ui()   # start the crosshair and ghost in the right mode
 
 	# transient save/load confirmation, top-center
@@ -5300,6 +5647,18 @@ func _build_ui() -> void:
 	_toast_label.add_theme_font_size_override("font_size", 22)
 	_toast_label.visible = false
 	layer.add_child(_toast_label)
+
+	# Your own voice, low on the screen and set apart from the toasts above:
+	# a toast says the game did something, this says you noticed something.
+	_thought = Label.new()
+	_thought.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	_thought.position = Vector2(0, -152)
+	_thought.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_thought.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_thought.add_theme_font_size_override("font_size", 19)
+	_thought.modulate = Color(0.88, 0.90, 0.78)
+	_thought.visible = false
+	layer.add_child(_thought)
 
 	# survival bars (top-left, below the status labels)
 	_hp_fill = _make_bar(layer, 104, Color(0.85, 0.25, 0.25), "HP")
@@ -8603,7 +8962,7 @@ func _close_journal() -> void:
 		_journal_panel.queue_free()
 	_journal_panel = null
 	menu_open = false
-	if not (inv_open or book_open or _station_open != null):
+	if not (inv_open or book_open or adv_open or _station_open != null):
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 

@@ -1942,6 +1942,13 @@ func _put_player_in_wreck(ship: Ship, player: Player, up: Vector3,
 	else:
 		var nose: Vector3 = -ship.global_transform.basis.z
 		player.look_at(player.global_position + nose, up)
+	# The survey goes in your HANDS, not in the locker. It is the whole of this
+	# game's teaching, and it used to sit inside a box you had to notice and
+	# open first -- so anyone who climbed out of the hole and walked off had
+	# none of it. Held, it is the first thing you are carrying when you can see
+	# again, and it points back at the locker itself.
+	player.give_item(Blocks.JOURNAL, 1,
+		{"text": CrashSite.journal_text(player.world.nearest_planet(player.global_position))})
 	# ...with your eyes on the floor. The head comes up on its own over the next
 	# few seconds, under the fade, so the first thing a world does is a slow
 	# look up at the inside of the ship you came down in.
@@ -2383,10 +2390,16 @@ func _start_world(load_existing: bool, mode: String = "single") -> void:
 			player.begin_wake(5.0, -1.25)
 			# ...and once the head is up, one line saying the thing in front of
 			# you can be talked to. It appears once in the life of a world.
+			# ...and once the head is up, a marker ON THE CONSOLE rather than
+			# a line across the screen. Text in the middle of the screen has to
+			# be read, understood and then matched to whatever it was about;
+			# text floating over the thing with a line down to it has already
+			# pointed at it before you finish reading. It stays until you
+			# actually open the computer.
 			var hint := get_tree().create_timer(5.6)
 			hint.timeout.connect(func():
 				if is_instance_valid(player):
-					player.hold_toast("Right-click the console to see what the ship needs", 9.0))
+					player.raise_console_hint())
 	else:
 		_hide_loading_screen()
 	# The home world's guaranteed enemy is not set down beside you any more:
