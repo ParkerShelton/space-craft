@@ -481,6 +481,7 @@ var _adv_sig := ""
 var _port_panel: Panel
 var _port_open: Station
 var _port_cells: Array = []
+var _port_bag: Array = []          # your whole bag, shown in the Port window
 var _port_prio: Label
 var _adv_card: Panel
 var _adv_card_t := 0.0
@@ -6953,7 +6954,48 @@ func _slot_can_drop(_at: Vector2, data: Variant, _cont: String, _index: int) -> 
 
 
 func _slot_do_drop(_at: Vector2, data: Variant, cont: String, index: int) -> void:
+	# A filter slot is a PICTURE of a thing, not a place to keep one. Dropping
+	# on it says "this is what goes through here" and nothing changes hands --
+	# which is why it cannot go through _transfer with everything else.
+	if cont == "filt":
+		_set_filter(index, _slot_ref(str(data["cont"]), int(data["index"])))
+		return
+	if str(data["cont"]) == "filt":
+		return     # dragging OUT of a filter would be taking a picture off a wall
 	_transfer(data["cont"], int(data["index"]), cont, index)
+
+
+## Point a filter slot at whatever `from` is, or clear it if that is nothing.
+func _set_filter(i: int, from: Dictionary) -> void:
+	if _port_open == null or not is_instance_valid(_port_open):
+		return
+	var id := int(from.get("id", Blocks.AIR)) if _slot_holds(from) else Blocks.AIR
+	_port_open.port_set(i, id)
+	Audio.ui("ui_toggle_on" if id != Blocks.AIR else "ui_toggle_off")
+	_refresh_port_panel()
+
+
+## Shift-clicking something while a Port is open points the first free filter
+## slot at it -- or, if it is already named, takes it off the list again.
+func _filter_quick(from: Dictionary) -> bool:
+	if _port_open == null or not is_instance_valid(_port_open) or not _slot_holds(from):
+		return false
+	var id := int(from["id"])
+	var free := -1
+	for i in Station.PORT_SLOTS:
+		var cur := int(_port_open.port_filter[i]) if i < _port_open.port_filter.size() \
+			else Blocks.AIR
+		if cur == id:
+			_set_filter(i, {})
+			return true
+		if free < 0 and cur == Blocks.AIR:
+			free = i
+	if free < 0:
+		_toast("Every filter slot is taken -- click one to clear it")
+		Audio.ui("ui_deny")
+		return true
+	_set_filter(free, from)
+	return true
 
 
 func _clear_slot(s: Dictionary) -> void:
@@ -7152,6 +7194,11 @@ func _quick_move(cont: String, index: int) -> void:
 	var src := _slot_ref(cont, index)
 	if not _slot_holds(src):
 		return
+	# A Port open in front of you is what a shift-click is FOR while it is
+	# open: naming what may pass, rather than moving anything anywhere.
+	if _port_open != null and is_instance_valid(_port_open) and cont == "inv":
+		if _filter_quick(src):
+			return
 	var dests := _quick_targets(cont, index)
 	if dests.is_empty():
 		return
@@ -9966,12 +10013,29 @@ func _spark_burst(where: Vector3, count: int, col: Color, big: bool = false) -> 
 const PORT_CELL := 54
 
 
+## The Port's window.
+##
+## It shows YOUR WHOLE BAG, because the question it is asking is "which of the
+## things you have should come through here", and the answer was previously
+## given by holding the right thing in the right hotbar slot and clicking --
+## which meant knowing the answer before you opened the window.
+##
+## Nothing in here is a place to keep anything. A filter slot holds a picture
+## of a thing, not the thing: drag one across, or shift-click it, and what you
+## dragged stays exactly where it was.
+const PORT_BAG_COLS := 8
+const PORT_BAG_CELL := 52
+
+
 func _open_port(port: Station) -> void:
 	_close_port()
 	_port_open = port
+	var rows: int = int(ceil(float(SLOTS) / float(PORT_BAG_COLS)))
+	var bag_h: int = rows * (PORT_BAG_CELL + 4)
 	_port_panel = Panel.new()
 	_port_panel.set_anchors_preset(Control.PRESET_CENTER)
-	_port_panel.custom_minimum_size = Vector2(360, 216)
+	_port_panel.custom_minimum_size = Vector2(PORT_BAG_COLS * (PORT_BAG_CELL + 4) + 36,
+		250 + bag_h)
 	_port_panel.size = _port_panel.custom_minimum_size
 	_port_panel.position = -_port_panel.size * 0.5
 	var sb := StyleBoxFlat.new()
@@ -9991,14 +10055,16 @@ func _open_port(port: Station) -> void:
 	_port_panel.add_child(title)
 	var hint := Label.new()
 	hint.position = Vector2(16, 36)
-	hint.text = "click a slot holding something to let it through; empty-handed to clear"
+	hint.text = "only these come through. drag one up, or shift-click it. "         + "nothing is taken."
 	hint.add_theme_font_size_override("font_size", 11)
 	hint.modulate = Color(1, 1, 1, 0.55)
 	_port_panel.add_child(hint)
+
+	# The filter slots.
 	_port_cells.clear()
 	for i in Station.PORT_SLOTS:
 		var cell := Panel.new()
-		cell.position = Vector2(18 + i * (PORT_CELL + 10), 66)
+		cell.position = Vector2(18 + i * (PORT_CELL + 10), 62)
 		cell.custom_minimum_size = Vector2(PORT_CELL, PORT_CELL)
 		cell.size = cell.custom_minimum_size
 		_style_slot(cell, false)
@@ -10018,10 +10084,36 @@ func _open_port(port: Station) -> void:
 		btn.size = cell.custom_minimum_size
 		btn.pressed.connect(_port_slot_clicked.bind(i))
 		cell.add_child(btn)
+		# On the BUTTON, not the panel under it: the button covers the whole
+		# cell, so it is what the mouse is over when you let go of a drag.
+		# Nothing is draggable OUT of a filter -- there is nothing in there to
+		# take, only a picture of something.
+		btn.set_drag_forwarding(
+			Callable(), _slot_can_drop.bind("filt", i), _slot_do_drop.bind("filt", i))
 		_port_cells.append(pic)
+
+	# ...and your bag, under them, so the answer is on the screen.
+	var bag_y: int = 62 + PORT_CELL + 26
+	var bl := Label.new()
+	bl.position = Vector2(18, bag_y - 20)
+	bl.text = "Your bag"
+	bl.add_theme_font_size_override("font_size", 11)
+	bl.modulate = Color(1, 1, 1, 0.5)
+	_port_panel.add_child(bl)
+	var grid := GridContainer.new()
+	grid.columns = PORT_BAG_COLS
+	grid.add_theme_constant_override("h_separation", 4)
+	grid.add_theme_constant_override("v_separation", 4)
+	grid.position = Vector2(18, bag_y)
+	_port_panel.add_child(grid)
+	_port_bag.clear()
+	for i in SLOTS:
+		_port_bag.append(_make_slot(grid, i, "to_station", PORT_BAG_CELL))
+
 	# The one number in the whole system, and it only breaks ties.
+	var foot: int = bag_y + bag_h + 14
 	var pl := Label.new()
-	pl.position = Vector2(18, 138)
+	pl.position = Vector2(18, foot)
 	pl.text = "Priority (only decides between two that both want it)"
 	pl.add_theme_font_size_override("font_size", 11)
 	pl.modulate = Color(1, 1, 1, 0.55)
@@ -10029,7 +10121,7 @@ func _open_port(port: Station) -> void:
 	for spec in [[-1, "-", 18.0], [1, "+", 64.0]]:
 		var b := Button.new()
 		b.text = str(spec[1])
-		b.position = Vector2(float(spec[2]), 156)
+		b.position = Vector2(float(spec[2]), float(foot + 18))
 		b.custom_minimum_size = Vector2(34, 30)
 		b.pressed.connect(func():
 			if _port_open != null and is_instance_valid(_port_open):
@@ -10037,13 +10129,13 @@ func _open_port(port: Station) -> void:
 				_refresh_port_panel())
 		_port_panel.add_child(b)
 	_port_prio = Label.new()
-	_port_prio.position = Vector2(108, 160)
+	_port_prio.position = Vector2(108, float(foot + 22))
 	_port_prio.add_theme_font_size_override("font_size", 16)
 	_port_panel.add_child(_port_prio)
 	var close := Button.new()
 	close.text = "Close"
 	close.custom_minimum_size = Vector2(100, 30)
-	close.position = Vector2(240, 156)
+	close.position = Vector2(_port_panel.size.x - 118, float(foot + 18))
 	close.pressed.connect(_close_port)
 	_port_panel.add_child(close)
 	_refresh_port_panel()
@@ -10075,6 +10167,8 @@ func _refresh_port_panel() -> void:
 		else:
 			pic.texture = ItemIcon.of(id, _world_tint(id),
 				world.nearest_planet(global_position) if world != null else null)
+	for i in _port_bag.size():
+		_paint_cell(_port_bag[i], inv[i], i == active_slot)
 	if _port_prio != null:
 		_port_prio.text = str(_port_open.port_priority)
 
@@ -10085,6 +10179,7 @@ func _close_port() -> void:
 		_port_panel = null
 	_port_open = null
 	_port_cells.clear()
+	_port_bag.clear()
 	_port_prio = null
 	if not (inv_open or book_open or adv_open or _station_open != null):
 		menu_open = false
