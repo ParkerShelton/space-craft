@@ -2446,7 +2446,7 @@ const TEST_SMITHING_KIT := false
 ## a generator, a pipe bench, wood to cut into staves, a pair of chests to move
 ## things between, and a stack of this world's fuel ore to burn. Set false (or
 ## delete this and the function below) before shipping.
-const TEST_DUCT_KIT := false
+const TEST_DUCT_KIT := true
 
 
 func _give_smithing_kit(ground: Planet, player: Player) -> void:

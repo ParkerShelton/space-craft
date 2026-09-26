@@ -3580,20 +3580,24 @@ func _hold_the_ledge(horiz: Vector3, up: Vector3, delta: float) -> Vector3:
 	return Vector3.ZERO
 
 
-## Would you still be held up after this step?
+## Would any part of you still be held up after this step?
 ##
-## Not "is there floor directly under my middle", which is what this used to
-## ask. A body is held up by whatever is under ANY of it, so crouching at a
-## ledge should let most of you out over the drop and still let you walk about
-## -- and, above all, always let you walk back.
+## The question is about the BODY, not about the direction you are walking.
+## Both earlier goes at this got that wrong: they probed one point offset along
+## the way you were heading, which meant that once you were out over a drop,
+## stepping back toward the block tested a point even further over the void and
+## would not let you leave. You could reach the overhang you wanted and then
+## you were pinned there.
 ##
-## Two probes: where the step lands, and a third of a block back toward where
-## you came from. Ground under either is ground enough. Walking outward, the
-## second probe is the one that holds you, and it runs out exactly when your
-## weight would really go over. Walking back inward it is trivially satisfied,
-## which is the part that was broken: the old single probe was offset AGAINST
-## the direction of travel, so stepping away from a ledge tested a point even
-## further over the void and refused to let you leave.
+## So it probes a small cross: where your middle lands, and four points a third
+## of a block out from it. Ground under ANY of them is ground enough, because
+## that is what holding a body up means.
+##
+## The limit on how far you can lean falls out of it rather than being a rule.
+## Out past the brink, the only probe still finding floor is the one pointing
+## back at the block; once your middle is further out than that probe reaches,
+## nothing finds anything and you stop -- which is exactly the moment your
+## weight would really have gone over.
 func _ground_ahead(step: Vector3, up: Vector3) -> bool:
 	var space := get_world_3d().direct_space_state
 	if space == null:
@@ -3602,7 +3606,17 @@ func _ground_ahead(step: Vector3, up: Vector3) -> bool:
 	if dir.length() > 0.0001:
 		dir = dir.normalized()
 	var land: Vector3 = global_position + dir * maxf(step.length(), CROUCH_LOOKAHEAD)
-	for from in [land, land - dir * CROUCH_OVERHANG]:
+	# Two axes across the ground, taken from the body rather than the world, so
+	# this reads the same on the side of a planet as it does on the flat.
+	var f := -global_transform.basis.z
+	f = f - up * f.dot(up)
+	if f.length() < 0.001:
+		f = global_transform.basis.x
+	f = f.normalized()
+	var r := up.cross(f).normalized()
+	for off in [Vector3.ZERO, f * CROUCH_OVERHANG, -f * CROUCH_OVERHANG,
+			r * CROUCH_OVERHANG, -r * CROUCH_OVERHANG]:
+		var from: Vector3 = land + off
 		var q := PhysicsRayQueryParameters3D.create(from, from - up * CROUCH_PROBE)
 		q.exclude = [get_rid()]
 		q.collide_with_areas = false
