@@ -2457,7 +2457,7 @@ func _toggle_pilot() -> void:
 	if global_position.distance_to(cockpit_world) > 4.0:
 		return
 	if ship.remote_driven:
-		_toast("Someone else is flying her")
+		_toast("Someone else is flying this ship")
 		return
 	# Whatever was built onto her from the ground comes aboard first, so a
 	# thruster set down beside her counts towards whether she can fly.

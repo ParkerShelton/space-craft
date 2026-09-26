@@ -412,8 +412,8 @@ static func journal_text(planet: Planet) -> String:
 			lines.append("  %s best for electrical work." % _count_word(spark))
 		if burn > 0:
 			lines.append("  %s worth burning for power. The stone round" % _count_word(burn))
-			lines.append("  those is black and sooty -- you can see a seam of")
-			lines.append("  it from across a cave.")
+			lines.append("  those is black and sooty -- you can pick the patch")
+			lines.append("  out from across a cave.")
 		if burn == 0:
 			lines.append("  None of it burns well. Power will be the hard part.")
 		lines.append("Smelt ore into ingots, then beat an ingot flat on an")
@@ -433,7 +433,7 @@ static func journal_text(planet: Planet) -> String:
 	lines.append("The battery in the rack is what powers the ship. A flat")
 	lines.append("battery is not a broken one: charge it at a generator and")
 	lines.append("put it back. A generator takes ten plates and four")
-	lines.append("wire, and it burns the ore out of the black seams.")
+	lines.append("wire, and it burns the ore out of the black stone.")
 	lines.append("")
 	lines.append("Bare hands will not get ore or metal out of anything. They")
 	lines.append("will get wood, and wood makes the bench, and the bench makes")
