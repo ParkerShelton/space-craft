@@ -23,19 +23,25 @@ const WALK_SPEED := 4.6
 ## second. Low on purpose: a jump keeps the speed you left the ground with and
 ## can be nudged, not re-aimed. Steering at full walking speed in mid-air is
 ## what let a standing jump go as far as a running one.
-## How much you can still steer once your feet are off the ground. Low on
-## purpose: a jump should commit you. It was high enough that the air was
-## almost as manoeuvrable as the floor.
-const AIR_CONTROL := 1.1
-## Walking off a step drops you to the one below instead of sailing over it.
+## How much you can still steer once your feet are off the ground.
 ##
-## Coming down a flight of single blocks, you leave a step with your full
-## walking speed and gravity needs about a third of a second to take you down
-## one block -- by which time you have crossed more than a block of air and
-## cleared the next step entirely. So you skip three or four and land at the
-## bottom. This catches that: still walking, no longer on the floor, ground
-## within a step below, and no jump asked for -- so put the feet on it.
-const STEP_DOWN := 1.05
+## Back to what it was. Turning this down made the air feel wrong to move in --
+## you stopped going where you were pointing -- and steering was never the
+## complaint. Carrying too much SPEED off a ledge was, and that is a different
+## number (see WALKOFF_MULT).
+const AIR_CONTROL := 2.5
+## What is left of your speed when you WALK off an edge, as opposed to jumping.
+##
+## This is what makes a flight of single blocks behave like stairs. Falling one
+## block takes about a third of a second, and at full walking pace that is
+## nearly a block and a half of travel -- so you cleared the next step every
+## time and skipped to the bottom. Stepping off at two thirds of that puts you
+## under a block of travel, so you land on each one.
+##
+## A JUMP is untouched: you keep every bit of your run, because a jump is a
+## thing you meant and its distance is the whole point of it.
+const WALKOFF_MULT := 0.62
+
 const JUMP_SPEED := 8.0
 ## Webbing (see webbed): each glob that hits slows you more, and enough of them
 ## in a row hold you fast until you struggle out.
@@ -133,10 +139,10 @@ const CROUCH_EYE_MULT := 0.55
 ## of the lip and the body overhangs by most of its width, which is what makes
 ## looking down over a drop possible. The capsule still rests on what is left of
 ## the block, so you do not fall.
-## How far out from the middle of your sole still counts as standing on
-## something. Bigger lets you hang further over a drop; too big and you are
-## held up by a block you are not really over.
-const CROUCH_GRIP := 0.30
+## How far the body is dropped when asking whether it is standing on anything.
+## Short: a block one step below is a drop, not support, and refusing to walk
+## into it is the whole point of crouching at an edge.
+const FLOOR_REACH := 0.12
 
 ## How long after walking off an edge a jump still counts.
 ##
@@ -3578,38 +3584,37 @@ func _keep_on_the_ledge(before: Vector3, up: Vector3) -> void:
 			before + vert, before]:
 		if _floor_under(cand, up):
 			global_position = cand
+			# Drop the part of the push that was taking you off, so the body
+			# rests against the edge instead of grinding into it every frame.
+			var kept := global_position - before
+			var flat := kept - up * kept.dot(up)
+			if flat.length() > 0.0001:
+				var speed := (velocity - up * velocity.dot(up)).length()
+				velocity = flat.normalized() * speed + up * velocity.dot(up)
+			else:
+				velocity = up * velocity.dot(up)
 			return
 	global_position = before
+	velocity = up * velocity.dot(up)
 
 
-## Is there something directly under the feet from here?
+## Would the body be standing on something here?
 ##
-## The origin is the middle of the capsule and it is 1.8 tall, so the feet are
-## 0.9 below; anything within a short reach of THAT is what you are standing
-## on. Deliberately short: while crouching, a block one step down is not
-## support, it is a drop, and refusing to walk into it is the whole point.
+## Asked with the CAPSULE, not with rays. Rays round the sole are a guess at
+## what the body is resting on, and a guess that disagrees with the physics by
+## even a little is the difference between "crouching holds me" and "crouching
+## holds me and then sometimes does not" -- which is no good at all if falling
+## is going to start costing health.
+##
+## test_move slides the real collision shape down a short way and says whether
+## it hits. That is the same shape, the same world and the same solver that
+## decide is_on_floor(), so the two cannot disagree. It also gives the overhang
+## for free: the capsule is 0.4 across, so you can hang out over a drop until
+## the last of it leaves the block, and not one step further.
 func _floor_under(at: Vector3, up: Vector3) -> bool:
-	var space := get_world_3d().direct_space_state
-	if space == null:
-		return true
-	var feet: Vector3 = at - up * 0.9
-	# A ring of probes round the sole rather than one down the middle, so you
-	# are held up by any part of your foot and can genuinely overhang.
-	var f := -global_transform.basis.z
-	f = f - up * f.dot(up)
-	if f.length() < 0.001:
-		f = global_transform.basis.x
-	f = f.normalized()
-	var r := up.cross(f).normalized()
-	for off in [Vector3.ZERO, f * CROUCH_GRIP, -f * CROUCH_GRIP,
-			r * CROUCH_GRIP, -r * CROUCH_GRIP]:
-		var from: Vector3 = feet + off + up * 0.1
-		var q := PhysicsRayQueryParameters3D.create(from, from - up * 0.35)
-		q.exclude = [get_rid()]
-		q.collide_with_areas = false
-		if not space.intersect_ray(q).is_empty():
-			return true
-	return false
+	var xf := global_transform
+	xf.origin = at
+	return test_move(xf, -up * FLOOR_REACH)
 
 
 func _walk(delta: float, up: Vector3, gmag: float) -> void:
@@ -3689,31 +3694,13 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	if crouching:
 		# Crouching, a step that takes you off the block is simply undone.
 		_keep_on_the_ledge(before, up)
-	elif was_floor and v_up <= 0.1 and _jump_buffer <= 0.0:
-		_auto_step_down(up)
-
-
-## ...and walk DOWN one without leaving the ground.
-##
-## The pair of them are what make a flight of blocks behave like stairs: one
-## lifts you onto the step above, this one sets you on the step below instead
-## of launching you off it. Only while you are already walking -- a jump is
-## never caught by it, and neither is a real fall, because both start with you
-## off the floor or moving up.
-func _auto_step_down(up: Vector3) -> void:
-	if is_on_floor():
-		return
-	var xf := global_transform
-	var drop := KinematicCollision3D.new()
-	if not test_move(xf, -up * STEP_DOWN, drop):
-		return     # nothing within a step: this is a fall, and it is meant to be
-	var fell: float = drop.get_travel().length()
-	if fell <= 0.001:
-		return
-	global_position -= up * fell
-	# Land, rather than arrive still accelerating downward.
-	velocity -= up * velocity.dot(up)
-	apply_floor_snap()
+	elif was_floor and not is_on_floor() and v_up <= 0.1:
+		# You have just WALKED off something rather than jumped off it. Most of
+		# your speed goes, so you drop onto the next step down instead of
+		# sailing over it. Snapping you down to it, which is what this used to
+		# do, made every ledge in a cave grab at you.
+		var flat := velocity - up * velocity.dot(up)
+		velocity = flat * WALKOFF_MULT + up * velocity.dot(up)
 
 
 ## Walk up a half-height ledge (slabs, and later stairs) without jumping.
