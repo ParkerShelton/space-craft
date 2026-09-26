@@ -605,6 +605,56 @@ static func anvil_pile_boxes(n: int, col: Color) -> Array:
 ## The anvil with `shape` on its face in `col`, `t` through its stage, and
 ## `pile` more waiting beside it. The piece is its own surface, unshaded and
 ## pushed toward the colour of hot metal -- except scrap, which has gone cold.
+## The three shapes you can actually take off the anvil and use. An ingot is
+## what you PUT on it, and cracking and scrap are what happens if you keep
+## going, so neither of those is a thing you have made.
+const TAKEABLE := ["bar", "sheet", "plate"]
+
+
+## A white outline round the workpiece, drawn the moment it becomes one of
+## those three.
+##
+## Between stages the piece only creeps -- a blow nudges it a little toward the
+## next shape -- so the moment it BECOMES something is easy to miss while you
+## are watching the sparks. The outline is the tell: metal with a line round it
+## is metal worth taking, and you can see it from where you are standing
+## instead of reading a word off a panel.
+##
+## Twelve thin bars round the piece's bounding box, which is how everything
+## else in this game draws an outline (see repair_ghosts.gd).
+static func anvil_outline_boxes(shape: String, t: float = 0.0, hits: int = 0) -> Array:
+	if not TAKEABLE.has(shape):
+		return []
+	var piece := anvil_piece_boxes(shape, Color.WHITE, t, hits)
+	if piece.is_empty():
+		return []
+	var lo := Vector3(1e9, 1e9, 1e9)
+	var hi := -lo
+	for b in piece:
+		lo = lo.min((b[0] as Vector3) - (b[1] as Vector3) * 0.5)
+		hi = hi.max((b[0] as Vector3) + (b[1] as Vector3) * 0.5)
+	# Stand it off the metal a little, so the line reads as round the piece
+	# rather than as a bright edge on it.
+	lo -= Vector3(0.018, 0.014, 0.018)
+	hi += Vector3(0.018, 0.014, 0.018)
+	const T := 0.008
+	var out: Array = []
+	var size := hi - lo
+	var mid := (lo + hi) * 0.5
+	# Four bars along each axis, at the four corners of the other two.
+	for ax in 3:
+		for i in 4:
+			var c := mid
+			var sz := Vector3(T, T, T)
+			sz[ax] = size[ax]
+			var a1: int = (ax + 1) % 3
+			var a2: int = (ax + 2) % 3
+			c[a1] = lo[a1] if (i % 2) == 0 else hi[a1]
+			c[a2] = lo[a2] if i < 2 else hi[a2]
+			out.append([c, sz, Color(1, 1, 1)])
+	return out
+
+
 static func anvil_mesh(shape: String, col: Color, t: float = 0.0, hits: int = 0,
 		pile: int = 0, pile_col: Color = Color(0.7, 0.68, 0.64)) -> ArrayMesh:
 	var body: Array = anvil_boxes()
@@ -623,6 +673,15 @@ static func anvil_mesh(shape: String, col: Color, t: float = 0.0, hits: int = 0,
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sub.surface_get_arrays(0))
 	m.surface_set_material(m.get_surface_count() - 1, mat)
+	# ...and the outline, once it is a thing rather than a thing on its way.
+	var edge := _mesh_from(anvil_outline_boxes(shape, t, hits))
+	if edge.get_surface_count() > 0:
+		var em := StandardMaterial3D.new()
+		em.vertex_color_use_as_albedo = true
+		em.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		em.render_priority = 2
+		m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, edge.surface_get_arrays(0))
+		m.surface_set_material(m.get_surface_count() - 1, em)
 	return m
 
 

@@ -8,9 +8,11 @@ extends StaticBody3D
 ## ore into an identified refined material).
 
 const STORAGE_SLOTS := 8      # machines
-## A wooden chest is deliberately small. It is eight wood and an afternoon, and
-## it should feel like the answer to "where do I put this" rather than the
-## answer to storage -- which is what a bank of Cargo Modules is for.
+## A wooden chest is deliberately small. Eight wood, gathered by hand on your
+## first day, costs you nothing -- so it should answer "I am carrying too much,
+## where do I put this" and not "where does everything live from now on". That
+## second question is what a bank of Cargo Modules is for, and it is meant to
+## cost plate, wire and a circuit.
 const CHEST_SLOTS := 12
 const CHEST_WIDE_SLOTS := 24  # two chests in one box, and one lid to lift
 const CARGO_SLOTS := 16       # ...each, and they JOIN (see MAX_BANK in player.gd)
