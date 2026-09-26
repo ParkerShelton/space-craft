@@ -1374,9 +1374,9 @@ func _hull_material() -> Material:
 	var m := Chunk._get_material(p)
 	if m == null:
 		return Chunk._get_plain_material()
-	# Her own copy of the planet's material, so her lamps can go dark without
-	# darkening every lamp on the planet (see set_lamp_power). Copied again
-	# only when she comes under a different planet.
+	# Its own copy of the planet's material, so this ship's lamps can go dark
+	# without darkening every lamp on the planet (see set_lamp_power). Copied
+	# again only when it comes under a different planet.
 	if _mat_src != m or _mat == null:
 		_mat_src = m
 		_mat = m.duplicate() as ShaderMaterial

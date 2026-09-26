@@ -78,7 +78,7 @@ var _alarm_t := 0.0
 var _beep := 0
 var _rng := RandomNumberGenerator.new()
 var _inside: Node3D          # the cockpit set
-var _panel: Node3D           # the lit face of the console, which dies
+var _panel: MeshInstance3D   # the console, whose screen is what dies
 var _panel_text: Array = []  # the Label3Ds on it
 var _rock: Node3D            # the asteroid, seen through the window
 var _rock_out: Node3D        # ...and tumbling away behind you after the cut
@@ -86,6 +86,7 @@ var _hum: AudioStreamPlayer  # everything being fine
 var _strike: AudioStreamPlayer
 var _wind: AudioStreamPlayer
 var _rock_bits: CPUParticles3D
+var _in_clouds: Array = []   # cloud decks going past the canopy
 var _struck := false
 var _holding := 0.0          # counts up once the screen is black
 
@@ -296,93 +297,121 @@ func _slab(parent: Node3D, at: Vector3, size: Vector3, col: Color,
 	return mi
 
 
+## Where you are sitting, and what you are looking at.
+##
+## Roughly where the player's head is when they wake -- standing on the deck at
+## the front of the cabin, looking at the console with the canopy over it.
+const EYE := Vector3(0.5, 2.12, -0.35)
+const LOOK := Vector3(0.5, 1.66, -2.80)
+## Wider than the chase shot. A cabin three blocks across on a 62-degree lens
+## is a console filling the frame and nothing else; cockpits are shot wide for
+## the same reason.
+const INSIDE_FOV := 75.0
+## The plane of the canopy ahead, which is what the asteroid is aimed through.
+const PANE_Z := -5.0
+
+
 ## The cockpit you are sitting in for the first three seconds.
 ##
-## Built here rather than borrowed from the wreck, like everything else in this
-## file, so that deleting the file takes the whole reel with it. It is small on
-## purpose: a console, a window, and your hands. You are not meant to look round
-## the room -- you are meant to be looking at the one thing that is about to
-## stop working.
-##
-## The window is a HOLE, not glass: the sky behind it is the viewport's own sky,
-## so it costs nothing and it is the same sky the ship falls through.
+## Every part of it comes from the real thing rather than from a lookalike:
+## CrashSite._plan() for the shell and the glass, Ship._console_mesh() for the
+## console, StationModels for the supply locker bolted beside it. The first
+## version of this was a room I built to look roughly right, and it looked
+## nothing like the ship you walk around in ten seconds later -- different
+## console, different window, different shape. Two descriptions of one place
+## drift apart the moment there are two of them, so there is one.
 func _build_inside() -> void:
 	_inside = Node3D.new()
 	_inside.position = Vector3(0, INSIDE_Y, 0)
 	_vp.add_child(_inside)
-	# Dark. The panel has to be the brightest thing in here, or its going out
-	# changes nothing -- and a cockpit lit as evenly as a kitchen was why the
-	# first pass of this shot had no mood to lose.
-	var wall := Color(0.075, 0.082, 0.095)
-	var dark := Color(0.045, 0.05, 0.058)
-	var trim := Color(0.115, 0.12, 0.135)
-	# Floor, ceiling and the two side walls.
-	_slab(_inside, Vector3(0, -0.5, -0.4), Vector3(3.2, 0.1, 4.0), dark)
-	_slab(_inside, Vector3(0, 1.7, -0.4), Vector3(3.2, 0.1, 4.0), wall)
-	_slab(_inside, Vector3(-1.55, 0.6, -0.4), Vector3(0.1, 2.3, 4.0), wall)
-	_slab(_inside, Vector3(1.55, 0.6, -0.4), Vector3(0.1, 2.3, 4.0), wall)
-	# The front bulkhead, in four pieces round a window. Left, right, over, under.
-	_slab(_inside, Vector3(-1.05, 0.75, -2.3), Vector3(1.1, 2.0, 0.12), wall)
-	_slab(_inside, Vector3(1.05, 0.75, -2.3), Vector3(1.1, 2.0, 0.12), wall)
-	_slab(_inside, Vector3(0, 1.45, -2.3), Vector3(1.1, 0.6, 0.12), wall)
-	_slab(_inside, Vector3(0, 0.05, -2.3), Vector3(1.1, 0.8, 0.12), wall)
-	# A frame round the hole, one step proud, so the window reads as built.
-	_slab(_inside, Vector3(0, 1.13, -2.24), Vector3(1.24, 0.08, 0.06), trim)
-	_slab(_inside, Vector3(0, 0.48, -2.24), Vector3(1.24, 0.08, 0.06), trim)
-	_slab(_inside, Vector3(-0.58, 0.8, -2.24), Vector3(0.08, 0.72, 0.06), trim)
-	_slab(_inside, Vector3(0.58, 0.8, -2.24), Vector3(0.08, 0.72, 0.06), trim)
-	# The console: a body, and a face raked back toward you.
-	_slab(_inside, Vector3(0, 0.12, -1.5), Vector3(2.0, 0.6, 0.7), Color(0.062, 0.068, 0.078))
-	_panel = Node3D.new()
-	_panel.position = Vector3(0, 0.66, -1.52)
-	# Raked BACK toward the seat. The sign matters: the other way round tips the
-	# face into the bulkhead and you read the console edge-on as a black line.
-	_panel.rotation = Vector3(deg_to_rad(34.0), 0, 0)
+	var plan: Dictionary = CrashSite._plan()
+	var cells := {}
+	for v in plan:
+		cells[v] = int(plan[v])
+	var mi := MeshInstance3D.new()
+	mi.mesh = _hull_mesh(cells)
+	_inside.add_child(mi)
+	# The console. Not a painted cube -- the model Ship.build_props stands over
+	# the cockpit block, hood, pillars, lit screen and all. This is the thing
+	# you right-click a few seconds after the reel ends.
+	_panel = MeshInstance3D.new()
+	(_panel as MeshInstance3D).mesh = Ship._console_mesh()
+	_panel.position = Vector3(Vector3i(0, 1, CrashSite.CABIN_FRONT))
 	_inside.add_child(_panel)
-	_slab(_panel, Vector3.ZERO, Vector3(1.9, 0.02, 0.62), Color(0.09, 0.10, 0.11))
-	# The lit face, and the readout on it. Unshaded, because a screen makes its
-	# own light and is the brightest thing in a dim cockpit.
-	_slab(_panel, Vector3(0, 0.013, 0.0), Vector3(1.66, 0.01, 0.46),
-		Color(0.05, 0.13, 0.11), true)
-	# Three lines in the ship computer's own flat voice. It does not say what is
-	# happening or why -- it says the numbers, and every one of them is fine.
-	# That is the whole point of it being on screen at all.
-	var rows := [["ATMOSPHERIC ENTRY    NOMINAL", Color(0.42, 0.95, 0.72)],
-		["HULL  100%        POWER  100%", Color(0.42, 0.95, 0.72)]]
-	for i in rows.size():
-		var lb := Label3D.new()
-		lb.text = str(rows[i][0])
-		lb.modulate = rows[i][1]
-		lb.font_size = 64
-		lb.pixel_size = 0.0015
-		lb.billboard = BaseMaterial3D.BILLBOARD_DISABLED
-		lb.shaded = false
-		lb.double_sided = true
-		lb.no_depth_test = false
-		lb.rotation = Vector3(deg_to_rad(-90.0), 0, 0)
-		lb.position = Vector3(0, 0.02, -0.14 + float(i) * 0.14)
-		_panel.add_child(lb)
-		_panel_text.append(lb)
-	# No indicator lamps. There were two, and at any size worth seeing they sat
-	# on the ends of the top line. The words are the readout.
-	# Your hands on the edge of it. Not modelled -- suggested. Two gloved shapes
-	# at the bottom of the frame are enough to make the shot yours.
-	for hx in [-0.46, 0.46]:
-		var arm := Color(0.13, 0.14, 0.16)
-		# Forearm running away from you into the frame, then the hand on the
-		# near lip of the console. Coming from BEHIND the camera is what makes
-		# them yours rather than someone else's, sat opposite.
-		_slab(_inside, Vector3(hx, 0.42, -0.72), Vector3(0.17, 0.15, 0.62), arm)
-		_slab(_inside, Vector3(hx * 0.92, 0.465, -1.16), Vector3(0.21, 0.11, 0.26),
-			Color(0.19, 0.20, 0.23))
-	# One dim lamp so the room is lit at all, and dies with the panel.
-	var gl := OmniLight3D.new()
-	gl.light_color = Color(0.55, 0.85, 0.75)
-	gl.light_energy = 2.6
-	gl.omni_range = 4.6
-	gl.position = Vector3(0, 1.0, -1.25)
-	_inside.add_child(gl)
-	_panel_text.append(gl)
+	# The supply locker, bolted beside it, facing aft -- the one CrashSite puts
+	# the first day's food and torches in.
+	var loc := MeshInstance3D.new()
+	loc.mesh = StationModels.mesh_for(Blocks.CHEST)
+	loc.position = Vector3(CrashSite.LOCKER_AT) + Vector3(0.5, 0.0, 0.5)
+	loc.rotation = Vector3(0, PI, 0)
+	_inside.add_child(loc)
+	# The console's own light on the cabin round it -- which is what goes out.
+	var sg := OmniLight3D.new()
+	sg.light_color = Color(0.45, 0.9, 1.0)
+	sg.light_energy = 1.6
+	sg.omni_range = 3.2
+	sg.position = Vector3(0.5, 1.9, -1.7)
+	_inside.add_child(sg)
+	_panel_text.append(sg)
+	# The lamp in the roof (CrashSite puts a GLOW_LAMP at (0, H, 0)) -- the
+	# reason the first thing you see on waking is not the dark. It survives the
+	# strike, because it is still burning when you come round.
+	var rl := OmniLight3D.new()
+	rl.light_color = Color(1.0, 0.94, 0.82)
+	rl.light_energy = 1.7
+	rl.omni_range = 7.0
+	rl.position = Vector3(0.5, 3.2, 0.5)
+	_inside.add_child(rl)
+	# Daylight through the canopy, which is what actually lights this cabin when
+	# you are standing in it. The reel's own sun is outside and behind.
+	var day := OmniLight3D.new()
+	day.light_color = Color(0.82, 0.90, 1.0)
+	day.light_energy = 1.5
+	day.omni_range = 7.0
+	day.position = Vector3(0.5, 2.3, -2.2)
+	_inside.add_child(day)
+	# The planet, a long way down. Without it the canopy looks out at a sky the
+	# same pale grey as the glass itself, and no amount of transparency makes
+	# that read as a window -- what tells you it is glass is seeing something
+	# through it that is not the colour of glass. It is also true: you are
+	# coming down at this place, and it is the one you wake up on.
+	var land := MeshInstance3D.new()
+	var lbm := BoxMesh.new()
+	lbm.size = Vector3(3000, 20, 3000)
+	land.mesh = lbm
+	var lmat := StandardMaterial3D.new()
+	lmat.albedo_color = Color(0.26, 0.33, 0.24)
+	lmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	land.material_override = lmat
+	land.position = Vector3(0, -95.0, -300.0)
+	_inside.add_child(land)
+	for i2 in 40:
+		var lump := MeshInstance3D.new()
+		var lm := BoxMesh.new()
+		lm.size = Vector3(_rng.randf_range(30.0, 130.0), _rng.randf_range(10.0, 60.0),
+			_rng.randf_range(30.0, 130.0))
+		lump.mesh = lm
+		var mm := StandardMaterial3D.new()
+		var g := _rng.randf_range(0.7, 1.25)
+		mm.albedo_color = Color(0.26 * g, 0.33 * g, 0.24 * g)
+		mm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		lump.material_override = mm
+		lump.position = Vector3(_rng.randf_range(-1200.0, 1200.0),
+			10.0 + lm.size.y * 0.5, _rng.randf_range(-1400.0, -140.0))
+		land.add_child(lump)
+	for i in 14:
+		var deck := MeshInstance3D.new()
+		var dm := BoxMesh.new()
+		dm.size = Vector3(_rng.randf_range(14.0, 40.0), 1.2, _rng.randf_range(14.0, 40.0))
+		deck.mesh = dm
+		var cm := StandardMaterial3D.new()
+		cm.albedo_color = Color(0.92, 0.95, 1.0, 0.5)
+		cm.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		cm.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		deck.material_override = cm
+		deck.position = _in_cloud_spot()
+		_inside.add_child(deck)
+		_in_clouds.append(deck)
 
 
 ## The asteroid. A lump, not a ball: a body with smaller bodies stuck to it, the
@@ -397,6 +426,13 @@ func _build_rock() -> void:
 	_rock_out.visible = false
 	_rock_bits = _burst(70, 2.2, 30.0, Vector3(0.9, 0.9, 0.9),
 		Color(0.42, 0.38, 0.34, 1.0), Color(0.26, 0.24, 0.22, 0.0), 8.0)
+
+
+## Somewhere ahead and off to one side, far enough out to be weather rather
+## than something in the cabin.
+func _in_cloud_spot() -> Vector3:
+	return Vector3(_rng.randf_range(-55.0, 55.0), _rng.randf_range(-16.0, 14.0),
+		_rng.randf_range(-130.0, -30.0))
 
 
 func _rock_lump(parent: Node) -> Node3D:
@@ -414,30 +450,63 @@ func _rock_lump(parent: Node) -> Node3D:
 	return n
 
 
-## A block map to a mesh: every face that is not up against another block. The
-## same flat-box vocabulary as everything else, kept local so that deleting this
-## file takes the whole reel with it.
+## A block map to a mesh: every face that is not up against another block.
+##
+## Two surfaces, because the canopy is glass and you have to be able to see out
+## of it -- that is the whole reason the nose of this ship is glazed. And the
+## cockpit block's forward face is the bright windshield the real one has (see
+## Ship._build_mesh), because this is now used to build the room you sit in and
+## not only the shape falling past the camera.
 func _hull_mesh(cells: Dictionary) -> ArrayMesh:
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var solid := SurfaceTool.new()
+	var glass := SurfaceTool.new()
+	solid.begin(Mesh.PRIMITIVE_TRIANGLES)
+	glass.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var any_solid := false
+	var any_glass := false
 	for v in cells:
 		var c: Vector3i = v
-		var base := Blocks.color_of(int(cells[c]))
+		var id := int(cells[c])
+		var is_glass: bool = id == Blocks.GLASS
+		var base := Blocks.color_of(id)
 		for fi in 6:
 			if cells.has(c + (Chunk._WFACE[fi] as Vector3i)):
 				continue
+			var fcol := base
+			if id == Blocks.COCKPIT and (Chunk._WFACE[fi] as Vector3i) == Vector3i(0, 0, -1):
+				fcol = Color(0.55, 0.95, 1.0)
 			var sh: float = Chunk._face_shade(fi / 2, 1 if (fi % 2) == 0 else -1)
-			st.set_color(Color(base.r * sh, base.g * sh, base.b * sh, 1.0))
+			var st: SurfaceTool = glass if is_glass else solid
+			st.set_color(Color(fcol.r * sh, fcol.g * sh, fcol.b * sh,
+				base.a if is_glass else 1.0))
 			st.set_normal(Vector3(Chunk._WFACE[fi]))
 			var q := Chunk._box_face(Vector3(c), Vector3(c) + Vector3.ONE, fi)
 			st.add_vertex(q[0]); st.add_vertex(q[2]); st.add_vertex(q[1])
 			st.add_vertex(q[0]); st.add_vertex(q[3]); st.add_vertex(q[2])
-	var m := st.commit()
-	if m.get_surface_count() > 0:
-		var mat := StandardMaterial3D.new()
-		mat.vertex_color_use_as_albedo = true
-		mat.roughness = 0.8
-		m.surface_set_material(0, mat)
+			if is_glass:
+				any_glass = true
+			else:
+				any_solid = true
+	var m := ArrayMesh.new()
+	if any_solid:
+		var ms := solid.commit()
+		if ms.get_surface_count() > 0:
+			var mat := StandardMaterial3D.new()
+			mat.vertex_color_use_as_albedo = true
+			mat.roughness = 0.8
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,
+				ms.surface_get_arrays(0))
+			m.surface_set_material(m.get_surface_count() - 1, mat)
+	if any_glass:
+		var mg := glass.commit()
+		if mg.get_surface_count() > 0:
+			var gmat := StandardMaterial3D.new()
+			gmat.vertex_color_use_as_albedo = true
+			gmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			gmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+			m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,
+				mg.surface_get_arrays(0))
+			m.surface_set_material(m.get_surface_count() - 1, gmat)
 	return m
 
 
@@ -733,11 +802,19 @@ func _pose(t: float) -> void:
 ## there for the last second.
 func _pose_inside(t: float) -> void:
 	_inside.visible = true
+	_cam.fov = INSIDE_FOV
+	for cd in _in_clouds:
+		var d: MeshInstance3D = cd
+		var q: Vector3 = d.position
+		q.z += 26.0 * get_process_delta_time()
+		if q.z > 8.0:
+			q = _in_cloud_spot()
+		d.position = q
 	# A gentle ride, and then not. Buffet climbs a little through the calm --
 	# entry is bumpy even when it is going well -- and the strike slams it.
 	var bump: float = 0.004 + 0.006 * clampf(t / CALM, 0.0, 1.0)
-	var eye := Vector3(0.0, 1.02, -0.30)
-	var at := Vector3(0.0, 0.60, -1.58)
+	var eye := EYE
+	var at := LOOK
 	if _struck:
 		# Thrown. The head goes one way and the aim another, so you are looking
 		# at nothing in particular -- which is what being hit looks like.
@@ -760,18 +837,21 @@ func _pose_inside(t: float) -> void:
 			# almost nothing outside it is in shot. So: choose where on the
 			# window it should appear, choose how far away it is, and work back.
 			var e: float = pow(rk, 1.8)
-			var d: float = lerpf(38.0, 2.6, e)
-			var wx: float = lerpf(-0.38, -0.06, e)
-			var wy: float = lerpf(1.02, 0.86, e)
-			var base := Vector3(0.0, 1.02, -0.30)     # the eye, before buffet
-			const PANE := -1.94                        # ...to the window plane
-			_rock.position = base + Vector3(wx - base.x, wy - base.y, PANE) 				* (d / -PANE)
-			_rock.scale = Vector3.ONE * 2.5
+			var d: float = lerpf(46.0, 4.4, e)
+			# Held ABOVE the console: aimed at the middle of the canopy, it
+			# spends the run behind the one solid thing between you and it.
+			var wx: float = lerpf(-0.45, 0.45, e)
+			var wy: float = lerpf(2.80, 2.42, e)
+			var pane: float = PANE_Z - EYE.z
+			var dir := Vector3(wx - EYE.x, wy - EYE.y, pane)
+			_rock.position = EYE + dir * (d / -pane)
+			_rock.scale = Vector3.ONE * 2.2
 			_rock.rotation = Vector3(t * 1.3, t * 0.8, t * 1.9)
 	_cam.look_at_from_position(_inside.position + eye, _inside.position + at, Vector3.UP)
 
 
 func _pose_outside(t: float) -> void:
+	_cam.fov = 62.0
 	if _inside != null:
 		_inside.visible = false
 	# The rock that hit you, tumbling away below and behind. Gone in a second --
@@ -927,19 +1007,24 @@ func _take_the_hit() -> void:
 		_hum.stop()
 	if _strike != null:
 		_strike.play()
-	# The panel goes out. Not a warning on it -- out. A dead console is the same
-	# fact you will find when you wake up and the battery is flat, and it says it
-	# without a word.
+	# The console goes out. Not a warning on it -- out. Its screen is the
+	# brightest thing in the cabin, so losing it is the whole event, and it is
+	# the same fact you find on waking when the battery in the rack is flat.
+	#
+	# Done by multiplying the whole model down rather than by building a second
+	# dead one: the mesh paints its lit strips as vertex colours, and one dark
+	# albedo over the top takes the glow with it.
 	for n in _panel_text:
 		var nd := n as Node3D
 		if nd != null:
 			nd.visible = false
-	if _panel != null:
-		for c in _panel.get_children():
-			var mi := c as MeshInstance3D
-			if mi != null and mi.material_override is StandardMaterial3D:
-				(mi.material_override as StandardMaterial3D).albedo_color = \
-					Color(0.05, 0.05, 0.06)
+	var pm := _panel as MeshInstance3D
+	if pm != null:
+		var dead := StandardMaterial3D.new()
+		dead.vertex_color_use_as_albedo = true
+		dead.albedo_color = Color(0.22, 0.23, 0.26)
+		dead.roughness = 0.9
+		pm.material_override = dead
 	# Rock, where the rock was.
 	if _rock_bits != null and _rock != null:
 		_rock_bits.position = _rock.global_position
