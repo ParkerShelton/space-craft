@@ -132,11 +132,19 @@ func _want(port: Station, box: Station, id: int) -> int:
 ## How much the SOURCE wants to keep it, on the same scale -- a parcel only
 ## moves somewhere that wants it more than where it already is, which is what
 ## stops two chests holding the same thing passing it back and forth forever.
-func _want_src(box: Station, id: int) -> int:
-	for slot in box.storage:
-		if int(slot.get("id", Blocks.AIR)) == id and int(slot.get("count", 0)) > 0:
-			return 1     # a loader is there to empty it; holding some is not a claim
-	return 1
+func _want_src(_box: Station, _id: int) -> int:
+	# Nothing. A loader is bolted to this box in order to empty it, so the box
+	# holding some of a thing is not a claim on it -- which is the whole point
+	# of having put a loader there.
+	#
+	# This returned 1, and a destination has to want it MORE than the source
+	# does, so an ordinary empty chest -- which also scores 1 -- could never
+	# win. Two chests, a loader and a port, correctly built, and nothing ever
+	# moved: the only deliveries that could happen were into a box that already
+	# held some or had a filter naming it. The comment three functions up has
+	# always said an unfiltered chest with room catches whatever nothing else
+	# claimed; it just never did.
+	return 0
 
 
 func _has_room(box: Station, slot: Dictionary) -> bool:

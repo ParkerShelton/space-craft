@@ -5604,11 +5604,15 @@ func _placement_plan(tgt: Dictionary, place_id: int) -> Dictionary:
 		# the surface you clicked faces sideways -- not whether its normal
 		# happens to be Y.
 		var tn: Vector3i = tgt.get("normal", Vector3i(0, 1, 0))
-		var tface := -1
+		# Up is the planet's own up out here and the ship's own up aboard one,
+		# so a torch stuck to a bulkhead hangs off the bulkhead however the
+		# wreck happens to be lying.
+		var tup := Vector3.UP
 		if obj is Planet:
-			var tup: Vector3 = (obj as Planet)._axis_of(Vector3(pv) + Vector3(0.5, 0.5, 0.5))
-			if absf(Vector3(tn).normalized().dot(tup)) < 0.5:
-				tface = Chunk._WFACE.find(tn)
+			tup = (obj as Planet)._axis_of(Vector3(pv) + Vector3(0.5, 0.5, 0.5))
+		var tface := -1
+		if absf(Vector3(tn).normalized().dot(tup)) < 0.5:
+			tface = Chunk._WFACE.find(tn)
 		return {"voxel": pv, "value": Blocks.make_torch(place_id, tier, tface)}
 	if Blocks.is_leaf(place_id):
 		# Marked as placed, so it neither withers nor comes down with a tree.

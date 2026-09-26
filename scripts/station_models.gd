@@ -789,8 +789,33 @@ static func smelter_content_boxes(pieces: Array, heat: float) -> Array:
 	return out
 
 
-static func smelter_content_mesh(pieces: Array, heat: float) -> ArrayMesh:
-	var m := _mesh_from(smelter_content_boxes(pieces, heat))
+## What is in the GRATE, stacked behind the bars at the front.
+##
+## The chamber has always shown its load; the firebox showed nothing, so wood
+## you had just put in went somewhere invisible and the only way to know
+## whether a furnace was fed was to open it. `fuel` is [{"col": Color}], at
+## most three, and `lit` darkens them toward charcoal as they burn.
+static func smelter_fuel_boxes(fuel: Array, lit: bool) -> Array:
+	var out: Array = []
+	var n := mini(fuel.size(), 3)
+	for i in n:
+		var col: Color = (fuel[i] as Dictionary)["col"]
+		if lit:
+			col = col.lerp(EMBER, 0.45).darkened(0.1)
+		# Behind the bars, in the mouth of the firebox course. Stacked rather
+		# than laid in a row: a grate is full of sticks lying across each other.
+		var x := (float(i) - float(n - 1) * 0.5) * 0.13
+		var y := 0.17 + float(i % 2) * 0.07
+		out.append([Vector3(x, y, -0.30), Vector3(0.1, 0.07, 0.14), col])
+		out.append([Vector3(x * 0.6, y + 0.05, -0.22), Vector3(0.14, 0.05, 0.1),
+			col.darkened(0.12)])
+	return out
+
+
+static func smelter_content_mesh(pieces: Array, heat: float,
+		fuel: Array = [], lit: bool = false) -> ArrayMesh:
+	var m := _mesh_from(smelter_content_boxes(pieces, heat)
+		+ smelter_fuel_boxes(fuel, lit))
 	if m.get_surface_count() > 0 and heat > 0.05:
 		var mat := StandardMaterial3D.new()
 		mat.vertex_color_use_as_albedo = true

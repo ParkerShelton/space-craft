@@ -1238,19 +1238,41 @@ func _smelt_pieces() -> Array:
 	return out
 
 
+## What the grate is holding, to draw behind the bars. At most three, because
+## a stack of sixty logs is still a firebox with a few sticks showing in it.
+func _fuel_pieces() -> Array:
+	var sl := fire_slot()
+	var n := int(sl.get("count", 0))
+	if n <= 0:
+		return []
+	var id := int(sl.get("id", Blocks.AIR))
+	var mat: Dictionary = sl.get("mat", {})
+	var col: Color = mat.get("color", Blocks.color_of(id))
+	if world != null and Blocks.is_ore(id):
+		var p: Planet = world.nearest_planet(global_position)
+		if p != null and not mat.has("color"):
+			col = p.ore_color(id)
+	var out: Array = []
+	for i in mini(n, 3):
+		out.append({"col": col})
+	return out
+
+
 func _refresh_smelter() -> void:
 	if kind != Blocks.SMELTER or headless or _smelt_mi == null:
 		return
 	var pieces := _smelt_pieces()
 	var heat := job_progress() if _job != "" else 0.0
 	var lit := fire_lit()
-	var key := "%s|%s|%d|%d" % [_job, str(pieces), int(heat * 12.0), int(lit)]
+	var fuel := _fuel_pieces()
+	var key := "%s|%s|%s|%d|%d" % [_job, str(pieces), str(fuel), int(heat * 12.0), int(lit)]
 	if key != _smelt_shown:
 		var was_lit: bool = _smelt_shown.ends_with("|1")
 		_smelt_shown = key
 		if lit != was_lit or _mi.mesh == null:
 			_mi.mesh = StationModels.smelter_mesh(lit)
-		_smelt_mi.mesh = StationModels.smelter_content_mesh(pieces, heat if lit else 0.0)
+		_smelt_mi.mesh = StationModels.smelter_content_mesh(pieces,
+			heat if lit else 0.0, fuel, lit)
 	if _smelt_light != null:
 		_smelt_light.visible = lit
 		if _smelt_light.visible:

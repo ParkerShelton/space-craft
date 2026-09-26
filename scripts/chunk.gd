@@ -366,11 +366,17 @@ static func _static_init() -> void:
 		# Keyed on the low byte, which for every packed id is the block itself
 		# (a stacked slab's is its lower slab), so this is a superset of what
 		# each pass then checks for in full.
-		_SPECIAL[id] = 1 if (id == Blocks.WATER or Blocks.is_stair(id)
-			or id == Blocks.DOOR or id == Blocks.DOOR_OPEN
-			or id == Blocks.ROOF_SLAB or Blocks.is_slab(id)
-			or Blocks.is_light(id) or id == Blocks.WIRE
-			or id == Blocks.TALL_GRASS or Blocks.is_ore(id)) else 0
+		# Anything the greedy pass will not draw HAS to be drawn by one of the
+		# other passes, or it is drawn by nothing and the block is invisible.
+		# So this is derived from _FULL rather than listed again beside it: the
+		# list said "id == Blocks.WIRE" where _FULL said "Blocks.is_wire(id)",
+		# and the four duct materials fell straight down the gap between the
+		# two -- placed, solid, saved, and invisible. Crops, saplings and Parts
+		# were in the same hole.
+		#
+		# Plus the few that ARE full cubes and still want their own pass: water
+		# surfaces, and ore, which draws its speckle from a uniform.
+		_SPECIAL[id] = 1 if (not full or id == Blocks.WATER or Blocks.is_ore(id)) else 0
 
 
 static func _id_at(planet: Planet, snap: Dictionary, v: Vector3i) -> int:

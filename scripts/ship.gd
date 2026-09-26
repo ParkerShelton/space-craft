@@ -1239,6 +1239,15 @@ func rebuild() -> void:
 		# to fill every cell, so a door was a slab of wall and a length of cable
 		# was a solid metre of it -- which is what made a conduit in the cabin
 		# look like somebody had left a crate there.
+		# A torch is a stick with a flame on it, on a ship exactly as on the
+		# ground. It cannot go through _emit_shape with everything else,
+		# because that paints every box of a shape the same colour and the
+		# whole point of a torch is that the handle is wood and only the head
+		# burns.
+		var lbase := Blocks.bottom_of(id)
+		if Blocks.is_light(lbase) and lbase != Blocks.GLOW_LAMP:
+			_emit_torch(v, id, verts, normals, colors, uvs, uv2s)
+			continue
 		var shape := _shape_of(v, id)
 		if not shape.is_empty():
 			_emit_shape(v, id, shape, verts, normals, colors, uvs, uv2s)
@@ -1536,6 +1545,30 @@ func _shape_of(v: Vector3i, id: int) -> Array:
 
 ## Every face of every sub-box. Nothing is culled against the neighbours here:
 ## these shapes do not fill their cell, so the cell next door cannot hide them.
+## A torch bolted to a hull. Same model the ground uses (Chunk.torch_parts),
+## so one carried out of a cave and screwed to a bulkhead is the same object.
+##
+## "Up" on a ship is the ship's own up, not a planet's: a torch in a cabin
+## stands on the deck however the wreck is lying, and stays where it was put
+## when the thing takes off.
+func _emit_torch(v: Vector3i, id: int, verts: PackedVector3Array,
+		normals: PackedVector3Array, colors: PackedColorArray,
+		uvs: PackedVector2Array, uv2s: PackedVector2Array) -> void:
+	var fi := Blocks.torch_face_of(id)
+	var out := Vector3(Chunk._WFACE[fi]) if fi >= 0 and fi < 6 else Vector3.ZERO
+	# Bracketed to a wall that has since been cut away: stand it up rather than
+	# leave it hanging in the air.
+	if out != Vector3.ZERO and not blocks.has(v - Vector3i(out)):
+		out = Vector3.ZERO
+	var lit := _face_light(v, Vector3i.ZERO)
+	for tp in Chunk.torch_parts(Vector3.UP, out):
+		var burning: bool = bool(tp["burn"])
+		Chunk._emit_rot_box(Vector3(v) + (tp["c"] as Vector3), tp["h"], tp["b"],
+			_tint_of(id) if burning else Chunk.TORCH_HANDLE,
+			id if burning else Blocks.PLANK,
+			verts, normals, colors, uvs, uv2s, 1.0 if burning else maxf(lit, 0.6))
+
+
 func _emit_shape(v: Vector3i, id: int, boxes: Array, verts: PackedVector3Array,
 		normals: PackedVector3Array, colors: PackedColorArray,
 		uvs: PackedVector2Array, uv2s: PackedVector2Array) -> void:
