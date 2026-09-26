@@ -426,6 +426,50 @@ static func journal_text(planet: Planet) -> String:
 		lines.append("Machines are built from the plates; four of them")
 		lines.append("pressed together make a block of hull.")
 		lines.append("")
+		lines.append("WHAT THE FIVE READINGS MEAN")
+		lines.append("Every ore assays at five figures, each out of a hundred.")
+		lines.append("")
+		lines.append("HARDNESS -- how stubborn it is under the hammer. A hard")
+		lines.append("  ore takes more blows to work into anything, but it holds")
+		lines.append("  a cleaner bore, so pipe drawn from it runs faster.")
+		lines.append("DENSITY -- how much metal is actually in the rock. Dense")
+		lines.append("  ore casts more plates from the same ingot, and makes")
+		lines.append("  everything built out of it heavier, which the thrusters")
+		lines.append("  will have opinions about.")
+		lines.append("ENERGY -- how much there is in it to let go of. This is")
+		lines.append("  thruster push, and how long and how hard a fuel rod")
+		lines.append("  runs in a reactor.")
+		lines.append("REACTIVITY -- how willingly it carries a current. It sets")
+		lines.append("  how much wire a bar draws out, how much charge a battery")
+		lines.append("  will hold, and how well a solar panel works. Past about")
+		lines.append("  half, the raw ore glows in the dark on its own -- which")
+		lines.append("  is how you find the good stuff at night.")
+		lines.append("COMBUSTION -- how readily it burns. Over about half and it")
+		lines.append("  is fuel rather than metal: sooty stone, bakes down to")
+		lines.append("  coal, and no good for casting at all.")
+		lines.append("")
+		lines.append("Nothing is good at all five, and the ores that burn best")
+		lines.append("are the worst castings on the planet. Worth knowing before")
+		lines.append("I fill a chest with the wrong rock.")
+		lines.append("")
+		lines.append("And every way of making power asks a DIFFERENT one of")
+		lines.append("them. A burner wants Combustion. A solar panel wants")
+		lines.append("Reactivity. A reactor rod wants Energy. The pile that ran")
+		lines.append("the last machine will not run the next one.")
+		lines.append("")
+		lines.append("THE ASSAY")
+		lines.append("Off the scope on the way in. Names only -- I will have to")
+		lines.append("work out what each one looks like in the ground.")
+		for od in planet.ore_defs:
+			var op: Dictionary = od["props"]
+			lines.append("")
+			lines.append(str(od["name"]).to_upper())
+			lines.append("  Hardness %d%%   Density %d%%   Energy %d%%"
+				% [int(op.get("h", 0)), int(op.get("d", 0)), int(op.get("e", 0))])
+			lines.append("  Reactivity %d%%   Combustion %d%%"
+				% [int(op.get("r", 0)), int(op.get("c", 0))])
+			lines.append("  %s" % _ore_note(op))
+		lines.append("")
 	lines.append("IF THE LANDING GOES BADLY")
 	lines.append("Seal the ship before anything else: a block of hull in every")
 	lines.append("hole, and a door in the doorway. Nothing aboard the ship")
@@ -444,6 +488,20 @@ static func journal_text(planet: Planet) -> String:
 	lines.append("little wood and rock to get me going.")
 	return "
 ".join(PackedStringArray(lines))
+
+
+## The line under an ore's figures: what it is FOR, in words, so the numbers
+## above it mean something before you have used any of them.
+static func _ore_note(props: Dictionary) -> String:
+	match _ore_use(props):
+		"power":
+			return "Burns. Fuel, not metal -- bake it down to coal."
+		"electrical":
+			return "Carries a current. Wire, batteries, solar."
+		_:
+			if int(props.get("d", 0)) >= 60:
+				return "Heavy and inert. The best plate here."
+			return "Workable metal. Plates, tools, hull."
 
 
 ## What an ore is mostly good for. One answer each -- the survey is a summary,

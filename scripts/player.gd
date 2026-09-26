@@ -7800,7 +7800,7 @@ func _item_tooltip_base(slot: Dictionary) -> String:
 		var props: Dictionary = slot.get("props", {})
 		var lines := ["%s Ingot%s  (%s · Tier %d)" % [mname, suffix, Blocks.TIER_NAMES[tier], tier]]
 		for k in Blocks.PROP_KEYS:
-			lines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(props.get(k, 0))])
+			lines.append("%s: %d%%" % [Blocks.PROP_LABELS[k], int(props.get(k, 0))])
 		# What those two numbers MEAN, now that they decide different things. A
 		# list of scores is not a decision until something says which way round
 		# they cut.
@@ -7817,7 +7817,7 @@ func _item_tooltip_base(slot: Dictionary) -> String:
 		var ilines := ["%s — %s%s  (%s · Tier %d)" % [
 			Blocks.name_of(id), mname, suffix, Blocks.TIER_NAMES[itier], itier]]
 		for k in Blocks.PROP_KEYS:
-			ilines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(iprops.get(k, 0))])
+			ilines.append("%s: %d%%" % [Blocks.PROP_LABELS[k], int(iprops.get(k, 0))])
 		if Blocks.use_of(id) != "":
 			ilines.append(Blocks.use_of(id))
 		return "\n".join(ilines)
@@ -7826,7 +7826,7 @@ func _item_tooltip_base(slot: Dictionary) -> String:
 	if not cprops.is_empty() and mat.has("name"):
 		var clines := ["%s %s%s" % [mname, Blocks.name_of(id), suffix]]
 		for k in Blocks.PROP_KEYS:
-			clines.append("%s: %d" % [Blocks.PROP_LABELS[k], int(cprops.get(k, 0))])
+			clines.append("%s: %d%%" % [Blocks.PROP_LABELS[k], int(cprops.get(k, 0))])
 		return "\n".join(clines)
 	# ordinary block / item
 	var use := Blocks.use_of(id)
