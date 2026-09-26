@@ -103,6 +103,22 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 				seeds.append([at + tip, Vector3(0.025, 0.05, 0.03) if along_x
 					else Vector3(0.03, 0.05, 0.025), GRAIN])
 			return seeds
+		Blocks.FUEL_ROD:
+			# A sealed rod: a banded casing with a window near the top that is
+			# the only bright thing on it.
+			const CASING := Color(0.38, 0.42, 0.40)
+			const BAND := Color(0.26, 0.29, 0.28)
+			const CORE := Color(0.45, 0.92, 0.48)
+			var rod: Array = [
+				[Vector3(0, 0, 0), Vector3(0.16, 0.62, 0.16), CASING],
+				[Vector3(0, 0.34, 0), Vector3(0.20, 0.08, 0.20), BAND],
+				[Vector3(0, -0.34, 0), Vector3(0.20, 0.08, 0.20), BAND],
+				[Vector3(0, 0.10, -0.09), Vector3(0.07, 0.20, 0.02), CORE],
+			]
+			for i in 2:
+				rod.append([Vector3(0, -0.12 + float(i) * 0.24, 0),
+					Vector3(0.18, 0.04, 0.18), BAND])
+			return rod
 		Blocks.SOLAR_PANEL:
 			# A dark cell behind glass, with a bright bus bar down the middle
 			# and a tab at one corner -- small, flat, and obviously a part of

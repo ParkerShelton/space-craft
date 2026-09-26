@@ -24,6 +24,7 @@ const FOOTPRINT := {
 	Blocks.GENERATOR: Vector3i(1, 1, 1),
 	Blocks.SOLAR_ARRAY: Vector3i(2, 1, 1),
 	Blocks.REACTOR: Vector3i(1, 2, 1),
+	Blocks.CAPACITOR: Vector3i(1, 1, 1),
 	Blocks.POWER_BAY: Vector3i(1, 1, 1),
 	Blocks.OXYGEN_PLANT: Vector3i(1, 2, 1),
 	Blocks.HEATER: Vector3i(1, 1, 1),
@@ -96,6 +97,8 @@ static func boxes_for(kind: int) -> Array:
 			return solar_boxes(false, 0.0, 0.0)
 		Blocks.REACTOR:
 			return reactor_boxes(false, 0.0, false, 0.0)
+		Blocks.CAPACITOR:
+			return capacitor_boxes(false, 0.0, 0.0)
 		Blocks.POWER_BAY:
 			return power_bay_boxes(false, 0.0)
 		Blocks.ANVIL:
@@ -1008,6 +1011,51 @@ static func reactor_mesh(has_battery: bool, charge: float, running: bool,
 		power: float) -> ArrayMesh:
 	return _lit_mesh(reactor_boxes(has_battery, charge, running, power),
 		reactor_lit(running, power, has_battery, charge))
+
+
+## A Capacitor Bank: a rack of cells standing in a frame, with a charge column
+## up the front that fills as it does. No hopper, no glass, no stack -- it is
+## visibly a thing that only holds.
+static func capacitor_boxes(has_battery: bool, charge: float, power: float) -> Array:
+	const FRAME := Color(0.30, 0.33, 0.40)
+	const DEEP := Color(0.13, 0.15, 0.18)
+	const CAN := Color(0.44, 0.47, 0.54)
+	const TRACK := Color(0.09, 0.10, 0.12)
+	var out: Array = [
+		[Vector3(0, 0.07, 0), Vector3(0.94, 0.14, 0.94), DEEP],
+		[Vector3(0, 0.80, 0), Vector3(0.94, 0.10, 0.94), DEEP],
+	]
+	# Six cells in two rows, which is what makes it read as a bank rather than
+	# as another metal box.
+	for i in 3:
+		var x: float = -0.28 + float(i) * 0.28
+		for z in [-0.20, 0.20]:
+			out.append([Vector3(x, 0.44, z), Vector3(0.20, 0.60, 0.20), CAN])
+			out.append([Vector3(x, 0.72, z), Vector3(0.11, 0.06, 0.11), FRAME])
+	for sx in [-0.44, 0.44]:
+		out.append([Vector3(sx, 0.44, 0), Vector3(0.07, 0.62, 0.90), FRAME])
+	# The charge column, read from across the room.
+	out.append([Vector3(0, 0.44, -0.47), Vector3(0.09, 0.56, 0.04), TRACK])
+	out.append_array(_cradle_boxes(Vector3(-0.30, 0.86, 0.0), has_battery, FRAME, DEEP))
+	if has_battery:
+		out.append_array(_seated_battery(Vector3(-0.30, 0.86, 0.0)))
+	return out
+
+
+static func capacitor_lit(power: float, has_battery: bool, charge: float) -> Array:
+	var out: Array = []
+	var f := clampf(power, 0.0, 1.0)
+	if f > 0.001:
+		var h: float = 0.54 * f
+		out.append([Vector3(0, 0.17 + h * 0.5, -0.495), Vector3(0.07, h, 0.03),
+			gauge_colour(f)])
+	out.append_array(_battery_gauge(Vector3(-0.30, 0.86, 0.0), has_battery, charge))
+	return out
+
+
+static func capacitor_mesh(has_battery: bool, charge: float, power: float) -> ArrayMesh:
+	return _lit_mesh(capacitor_boxes(has_battery, charge, power),
+		capacitor_lit(power, has_battery, charge))
 
 
 ## The four-armed cradle every power station holds a battery in, at `at`. One

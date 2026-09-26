@@ -431,6 +431,13 @@ var _adv_body: Control
 var _adv_sig := ""
 var _adv_tab := "survival"
 var _adv_tabs: Array = []
+var _adv_card: Panel
+var _adv_card_t := 0.0
+const ADV_GOLD := Color(1.0, 0.80, 0.32)
+var _adv_gold: TextureRect        # the rim, as the crash alarm has in red
+var _adv_gold_t := 0.0
+var _confetti: Control
+var _bits: Array = []
 var _adv_t := 0.0
 ## World-space teaching markers, by id, so one is never raised twice and any
 ## of them can be taken away when what it teaches has been done.
@@ -2045,8 +2052,8 @@ func grant(id: String) -> void:
 	if d.is_empty():
 		return
 	earned[id] = true
-	Audio.ui("ui_toggle_on")
-	_toast("%s  --  %s" % [str(d["name"]), str(d["desc"])])
+	Audio.ui("ui_accept")
+	_show_advancement(d)
 	_adv_sig = ""
 	if adv_open:
 		_rebuild_advancements()
@@ -2104,6 +2111,7 @@ func _check_advancements() -> void:
 				Blocks.GENERATOR: grant("generator")
 				Blocks.SOLAR_ARRAY: grant("solar")
 				Blocks.REACTOR: grant("reactor")
+				Blocks.CAPACITOR: grant("bank_power")
 				Blocks.BED: grant("bed")
 				Blocks.CAMPFIRE: grant("fire")
 				Blocks.SHAPER: grant("shaper")
@@ -2230,6 +2238,229 @@ func think(msg: String, seconds := 6.0) -> void:
 	_thought.visible = true
 	_thought.modulate.a = 1.0
 	_thought_t = seconds
+
+
+## An advancement is the one moment in this game that is purely congratulation,
+## so it gets the full treatment: gold round the rim of the screen the way the
+## crash alarm gets red, confetti across it, and a card that rises out of the
+## bottom right corner and takes itself away again.
+##
+## It used to be a line in the same strip as "Ate Cooked Meat", which made
+## working out smelting look exactly like picking something up.
+const ADV_CARD_SIZE := Vector2(360, 82)
+const ADV_SHOW := 5.0
+
+
+func _show_advancement(d: Dictionary) -> void:
+	if _ui_layer == null:
+		return
+	if _adv_card != null and is_instance_valid(_adv_card):
+		_adv_card.queue_free()
+	var card := Panel.new()
+	card.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	card.custom_minimum_size = ADV_CARD_SIZE
+	card.size = ADV_CARD_SIZE
+	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(0.09, 0.075, 0.04, 0.96)
+	sb.border_color = ADV_GOLD
+	sb.set_border_width_all(2)
+	sb.set_corner_radius_all(6)
+	card.add_theme_stylebox_override("panel", sb)
+	_ui_layer.add_child(card)
+	var pic := TextureRect.new()
+	pic.position = Vector2(12, 14)
+	pic.custom_minimum_size = Vector2(54, 54)
+	pic.size = pic.custom_minimum_size
+	pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	pic.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var iid := Advancements.icon_id(d)
+	pic.texture = ItemIcon.of(iid, Blocks.color_of(iid),
+		world.nearest_planet(global_position) if world != null else null)
+	card.add_child(pic)
+	var tree := Label.new()
+	tree.position = Vector2(76, 10)
+	tree.text = _adv_tab_name(str(d.get("tab", ""))).to_upper()
+	tree.add_theme_font_size_override("font_size", 11)
+	tree.modulate = Color(ADV_GOLD.r, ADV_GOLD.g, ADV_GOLD.b, 0.85)
+	tree.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(tree)
+	var nm := Label.new()
+	nm.position = Vector2(76, 26)
+	nm.custom_minimum_size = Vector2(272, 0)
+	nm.text = str(d["name"])
+	nm.add_theme_font_size_override("font_size", 19)
+	nm.modulate = Color(1.0, 0.97, 0.88)
+	nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(nm)
+	var ds := Label.new()
+	ds.position = Vector2(76, 52)
+	ds.custom_minimum_size = Vector2(274, 0)
+	ds.text = str(d["desc"])
+	ds.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	ds.add_theme_font_size_override("font_size", 11)
+	ds.modulate = Color(1, 1, 1, 0.66)
+	ds.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	card.add_child(ds)
+	_adv_card = card
+	_adv_card_t = ADV_SHOW
+	_adv_place_card(0.0)
+	_adv_gold_t = ADV_SHOW
+	_start_confetti()
+
+
+## Where the card sits, given how far in it is (0 off the bottom, 1 home).
+func _adv_place_card(k: float) -> void:
+	if _adv_card == null or not is_instance_valid(_adv_card):
+		return
+	var home := Vector2(-ADV_CARD_SIZE.x - 20.0, -ADV_CARD_SIZE.y - 96.0)
+	# Rises out of the bottom edge rather than sliding in from the side: the
+	# hotbar lives along the bottom, so coming up beside it reads as belonging
+	# to the same strip of screen.
+	_adv_card.position = home + Vector2(0, (1.0 - k) * (ADV_CARD_SIZE.y + 110.0))
+
+
+func _tick_adv_card(delta: float) -> void:
+	# The rim, on its own curve so it is gone before the card is.
+	if _adv_gold_t > 0.0 and _adv_gold != null and is_instance_valid(_adv_gold):
+		_adv_gold_t -= delta
+		var age: float = ADV_SHOW - _adv_gold_t
+		# Up fast, then a slow ebb with one soft pulse in it.
+		var rise: float = clampf(age / 0.18, 0.0, 1.0)
+		var fall: float = clampf(_adv_gold_t / 1.9, 0.0, 1.0)
+		var pulse: float = 0.82 + 0.18 * sin(age * 5.0)
+		_adv_gold.visible = _adv_gold_t > 0.0
+		_adv_gold.modulate.a = rise * fall * pulse * 0.85
+	_tick_confetti(delta)
+	if _adv_card == null or not is_instance_valid(_adv_card):
+		return
+	_adv_card_t -= delta
+	if _adv_card_t <= 0.0:
+		_adv_card.queue_free()
+		_adv_card = null
+		return
+	var age2: float = ADV_SHOW - _adv_card_t
+	# Up over a third of a second with a little overshoot, and back down over
+	# the last half second -- it leaves the way it came rather than winking out.
+	var k := 1.0
+	if age2 < 0.34:
+		var t: float = age2 / 0.34
+		k = 1.0 - pow(1.0 - t, 3.0)
+		k += sin(t * PI) * 0.06
+	elif _adv_card_t < 0.45:
+		k = clampf(_adv_card_t / 0.45, 0.0, 1.0)
+		k = k * k
+	_adv_place_card(k)
+
+
+# --- confetti ------------------------------------------------------------------
+#
+# Drawn into one Control rather than spawned as nodes: a couple of hundred
+# rectangles under gravity is nothing to draw and everything to allocate.
+
+const CONFETTI_COLOURS := [Color(1.0, 0.84, 0.35), Color(1.0, 0.62, 0.30),
+	Color(0.55, 0.90, 1.0), Color(0.60, 1.0, 0.65), Color(1.0, 0.95, 0.85),
+	Color(0.95, 0.45, 0.55)]
+
+
+func _start_confetti() -> void:
+	if _confetti == null or not is_instance_valid(_confetti):
+		return
+	var vp := get_viewport().get_visible_rect().size
+	_bits.clear()
+	# Thrown from the two bottom corners, inward and up, the way a party popper
+	# goes -- not rained from the top, which reads as weather.
+	for side in [-1.0, 1.0]:
+		var from := Vector2(vp.x * 0.5 - side * vp.x * 0.46, vp.y + 10.0)
+		for i in 70:
+			var ang: float = randf_range(-2.35, -0.85) + side * 0.42
+			var spd: float = randf_range(620.0, 1180.0)
+			_bits.append({
+				"p": from, "v": Vector2(cos(ang), sin(ang)) * spd,
+				"r": randf() * TAU, "rv": randf_range(-9.0, 9.0),
+				"w": randf_range(5.0, 11.0), "h": randf_range(8.0, 16.0),
+				"c": CONFETTI_COLOURS[randi() % CONFETTI_COLOURS.size()],
+				"life": randf_range(1.6, 2.9)})
+	_confetti.visible = true
+	_confetti.queue_redraw()
+
+
+func _tick_confetti(delta: float) -> void:
+	if _bits.is_empty() or _confetti == null or not is_instance_valid(_confetti):
+		return
+	var live: Array = []
+	for b in _bits:
+		var bit: Dictionary = b
+		bit["life"] = float(bit["life"]) - delta
+		if float(bit["life"]) <= 0.0:
+			continue
+		var v: Vector2 = bit["v"]
+		v.y += 1500.0 * delta            # gravity
+		v.x *= 1.0 - 1.1 * delta         # air
+		bit["v"] = v
+		bit["p"] = (bit["p"] as Vector2) + v * delta
+		bit["r"] = float(bit["r"]) + float(bit["rv"]) * delta
+		live.append(bit)
+	_bits = live
+	_confetti.queue_redraw()
+	if _bits.is_empty():
+		_confetti.visible = false
+
+
+func _draw_confetti() -> void:
+	if _confetti == null:
+		return
+	for b in _bits:
+		var bit: Dictionary = b
+		var c: Color = bit["c"]
+		c.a = clampf(float(bit["life"]) / 0.7, 0.0, 1.0)
+		var w: float = float(bit["w"])
+		var h: float = float(bit["h"])
+		# Turned, and squashed by how far through its spin it is, so each piece
+		# reads as a flake tumbling rather than a square sliding.
+		var flip: float = absf(cos(float(bit["r"])))
+		var at: Vector2 = bit["p"]
+		_confetti.draw_set_transform(at, float(bit["r"]) * 0.35, Vector2.ONE)
+		_confetti.draw_rect(Rect2(-w * 0.5, -h * 0.5 * flip, w, h * flip), c)
+	_confetti.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+
+## The gold rim and the sheet the confetti is drawn on, built once with the HUD.
+## Same trick as the crash alarm: one soft frame texture, clear in the middle
+## and solid at the edges, tinted and pulsed rather than redrawn.
+func _build_celebration_ui(layer: CanvasLayer) -> void:
+	_adv_gold = TextureRect.new()
+	_adv_gold.texture = _rim_texture()
+	_adv_gold.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_adv_gold.stretch_mode = TextureRect.STRETCH_SCALE
+	_adv_gold.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_adv_gold.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_adv_gold.modulate = Color(ADV_GOLD.r, ADV_GOLD.g, ADV_GOLD.b, 0.0)
+	_adv_gold.visible = false
+	layer.add_child(_adv_gold)
+	_confetti = Control.new()
+	_confetti.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_confetti.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_confetti.visible = false
+	_confetti.draw.connect(_draw_confetti)
+	layer.add_child(_confetti)
+
+
+## Clear in the middle, solid at the edges. Distance to the nearest EDGE, not to
+## the centre, so it is a frame rather than a circle and the corners do not go
+## brighter than the sides.
+func _rim_texture() -> ImageTexture:
+	const N := 96
+	var img := Image.create(N, N, false, Image.FORMAT_RGBA8)
+	for y in N:
+		for x in N:
+			var u := (float(x) / float(N - 1)) * 2.0 - 1.0
+			var v := (float(y) / float(N - 1)) * 2.0 - 1.0
+			var d: float = maxf(absf(u), absf(v))
+			var a: float = clampf((d - 0.72) / 0.28, 0.0, 1.0)
+			img.set_pixel(x, y, Color(1, 1, 1, a * a * a))
+	return ImageTexture.create_from_image(img)
 
 
 func _toggle_advancements() -> void:
@@ -2783,6 +3014,7 @@ func _physics_process(delta: float) -> void:
 	_tick_dread(delta)
 	_tick_held_anim(delta)
 	_tick_hints(delta)
+	_tick_adv_card(delta)
 	if _trail != null:
 		_trail.emitting = velocity.length() > 0.8
 	if _toast_time > 0.0:
@@ -5733,6 +5965,7 @@ func _build_ui() -> void:
 	_build_starmap_ui(layer)
 	_build_book_ui(layer)
 	_build_advancements_ui(layer)
+	_build_celebration_ui(layer)
 	_apply_place_mode_ui()   # start the crosshair and ghost in the right mode
 
 	# transient save/load confirmation, top-center
@@ -8124,6 +8357,9 @@ func _craft_preview_text(kind: int) -> String:
 			lines.append("Switched off.")
 		elif st.power >= st.power_cap():
 			lines.append("Full -- waiting for somewhere to put it.")
+		elif st.kind == Blocks.CAPACITOR:
+			lines.append("Filling from whatever is wired to it."
+				if st.power < st.power_cap() else "Full.")
 		elif st.kind == Blocks.SOLAR_ARRAY:
 			lines.append(_solar_line(st))
 		elif st.burn_t > 0.0:

@@ -121,6 +121,9 @@ const DEFS := [
 	{"id": "rod", "name": "Fuel Rod", "parent": "alloy", "tab": "space",
 		"desc": "Press ingots into a rod. Its Energy is what it is worth.",
 		"icon": "FUEL_ROD"},
+	{"id": "bank_power", "name": "Somewhere to Keep It", "parent": "circuit",
+		"tab": "space", "desc": "Build a Capacitor Bank. Every generator fills it.",
+		"icon": "CAPACITOR"},
 	{"id": "reactor", "name": "The Last Generator", "parent": "rod", "tab": "space",
 		"desc": "Build a Reactor. It runs for minutes on one rod.",
 		"icon": "REACTOR"},
@@ -187,6 +190,7 @@ static func icon_id(d: Dictionary) -> int:
 		"REACTOR": return Blocks.REACTOR
 		"FUEL_ROD": return Blocks.FUEL_ROD
 		"SOLAR_PANEL": return Blocks.SOLAR_PANEL
+		"CAPACITOR": return Blocks.CAPACITOR
 		"BAR": return Blocks.BAR
 		"SHEET": return Blocks.SHEET
 		"SCRAP": return Blocks.SCRAP

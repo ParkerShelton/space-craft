@@ -101,7 +101,7 @@ static func capacity_of(k: int) -> int:
 		return CHEST_WIDE_SLOTS
 	if k == Blocks.CARGO_MODULE:
 		return CARGO_SLOTS
-	if k == Blocks.SOLAR_ARRAY:
+	if k == Blocks.SOLAR_ARRAY or k == Blocks.CAPACITOR:
 		return 1   # the battery cradle, and nothing to feed it
 	if k == Blocks.REACTOR:
 		return 2   # cradle and rod bay, the same two bays a Generator has
@@ -678,6 +678,8 @@ func _power_mesh(st: Color) -> ArrayMesh:
 	match kind:
 		Blocks.SOLAR_ARRAY:
 			return StationModels.solar_mesh(st.r > 0.5, st.g, st.a)
+		Blocks.CAPACITOR:
+			return StationModels.capacitor_mesh(st.r > 0.5, st.g, st.a)
 		Blocks.REACTOR:
 			return StationModels.reactor_mesh(st.r > 0.5, st.g, st.b > 0.5, st.a)
 	return StationModels.generator_mesh(st.r > 0.5, st.g, st.b > 0.5, st.a)
@@ -688,6 +690,8 @@ func _lever_at() -> Vector3:
 	match kind:
 		Blocks.SOLAR_ARRAY:
 			return Vector3(0.62, 0.20, -0.44)
+		Blocks.CAPACITOR:
+			return Vector3(0.36, 0.26, -0.47)
 		Blocks.REACTOR:
 			return Vector3(0.34, 0.30, -0.47)
 	return StationModels.GEN_LEVER
@@ -1312,6 +1316,40 @@ func _solar_props() -> Dictionary:
 	return build_mat if not build_mat.is_empty() else {"r": 40}
 
 
+## How fast power moves along a conduit into a Capacitor Bank.
+const FILL_RATE := 130.0
+
+
+## A Capacitor Bank fills from anything on its grid that actually generates.
+##
+## It pulls rather than the generators pushing, because pulling is the version
+## that needs no bookkeeping: each bank asks what it can reach and takes what
+## is spare, so two banks on one generator simply share it and a bank wired to
+## nothing quietly does nothing.
+func _tick_capacitor(delta: float) -> void:
+	if kind != Blocks.CAPACITOR or not switched_on or not active:
+		return
+	var room := power_cap() - power
+	if room <= 0.01 or world == null:
+		return
+	var pl: Planet = world.nearest_planet(global_position)
+	if pl == null:
+		return
+	var want: float = minf(FILL_RATE * delta, room)
+	for g in pl.station_grid_generators(self):
+		var src: Station = g
+		if src == null or not is_instance_valid(src) or src == self:
+			continue
+		if not Blocks.generates_power(src.kind) or src.power <= 0.0:
+			continue
+		var moved: float = minf(want, src.power)
+		src.power -= moved
+		power += moved
+		want -= moved
+		if want <= 0.001:
+			return
+
+
 ## The battery in a Generator's cradle soaks up its output. This is the only way
 ## to get power off a planet, so it is deliberately the simplest possible
 ## action: seat one and wait. Switched off, nothing flows.
@@ -1499,6 +1537,7 @@ func _process(delta: float) -> void:
 	_tick_lever(delta)
 	_tick_generator(delta)
 	_tick_solar(delta)
+	_tick_capacitor(delta)
 	_tick_batteries(delta)
 	_tick_power_bay(delta)
 	_refresh_gen()

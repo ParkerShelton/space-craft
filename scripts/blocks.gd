@@ -921,11 +921,27 @@ const FUEL_ROD := 218
 ## the ore you chose is baked into the panel, and the array you build out of
 ## four of them is exactly as good as they are.
 const SOLAR_PANEL := 219
+## A Capacitor Bank: storage and nothing else.
+##
+## A bigger generator would be the obvious upgrade and the weaker one -- it
+## would make the machine you already own worse rather than making it go
+## further. Storage split off into its own building is better in every
+## direction: it serves EVERY tier at once, it stacks, and it is what a Solar
+## Array has actually been missing, since banking a long day to spend it
+## through a long night is the whole of what a panel is for.
+const CAPACITOR := 220
 
 
 ## Does this station make power? Anything here feeds a base and charges a
 ## battery in its cradle; nothing else needs to know which kind it is.
 static func makes_power(kind: int) -> bool:
+	return generates_power(kind) or kind == CAPACITOR
+
+
+## ...and which of them actually MAKE any. A Capacitor Bank holds power and
+## hands it out like the others, but it has nothing to burn and no sun to
+## catch -- it fills from whatever is wired to it.
+static func generates_power(kind: int) -> bool:
 	return kind == GENERATOR or kind == SOLAR_ARRAY or kind == REACTOR
 
 
@@ -935,6 +951,7 @@ static func power_store(kind: int) -> float:
 	match kind:
 		SOLAR_ARRAY: return 2200.0
 		REACTOR: return 6000.0
+		CAPACITOR: return 5000.0
 	return 1000.0
 
 
@@ -943,6 +960,7 @@ static func charge_rate(kind: int) -> float:
 	match kind:
 		SOLAR_ARRAY: return 60.0
 		REACTOR: return 160.0
+		CAPACITOR: return 120.0
 	return 45.0
 
 
@@ -1145,6 +1163,10 @@ const STATION_BUILDS := [
 	# thing in the middle of it, and enough circuitry to keep it honest.
 	{"kind": REACTOR, "reqs": [{"id": PLATE, "n": 16}, {"id": ALLOY, "n": 8},
 		{"id": CIRCUIT, "n": 6}, {"id": MACHINE_CORE, "n": 1}]},
+	# Cheap enough to build several of, because several is the point: they
+	# stack, and every generator on the grid fills all of them.
+	{"kind": CAPACITOR, "reqs": [{"id": PLATE, "n": 8}, {"id": WIRE, "n": 6},
+		{"id": CIRCUIT, "n": 1}]},
 	{"kind": HEATER, "reqs": [{"any": STONE_IDS, "n": 10, "label": "Rock"},
 		{"id": PLATE, "n": 6}]},
 	{"kind": COOLER, "reqs": [{"id": GLASS, "n": 6}, {"id": PLATE, "n": 10}]},
@@ -1167,7 +1189,8 @@ const STATION_CATEGORIES := [
 	{"name": "Containers", "icon": CHEST, "kinds": [CHEST, CHEST_WIDE, CARGO_MODULE]},
 	{"name": "Crafters", "icon": CARPENTER, "kinds": [CARPENTER, SHAPER, FABRICATOR, SHIPWORKS]},
 	{"name": "Smelters", "icon": SMELTER, "kinds": [SMELTER]},
-	{"name": "Power", "icon": GENERATOR, "kinds": [GENERATOR, SOLAR_ARRAY, REACTOR, POWER_BAY]},
+	{"name": "Power", "icon": GENERATOR,
+		"kinds": [GENERATOR, SOLAR_ARRAY, REACTOR, CAPACITOR, POWER_BAY]},
 	{"name": "Climate", "icon": OXYGEN_PLANT, "kinds": [OXYGEN_PLANT, HEATER, COOLER, CLIMATE_UNIT]},
 ]
 
@@ -1757,6 +1780,7 @@ const NAMES := {
 	REACTOR: "Reactor",
 	FUEL_ROD: "Fuel Rod",
 	SOLAR_PANEL: "Solar Panel",
+	CAPACITOR: "Capacitor Bank",
 	CARGO_MODULE: "Cargo Module",
 	OXYGEN_PLANT: "Oxygen Plant",
 	HEATER: "Heater",
@@ -1944,6 +1968,7 @@ const COLORS := {
 	REACTOR: Color(0.34, 0.44, 0.40),
 	FUEL_ROD: Color(0.45, 0.78, 0.42),
 	SOLAR_PANEL: Color(0.19, 0.25, 0.42),
+	CAPACITOR: Color(0.30, 0.33, 0.40),
 	CARGO_MODULE: Color(0.42, 0.52, 0.58),
 	OXYGEN_PLANT: Color(0.42, 0.68, 0.78),
 	HEATER: Color(0.74, 0.40, 0.26),
