@@ -60,6 +60,9 @@ const DEFS := [
 		"desc": "Seal every hole in the cabin.", "icon": "LIFE_SUPPORT"},
 
 	# --- metalwork: everything the anvil and the press can do ----------------
+	{"id": "coal", "name": "Baked Down", "parent": "smelter", "tab": "craft",
+		"desc": "Smelt a fuel ore. It has no metal in it -- you get coal.",
+		"icon": "COAL"},
 	{"id": "bar", "name": "Drawn Out", "parent": "plate", "tab": "craft",
 		"desc": "Take a bar off the anvil instead of going further.", "icon": "BAR"},
 	{"id": "sheet", "name": "Rolled Thin", "parent": "bar", "tab": "craft",
@@ -167,6 +170,7 @@ static func icon_id(d: Dictionary) -> int:
 		"WARP_DRIVE": return Blocks.WARP_DRIVE
 		"JOURNAL": return Blocks.JOURNAL
 		"BOAT": return Blocks.BOAT
+		"COAL": return Blocks.COAL
 		"BAR": return Blocks.BAR
 		"SHEET": return Blocks.SHEET
 		"SCRAP": return Blocks.SCRAP

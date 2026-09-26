@@ -2069,6 +2069,8 @@ func _check_advancements() -> void:
 			grant("sheet")
 		elif sid == Blocks.SCRAP:
 			grant("scrap")
+		elif sid == Blocks.COAL:
+			grant("coal")
 		elif sid == Blocks.WIRE:
 			grant("wire")
 		elif sid == Blocks.CIRCUIT:

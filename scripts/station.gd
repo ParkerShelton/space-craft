@@ -452,6 +452,13 @@ func refine_all() -> int:
 	var done := 0
 	for s in storage:
 		if s["count"] > 0 and Blocks.is_ore(s["id"]):
+			# A fuel ore has no metal in it to cast. The same heat bakes it
+			# down to coal instead, which burns far harder than the rock it
+			# came from and is no use at all on an anvil.
+			if Blocks.is_fuel_grade(s.get("props", {})):
+				s["id"] = Blocks.COAL
+				done += 1
+				continue
 			var refined := Blocks.refined_of(s["id"])
 			if refined != Blocks.AIR:
 				s["id"] = refined
@@ -588,7 +595,8 @@ func _tick_generator(delta: float) -> void:
 	if int(s.get("count", 0)) <= 0:
 		return
 	var props: Dictionary = s.get("props", {})
-	if not Blocks.is_fuel(int(s["id"]), props):
+	var fuel_id := int(s["id"])
+	if not Blocks.is_fuel(fuel_id, props):
 		return
 	s["count"] = int(s["count"]) - 1
 	if int(s["count"]) <= 0:
@@ -596,8 +604,8 @@ func _tick_generator(delta: float) -> void:
 		s["props"] = {}
 		s["src"] = ""
 		s["mat"] = {}
-	burn_t = Blocks.fuel_burn_time(props)
-	burn_rate = Blocks.fuel_power_rate(props)
+	burn_t = Blocks.fuel_burn_time(props, fuel_id)
+	burn_rate = Blocks.fuel_power_rate(props, fuel_id)
 
 
 ## What a battery holds if nothing says otherwise. A real one asks its own
@@ -913,6 +921,8 @@ var _smelt_shown := "-"
 
 ## Whether a smelter takes this by the handful: ore, scrap to remelt, sand.
 static func smelts(id: int) -> bool:
+	# Coal is not on this list: it has already been through, and a furnace that
+	# ate it and gave nothing back would be a trap.
 	return Blocks.is_ore(id) or id == Blocks.SCRAP or id == Blocks.REGOLITH
 
 

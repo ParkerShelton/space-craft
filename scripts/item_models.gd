@@ -103,6 +103,21 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 				seeds.append([at + tip, Vector3(0.025, 0.05, 0.03) if along_x
 					else Vector3(0.03, 0.05, 0.025), GRAIN])
 			return seeds
+		Blocks.COAL:
+			# A baked lump: angular, matte, catching light only on its facets.
+			# Deliberately nothing like an ingot, because the whole point of it
+			# is that it is not one.
+			const CHAR := Color(0.13, 0.12, 0.13)
+			const FACET := Color(0.22, 0.21, 0.22)
+			const DUST := Color(0.09, 0.08, 0.09)
+			return [
+				[Vector3(0, 0, 0), Vector3(0.40, 0.32, 0.36), CHAR],
+				[Vector3(-0.14, 0.10, 0.06), Vector3(0.22, 0.18, 0.22), FACET],
+				[Vector3(0.15, -0.04, -0.08), Vector3(0.20, 0.20, 0.18), FACET],
+				[Vector3(0.08, 0.14, 0.10), Vector3(0.14, 0.12, 0.14), CHAR],
+				[Vector3(-0.18, -0.10, -0.10), Vector3(0.12, 0.10, 0.12), DUST],
+				[Vector3(0.20, 0.12, 0.02), Vector3(0.10, 0.09, 0.10), DUST],
+			]
 		Blocks.BONE:
 			return [
 				[Vector3(0, 0, 0), Vector3(0.52, 0.10, 0.10), BONE_C],

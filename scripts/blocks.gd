@@ -255,16 +255,24 @@ static func combustion_of(props: Dictionary) -> int:
 ## How long a unit of ore burns, and how much power it yields -- both scaled by
 ## that ore's Combustion. This is what makes a volatile ore worth hauling home
 ## rather than being just another rock.
-static func fuel_burn_time(props: Dictionary) -> float:
-	return 2.0 + float(combustion_of(props)) * 0.10      # ~2 .. 12 seconds
+static func fuel_burn_time(props: Dictionary, id: int = AIR) -> float:
+	var t := 2.0 + float(combustion_of(props)) * 0.10    # ~2 .. 12 seconds
+	return t * COAL_BONUS if id == COAL else t
 
 
-static func fuel_power_rate(props: Dictionary) -> float:
-	return 1.0 + float(combustion_of(props)) * 0.05      # ~1 .. 6 power/sec
+static func fuel_power_rate(props: Dictionary, id: int = AIR) -> float:
+	var r := 1.0 + float(combustion_of(props)) * 0.05    # ~1 .. 6 power/sec
+	return r * COAL_BONUS if id == COAL else r
 
 
 static func is_fuel(id: int, props: Dictionary) -> bool:
-	return is_ore(id) and combustion_of(props) > 0
+	return id == COAL or (is_ore(id) and combustion_of(props) > 0)
+
+
+## How much better coal is than the ore it was baked from. Worth the trip back
+## to the smelter, and not so much better that raw ore stops being worth
+## shovelling in when you are in a hurry.
+const COAL_BONUS := 2.1
 
 
 ## The Combustion at which an ore counts as FUEL rather than a metal that
@@ -874,6 +882,19 @@ const CONTAINMENT_SHELL := 212  # plates of a very dense metal (Density)
 # paying plate, wire and a circuit for.
 const CHEST_WIDE := 213    # carpenter's bench: two chests' worth, one lid
 const CARGO_MODULE := 214  # press + fabricator stock: banks with its neighbours
+
+## What a fuel ore becomes in a smelter.
+##
+## A metal ore smelts into an ingot you can beat into something. A fuel ore has
+## nothing in it to beat -- it is not a metal that happens to burn, it is the
+## burning part -- so putting it through the same furnace bakes it down into a
+## dense black lump instead. Coal burns far longer and far harder than the raw
+## ore it came from, which is the whole reason to spend the heat on it, and it
+## is no use whatever on an anvil.
+##
+## It keeps the props of the ore it came from, so a fiercer seam still makes
+## fiercer coal.
+const COAL := 215
 ## How good the ore has to be. Signature ores roll 88-100; ordinary ores stop
 ## at ORDINARY_PROP_CAP.
 const WARP_GRADE := {"e": 80, "c": 85, "r": 80, "d": 85}
@@ -1647,6 +1668,7 @@ const NAMES := {
 	JOURNAL: "Salvaged Journal",
 	GENERATOR: "Generator",
 	CHEST_WIDE: "Wide Chest",
+	COAL: "Coal",
 	CARGO_MODULE: "Cargo Module",
 	OXYGEN_PLANT: "Oxygen Plant",
 	HEATER: "Heater",
@@ -1829,6 +1851,7 @@ const COLORS := {
 	JOURNAL: Color(0.52, 0.40, 0.30),
 	GENERATOR: Color(0.62, 0.45, 0.28),
 	CHEST_WIDE: Color(0.46, 0.31, 0.17),
+	COAL: Color(0.13, 0.12, 0.13),
 	CARGO_MODULE: Color(0.42, 0.52, 0.58),
 	OXYGEN_PLANT: Color(0.42, 0.68, 0.78),
 	HEATER: Color(0.74, 0.40, 0.26),
