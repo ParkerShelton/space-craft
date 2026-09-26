@@ -67,15 +67,28 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 			out.append([Vector3(0, -0.06, 0), Vector3(0.46, 0.07, 0.16), GRAIN_DK])
 			return out
 		Blocks.COOKED_CROP:
-			# A small loaf, scored across the top.
-			var loaf: Array = [
-				[Vector3(0, 0, 0), Vector3(0.56, 0.26, 0.34), LOAF],
-				[Vector3(0, 0.15, 0), Vector3(0.48, 0.08, 0.28), CRUST],
+			# Roasted vegetables in a shallow dish -- NOT a loaf and not a cut
+			# of meat, which is what it used to be mistaken for from both
+			# sides. Round pieces, several colours, visibly a plate of
+			# something rather than one solid lump.
+			const DISH := Color(0.42, 0.40, 0.38)
+			const ROOT := Color(0.82, 0.52, 0.18)
+			const ROOT_D := Color(0.62, 0.36, 0.12)
+			const GREENS := Color(0.38, 0.55, 0.22)
+			const CHAR := Color(0.30, 0.22, 0.12)
+			var veg: Array = [
+				[Vector3(0, -0.10, 0), Vector3(0.52, 0.07, 0.38), DISH],
+				[Vector3(0, -0.06, 0.19), Vector3(0.52, 0.09, 0.04), DISH],
+				[Vector3(0, -0.06, -0.19), Vector3(0.52, 0.09, 0.04), DISH],
 			]
-			for i2 in 3:
-				loaf.append([Vector3(-0.14 + float(i2) * 0.14, 0.20, 0),
-					Vector3(0.04, 0.05, 0.22), CRUST])
-			return loaf
+			var bits := [
+				[Vector3(-0.14, -0.01, -0.06), ROOT], [Vector3(0.04, -0.01, 0.05), ROOT_D],
+				[Vector3(0.16, -0.02, -0.08), GREENS], [Vector3(-0.05, 0.04, -0.02), ROOT],
+				[Vector3(0.12, 0.04, 0.07), GREENS], [Vector3(-0.17, -0.01, 0.09), CHAR],
+			]
+			for bit in bits:
+				veg.append([bit[0] as Vector3, Vector3(0.13, 0.10, 0.13), bit[1]])
+			return veg
 		Blocks.SEEDS:
 			# A loose scatter of them, each its own little grain with daylight
 			# between it and the next. The last version stood them on a slab,
@@ -162,6 +175,46 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 				[Vector3(-0.18, -0.10, -0.10), Vector3(0.12, 0.10, 0.12), DUST],
 				[Vector3(0.20, 0.12, 0.02), Vector3(0.10, 0.09, 0.10), DUST],
 			]
+		Blocks.HIDE:
+			# A pelt off the animal: folded once, still ragged at the edges, with
+			# the pale underside showing where the fold turns it over.
+			const PELT := Color(0.60, 0.45, 0.30)
+			const UNDER := Color(0.78, 0.68, 0.56)
+			var hide: Array = [
+				[Vector3(0, -0.04, 0), Vector3(0.52, 0.06, 0.40), PELT],
+				[Vector3(-0.04, 0.02, 0.02), Vector3(0.40, 0.05, 0.32), UNDER],
+				[Vector3(0.02, 0.07, -0.03), Vector3(0.34, 0.05, 0.26), PELT],
+			]
+			# Ragged: a few tufts off the edges, which is what stops it reading
+			# as a folded towel.
+			for sp in [Vector3(-0.28, -0.04, 0.12), Vector3(0.27, -0.03, -0.14),
+					Vector3(0.06, -0.04, 0.21), Vector3(-0.12, -0.05, -0.20)]:
+				hide.append([sp as Vector3, Vector3(0.10, 0.04, 0.09), PELT])
+			return hide
+		Blocks.LEATHER:
+			# The same skin, worked: cut square, stacked, and darker for the
+			# tanning. Tidy where a hide is ragged -- that IS the difference.
+			const TAN := Color(0.44, 0.28, 0.16)
+			const TAN_D := Color(0.32, 0.20, 0.11)
+			var lea: Array = []
+			for i in 3:
+				lea.append([Vector3(float(i) * 0.015, -0.06 + float(i) * 0.05,
+					float(i) * 0.012), Vector3(0.44, 0.045, 0.34),
+					TAN if (i % 2) == 0 else TAN_D])
+			return lea
+		Blocks.CLOTH:
+			# A bolt of it, rolled: the roll, and one loose end hanging off.
+			const WEAVE := Color(0.78, 0.74, 0.64)
+			const SHADE := Color(0.64, 0.60, 0.51)
+			var cl: Array = [
+				[Vector3(0, 0, 0), Vector3(0.44, 0.26, 0.26), WEAVE],
+				[Vector3(0, 0, 0), Vector3(0.46, 0.16, 0.16), SHADE],
+				[Vector3(0, 0, 0), Vector3(0.48, 0.07, 0.07), WEAVE],
+				# the loose end, falling away from the roll
+				[Vector3(0.02, -0.16, 0.16), Vector3(0.38, 0.04, 0.16), WEAVE],
+				[Vector3(0.02, -0.21, 0.24), Vector3(0.34, 0.04, 0.10), SHADE],
+			]
+			return cl
 		Blocks.BONE:
 			return [
 				[Vector3(0, 0, 0), Vector3(0.52, 0.10, 0.10), BONE_C],

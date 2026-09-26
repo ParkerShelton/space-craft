@@ -23,7 +23,19 @@ const WALK_SPEED := 4.6
 ## second. Low on purpose: a jump keeps the speed you left the ground with and
 ## can be nudged, not re-aimed. Steering at full walking speed in mid-air is
 ## what let a standing jump go as far as a running one.
-const AIR_CONTROL := 2.5
+## How much you can still steer once your feet are off the ground. Low on
+## purpose: a jump should commit you. It was high enough that the air was
+## almost as manoeuvrable as the floor.
+const AIR_CONTROL := 1.1
+## Walking off a step drops you to the one below instead of sailing over it.
+##
+## Coming down a flight of single blocks, you leave a step with your full
+## walking speed and gravity needs about a third of a second to take you down
+## one block -- by which time you have crossed more than a block of air and
+## cleared the next step entirely. So you skip three or four and land at the
+## bottom. This catches that: still walking, no longer on the floor, ground
+## within a step below, and no jump asked for -- so put the feet on it.
+const STEP_DOWN := 1.05
 const JUMP_SPEED := 8.0
 ## Webbing (see webbed): each glob that hits slows you more, and enough of them
 ## in a row hold you fast until you struggle out.
@@ -105,7 +117,9 @@ const EYE_CLEARANCE := 0.25
 const WRENCH_NUDGE_Y := 4.0
 ## Crouching. Slower, because a careful step is a slow one -- and because the
 ## speed is what tells you the ledge guard is on without a word on screen.
-const CROUCH_SPEED_MULT := 0.45
+## Crouching is careful, not crippled. It was slow enough that shuffling along
+## a roof edge felt like being held rather than being careful.
+const CROUCH_SPEED_MULT := 0.58
 ## How far the eye drops when crouching, as a fraction of standing eye height.
 ## Enough that you can see it happen in first person -- the point of a crouch
 ## you cannot see is not obvious.
@@ -120,6 +134,15 @@ const CROUCH_EYE_MULT := 0.55
 ## looking down over a drop possible. The capsule still rests on what is left of
 ## the block, so you do not fall.
 const CROUCH_LOOKAHEAD := 0.08
+## How far past the edge your middle may get before crouching stops you.
+##
+## The probe used to go DOWN from a point slightly ahead of you, so you were
+## halted with your centre barely over the brink -- feet still flat on the
+## block, nothing hanging off, which is not what crouching at a ledge is for.
+## Pulling the probe back lets most of you out over the drop, the way it works
+## everywhere else that has this move, while still catching you before your
+## weight actually goes over.
+const CROUCH_OVERHANG := 0.34
 const CROUCH_PROBE := 1.25
 
 ## How long after walking off an edge a jump still counts.
@@ -766,8 +789,16 @@ func _add_item(id: int, n: int, props: Dictionary = {}, src: String = "", mat: D
 
 ## Public entry points for things outside the player that hand it items or
 ## messages -- creature drops, mainly (see Creature._grant_drops).
+## Something handed to you from outside: a creature's drops, a testing kit, the
+## survey put in your hands as you come round.
+##
+## It REDRAWS afterwards, which it did not, so what you killed something for
+## did not appear in the hotbar until you happened to open your bag -- the item
+## was there the whole time and the picture of it was a minute late.
 func grant_item(id: int, n: int, props: Dictionary = {}) -> int:
-	return _add_item(id, n, props)
+	var left := _add_item(id, n, props)
+	_refresh_slots()
+	return left
 
 
 func notify(msg: String) -> void:
@@ -3561,7 +3592,7 @@ func _ground_ahead(step: Vector3, up: Vector3) -> bool:
 		return true
 	var lead: Vector3 = step
 	if lead.length() > 0.0001:
-		lead = lead.normalized() * maxf(lead.length(), CROUCH_LOOKAHEAD)
+		lead = lead.normalized() * (maxf(lead.length(), CROUCH_LOOKAHEAD) - CROUCH_OVERHANG)
 	var from: Vector3 = global_position + lead
 	var q := PhysicsRayQueryParameters3D.create(from, from - up * CROUCH_PROBE)
 	q.exclude = [get_rid()]
@@ -3639,8 +3670,34 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 		horiz = flat_now.lerp(horiz, clampf(delta * AIR_CONTROL, 0.0, 1.0))
 	velocity = horiz + up * v_up
 	up_direction = up
+	var was_floor := is_on_floor()
 	move_and_slide()
 	_auto_step_up(up, horiz, delta)
+	if was_floor and v_up <= 0.1 and _jump_buffer <= 0.0:
+		_auto_step_down(up)
+
+
+## ...and walk DOWN one without leaving the ground.
+##
+## The pair of them are what make a flight of blocks behave like stairs: one
+## lifts you onto the step above, this one sets you on the step below instead
+## of launching you off it. Only while you are already walking -- a jump is
+## never caught by it, and neither is a real fall, because both start with you
+## off the floor or moving up.
+func _auto_step_down(up: Vector3) -> void:
+	if is_on_floor():
+		return
+	var xf := global_transform
+	var drop := KinematicCollision3D.new()
+	if not test_move(xf, -up * STEP_DOWN, drop):
+		return     # nothing within a step: this is a fall, and it is meant to be
+	var fell: float = drop.get_travel().length()
+	if fell <= 0.001:
+		return
+	global_position -= up * fell
+	# Land, rather than arrive still accelerating downward.
+	velocity -= up * velocity.dot(up)
+	apply_floor_snap()
 
 
 ## Walk up a half-height ledge (slabs, and later stairs) without jumping.
