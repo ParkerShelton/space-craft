@@ -112,6 +112,15 @@ const DEFS := [
 	# --- getting off the ground ----------------------------------------------
 	{"id": "generator", "name": "Power of Your Own", "parent": "wire", "tab": "space",
 		"desc": "Build a Generator.", "icon": "GENERATOR"},
+	{"id": "solar", "name": "Free Power", "parent": "circuit", "tab": "space",
+		"desc": "Build a Solar Array. No fuel -- and nothing after dark.",
+		"icon": "SOLAR_ARRAY"},
+	{"id": "rod", "name": "Fuel Rod", "parent": "alloy", "tab": "space",
+		"desc": "Press ingots into a rod. Its Energy is what it is worth.",
+		"icon": "FUEL_ROD"},
+	{"id": "reactor", "name": "The Last Generator", "parent": "rod", "tab": "space",
+		"desc": "Build a Reactor. It runs for minutes on one rod.",
+		"icon": "REACTOR"},
 	{"id": "charged", "name": "Charged", "parent": "generator", "tab": "space",
 		"desc": "Fill a battery at a Generator.", "icon": "BATTERY"},
 	{"id": "shippower", "name": "Ship Power", "parent": "charged sealed", "tab": "space",
@@ -171,6 +180,9 @@ static func icon_id(d: Dictionary) -> int:
 		"JOURNAL": return Blocks.JOURNAL
 		"BOAT": return Blocks.BOAT
 		"COAL": return Blocks.COAL
+		"SOLAR_ARRAY": return Blocks.SOLAR_ARRAY
+		"REACTOR": return Blocks.REACTOR
+		"FUEL_ROD": return Blocks.FUEL_ROD
 		"BAR": return Blocks.BAR
 		"SHEET": return Blocks.SHEET
 		"SCRAP": return Blocks.SCRAP

@@ -2117,7 +2117,7 @@ func station_grid_generators(st: Station) -> Array:
 		for n in _NEIGH6:
 			var a: Vector3i = w + n
 			var other = _placed_at.get(a)
-			if other != null and is_instance_valid(other) and other.kind == Blocks.GENERATOR:
+			if other != null and is_instance_valid(other) and Blocks.makes_power(other.kind):
 				gens[other] = true
 			if Blocks.bottom_of(get_id(a)) == Blocks.WIRE and not wires.has(a) \
 					and wires.size() < GRID_MAX:
@@ -2261,7 +2261,7 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 		var st: Station = sv as Station
 		if st == null or not is_instance_valid(st):
 			continue
-		if st.kind == Blocks.GENERATOR:
+		if Blocks.makes_power(st.kind):
 			gset[st] = true
 			room_gens.append(st)
 		else:
@@ -2278,7 +2278,7 @@ func update_base(v: Vector3i, delta: float) -> Dictionary:
 	gens = gset.keys()
 	for g in gens:
 		out["power"] += (g as Station).power
-		out["power_max"] += Station.POWER_MAX
+		out["power_max"] += (g as Station).power_cap()
 	out["gen"] = not gens.is_empty()
 	out["ls"] = ls != null
 	out["heater"] = heater != null

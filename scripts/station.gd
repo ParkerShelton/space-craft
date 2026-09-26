@@ -50,7 +50,14 @@ var active := true
 var switched_on := true
 
 # --- power ---
+## The old single ceiling. Kept because the base-status readout still totals
+## against it; a station's real limit is Blocks.power_store of its kind.
 const POWER_MAX := 1000.0
+
+
+## What THIS station can hold.
+func power_cap() -> float:
+	return Blocks.power_store(kind)
 var power := 0.0
 var burn_t := 0.0          # seconds left on the current unit of fuel
 var burn_rate := 0.0       # power/sec it is producing while that burns
@@ -89,6 +96,10 @@ static func capacity_of(k: int) -> int:
 		return CHEST_WIDE_SLOTS
 	if k == Blocks.CARGO_MODULE:
 		return CARGO_SLOTS
+	if k == Blocks.SOLAR_ARRAY:
+		return 1   # the battery cradle, and nothing to feed it
+	if k == Blocks.REACTOR:
+		return 2   # cradle and rod bay, the same two bays a Generator has
 	if k == Blocks.POWER_BAY:
 		return 1   # one battery, seated in the cradle -- no inventory to open
 	if k == Blocks.ANVIL:
@@ -256,17 +267,16 @@ func _build_visual() -> void:
 		_anvil_shown = "-"
 		_mi.mesh = StationModels.anvil_mesh("", Color.WHITE)
 		_refresh_anvil.call_deferred()
-	elif kind == Blocks.GENERATOR:
+	elif Blocks.makes_power(kind):
 		_gen_shown = gen_state()
-		_mi.mesh = StationModels.generator_mesh(_gen_shown.r > 0.5, _gen_shown.g,
-			_gen_shown.b > 0.5, _gen_shown.a)
+		_mi.mesh = _power_mesh(_gen_shown)
 		if _lever == null:
 			# A node of its own, hinged where it meets the case, so throwing it
 			# is a thing that happens rather than two pictures.
 			_lever = MeshInstance3D.new()
 			_lever.mesh = StationModels.mesh_from_boxes(
 				StationModels.generator_lever_boxes())
-			_lever.position = StationModels.GEN_LEVER + Vector3(0, -0.5, 0)
+			_lever.position = _lever_at() + Vector3(0, -0.5, 0)
 			_lever_t = 1.0 if switched_on else 0.0
 			_lever.rotation.x = lever_angle(_lever_t)
 			add_child(_lever)
@@ -574,7 +584,7 @@ func _affordable(reqs: Array) -> int:
 ## Combustion, so which ore you shovel in genuinely matters -- and a damaged
 ## structure produces nothing until its missing block is replaced.
 func _tick_generator(delta: float) -> void:
-	if kind != Blocks.GENERATOR:
+	if kind != Blocks.GENERATOR and kind != Blocks.REACTOR:
 		return
 	if not active or not switched_on:
 		# Thrown off mid-burn, what is in the firebox stays in it. Coming back
@@ -583,11 +593,11 @@ func _tick_generator(delta: float) -> void:
 		return
 	if burn_t > 0.0:
 		burn_t -= delta
-		power = minf(power + burn_rate * delta, POWER_MAX)
+		power = minf(power + burn_rate * delta, power_cap())
 		if burn_t > 0.0:
 			return
 		burn_rate = 0.0
-	if power >= POWER_MAX:
+	if power >= power_cap():
 		return   # full: don't waste fuel
 	# Only the hopper burns. The cradle is not a place to keep ore, and any
 	# old slots left over from the six-slot bunker are just holding things.
@@ -596,7 +606,10 @@ func _tick_generator(delta: float) -> void:
 		return
 	var props: Dictionary = s.get("props", {})
 	var fuel_id := int(s["id"])
-	if not Blocks.is_fuel(fuel_id, props):
+	if kind == Blocks.REACTOR:
+		if fuel_id != Blocks.FUEL_ROD:
+			return
+	elif not Blocks.is_fuel(fuel_id, props):
 		return
 	s["count"] = int(s["count"]) - 1
 	if int(s["count"]) <= 0:
@@ -604,8 +617,15 @@ func _tick_generator(delta: float) -> void:
 		s["props"] = {}
 		s["src"] = ""
 		s["mat"] = {}
-	burn_t = Blocks.fuel_burn_time(props, fuel_id)
-	burn_rate = Blocks.fuel_power_rate(props, fuel_id)
+	if kind == Blocks.REACTOR:
+		# A rod runs for minutes, not seconds, and how hard is the ENERGY of the
+		# ore it was made from -- the property that until now only ever decided
+		# how hard a thruster pushed.
+		burn_t = Blocks.rod_burn_time(props)
+		burn_rate = Blocks.rod_power_rate(props)
+	else:
+		burn_t = Blocks.fuel_burn_time(props, fuel_id)
+		burn_rate = Blocks.fuel_power_rate(props, fuel_id)
 
 
 ## What a battery holds if nothing says otherwise. A real one asks its own
@@ -636,6 +656,7 @@ func gen_has_battery() -> bool:
 ## What the model is currently showing: battery seated, its charge, burning,
 ## how full the machine's own store is.
 func gen_state() -> Color:
+	# Solar has nothing burning; a reactor is "running" while a rod is in it.
 	var seated := gen_has_battery()
 	var f := 0.0
 	if seated:
@@ -643,18 +664,39 @@ func gen_state() -> Color:
 		f = clampf(float(props.get("charge", 0.0)) / Blocks.battery_capacity(props),
 			0.0, 1.0)
 	return Color(1.0 if seated else 0.0, snappedf(f, 0.04),
-		1.0 if burn_t > 0.0 else 0.0, snappedf(power / POWER_MAX, 0.04))
+		1.0 if burn_t > 0.0 else 0.0, snappedf(power / power_cap(), 0.04))
+
+
+## The model for whichever power station this is. They share a cradle, a lever
+## and a gauge; what differs is the machine behind them.
+func _power_mesh(st: Color) -> ArrayMesh:
+	match kind:
+		Blocks.SOLAR_ARRAY:
+			return StationModels.solar_mesh(st.r > 0.5, st.g, st.a)
+		Blocks.REACTOR:
+			return StationModels.reactor_mesh(st.r > 0.5, st.g, st.b > 0.5, st.a)
+	return StationModels.generator_mesh(st.r > 0.5, st.g, st.b > 0.5, st.a)
+
+
+## Where this one's lever turns.
+func _lever_at() -> Vector3:
+	match kind:
+		Blocks.SOLAR_ARRAY:
+			return Vector3(0.62, 0.20, -0.44)
+		Blocks.REACTOR:
+			return Vector3(0.34, 0.30, -0.47)
+	return StationModels.GEN_LEVER
 
 
 ## Keep the model looking like what is in it and what it is doing.
 func _refresh_gen() -> void:
-	if kind != Blocks.GENERATOR or headless or _mi == null:
+	if not Blocks.makes_power(kind) or headless or _mi == null:
 		return
 	var want := gen_state()
 	if want.is_equal_approx(_gen_shown):
 		return
 	_gen_shown = want
-	_mi.mesh = StationModels.generator_mesh(want.r > 0.5, want.g, want.b > 0.5, want.a)
+	_mi.mesh = _power_mesh(want)
 
 
 ## Swap what is in the cradle for what you are holding. Either side may be
@@ -1230,11 +1272,50 @@ func _tick_lever(delta: float) -> void:
 	_lever.rotation.x = lever_angle(_lever_t)
 
 
+## A Solar Array. No fuel, no hopper, nothing to come back and refill -- and
+## nothing at all once the sun is down, which is the trade. It fills its store
+## through the day and you spend it through the night, so the size of that
+## store is the point of the machine rather than a number on the side of it.
+##
+## How good YOUR array is depends on what it was built from: Reactivity is how
+## well a material carries a current, so a panel of good stock wastes less on
+## the way out. The ore you sorted still matters here -- it is simply a
+## different pile from the one a Generator wanted.
+func _tick_solar(delta: float) -> void:
+	if kind != Blocks.SOLAR_ARRAY or not switched_on or not active:
+		return
+	if power >= power_cap():
+		return
+	var sun := 0.0
+	var main := Engine.get_main_loop()
+	var scene = (main as SceneTree).current_scene if main is SceneTree else null
+	if scene != null and scene.has_method("daylight"):
+		sun = float(scene.call("daylight"))
+	if sun <= 0.001:
+		return
+	# Underground it sees nothing, however bright it is outside.
+	if world != null:
+		var pl: Planet = world.nearest_planet(global_position)
+		if pl != null and pl.altitude(global_position) < -1.0:
+			return
+	power = minf(power + Blocks.solar_output(_solar_props()) * sun * delta, power_cap())
+
+
+## What the panel was built from. Stations do not carry a material today, so it
+## takes one from whatever battery is seated in it and falls back to middling
+## stock -- which keeps the property meaningful without inventing a whole
+## material system for stations first.
+func _solar_props() -> Dictionary:
+	var slot := gen_battery()
+	var pr: Dictionary = slot.get("props", {})
+	return pr if not pr.is_empty() else {"r": 40}
+
+
 ## The battery in a Generator's cradle soaks up its output. This is the only way
 ## to get power off a planet, so it is deliberately the simplest possible
 ## action: seat one and wait. Switched off, nothing flows.
 func _tick_batteries(delta: float) -> void:
-	if kind != Blocks.GENERATOR or power <= 0.0 or not switched_on or not active:
+	if not Blocks.makes_power(kind) or power <= 0.0 or not switched_on or not active:
 		return
 	if not gen_has_battery():
 		return
@@ -1416,6 +1497,7 @@ func _process(delta: float) -> void:
 	_tick_lid(delta)
 	_tick_lever(delta)
 	_tick_generator(delta)
+	_tick_solar(delta)
 	_tick_batteries(delta)
 	_tick_power_bay(delta)
 	_refresh_gen()

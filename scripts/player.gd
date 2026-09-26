@@ -2071,6 +2071,8 @@ func _check_advancements() -> void:
 			grant("scrap")
 		elif sid == Blocks.COAL:
 			grant("coal")
+		elif sid == Blocks.FUEL_ROD:
+			grant("rod")
 		elif sid == Blocks.WIRE:
 			grant("wire")
 		elif sid == Blocks.CIRCUIT:
@@ -2086,6 +2088,8 @@ func _check_advancements() -> void:
 				Blocks.SMELTER: grant("smelter")
 				Blocks.ANVIL: grant("anvil")
 				Blocks.GENERATOR: grant("generator")
+				Blocks.SOLAR_ARRAY: grant("solar")
+				Blocks.REACTOR: grant("reactor")
 				Blocks.BED: grant("bed")
 				Blocks.CAMPFIRE: grant("fire")
 				Blocks.SHAPER: grant("shaper")
@@ -6300,7 +6304,7 @@ func _gen_bay_of(cont: String, index: int) -> int:
 	if cont != "stor" or index < 0 or index >= _stor_map.size():
 		return -1
 	var st: Station = _stor_map[index]["st"]
-	if not is_instance_valid(st) or st.kind != Blocks.GENERATOR:
+	if not is_instance_valid(st) or not Blocks.makes_power(st.kind):
 		return -1
 	return int(_stor_map[index]["slot"])
 
@@ -7691,7 +7695,7 @@ func _open_station(st: Station) -> void:
 	_station_store_label.text = "%s contents  (drag to move)" % st.title()
 	if st.kind == Blocks.SHAPER:
 		_station_store_label.text = "Input a block, take the shapes out"
-	var is_gen: bool = st.kind == Blocks.GENERATOR
+	var is_gen: bool = Blocks.makes_power(st.kind)
 	if is_gen:
 		# Each bay carries its own caption (see _build_storage_cells).
 		_station_store_label.text = ""
@@ -7791,9 +7795,10 @@ func _build_storage_cells(st: Station) -> Vector2i:
 		var idx := _stor_map.size()
 		var cell := _make_stor_cell(idx, pl["cx"], pl["cy"])
 		_station_cells.append(cell)
-		if st.kind == Blocks.GENERATOR and int(pl["slot"]) < 2:
+		if Blocks.makes_power(st.kind) and int(pl["slot"]) < 2:
 			var cap := Label.new()
-			cap.text = "BATTERY" if int(pl["slot"]) == 0 else "FUEL"
+			cap.text = "BATTERY" if int(pl["slot"]) == 0 else (
+				"FUEL ROD" if st.kind == Blocks.REACTOR else "FUEL")
 			cap.modulate = Color(1, 1, 1, 0.7)
 			cap.position = Vector2(0, -22)
 			cap.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -7820,7 +7825,7 @@ func _storage_placements(st: Station) -> Array:
 				out.append({"st": cst, "slot": slot,
 					"cx": int(blk["cb"]) * _STORE_COLS + slot % _STORE_COLS,
 					"cy": int(blk["rb"]) * rows + slot / _STORE_COLS})
-	elif st.kind == Blocks.GENERATOR:
+	elif Blocks.makes_power(st.kind):
 		# The cradle and the hopper, set apart so they read as two bays with a
 		# job each rather than a row of storage. Anything left over from when
 		# this was a six-slot bunker sits on a row beneath them to be taken out.
@@ -8007,10 +8012,10 @@ func _refresh_station_ui() -> void:
 	if _station_open.kind != Blocks.SHAPER \
 			and _craft_signature(_station_open) != _craft_sig:
 		_rebuild_craft_buttons(_station_open)
-	if _station_open.kind == Blocks.GENERATOR:
+	if Blocks.makes_power(_station_open.kind):
 		# No button here: the lever on the front of the machine is the switch,
 		# and one switch in two places is two things to keep in step.
-		_preview_label.text = _craft_preview_text(Blocks.GENERATOR)
+		_preview_label.text = _craft_preview_text(_station_open.kind)
 		_job_label.visible = false
 		return
 	var craft_key: int = Blocks.SMELTER if Blocks.is_smelter_kind(_station_open.kind) else _station_open.kind
@@ -8070,14 +8075,26 @@ func _station_primary_material(mtype: String) -> Dictionary:
 	return {}
 
 
+## Nothing to load and nothing to run out of: the only question a panel can
+## answer is whether the sun is on it.
+func _solar_line(st: Station) -> String:
+	var main := get_tree().current_scene
+	var sun := 0.0
+	if main != null and main.has_method("daylight"):
+		sun = float(main.call("daylight"))
+	if sun > 0.05:
+		return "In the sun: +%.1f/s" % (Blocks.solar_output(st._solar_props()) * sun)
+	return "Dark. Spend what is banked and wait for morning."
+
+
 func _craft_preview_text(kind: int) -> String:
-	if kind == Blocks.GENERATOR:
+	if Blocks.makes_power(kind):
 		var st := _station_open
 		if st == null:
 			return ""
 		if not st.active:
 			return "DAMAGED — replace the missing block to restart"
-		var pct := 100.0 * st.power / Station.POWER_MAX
+		var pct := 100.0 * st.power / st.power_cap()
 		var lines: Array = ["Stored power %d%%" % int(pct)]
 		if st.gen_has_battery():
 			var bp: Dictionary = st.gen_battery().get("props", {})
@@ -8088,12 +8105,17 @@ func _craft_preview_text(kind: int) -> String:
 			lines.append("No battery in the cradle")
 		if not st.switched_on:
 			lines.append("Switched off.")
-		elif st.burn_t > 0.0:
-			lines.append("Burning: +%.1f/s, %.0fs left on this lump" % [st.burn_rate, st.burn_t])
-		elif int(st.gen_fuel().get("count", 0)) <= 0:
-			lines.append("Hopper empty -- put in ore with Combustion.")
-		elif st.power >= Station.POWER_MAX:
+		elif st.power >= st.power_cap():
 			lines.append("Full -- waiting for somewhere to put it.")
+		elif st.kind == Blocks.SOLAR_ARRAY:
+			lines.append(_solar_line(st))
+		elif st.burn_t > 0.0:
+			var what: String = "this rod" if st.kind == Blocks.REACTOR else "this lump"
+			lines.append("Burning: +%.1f/s, %.0fs left on %s"
+				% [st.burn_rate, st.burn_t, what])
+		elif int(st.gen_fuel().get("count", 0)) <= 0:
+			lines.append("Bay empty -- put in a Fuel Rod." if st.kind == Blocks.REACTOR
+				else "Hopper empty -- put in ore or coal.")
 		else:
 			lines.append("Idle.")
 		return "\n".join(lines)
@@ -8231,7 +8253,7 @@ func _update_ui() -> void:
 ## and an empty hand at an empty cradle says so rather than doing nothing
 ## silently.
 func _swap_bay_battery(bay: Station) -> void:
-	var is_gen: bool = bay.kind == Blocks.GENERATOR
+	var is_gen: bool = Blocks.makes_power(bay.kind)
 	var held: Dictionary = inv[active_slot] if active_slot >= 0 and active_slot < inv.size() else {}
 	var holding_battery: bool = Station.holds_power(int(held.get("id", Blocks.AIR))) \
 		and int(held.get("count", 0)) > 0
@@ -8280,7 +8302,7 @@ func _swap_bay_battery(bay: Station) -> void:
 ## hopper beside it takes the fuel in your hand or gives back what is in it.
 ## Anywhere else on it opens its panel. Returns whether a part was used.
 func _use_generator_part(st: Station) -> bool:
-	if st.kind != Blocks.GENERATOR or st.headless or not _ray.is_colliding():
+	if not Blocks.makes_power(st.kind) or st.headless or not _ray.is_colliding():
 		return false
 	# Into the model's own space, which stands on the floor of its cell.
 	var p: Vector3 = st.to_local(_ray.get_collision_point()) + Vector3(0, 0.5, 0)

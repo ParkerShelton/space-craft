@@ -895,6 +895,68 @@ const CARGO_MODULE := 214  # press + fabricator stock: banks with its neighbours
 ## It keeps the props of the ore it came from, so a fiercer seam still makes
 ## fiercer coal.
 const COAL := 215
+
+# --- the power tiers -------------------------------------------------------------
+#
+# Three generators, and the later ones DO make the earlier one obsolete. That is
+# the point of them: a stone pick stops being worth carrying the day you make a
+# drill, and nobody mourns it. What keeps the choice alive is not that the old
+# one stays competitive -- it is that each tier asks a different question of the
+# ore you feed it.
+#
+#   Generator      burns ore and coal.   Combustion decides how well.
+#   Solar Array    burns nothing.        Reactivity decides how well.
+#   Reactor        burns fuel rods.      Energy decides how well.
+#
+# So the property that matters moves as you climb, and the pile you sorted for
+# one tier is not the pile the next one wants.
+const SOLAR_ARRAY := 216
+const REACTOR := 217
+## What a Reactor eats: ingots sealed in a sheet casing. It takes its material
+## from the ingots, and a rod's worth of output is that ore's ENERGY -- the
+## property that until now only ever decided how hard a thruster pushed.
+const FUEL_ROD := 218
+
+
+## Does this station make power? Anything here feeds a base and charges a
+## battery in its cradle; nothing else needs to know which kind it is.
+static func makes_power(kind: int) -> bool:
+	return kind == GENERATOR or kind == SOLAR_ARRAY or kind == REACTOR
+
+
+## How much a power station can hold. A later tier is worth building partly
+## because it can bank a day's worth rather than a lump's worth.
+static func power_store(kind: int) -> float:
+	match kind:
+		SOLAR_ARRAY: return 2200.0
+		REACTOR: return 6000.0
+	return 1000.0
+
+
+## How fast it pushes charge into a battery sitting in its cradle.
+static func charge_rate(kind: int) -> float:
+	match kind:
+		SOLAR_ARRAY: return 60.0
+		REACTOR: return 160.0
+	return 45.0
+
+
+## What a Solar Array makes in full, unobstructed daylight, before the sun's
+## height and the weather are taken off it. Built from a good conductor it
+## wastes less on the way out of the panel, so Reactivity still decides how
+## good YOUR array is.
+static func solar_output(props: Dictionary) -> float:
+	return 4.0 + float(conductivity_of(props)) / 14.0     # ~4 .. 11 power/sec
+
+
+## A fuel rod runs for a long time and hard, and how hard is the Energy of the
+## ore it was made from -- the same number that decides a thruster's push.
+static func rod_burn_time(props: Dictionary) -> float:
+	return 90.0 + float(props.get("e", 40)) * 1.8         # ~90 .. 270 seconds
+
+
+static func rod_power_rate(props: Dictionary) -> float:
+	return 8.0 + float(props.get("e", 40)) * 0.16         # ~8 .. 24 power/sec
 ## How good the ore has to be. Signature ores roll 88-100; ordinary ores stop
 ## at ORDINARY_PROP_CAP.
 const WARP_GRADE := {"e": 80, "c": 85, "r": 80, "d": 85}
@@ -1068,6 +1130,14 @@ const STATION_BUILDS := [
 		{"any": WOOD_IDS, "n": 4, "label": "Wood"}]},
 	{"kind": GENERATOR, "reqs": [{"id": PLATE, "n": 10}, {"id": WIRE, "n": 4}]},
 	{"kind": POWER_BAY, "reqs": [{"id": PLATE, "n": 12}, {"id": BATTERY, "n": 1}]},
+	# Glass to catch the light, plate to stand it on, circuitry to get the
+	# current out of it. No fuel ever again -- but only while the sun is up.
+	{"kind": SOLAR_ARRAY, "reqs": [{"id": GLASS, "n": 10}, {"id": PLATE, "n": 8},
+		{"id": CIRCUIT, "n": 3}]},
+	# The last one you build. Alloy for the shielding, a machine core for the
+	# thing in the middle of it, and enough circuitry to keep it honest.
+	{"kind": REACTOR, "reqs": [{"id": PLATE, "n": 16}, {"id": ALLOY, "n": 8},
+		{"id": CIRCUIT, "n": 6}, {"id": MACHINE_CORE, "n": 1}]},
 	{"kind": HEATER, "reqs": [{"any": STONE_IDS, "n": 10, "label": "Rock"},
 		{"id": PLATE, "n": 6}]},
 	{"kind": COOLER, "reqs": [{"id": GLASS, "n": 6}, {"id": PLATE, "n": 10}]},
@@ -1090,7 +1160,7 @@ const STATION_CATEGORIES := [
 	{"name": "Containers", "icon": CHEST, "kinds": [CHEST, CHEST_WIDE, CARGO_MODULE]},
 	{"name": "Crafters", "icon": CARPENTER, "kinds": [CARPENTER, SHAPER, FABRICATOR, SHIPWORKS]},
 	{"name": "Smelters", "icon": SMELTER, "kinds": [SMELTER]},
-	{"name": "Power", "icon": GENERATOR, "kinds": [GENERATOR, POWER_BAY]},
+	{"name": "Power", "icon": GENERATOR, "kinds": [GENERATOR, SOLAR_ARRAY, REACTOR, POWER_BAY]},
 	{"name": "Climate", "icon": OXYGEN_PLANT, "kinds": [OXYGEN_PLANT, HEATER, COOLER, CLIMATE_UNIT]},
 ]
 
@@ -1342,6 +1412,9 @@ const PRESS_RECIPES := [
 	{"label": "Wire", "out": WIRE, "n": 8, "yield_from_material": true, "parts": [[BAR, 1]]},
 	{"label": "Battery", "out": BATTERY, "n": 1, "parts": [["ingot", 1], [SHEET, 2]]},
 	{"label": "Machine Core", "out": MACHINE_CORE, "n": 1, "parts": [[BAR, 2], [PLATE, 2]]},
+	# Reactor fuel. The ingots go first so the rod takes THEIR material: how
+	# long it runs and how hard is the Energy of the ore it was made from.
+	{"label": "Fuel Rod", "out": FUEL_ROD, "n": 1, "parts": [["ingot", 2], [SHEET, 1]]},
 	{"label": "Circuitry x2", "out": CIRCUIT, "n": 2, "parts": [[SHEET, 1], [WIRE, 2]]},
 	{"label": "Glow Lamp x2", "out": GLOW_LAMP, "n": 2, "parts": [[SHEET, 1], [CRYSTAL, 1]]},
 	{"label": "Bucket", "out": BUCKET, "n": 1, "parts": [[SHEET, 2]]},
@@ -1669,6 +1742,9 @@ const NAMES := {
 	GENERATOR: "Generator",
 	CHEST_WIDE: "Wide Chest",
 	COAL: "Coal",
+	SOLAR_ARRAY: "Solar Array",
+	REACTOR: "Reactor",
+	FUEL_ROD: "Fuel Rod",
 	CARGO_MODULE: "Cargo Module",
 	OXYGEN_PLANT: "Oxygen Plant",
 	HEATER: "Heater",
@@ -1852,6 +1928,9 @@ const COLORS := {
 	GENERATOR: Color(0.62, 0.45, 0.28),
 	CHEST_WIDE: Color(0.46, 0.31, 0.17),
 	COAL: Color(0.13, 0.12, 0.13),
+	SOLAR_ARRAY: Color(0.22, 0.30, 0.46),
+	REACTOR: Color(0.34, 0.44, 0.40),
+	FUEL_ROD: Color(0.45, 0.78, 0.42),
 	CARGO_MODULE: Color(0.42, 0.52, 0.58),
 	OXYGEN_PLANT: Color(0.42, 0.68, 0.78),
 	HEATER: Color(0.74, 0.40, 0.26),

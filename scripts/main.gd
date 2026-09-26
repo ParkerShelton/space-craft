@@ -124,6 +124,12 @@ var _overcast := 0.0
 var _sun: DirectionalLight3D
 var _atmo := 0.0
 var _day := 1.0                    # 0 = night, 1 = full day (eased, see _process)
+
+
+## How much sun is falling on the open ground right now, 0..1. A Solar Array
+## asks this; nothing else about the day/night cycle has to be public for it.
+func daylight() -> float:
+	return clampf(_day * (1.0 - 0.55 * _overcast), 0.0, 1.0)
 var _menu_layer: CanvasLayer
 var _net: Net
 var _join_ip: LineEdit
@@ -2850,7 +2856,7 @@ func _process(delta: float) -> void:
 		pl.day_phase = fposmod(pl.day_phase + delta / maxf(pl.day_length, 1.0), 1.0)
 
 	var sun_dir := Vector3(0.3, -0.8, 0.4).normalized()   # fixed light in space
-	var daylight := 1.0
+	var sun_lit := 1.0
 	var sun_height := 1.0   # 1 overhead, 0 at the horizon, negative at night
 	if p != null:
 		# A basis on the planet's own up, so the sun tracks across ITS sky.
@@ -2867,8 +2873,8 @@ func _process(delta: float) -> void:
 		# An atmosphere scatters light, so dusk lingers and night keeps a little
 		# blue. Without one it's a hard terminator -- glare or nothing.
 		var soft: float = 0.22 if p.has_atmosphere else 0.04
-		daylight = clampf(smoothstep(-soft, soft, sun_height), 0.0, 1.0)
-	_day = lerpf(_day, daylight, clampf(delta * 3.0, 0.0, 1.0))
+		sun_lit = clampf(smoothstep(-soft, soft, sun_height), 0.0, 1.0)
+	_day = lerpf(_day, sun_lit, clampf(delta * 3.0, 0.0, 1.0))
 
 	# Redden the sky near the horizon crossing, then drain it toward night.
 	var dusk := 1.0 - absf(_day * 2.0 - 1.0)          # peaks mid-transition

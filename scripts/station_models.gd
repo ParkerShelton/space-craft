@@ -22,6 +22,8 @@ const FOOTPRINT := {
 	Blocks.SHAPER: Vector3i(2, 1, 1),
 	Blocks.SMELTER: Vector3i(1, 2, 1),
 	Blocks.GENERATOR: Vector3i(1, 1, 1),
+	Blocks.SOLAR_ARRAY: Vector3i(2, 1, 1),
+	Blocks.REACTOR: Vector3i(1, 2, 1),
 	Blocks.POWER_BAY: Vector3i(1, 1, 1),
 	Blocks.OXYGEN_PLANT: Vector3i(1, 2, 1),
 	Blocks.HEATER: Vector3i(1, 1, 1),
@@ -90,6 +92,10 @@ static func boxes_for(kind: int) -> Array:
 			return smelter_boxes(true)
 		Blocks.GENERATOR:
 			return generator_boxes(false, 0.0, false, 0.0)
+		Blocks.SOLAR_ARRAY:
+			return solar_boxes(false, 0.0, 0.0)
+		Blocks.REACTOR:
+			return reactor_boxes(false, 0.0, false, 0.0)
 		Blocks.POWER_BAY:
 			return power_bay_boxes(false, 0.0)
 		Blocks.ANVIL:
@@ -902,6 +908,163 @@ static func press_mesh(parts: Array, output: Dictionary) -> ArrayMesh:
 		boxes.append_array(press_item_boxes(output,
 			Vector3(PRESS_BED_X, PRESS_BED_Y, 0), 0.42))
 	return _mesh_from(boxes)
+
+
+# --- the later power tiers -------------------------------------------------------
+
+## A Solar Array: two cells of tilted glass on a low frame, a cradle for a
+## battery at one end and the same lever every power station has. No hopper,
+## no firebox, no chimney -- what it does NOT have is most of what it is.
+static func solar_boxes(has_battery: bool, charge: float, power: float) -> Array:
+	const FRAME := Color(0.38, 0.41, 0.46)
+	const DEEP := Color(0.15, 0.17, 0.20)
+	const CELL := Color(0.16, 0.21, 0.34)
+	const GRID := Color(0.30, 0.40, 0.58)
+	const TRACK := Color(0.09, 0.10, 0.12)
+	var out: Array = [
+		[Vector3(0, 0.10, 0), Vector3(1.86, 0.20, 0.86), DEEP],
+	]
+	for sx in [-0.72, 0.0, 0.72]:
+		out.append([Vector3(sx, 0.26, 0), Vector3(0.12, 0.34, 0.12), FRAME])
+	# The panel itself, stepped rather than tilted -- boxes cannot lean, and a
+	# staircase of four reads as a slope well enough at this size.
+	for i in 4:
+		var t: float = float(i) / 3.0
+		out.append([Vector3(0, 0.46 + t * 0.20, -0.30 + t * 0.20),
+			Vector3(1.80, 0.06, 0.24), CELL])
+		out.append([Vector3(0, 0.50 + t * 0.20, -0.30 + t * 0.20),
+			Vector3(1.72, 0.015, 0.03), GRID])
+	# Cradle on the left-hand end of the frame.
+	out.append_array(_cradle_boxes(Vector3(-0.66, 0.20, 0.0), has_battery, FRAME, DEEP))
+	if has_battery:
+		out.append_array(_seated_battery(Vector3(-0.66, 0.20, 0.0)))
+	out.append([Vector3(0.62, 0.30, -0.44), Vector3(0.40, 0.06, 0.03), TRACK])
+	return out
+
+
+static func solar_lit(power: float, has_battery: bool, charge: float) -> Array:
+	var out: Array = []
+	var f := clampf(power, 0.0, 1.0)
+	if f > 0.001:
+		var w: float = 0.38 * f
+		out.append([Vector3(0.43 + w * 0.5, 0.30, -0.455), Vector3(w, 0.045, 0.03),
+			gauge_colour(f)])
+	out.append_array(_battery_gauge(Vector3(-0.66, 0.20, 0.0), has_battery, charge))
+	return out
+
+
+static func solar_mesh(has_battery: bool, charge: float, power: float) -> ArrayMesh:
+	return _lit_mesh(solar_boxes(has_battery, charge, power),
+		solar_lit(power, has_battery, charge))
+
+
+## A Reactor: a shielded column two cells tall with a rod bay in its face, a
+## cradle on the side and a coolant stack up the back. Deliberately the biggest
+## thing you can build that is not a building.
+static func reactor_boxes(has_battery: bool, charge: float, running: bool,
+		power: float) -> Array:
+	const SHELL := Color(0.34, 0.40, 0.38)
+	const DEEP := Color(0.13, 0.16, 0.16)
+	const TRIM := Color(0.56, 0.62, 0.60)
+	const TRACK := Color(0.09, 0.10, 0.12)
+	var out: Array = [
+		[Vector3(0, 0.90, 0), Vector3(0.92, 1.76, 0.92), SHELL],
+		[Vector3(0, 0.06, 0), Vector3(0.98, 0.12, 0.98), DEEP],
+		[Vector3(0, 1.80, 0), Vector3(0.98, 0.10, 0.98), DEEP],
+	]
+	# Shielding bands, which is most of what makes it read as a reactor.
+	for y in [0.42, 0.90, 1.38]:
+		out.append([Vector3(0, y, 0), Vector3(0.98, 0.09, 0.98), TRIM])
+	# The rod bay: a slot in the front face at chest height.
+	out.append([Vector3(0, 1.10, -0.45), Vector3(0.44, 0.44, 0.06), DEEP])
+	out.append([Vector3(0, 1.10, -0.48), Vector3(0.30, 0.30, 0.03), Color(0.07, 0.09, 0.09)])
+	# Coolant stack up the back.
+	out.append([Vector3(0.30, 1.30, 0.40), Vector3(0.18, 1.10, 0.18), TRIM])
+	out.append([Vector3(-0.30, 1.30, 0.40), Vector3(0.18, 1.10, 0.18), TRIM])
+	# Cradle on the right-hand side, at the same height a Generator's sits.
+	out.append_array(_cradle_boxes(Vector3(0.0, 1.86, 0.0), has_battery, SHELL, DEEP))
+	if has_battery:
+		out.append_array(_seated_battery(Vector3(0.0, 1.86, 0.0)))
+	out.append([Vector3(0, 0.66, -0.47), Vector3(0.52, 0.07, 0.04), TRACK])
+	return out
+
+
+static func reactor_lit(running: bool, power: float, has_battery: bool,
+		charge: float) -> Array:
+	const GLOW_G := Color(0.45, 1.0, 0.55)
+	var out: Array = []
+	if running:
+		out.append([Vector3(0, 1.10, -0.50), Vector3(0.26, 0.26, 0.03), GLOW_G])
+	var f := clampf(power, 0.0, 1.0)
+	if f > 0.001:
+		var w: float = 0.50 * f
+		out.append([Vector3(-0.25 + w * 0.5, 0.66, -0.495), Vector3(w, 0.05, 0.03),
+			gauge_colour(f)])
+	out.append_array(_battery_gauge(Vector3(0.0, 1.86, 0.0), has_battery, charge))
+	return out
+
+
+static func reactor_mesh(has_battery: bool, charge: float, running: bool,
+		power: float) -> ArrayMesh:
+	return _lit_mesh(reactor_boxes(has_battery, charge, running, power),
+		reactor_lit(running, power, has_battery, charge))
+
+
+## The four-armed cradle every power station holds a battery in, at `at`. One
+## shape wherever you meet it, so a cradle is always a cradle.
+static func _cradle_boxes(at: Vector3, has_battery: bool, case: Color,
+		deep: Color) -> Array:
+	const CONT := Color(0.74, 0.62, 0.30)
+	var out: Array = [
+		[at + Vector3(0, 0.03, 0), Vector3(0.44, 0.06, 0.44), deep],
+		[at + Vector3(0, 0.07, 0), Vector3(0.20, 0.04, 0.20), CONT],
+	]
+	var grip: float = 0.04 if has_battery else 0.0
+	var lean: float = 0.0 if has_battery else 0.05
+	for d in [Vector3(1, 0, 0), Vector3(-1, 0, 0), Vector3(0, 0, 1), Vector3(0, 0, -1)]:
+		var dir: Vector3 = d
+		var across := Vector3(absf(dir.z), 0, absf(dir.x))
+		var post: Vector3 = dir * (0.19 + lean)
+		out.append([at + Vector3(post.x, 0.13, post.z),
+			Vector3(0.07 + across.x * 0.13, 0.18, 0.07 + across.z * 0.13), case])
+		var tip: Vector3 = dir * (0.17 + lean - grip)
+		out.append([at + Vector3(tip.x, 0.23, tip.z),
+			Vector3(0.08 + across.x * 0.16, 0.06, 0.08 + across.z * 0.16), CONT])
+	return out
+
+
+static func _seated_battery(at: Vector3) -> Array:
+	var out: Array = []
+	for b in battery_boxes(0.0):
+		var bb: Array = b
+		var c: Vector3 = bb[0]
+		out.append([at + Vector3(c.x * 0.66, 0.08 + c.y * 0.66, c.z * 0.66),
+			(bb[1] as Vector3) * 0.66, bb[2]])
+	return out
+
+
+static func _battery_gauge(at: Vector3, has_battery: bool, charge: float) -> Array:
+	if not has_battery or charge <= 0.001:
+		return []
+	var h: float = (G1 - G0) * 0.66 * clampf(charge, 0.0, 1.0)
+	return [[at + Vector3(0, 0.08 + (G0 - BATT_Y0) * 0.66 + h * 0.5, GZ * 0.66 - 0.012),
+		Vector3(0.10, h, 0.03), gauge_colour(charge)]]
+
+
+## Body plus an unshaded surface for whatever is lit on it.
+static func _lit_mesh(body: Array, lit: Array) -> ArrayMesh:
+	var m := _mesh_from(body)
+	if lit.is_empty():
+		return m
+	var sub := _mesh_from(lit)
+	if sub.get_surface_count() == 0:
+		return m
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, sub.surface_get_arrays(0))
+	m.surface_set_material(m.get_surface_count() - 1, mat)
+	return m
 
 
 ## Where a chest's lid is hinged: the top of the back edge, so it swings up and

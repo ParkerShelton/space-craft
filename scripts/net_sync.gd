@@ -462,7 +462,7 @@ func apply_station(d: Dictionary) -> void:
 	# Filled in place, not swapped for a new array: an open chest window is
 	# looking at this one.
 	st.storage.assign((d.get("storage", []) as Array).duplicate(true))
-	if st.kind == Blocks.GENERATOR:
+	if Blocks.makes_power(st.kind):
 		if st.switched_on != bool(d.get("on", true)):
 			st.set_switched(bool(d.get("on", true)))
 		st.power = float(d.get("power", st.power))

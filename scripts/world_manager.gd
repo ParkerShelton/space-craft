@@ -456,7 +456,7 @@ func save_game() -> bool:
 		if not is_instance_valid(st):
 			continue
 		var entry := {"kind": st.kind, "storage": st.storage, "nid": st.net_id}
-		if st.kind == Blocks.GENERATOR:
+		if Blocks.makes_power(st.kind):
 			# Which way the lever is thrown and what it had banked, or every
 			# load would switch your generators back on and empty them.
 			entry["on"] = st.switched_on
@@ -602,7 +602,7 @@ func load_game() -> bool:
 		station.net_id = str(std.get("nid", ""))
 		if skind == Blocks.ANVIL:
 			station._refresh_anvil()   # whatever was left on it, drawn there
-		if skind == Blocks.GENERATOR:
+		if Blocks.makes_power(skind):
 			station.migrate_generator()
 			station.set_switched(bool(std.get("on", true)))
 			station.power = float(std.get("power", 0.0))
