@@ -548,6 +548,67 @@ const CHARGE_DRAIN := 0.0035  # per second while life support is running
 ## tells you something that "0.69" does not, and the scrubber panel is meant to
 ## be read at a glance while the alarm is going.
 const AIR_LITRES := 600.0
+
+# --- what flying costs -----------------------------------------------------------
+#
+# Thrust runs the tanks down. Not by the second -- by the BURN.
+#
+# Charging for every moment in the air would make power the only thing anybody
+# ever did, and a long trip would cost more than a short one for no reason a
+# pilot would recognise. Nothing slows a ship down out there, so holding a
+# course costs nothing: you pay to get off the ground, you pay to stop, and
+# the middle is free. Power is a launch budget, not a tax.
+#
+# The draw follows the thrust actually commanded, so a heavier hull costs more
+# -- but a heavier hull also has the room for more batteries and another power
+# bay, so it pays for itself. What it does not do is punish you for building
+# big.
+#
+# Tuned against the ship the game hands you: about a hundred and fifty blocks,
+# seven hundred and fifty of thrust to make the five metres per second squared
+# it wants. At full burn that empties a full tank in four minutes, so a launch
+# and a landing is roughly a third of it -- a battery or two a trip, not ten.
+const THRUST_DRAIN := 0.0000056
+## What is left when the tank is dry. Enough to set down badly, never enough to
+## go anywhere: running out should strand you on the ground, not in the sky.
+const DRY_THRUST := 0.10
+## A jump, as a fraction of a full tank. On its OWN budget: crossing between
+## stars is meant to be the expensive thing, and tying it to the same number
+## that pays for taking off means tuning one ruins the other. Two thirds, so a
+## full tank is a jump with enough left to land at the far end -- and a jump
+## you cannot make yet is a reason to sit on a planet and charge.
+const WARP_COST := 0.66
+
+
+## Can this ship make a jump, and what it would leave her with.
+func can_warp() -> bool:
+	return has_warp_drive() and charge >= WARP_COST
+
+
+func spend_warp() -> void:
+	charge = maxf(charge - WARP_COST, 0.0)
+
+
+## How hard the pilot is asking, 0 to 1, however they are flying.
+static func wish_raw(input: Dictionary) -> float:
+	var mv: Vector2 = input["move"]
+	return absf(mv.x) + absf(mv.y) + absf(float(input["ascend"]))
+
+
+## What fraction of its engines a ship can actually light right now.
+func power_factor() -> float:
+	return 1.0 if charge > 0.0 else DRY_THRUST
+
+
+## Burn charge for a commanded thrust. `amount` is in the same units as
+## flight_stats().thrust; returns what the engines really manage.
+func _burn_for_thrust(amount: float, delta: float) -> float:
+	if amount <= 0.0:
+		return 0.0
+	if charge <= 0.0:
+		return DRY_THRUST
+	charge = maxf(charge - amount * THRUST_DRAIN * delta, 0.0)
+	return 1.0
 ## Lifetime totals, for the same panel: how much air has been put into the tank
 ## and how much has been breathed out of it since this hull was built.
 var air_made := 0.0
@@ -835,6 +896,13 @@ func trim_error() -> float:
 
 
 ## Everything the computer needs to say about how she flies.
+## How long the tanks would hold out at full burn, in seconds.
+func burn_endurance() -> float:
+	if _thrust_total <= 0.0:
+		return 0.0
+	return charge / (_thrust_total * THRUST_DRAIN)
+
+
 func flight_stats() -> Dictionary:
 	var accel := thrust_accel()
 	var per: float = _thrust_total / float(maxi(_thrusters, 1))
@@ -924,6 +992,10 @@ func _fly_free(delta: float, input: Dictionary, g: Vector3) -> void:
 	var acc := thrust_accel()
 	var wish_local := Vector3(move.x, float(input["ascend"]), -move.y)
 	_apply_trim_torque(wish_local, delta)
+	# Only what you are actually asking for is paid for. Coasting is free.
+	var asked: float = absf(move.y) + absf(move.x) + absf(float(input["ascend"]))
+	var lit := _burn_for_thrust(_thrust_total * minf(asked, 1.0), delta)
+	acc *= lit
 	var thrust := (-b.z) * move.y * acc + b.x * move.x * acc + b.y * float(input["ascend"]) * acc
 	velocity += (g + thrust) * delta
 	velocity = velocity.lerp(Vector3.ZERO, clampf(SHIP_DRAG * delta, 0.0, 1.0))
@@ -991,6 +1063,15 @@ func _fly_assisted(delta: float, input: Dictionary, g: Vector3) -> void:
 	# rather than applying thrust, so without this a ship with one engine and
 	# two hundred blocks handled like a racer the moment it neared the ground.
 	_assist_mult = clampf(thrust_accel() / GOOD_ACCEL, 0.35, 1.0)
+	# Hovering is holding yourself up against gravity, which is the one place
+	# where standing still really does cost something -- so assisted flight
+	# pays whether or not you are moving, and pays more the harder you push.
+	# ...but a ship sitting on the ground with your hands off the controls is
+	# not holding itself up, it is parked. Parked is free.
+	var pushing := wish_raw(input)
+	if not (landed and pushing <= 0.01):
+		var asked2: float = 0.35 + 0.65 * minf(pushing, 1.0)
+		_assist_mult *= _burn_for_thrust(_thrust_total * asked2, delta)
 	var wish := camf * move.y + camr * move.x
 	if wish.length() > 1.0:
 		wish = wish.normalized()

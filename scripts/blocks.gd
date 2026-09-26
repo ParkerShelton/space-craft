@@ -410,7 +410,7 @@ const SHAPER := 70       # "Block Shaper" bench: reshape a block into slabs etc.
 const TORCH := 91        # small standing flame: cheap, bright, warm
 const GLOW_LAMP := 92     # full block of steady light, for finished builds
 const EMBER_TORCH := 93   # torch burning a combustible ore -- brightness from its Combustion
-const LIGHT_IDS := [TORCH, GLOW_LAMP, EMBER_TORCH]
+const LIGHT_IDS := [TORCH, GLOW_LAMP, EMBER_TORCH, AURORA_BLOOM]
 
 ## Brightness step baked into a placed ember torch. Packed above the id (the
 ## bits stairs use for facing -- a block is one or the other, never both)
@@ -461,6 +461,11 @@ static func light_def(raw: int) -> Dictionary:
 			"color": Color(1.0, 0.66, 0.30).lerp(Color(1.0, 0.93, 0.72), t / 3.0)}
 	if id == TORCH:
 		return {"range": 14.0, "energy": 1.6, "color": Color(1.0, 0.72, 0.38)}
+	if id == AURORA_BLOOM:
+		# Bright, and the colour of the sky that grew it. Most players will be
+		# indoors or asleep, so a bloom has to be worth noticing through a
+		# window from across a valley.
+		return {"range": 17.0, "energy": 2.1, "color": Color(0.55, 1.0, 0.85)}
 	return {"range": 15.0, "energy": 1.8, "color": Color(0.92, 0.95, 1.0)}
 
 # Half-height version of each shapeable material. One id per material is still
@@ -930,6 +935,15 @@ const SOLAR_PANEL := 219
 ## Array has actually been missing, since banking a long day to spend it
 ## through a long night is the whole of what a panel is for.
 const CAPACITOR := 220
+
+## Aurora Bloom: a crystal that grows out of open ground while an aurora is
+## overhead, and is gone by morning.
+##
+## It is the one reason to be outside after dark. Most nights you are indoors
+## or asleep, which is correct -- so the night that is worth going out for has
+## to announce itself from a long way off, and this does: a field of them lights
+## a hillside. Cut them while they are up; by dawn there is nothing there.
+const AURORA_BLOOM := 221
 
 
 ## Does this station make power? Anything here feeds a base and charges a
@@ -1781,6 +1795,7 @@ const NAMES := {
 	FUEL_ROD: "Fuel Rod",
 	SOLAR_PANEL: "Solar Panel",
 	CAPACITOR: "Capacitor Bank",
+	AURORA_BLOOM: "Aurora Bloom",
 	CARGO_MODULE: "Cargo Module",
 	OXYGEN_PLANT: "Oxygen Plant",
 	HEATER: "Heater",
@@ -1969,6 +1984,7 @@ const COLORS := {
 	FUEL_ROD: Color(0.45, 0.78, 0.42),
 	SOLAR_PANEL: Color(0.19, 0.25, 0.42),
 	CAPACITOR: Color(0.30, 0.33, 0.40),
+	AURORA_BLOOM: Color(0.55, 0.95, 0.90),
 	CARGO_MODULE: Color(0.42, 0.52, 0.58),
 	OXYGEN_PLANT: Color(0.42, 0.68, 0.78),
 	HEATER: Color(0.74, 0.40, 0.26),

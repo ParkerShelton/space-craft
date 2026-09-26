@@ -2853,7 +2853,19 @@ func _process(delta: float) -> void:
 	# LIGHT moves instead: the sun swings around the planet's up axis once per
 	# day, which is indistinguishable from the ground turning.
 	for pl in _world.planets:
+		var was: float = pl.day_phase
 		pl.day_phase = fposmod(pl.day_phase + delta / maxf(pl.day_length, 1.0), 1.0)
+		if pl.day_phase < was:
+			pl.day_count += 1   # wrapped: another day on this world
+		# Dawn takes back every bloom still standing (see Planet.grow_blooms).
+		# Checked against the SUN rather than the phase, so it happens at the
+		# same moment the light does whatever the day length is.
+		var lit: bool = not pl.is_night()
+		if lit and pl.get_meta("was_night", false):
+			var gone := pl.clear_blooms()
+			if not gone.is_empty():
+				_world.edit_blocks(pl, gone)
+		pl.set_meta("was_night", not lit)
 
 	var sun_dir := Vector3(0.3, -0.8, 0.4).normalized()   # fixed light in space
 	var sun_lit := 1.0
@@ -2922,6 +2934,12 @@ func _process(delta: float) -> void:
 		below = clampf(dep / 5.0, 0.0, 1.0)
 	_underground = lerpf(_underground, below, clampf(delta * 4.0, 0.0, 1.0))
 	_sky_mat.set_shader_parameter("underground", _underground)
+	# Aurora blooms: crystal coming up out of open ground while the sky is lit,
+	# near enough to you to be worth walking to.
+	if p != null and _weather != null and _underground < 0.5:
+		var grew := p.grow_blooms(delta, _weather.aurora * (1.0 - _day), ppos)
+		if not grew.is_empty():
+			_world.edit_blocks(p, grew)
 	_world.player.underground = _underground > 0.6
 	# Never let night reach true black: this game drains O2 and applies hazard
 	# damage, and being unable to see on top of that is punishing before you

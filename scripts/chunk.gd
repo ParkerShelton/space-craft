@@ -98,6 +98,11 @@ static func _get_material(p: Planet) -> ShaderMaterial:
 	for oid in Blocks.ORE_SLOT_IDS:
 		soot.append(1.0 if p.ore_is_fuel_grade(oid) else 0.0)
 	m.set_shader_parameter("ore_soot", soot)
+	# ...and which of them are conductive enough to hold a light of their own.
+	var glow := PackedFloat32Array()
+	for oid in Blocks.ORE_SLOT_IDS:
+		glow.append(p.ore_glow(oid))
+	m.set_shader_parameter("ore_glow", glow)
 	m.set_shader_parameter("ore_chunk_id", ORE_CHUNK_ID)
 	# Foliage silhouette varies per world, so an alien canopy differs in shape
 	# and density and not only in colour.

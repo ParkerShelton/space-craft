@@ -3005,6 +3005,15 @@ func _on_warp_pressed() -> void:
 	if _starmap_selected == world.current_system_index:
 		_toast("Already in this system")
 		return
+	# A jump is most of a tank. Charge first, jump second -- arriving somewhere
+	# new with nothing in the tanks and no way down is a worse story than not
+	# having gone.
+	if not piloting.can_warp():
+		_toast("Not enough charge to jump -- the drive needs %d%% of a full tank"
+			% int(round(Ship.WARP_COST * 100.0)))
+		Audio.ui("ui_deny")
+		return
+	piloting.spend_warp()
 	var sysdef := world.warp_to_system(_starmap_selected, piloting)
 	_close_starmap()
 	if sysdef.is_empty():

@@ -80,6 +80,9 @@ uniform float metal_seam = 0.22;
 // protruding geometry (see Chunk._emit_ore_chunks) tagged with ore_chunk_id,
 // which carries the ore colour in its own vertex colour.
 uniform float ore_ids[4];
+// How much light each of this world's ores gives off on its own. A rich
+// conductor holds a charge and shows it in the dark; a dead one is rock.
+uniform float ore_glow[4];
 // 1 for an ore that is good fuel: its stone is meshed near-black (see
 // Chunk._block_color) and textured here as grimy rather than calm.
 uniform float ore_soot[4];
@@ -409,6 +412,10 @@ void fragment() {
 		if (abs(id - ore_ids[i]) < 0.5) {
 			shade = 1.0 + (quantize(hash21(floor(fc * texels * 0.5 * rock_grain) + 2.0), 2.0)
 				- 0.5) * 0.05 * rock_contrast;
+			// Its own light, if it is conductive enough to have one. Added
+			// as emission so it survives being underground with no sun and no
+			// torch, which is the only place you will ever notice it.
+			emit = max(emit, ore_glow[i] * 0.55);
 			if (ore_soot[i] > 0.5) {
 				// Coal-ish: fine grit on a full-resolution grid over broad dark
 				// smudges, and the odd bright fleck where the face has fractured
@@ -426,6 +433,11 @@ void fragment() {
 	if (abs(id - ore_chunk_id) < 0.5) {
 		float ch = hash21(floor(fc * texels * 1.5) + vec2(5.0, 9.0));
 		shade = 0.88 + quantize(ch, 3.0) * 0.24;
+		// The lumps are the ore itself, so they carry most of the glow. The
+		// mesher does not tell us WHICH ore this lump is, so take the brightest
+		// on the world: a wall only ever shows the ore that is in it.
+		float best = max(max(ore_glow[0], ore_glow[1]), max(ore_glow[2], ore_glow[3]));
+		emit = max(emit, best * 1.15);
 	}
 
 	base *= mix(1.0, shade, texture_strength);

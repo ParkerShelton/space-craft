@@ -150,6 +150,10 @@ static func _thruster(vb: VBoxContainer, ship: Ship, cell: Vector3i) -> void:
 	_stat(side, "Ship mass", "%d t" % roundi(float(f["mass"]) / 1000.0))
 	_stat(side, "Acceleration", "%.1f m/s2" % float(f["accel"]),
 		GOOD if float(f["accel"]) >= Ship.GOOD_ACCEL else WARN)
+	# What the tanks will actually fly. Thrust runs charge down, so an engine
+	# is only as good as what is behind it.
+	_stat(side, "Burn time left", _hms(ship.burn_endurance()) if ship.charge > 0.0
+		else "dry", GOOD if ship.charge > 0.25 else (WARN if ship.charge > 0.0 else BAD))
 	var err: float = float(f["trim_error"])
 	_stat(side, "Balance", "even" if err <= 0.0 else "%.1f blocks off" % err,
 		GOOD if err <= 0.0 else WARN)

@@ -79,6 +79,11 @@ var day_length := 600.0
 ## How far through the current day, 0..1. Advanced by main's environment update
 ## rather than by the planet, so it keeps ticking for planets you aren't on.
 var day_phase := 0.0
+## How many whole days this world has turned since the world began. day_phase
+## wraps to 0..1 every cycle, so it cannot answer "which night is this" -- and
+## anything that wants one roll per night (an aurora, say) needs a number that
+## keeps counting.
+var day_count := 0
 ## Where a brand new world starts its home planet. Sun height is sin(phase*TAU),
 ## so 0 is sunrise, 0.25 noon and 0.5 sunset: this is early morning, with the sun
 ## just clear of the horizon and most of the daylight still ahead of you.
@@ -1797,6 +1802,94 @@ func advance_crop(v: Vector3i) -> int:
 
 
 ## Everything planted here, flat, for saving and for handing to a new arrival.
+# --- aurora blooms ---------------------------------------------------------------
+#
+# Crystal that grows out of open ground while an aurora is overhead, and is
+# gone by morning. The only reason this world gives you to be outside at night
+# -- so it has to be worth crossing a valley for, and it has to be obvious from
+# that valley that it is happening.
+
+## Which cells this world has grown, so dawn knows what to take back. Every one
+## of them is AURORA_BLOOM and nothing else ever writes one.
+var _blooms := {}
+var _bloom_t := 0.0
+## How many go up per second of aurora, near the player.
+const BLOOM_RATE := 5.0
+const BLOOM_REACH := 46.0      # how far from you they will come up
+const BLOOM_MAX := 260         # ...and how many at once, per world
+
+
+## Grow a few. `strength` is the aurora (0 when there is none), `at` is where
+## the player is. Returns the cells to write, for the caller to edit in one go.
+func grow_blooms(delta: float, strength: float, at: Vector3) -> Dictionary:
+	if strength <= 0.01 or not is_night() or _blooms.size() >= BLOOM_MAX:
+		return {}
+	_bloom_t += delta * BLOOM_RATE * strength
+	var n := int(_bloom_t)
+	if n <= 0:
+		return {}
+	_bloom_t -= float(n)
+	var out := {}
+	var up := _axis_of(to_local(at))
+	for i in mini(n, 6):
+		# A point on the ground somewhere around you, found by dropping down
+		# the world's own up axis from above head height.
+		var a := randf() * TAU
+		var r: float = sqrt(randf()) * BLOOM_REACH
+		var side := up.cross(Vector3(0, 0, 1) if absf(up.z) < 0.9 else Vector3(1, 0, 0)).normalized()
+		var side2 := up.cross(side).normalized()
+		var probe: Vector3 = at + (side * cos(a) + side2 * sin(a)) * r + up * 8.0
+		var v := world_to_voxel(probe)
+		# Walk down until there is ground under the cell.
+		var found := false
+		for step in 22:
+			var below := v - Vector3i(roundi(up.x), roundi(up.y), roundi(up.z))
+			if get_id(v) == Blocks.AIR and _bloom_soil(get_id(below)):
+				found = true
+				break
+			v = below
+		if not found or _blooms.has(v):
+			continue
+		out[v] = Blocks.AURORA_BLOOM
+		_blooms[v] = true
+	return out
+
+
+## What a bloom will root in. Open ground only -- not stone you are standing
+## inside, and never on something somebody built.
+func _bloom_soil(id: int) -> bool:
+	var b := Blocks.base_material_of(Blocks.bottom_of(id))
+	return b == Blocks.GRASS or b == Blocks.DIRT or b == Blocks.ROCK \
+		or b == Blocks.SNOW or b == Blocks.REGOLITH or b == Blocks.PATH
+
+
+## Morning. Everything still standing goes, and anything you cut in the night
+## is yours to keep -- it is already out of this list.
+func clear_blooms() -> Dictionary:
+	var out := {}
+	for v in _blooms:
+		if get_id(v) == Blocks.AURORA_BLOOM:
+			out[v] = Blocks.AIR
+	_blooms.clear()
+	_bloom_t = 0.0
+	return out
+
+
+## A bloom you mined is no longer ours to take back.
+func forget_bloom(v: Vector3i) -> void:
+	_blooms.erase(v)
+
+
+func blooms_snapshot() -> Array:
+	return _blooms.keys()
+
+
+func restore_blooms(cells: Array) -> void:
+	_blooms.clear()
+	for v in cells:
+		_blooms[v as Vector3i] = true
+
+
 func crops_snapshot() -> Array:
 	var out: Array = []
 	for v in _crops:
@@ -2348,6 +2441,23 @@ func ore_color(block_id: int) -> Color:
 func ore_is_fuel_grade(block_id: int) -> bool:
 	var d := ore_def(block_id)
 	return d.has("props") and Blocks.is_fuel_grade(d["props"])
+
+
+## How brightly this ore glows in the dark, 0 to 1.
+##
+## Reactivity is how well the stuff carries a current, and the ones that carry
+## it best hold a charge of their own -- so the richest conductor on a world is
+## a faint light in an unlit cave, and a dead one is just rock. It is nothing
+## to do with the aurora and nothing to do with night; it simply never stops,
+## and you only notice it where there is nothing brighter.
+func ore_glow(ore_id: int) -> float:
+	var d := ore_def(ore_id)
+	if not d.has("props"):
+		return 0.0
+	var props: Dictionary = d["props"]
+	# Nothing at all below the halfway mark, then climbing to the top of the
+	# range, so a glowing seam means something rather than every wall shining.
+	return clampf((float(props.get("r", 0)) - 52.0) / 48.0, 0.0, 1.0)
 
 
 ## The stone a fuel ore sits in: the planet's own rock, gone most of the way to

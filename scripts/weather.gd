@@ -78,6 +78,32 @@ func profile(p: Planet) -> Dictionary:
 	return pr
 
 
+## Whether TONIGHT has an aurora, and how strong.
+##
+## `pr["aurora"]` is how aurora-prone the WORLD is. It used to be used directly,
+## so a world that had auroras had one every single night at full strength,
+## which is the same as having none: nothing you can plan around and nothing
+## worth staying up for. Rolled per night instead, against the world's own
+## proneness, it lands at roughly one night in three or four on a world that
+## gets them at all -- often enough to learn the sky, rare enough to be a
+## reason to go out when it happens.
+const AURORA_ODDS := 0.45
+
+
+func aurora_tonight(p: Planet, pr: Dictionary) -> float:
+	var prone := float(pr.get("aurora", 0.0))
+	if prone <= 0.0:
+		return 0.0
+	# One roll per night, from the night's own number, so it does not flicker
+	# on and off while you watch it.
+	var night := p.day_count
+	var c := Vector3i(night, night >> 8, 11)
+	if p._hash01(c, 9311) > prone * AURORA_ODDS:
+		return 0.0
+	# ...and how bright this one is.
+	return 0.55 + 0.45 * p._hash01(c, 9312)
+
+
 ## What this world's weather is doing in the current spell: [precip, fog].
 func _spell(p: Planet, pr: Dictionary) -> Array:
 	var n := int(floor(Time.get_unix_time_from_system() / SPELL))
@@ -178,7 +204,7 @@ func _process(delta: float) -> void:
 	precip = move_toward(precip, float(target[0]), step)
 	fog = move_toward(fog, float(target[1]), step)
 	snowing = outside and bool(pr.get("snow", false))
-	aurora = float(pr.get("aurora", 0.0)) if outside else 0.0
+	aurora = aurora_tonight(p, pr) if outside else 0.0
 	if outside:
 		aurora_color = pr["aurora_a"]
 		aurora_color2 = pr["aurora_b"]
