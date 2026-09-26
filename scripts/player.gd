@@ -7333,11 +7333,16 @@ func _update_held_item(active: Dictionary) -> void:
 		# The book is a rig rather than a mesh: it has a hinge, and a hinge is
 		# the only thing that makes opening one look like opening one.
 		_held_book = ItemModels.make_book()
-		_held_book.scale = Vector3.ONE * 0.55
-		_held_book.position = Vector3(0.04, -0.06, 0)
-		_held_book.rotation = Vector3(-0.25, 0.6, 0.0)
 		_held_root.add_child(_held_book)
+		# Put down shut, in exactly the pose _tick_reading calls shut, so the
+		# first frame it is in your hand is not a different book from the one
+		# that opens. These two used to be written out separately and did not
+		# match, which is most of why holding it looked wrong.
+		_held_book.scale = Vector3.ONE * 0.55
+		_held_book.position = Vector3(0.02, -0.08, 0.0)
+		_held_book.rotation = Vector3(-0.10, -HAND_IDLE_ROT.y, -HAND_IDLE_ROT.z)
 		ItemModels.set_book_open(_held_book, 0.0)
+		_read_t = 0.0
 	elif ItemModels.has_model(id):
 		# Food: a model rather than a tinted cube. Held a little larger than a
 		# tool, because a loaf in the corner of the eye at tool scale is a crumb.
@@ -7435,26 +7440,23 @@ func _tick_reading(delta: float) -> void:
 		return
 	_read_t = move_toward(_read_t, want, delta * 2.6)
 	var e: float = _read_t * _read_t * (3.0 - 2.0 * _read_t)
-	ItemModels.set_book_open(_held_book, e)
-	# Turned to face YOU as it opens.
+	# ONE motion: the book comes up to your face. Nothing else changes.
 	#
-	# It used to end up held out flat with the pages pointing away, as though
-	# you were showing it to somebody across the table. Two reasons, and both
-	# are fixed here. The tilt only reached 0.6 of a radian, which leaves an
-	# open book nearly face-up and seen edge-on; a book you are reading is
-	# canted back most of a right angle so the pages look at your face. And it
-	# never undid the hand's own pose -- the hand it hangs off sits turned
-	# 0.35 out and rolled 0.12 over, so even square to the hand it was angled
-	# away from the eye.
-	var yaw: float = lerpf(0.6, -HAND_IDLE_ROT.y, e)
-	var roll: float = lerpf(0.0, -HAND_IDLE_ROT.z, e)
-	# Canted BACK toward your face. The sign of this was the whole bug: tilting
-	# the other way is what had you holding it out for somebody else to read.
-	_held_book.rotation = Vector3(lerpf(-0.25, 1.30, e), yaw, roll)
-	# ...and brought in front of you rather than left down at your side.
-	_held_book.position = Vector3(lerpf(0.04, -0.26, e), lerpf(-0.06, 0.06, e),
+	# It used to tumble -- pitch, yaw and roll all moving at once from a pose
+	# that had nothing to do with the one it was heading for -- which is why
+	# opening it made no sense to watch. Closed and open now differ in a single
+	# axis, so what you see is a book being raised, and the only other thing
+	# moving is the cover.
+	var yaw: float = -HAND_IDLE_ROT.y
+	var roll: float = -HAND_IDLE_ROT.z
+	_held_book.rotation = Vector3(lerpf(-0.10, 1.30, e), yaw, roll)
+	_held_book.position = Vector3(lerpf(0.02, -0.26, e), lerpf(-0.08, 0.06, e),
 		lerpf(0.0, 0.14, e))
 	_held_book.scale = Vector3.ONE * lerpf(0.55, 0.92, e)
+	# ...and the cover waits until it is most of the way up before it swings,
+	# so the two read as one action after another rather than as a thing
+	# unfolding while it flies about.
+	ItemModels.set_book_open(_held_book, clampf((e - 0.35) / 0.65, 0.0, 1.0))
 
 
 func _mk_view_box(size: Vector3, pos: Vector3, color: Color) -> MeshInstance3D:
@@ -10016,7 +10018,10 @@ func _open_journal() -> void:
 
 
 func _close_journal() -> void:
-	_read_t = 0.0
+	# _read_t is NOT reset here. It is how far open the book in your hand is,
+	# and setting it to zero the moment the panel goes put the animation past
+	# its own end -- so the model was never told to shut and the book stayed
+	# open in your hand. Let it close the way it opened.
 	if _journal_panel != null and is_instance_valid(_journal_panel):
 		_journal_panel.queue_free()
 	_journal_panel = null
