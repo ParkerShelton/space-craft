@@ -851,6 +851,18 @@ func _any_perp(axis: Vector3) -> Vector3:
 
 ## Place a crafting station at a grid cell, oriented flat to the surface (its up
 ## axis = the face you're standing on), like spawn_ship.
+## Put a station down at exactly this transform. The caller has already
+## decided where it stands -- which is the only way a ghost and the thing it
+## previews can be guaranteed to agree.
+func spawn_station_at(kind: int, xform: Transform3D) -> Station:
+	var st := Station.new()
+	add_child(st)
+	st.configure(kind, self)
+	st.global_transform = xform
+	_stations.append(st)
+	return st
+
+
 func spawn_station(kind: int, pos: Vector3, up: Vector3, fwd: Vector3) -> Station:
 	var st := Station.new()
 	add_child(st)

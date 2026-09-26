@@ -1499,7 +1499,14 @@ func _place_spot(tgt: Dictionary = {}) -> Dictionary:
 	var pos := planet.to_global(centre_local)
 	if pos.distance_to(global_position) < 1.2:
 		ok = false
-	return {"planet": planet, "cells": cells, "pos": pos, "up": up, "fwd": fwd, "ok": ok}
+	# THE transform -- one of them, worked out here, used by the ghost and by
+	# the station that follows it. The two used to build their own from the
+	# same ingredients, which is a standing invitation for them to disagree,
+	# and they did: what you put down did not land under the ghost you aimed
+	# with. Now there is only one answer to where it goes.
+	var gx := up.cross(-fwd).normalized()
+	return {"planet": planet, "cells": cells, "pos": pos, "up": up, "fwd": fwd, "ok": ok,
+		"xform": Transform3D(Basis(gx, up, -fwd), pos)}
 
 
 ## The same question asked of a ship instead of a planet: where would this
@@ -1572,10 +1579,12 @@ func _update_place_ghost(spot: Dictionary = {}) -> void:
 	if spot.is_empty():
 		return
 	var up: Vector3 = spot["up"]
-	var fwd: Vector3 = spot["fwd"]
-	var x := up.cross(-fwd).normalized()
-	_place_ghost.global_transform = Transform3D(Basis(x, up, -fwd), spot["pos"] as Vector3)
-	_place_ghost.position -= up * 0.5     # model space stands on y 0
+	var t: Transform3D = spot.get("xform", Transform3D.IDENTITY)
+	# The model stands on y 0 in its own space, so the ghost drops half a cell
+	# to put its feet on the floor -- along the STATION's own up, which on a
+	# round world is not the world's.
+	t.origin -= (t.basis.y as Vector3).normalized() * 0.5
+	_place_ghost.global_transform = t
 	var mat := _place_ghost.get_active_material(0)
 	if mat is StandardMaterial3D:
 		(mat as StandardMaterial3D).albedo_color = Color(0.6, 1.0, 0.6, 0.45) if _place_ok 			else Color(1.0, 0.4, 0.4, 0.4)
@@ -1613,8 +1622,7 @@ func _do_place_station() -> void:
 		st = world.spawn_station_on_ship(_place_kind, spot["ship"] as Ship,
 			spot["local"] as Vector3i, spot["local_fwd"] as Vector3i)
 	else:
-		st = world.spawn_station(_place_kind, (spot["pos"] as Vector3) - Vector3(0.5, 0.5, 0.5),
-			spot["up"] as Vector3, spot["fwd"] as Vector3)
+		st = world.spawn_station_at(_place_kind, spot["xform"] as Transform3D)
 	if st != null:
 		st.build_mat = mat
 		_toast("%s built" % Blocks.name_of(_place_kind))
@@ -5703,19 +5711,12 @@ func _process_station_mining(delta: float, st: Station) -> void:
 		return
 	_look_name = st.title() + "  (hold to take apart)"
 	var holding := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
-	# A station will not start coming apart on a hold that was already running
-	# when it came into view. Breaking the split plate over a buried supply
-	# cache put the chest under it straight into the crosshair, and the same
-	# unbroken hold took the chest apart inside a second -- so the cache handed
-	# over its contents before you ever saw there was a chest there.
 	if holding and _hold_used:
 		_look_name = st.title() + "  (let go, then hold to take apart)"
-		st.set_dismantle(0.0)
 		return
 	if not holding:
 		_mine_key = ""
 		_mine_time = 0.0
-		st.set_dismantle(0.0)
 		if _crack != null:
 			_crack.visible = false
 		return
@@ -5723,18 +5724,42 @@ func _process_station_mining(delta: float, st: Station) -> void:
 	if key != _mine_key:
 		_mine_key = key
 		_mine_time = 0.0
-		_mine_total = 0.6
+		_mine_total = 0.9
 	_mine_time += delta
-	# Coming apart in front of you: it shrinks and reddens as the seconds run,
-	# and says how far along it is.
 	var t := clampf(_mine_time / maxf(_mine_total, 0.001), 0.0, 1.0)
-	st.set_dismantle(t)
+	# Cracks over it and a chipping sound, exactly as a block gets. It used to
+	# shrink and redden instead -- a language nothing else in the game speaks --
+	# and it called the sound directly every frame rather than going through
+	# Audio.mining, which is the thing that knows how often mining may be heard.
+	_crack_station(st, t)
+	Audio.mining(Blocks.ROCK, st.global_position)
 	_look_name = "%s  (taking apart %d%%)" % [st.title(), int(t * 100.0)]
-	Audio.at("break_wood", st.global_position)
 	if _mine_time >= _mine_total:
+		_hold_used = true
 		_pick_up_station(st)
 		_mine_key = ""
 		_mine_time = 0.0
+		if _crack != null:
+			_crack.visible = false
+
+
+## The same cracking shell a block gets, sized to the station instead of to a
+## cell -- so a two-cell bench cracks across the whole of itself.
+func _crack_station(st: Station, t: float) -> void:
+	if _crack == null or _crack_mat == null:
+		return
+	var fp := Vector3(StationModels.footprint(st.kind))
+	var sig := "st%d|%s" % [st.kind, fp]
+	if sig != _crack_sig:
+		_crack_sig = sig
+		_crack.mesh = _make_ghost_mesh([[
+			Vector3(-fp.x * 0.5, -0.5, -fp.z * 0.5) - Vector3.ONE * 0.006,
+			Vector3(fp.x * 0.5, fp.y - 0.5, fp.z * 0.5) + Vector3.ONE * 0.006]])
+	_crack_mat.set_shader_parameter("progress", clampf(t, 0.0, 1.0))
+	_crack_mat.set_shader_parameter("block_seed",
+		float(absi(st.get_instance_id()) % 4096) / 4096.0)
+	_crack.global_transform = st.global_transform
+	_crack.visible = true
 
 
 ## Currently active hotbar slot, or {} if empty/out of range.
@@ -5932,7 +5957,11 @@ func _pick_up_station(st: Station) -> void:
 	# Carried with its material, so moving an array built from good panels to a
 	# sunnier spot does not quietly turn it into a worse one.
 	_add_item(st.kind, 1, st.build_mat)
-	_break_burst(st.global_position, Blocks.color_of(st.kind))
+	# From the middle of it rather than its foot, so a two-cell bench throws
+	# debris across itself instead of out of the floor.
+	var fpv := Vector3(StationModels.footprint(st.kind))
+	_break_burst(st.global_position + st.global_transform.basis.y * (fpv.y * 0.5 - 0.5),
+		Blocks.color_of(st.kind))
 	Audio.at("break_wood", st.global_position)
 	# return whatever was inside to your inventory
 	for s in st.storage:

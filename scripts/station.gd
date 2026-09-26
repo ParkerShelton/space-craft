@@ -248,14 +248,14 @@ func _exit_tree() -> void:
 ## How far through being taken apart this station is, 0 to 1. Shown rather than
 ## merely counted: it shrinks a little and darkens toward its own break, so a
 ## station comes apart in front of you instead of vanishing on a timer.
-func set_dismantle(t: float) -> void:
-	var k := clampf(t, 0.0, 1.0)
-	if _mi == null:
-		return
-	_mi.scale = Vector3.ONE * (1.0 - 0.12 * k)
-	var mat := _mi.get_active_material(0)
-	if mat is StandardMaterial3D:
-		(mat as StandardMaterial3D).albedo_color = Color(1, 1, 1).lerp(Color(1.0, 0.55, 0.4), k)
+## Kept so any caller left over is harmless, and so a station part way through
+## being taken apart when you let go springs back to its proper size. Coming
+## apart is shown with the same cracking overlay a block gets (see
+## Player._crack_station) -- it no longer shrinks and reddens, which was a
+## language nothing else in the game spoke.
+func set_dismantle(_t: float) -> void:
+	if _mi != null and _mi.scale != Vector3.ONE:
+		_mi.scale = Vector3.ONE
 
 
 func title() -> String:
