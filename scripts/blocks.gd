@@ -65,6 +65,9 @@ const FABRICATOR := 35
 const SHIPWORKS := 36
 const CHEST := 52     # pure storage (bigger than a machine)
 const CARPENTER := 62 # base-building bench: structural blocks from plain resources
+## What a bench costs, named because the game has to be able to ask "could they
+## build one yet?" in order to mention that they could.
+const CARPENTER_WOOD := 8
 ## Cut for now (station upgrades will come back as their own thing). The id is
 ## kept only so a world saved with one loads it as a Smelter -- see
 ## Station.configure.
@@ -1310,7 +1313,7 @@ static func food_value(raw: int) -> float:
 const STATION_BUILDS := [
 	{"kind": CAMPFIRE, "reqs": [{"any": WOOD_IDS, "n": 4, "label": "Wood"},
 		{"any": STONE_IDS, "n": 4, "label": "Rock"}]},
-	{"kind": CARPENTER, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
+	{"kind": CARPENTER, "reqs": [{"any": WOOD_IDS, "n": CARPENTER_WOOD, "label": "Wood"}]},
 	{"kind": CHEST, "reqs": [{"any": WOOD_IDS, "n": 8, "label": "Wood"}]},
 	{"kind": CHEST_WIDE, "reqs": [{"any": WOOD_IDS, "n": 18, "label": "Wood"}]},
 	# Plate for the shell, wire for the rails it joins along, and one circuit

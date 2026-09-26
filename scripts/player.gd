@@ -1114,6 +1114,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			_toast("Stairs: %s" % Blocks.stair_state_name(_stair_state))
 		elif key_is(event, "stations"):
 			_open_ring()
+			grant("ring")
+			clear_hint("ring")
 		elif key_is(event, "recipes"):
 			if not (_book_search != null and _book_search.has_focus()):
 				_toggle_book()
@@ -2115,12 +2117,20 @@ func grant(id: String) -> void:
 		_rebuild_advancements()
 
 
+## Wood of any grain, which is what every wooden recipe actually asks for.
+func _wood_count() -> int:
+	var n := 0
+	for w in Blocks.WOOD_IDS:
+		n += _count_item(int(w))
+	return n
+
+
 ## The state-driven ones, polled rather than hooked into twenty call sites: a
 ## condition asked four times a second costs nothing and cannot be forgotten
 ## when the code around it moves.
 func _check_advancements() -> void:
 	grant("crash")
-	if _count_item(Blocks.WOOD) > 0 or _count_item(Blocks.WOOD_PALE) > 0 			or _count_item(Blocks.WOOD_DARK) > 0:
+	if _wood_count() > 0:
 		grant("wood")
 	for s3 in inv:
 		var sid := int(s3.get("id", Blocks.AIR))
@@ -2266,6 +2276,13 @@ func _tick_hints(delta: float) -> void:
 func _check_thoughts() -> void:
 	if world == null or _thought == null:
 		return
+	# Enough wood for a bench and no idea the ring exists. This one is on the
+	# screen rather than out in the world because what it is teaching IS a key:
+	# there is nothing in the world to point a line at.
+	if not earned.has("ring") and not _hints_done.has("ring") 			and _wood_count() >= Blocks.CARPENTER_WOOD:
+		_hints_done["ring"] = true
+		think("Enough wood for a bench. %s opens what I can build."
+			% OS.get_keycode_string(int(binds.get("stations", KEY_C))), 9.0)
 	var p := world.nearest_planet(global_position)
 	if p == null:
 		return
@@ -2303,7 +2320,9 @@ func think(msg: String, seconds := 6.0) -> void:
 ##
 ## It used to be a line in the same strip as "Ate Cooked Meat", which made
 ## working out smelting look exactly like picking something up.
-const ADV_CARD_SIZE := Vector2(360, 82)
+## Tall enough for the longest description in Advancements.DEFS at two lines.
+## It was 82, which cut the second line in half on every entry that needed one.
+const ADV_CARD_SIZE := Vector2(372, 100)
 const ADV_SHOW := 5.0
 
 
@@ -2313,7 +2332,8 @@ func _show_advancement(d: Dictionary) -> void:
 	if _adv_card != null and is_instance_valid(_adv_card):
 		_adv_card.queue_free()
 	var card := Panel.new()
-	card.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	# Top-left anchors, because _adv_place_card works in absolute screen space.
+	card.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	card.custom_minimum_size = ADV_CARD_SIZE
 	card.size = ADV_CARD_SIZE
 	card.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2344,7 +2364,7 @@ func _show_advancement(d: Dictionary) -> void:
 	card.add_child(tree)
 	var nm := Label.new()
 	nm.position = Vector2(76, 26)
-	nm.custom_minimum_size = Vector2(272, 0)
+	nm.custom_minimum_size = Vector2(284, 0)
 	nm.text = str(d["name"])
 	nm.add_theme_font_size_override("font_size", 19)
 	nm.modulate = Color(1.0, 0.97, 0.88)
@@ -2352,10 +2372,10 @@ func _show_advancement(d: Dictionary) -> void:
 	card.add_child(nm)
 	var ds := Label.new()
 	ds.position = Vector2(76, 52)
-	ds.custom_minimum_size = Vector2(274, 0)
+	ds.custom_minimum_size = Vector2(286, 0)
 	ds.text = str(d["desc"])
 	ds.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	ds.add_theme_font_size_override("font_size", 11)
+	ds.add_theme_font_size_override("font_size", 12)
 	ds.modulate = Color(1, 1, 1, 0.66)
 	ds.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	card.add_child(ds)
@@ -2367,10 +2387,20 @@ func _show_advancement(d: Dictionary) -> void:
 
 
 ## Where the card sits, given how far in it is (0 off the bottom, 1 home).
+##
+## Measured off the real viewport rather than written as a negative offset from
+## a bottom-right anchor. That is how the hotbar does it and it works, but only
+## because the hotbar sets its position BEFORE it is added to the layer: with no
+## parent yet, Control.position becomes a plain offset from the anchor, and the
+## anchor moves it into the corner when it lands. This card was positioned after
+## being added, when position means the absolute spot in the parent -- so it was
+## laid out at (-380, -180) and had never once been on screen. All anybody ever
+## saw of an advancement was the gold rim and the confetti.
 func _adv_place_card(k: float) -> void:
 	if _adv_card == null or not is_instance_valid(_adv_card):
 		return
-	var home := Vector2(-ADV_CARD_SIZE.x - 20.0, -ADV_CARD_SIZE.y - 96.0)
+	var vp: Vector2 = _adv_card.get_viewport_rect().size
+	var home := Vector2(vp.x - ADV_CARD_SIZE.x - 20.0, vp.y - ADV_CARD_SIZE.y - 96.0)
 	# Rises out of the bottom edge rather than sliding in from the side: the
 	# hotbar lives along the bottom, so coming up beside it reads as belonging
 	# to the same strip of screen.
