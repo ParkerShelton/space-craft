@@ -8992,9 +8992,10 @@ func _bench_zone(st: Station) -> Dictionary:
 	if not _ray.is_colliding():
 		return {}
 	var p: Vector3 = st.to_local(_ray.get_collision_point()) + Vector3(0, 0.5, 0)
-	if p.x < -0.42:
+	# The same lines the bench is built to, so what you click is what you see.
+	if p.x < StationModels.BENCH_BLADE_X:
 		return {"zone": "blade"}
-	if p.x > 0.42:
+	if p.x > StationModels.BENCH_ROLL_X:
 		return {"zone": "roller"}
 	return {"zone": "bed"}
 

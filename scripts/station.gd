@@ -125,6 +125,10 @@ var _lever_t := 0.0
 ## The Pipe Bench's rollers, and how far round they have turned.
 var _rollers: MeshInstance3D
 var _roll_t := 0.0
+## The saw disc, and how fast it is turning. It also DROPS through a cut,
+## which is the part that says a cut happened rather than a button was pressed.
+var _blade: MeshInstance3D
+var _blade_t := 0.0
 ## A chest's lid, and how far open it is (0 shut, 1 wide). Set lid_open and it
 ## swings; nothing else has to be told.
 var _lid: MeshInstance3D
@@ -322,15 +326,23 @@ func _build_visual() -> void:
 		_mi.mesh = StationModels.anvil_mesh("", Color.WHITE)
 		_refresh_anvil.call_deferred()
 	elif kind == Blocks.PIPE_BENCH:
-		_mi.mesh = StationModels.mesh_from_boxes(StationModels.pipe_bench_boxes())
+		_bench_shown = "-"
+		_mi.mesh = StationModels.pipe_bench_mesh([], {})
+		# The two moving parts are nodes of their own, so they can run without
+		# the bench being rebuilt sixty times a second.
 		if _rollers == null:
-			# A node of their own so they can turn without the bench being
-			# rebuilt sixty times a second.
 			_rollers = MeshInstance3D.new()
 			_rollers.mesh = StationModels.mesh_from_boxes(
 				StationModels.pipe_roller_boxes(0.0))
 			_rollers.position = Vector3(0, -0.5, 0)
 			add_child(_rollers)
+		if _blade == null:
+			_blade = MeshInstance3D.new()
+			_blade.mesh = StationModels.mesh_from_boxes(
+				StationModels.pipe_blade_boxes(0.0))
+			_blade.position = StationModels.BENCH_ARBOR + Vector3(0, -0.5, 0)
+			add_child(_blade)
+		_refresh_bench.call_deferred()
 	elif kind == Blocks.DUCT_PORT:
 		_mi.mesh = StationModels.filter_mesh(filter_colour())
 	elif Blocks.makes_power(kind):
@@ -1257,14 +1269,24 @@ func _animate_bench(at: String, good: bool) -> void:
 	if headless or _bench_busy:
 		return
 	_bench_busy = true
-	if at == "roller":
-		_roll_t = 9.0 if good else 3.0
 	var tw := create_tween()
-	tw.tween_interval(0.26 if good else 0.12)
-	tw.tween_callback(func():
-		_bench_busy = false
-		if at == "roller":
-			_roll_t = 0.0)
+	if at == "blade":
+		# Spin up, drop through the work, lift off. A refused cut spins and
+		# stops without ever coming down, which is a different thing to watch
+		# and so a different thing to understand.
+		_blade_t = 26.0 if good else 9.0
+		var up: float = StationModels.BENCH_ARBOR.y - 0.5
+		if good and _blade != null:
+			tw.tween_property(_blade, "position:y", up - 0.20, 0.10).set_ease(Tween.EASE_IN)
+			tw.tween_interval(0.14)
+			tw.tween_property(_blade, "position:y", up, 0.22).set_ease(Tween.EASE_OUT)
+		else:
+			tw.tween_interval(0.16)
+	else:
+		# The rollers wind up, run, and coast down on their own.
+		_roll_t = 16.0 if good else 5.0
+		tw.tween_interval(0.30 if good else 0.12)
+	tw.tween_callback(func(): _bench_busy = false)
 
 
 func _refresh_bench() -> void:
@@ -1488,12 +1510,21 @@ func _refresh_press() -> void:
 ## Nothing depends on them -- they are how you tell from across the room that
 ## the bench is doing something.
 func _tick_rollers(delta: float) -> void:
-	if _rollers == null or not is_instance_valid(_rollers):
-		return
-	if _roll_t <= 0.001:
-		return
-	_rollers.mesh = StationModels.mesh_from_boxes(
-		StationModels.pipe_roller_boxes(Time.get_ticks_msec() * 0.001 * _roll_t))
+	var t := Time.get_ticks_msec() * 0.001
+	if _rollers != null and is_instance_valid(_rollers) and _roll_t > 0.001:
+		_rollers.mesh = StationModels.mesh_from_boxes(
+			StationModels.pipe_roller_boxes(t * _roll_t))
+		_roll_t = maxf(_roll_t - delta * 9.0, 0.0)
+		if _roll_t <= 0.001:
+			_rollers.mesh = StationModels.mesh_from_boxes(
+				StationModels.pipe_roller_boxes(0.0))
+	if _blade != null and is_instance_valid(_blade) and _blade_t > 0.001:
+		_blade.mesh = StationModels.mesh_from_boxes(
+			StationModels.pipe_blade_boxes(t * _blade_t))
+		_blade_t = maxf(_blade_t - delta * 14.0, 0.0)
+		if _blade_t <= 0.001:
+			_blade.mesh = StationModels.mesh_from_boxes(
+				StationModels.pipe_blade_boxes(0.0))
 
 
 func _tick_lever(delta: float) -> void:

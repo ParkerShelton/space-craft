@@ -1067,76 +1067,129 @@ static func capacitor_mesh(has_battery: bool, charge: float, power: float) -> Ar
 		capacitor_lit(power, has_battery, charge))
 
 
-## The Pipe Bench: a blade at one end, a pair of rollers at the other, and a
-## trough between them. Two cells wide, because it is visibly two machines
-## sharing a frame -- which is exactly what it is.
-const ROLLER_AT := Vector3(0.62, 0.72, 0.0)
+## The Pipe Bench. Two cells wide and visibly three things:
+##
+##   -1.00 .. -0.45   the blade, with a red handle to pull
+##   -0.45 ..  0.25   the bed: a sunk tray with four bays, where stock goes
+##    0.25 ..  1.00   the rollers, with a red crank -- the biggest end, because
+##                    it is the one you use for every pipe there is
+##
+## The proportions are the instructions. Anything red is a thing you touch,
+## anything sunk is a thing you put something in, and the end you use most is
+## the end that takes up the most bench.
+const BENCH_BLADE_X := -0.45     # left of this is the blade
+const BENCH_ROLL_X := 0.25       # right of this is the rollers
+const BENCH_TOP := 0.62
+const BENCH_ARBOR := Vector3(-0.70, 0.86, 0.0)
+const ROLLER_AT := Vector3(0.62, 0.80, 0.0)
+const BENCH_BAYS := 4
+
+
+## Where the i-th bay sits, so the bench and whatever is lying in it agree.
+static func bench_bay(i: int) -> Vector3:
+	return Vector3(-0.38 + float(i) * 0.18, BENCH_TOP + 0.02, 0.0)
 
 
 static func pipe_bench_boxes() -> Array:
-	const FRAME := Color(0.40, 0.34, 0.24)
+	const FRAME := Color(0.38, 0.32, 0.22)
 	const TOP := Color(0.52, 0.44, 0.30)
 	const IRON := Color(0.34, 0.36, 0.40)
-	const EDGE := Color(0.78, 0.80, 0.84)
+	const DEEP := Color(0.14, 0.13, 0.12)
+	const GRAB := Color(0.72, 0.26, 0.20)      # red: the parts you touch
 	var out: Array = [
-		[Vector3(0, 0.46, 0), Vector3(1.94, 0.16, 0.88), TOP],
-		[Vector3(0, 0.20, 0), Vector3(1.80, 0.36, 0.72), FRAME],
+		[Vector3(0, BENCH_TOP - 0.08, 0), Vector3(1.94, 0.16, 0.88), TOP],
+		[Vector3(0, 0.28, 0), Vector3(1.78, 0.52, 0.72), FRAME],
 	]
 	for sx in [-0.86, 0.86]:
-		for sz in [-0.34, 0.34]:
-			out.append([Vector3(sx, 0.20, sz), Vector3(0.14, 0.40, 0.14), FRAME])
-	# The blade end: a saw standing proud of the bed with its guard behind it,
-	# and the trough the shavings fall into.
-	out.append([Vector3(-0.62, 0.70, 0.22), Vector3(0.10, 0.34, 0.34), IRON])
-	out.append([Vector3(-0.62, 0.74, 0.0), Vector3(0.04, 0.42, 0.42), EDGE])
-	out.append([Vector3(-0.62, 0.58, -0.28), Vector3(0.42, 0.10, 0.22), IRON])
-	out.append([Vector3(-0.20, 0.56, 0), Vector3(0.34, 0.06, 0.60), IRON])
-	# ...and the roller end: two posts for the rollers to turn between.
+		for sz in [-0.32, 0.32]:
+			out.append([Vector3(sx, 0.24, sz), Vector3(0.14, 0.48, 0.14), FRAME])
+
+	# --- the bed: sunk, and divided, so it reads as four places to put things
+	out.append([Vector3(-0.10, BENCH_TOP - 0.04, 0), Vector3(0.78, 0.10, 0.56), DEEP])
+	for i in BENCH_BAYS + 1:
+		out.append([Vector3(-0.47 + float(i) * 0.18, BENCH_TOP + 0.01, 0),
+			Vector3(0.025, 0.06, 0.56), IRON])
 	for sz2 in [-0.30, 0.30]:
-		out.append([Vector3(0.62, 0.70, sz2), Vector3(0.22, 0.44, 0.10), IRON])
-	out.append([Vector3(0.92, 0.60, 0), Vector3(0.10, 0.28, 0.50), IRON])
+		out.append([Vector3(-0.10, BENCH_TOP + 0.01, sz2), Vector3(0.80, 0.06, 0.04), IRON])
+
+	# --- the blade end: a housing, a guard, and a handle to pull
+	out.append([Vector3(-0.70, 0.74, 0.30), Vector3(0.40, 0.30, 0.22), IRON])
+	out.append([Vector3(-0.70, 0.96, 0.22), Vector3(0.46, 0.22, 0.10), IRON])
+	out.append([Vector3(-0.70, 1.02, -0.02), Vector3(0.10, 0.10, 0.44), GRAB])
+	out.append([Vector3(-0.70, 0.60, 0), Vector3(0.52, 0.06, 0.52), DEEP])
+
+	# --- the roller end: posts, a crank, and the tray the pipe lands in
+	for sz3 in [-0.34, 0.34]:
+		out.append([Vector3(0.62, 0.80, sz3), Vector3(0.34, 0.52, 0.12), IRON])
+	out.append([Vector3(0.62, 1.08, 0), Vector3(0.40, 0.10, 0.78), IRON])
+	# The crank, on the near side, where your hand would go.
+	out.append([Vector3(0.62, 0.80, -0.44), Vector3(0.14, 0.14, 0.10), IRON])
+	out.append([Vector3(0.62, 0.62, -0.50), Vector3(0.08, 0.30, 0.08), GRAB])
+	out.append([Vector3(0.62, 0.46, -0.50), Vector3(0.16, 0.10, 0.10), GRAB])
+	# ...and the output tray past them, sunk like the bed so it is obviously
+	# somewhere things sit rather than part of the frame.
+	out.append([Vector3(0.94, BENCH_TOP - 0.04, 0), Vector3(0.26, 0.10, 0.56), DEEP])
 	return out
 
 
-## The rollers themselves, turned by `spin`. Their own boxes so the bench can
-## run them without rebuilding the frame every frame.
+## The saw disc, in its own node so it can drop and spin.
+##
+## Drawn as bands across a circle -- so it is round from every angle -- with a
+## few teeth marks that travel round the rim. The bands never move; the teeth
+## are the whole of the spin, and that is enough to read as a blade running.
+static func pipe_blade_boxes(spin: float) -> Array:
+	const EDGE := Color(0.80, 0.82, 0.86)
+	const HUB := Color(0.30, 0.32, 0.36)
+	const R := 0.23
+	var out: Array = [[Vector3.ZERO, Vector3(0.06, 0.15, 0.15), HUB]]
+	const BANDS := 7
+	for i in BANDS:
+		var z0: float = -R + 2.0 * R * float(i) / float(BANDS)
+		var z1: float = -R + 2.0 * R * float(i + 1) / float(BANDS)
+		var zm: float = (z0 + z1) * 0.5
+		var half: float = sqrt(maxf(R * R - zm * zm, 0.0))
+		out.append([Vector3(0, 0, zm), Vector3(0.035, half * 2.0, z1 - z0), EDGE])
+	for k in 5:
+		var a: float = spin + float(k) * TAU / 5.0
+		out.append([Vector3(0, cos(a) * (R + 0.03), sin(a) * (R + 0.03)),
+			Vector3(0.045, 0.06, 0.06), HUB])
+	return out
+
+
+## The rollers, turned by `spin`. Bigger than they were: this is the end you
+## use for every pipe there is.
 static func pipe_roller_boxes(spin: float) -> Array:
-	const IRON := Color(0.46, 0.48, 0.54)
-	const DARK := Color(0.24, 0.26, 0.30)
+	const IRON := Color(0.50, 0.52, 0.58)
+	const DARK := Color(0.22, 0.24, 0.28)
 	var out: Array = []
 	for i in 2:
-		var y: float = ROLLER_AT.y + (0.13 if i == 0 else -0.13)
-		# Boxes cannot turn, so the roller is a short stack of bars offset
-		# round its axis -- at any angle it reads as something round in motion.
-		for k in 3:
-			var a: float = spin + float(k) * PI / 3.0 + (0.0 if i == 0 else 0.5)
-			var dy: float = cos(a) * 0.055
-			var dz: float = sin(a) * 0.055
+		var y: float = ROLLER_AT.y + (0.17 if i == 0 else -0.17)
+		for k in 4:
+			var ang: float = spin * (1.0 if i == 0 else -1.0) + float(k) * PI / 4.0
+			var dy: float = cos(ang) * 0.085
+			var dz: float = sin(ang) * 0.085
 			out.append([Vector3(ROLLER_AT.x, y + dy, dz),
-				Vector3(0.40, 0.055, 0.055), IRON if (k % 2) == 0 else DARK])
+				Vector3(0.46, 0.075, 0.075), IRON if (k % 2) == 0 else DARK])
 	return out
 
 
-## The bench with what is lying on it: the stock along the bed, and whatever
-## came off the rollers sitting at the far end where you take it from.
+## The bench with what is lying on it: stock in the bays, and whatever came off
+## the rollers in the tray past them.
 static func pipe_bench_mesh(parts: Array, out_item: Dictionary) -> ArrayMesh:
 	var boxes := pipe_bench_boxes()
-	boxes.append_array(pipe_roller_boxes(0.0))
-	for i in parts.size():
+	for i in mini(parts.size(), BENCH_BAYS):
 		var it: Dictionary = parts[i]
 		var col: Color = (it.get("mat", {}) as Dictionary).get("color",
 			Blocks.color_of(int(it["id"])))
-		# Laid along the bed between the blade and the rollers, in the order
-		# they went on, so you can see what the machine has to work with.
-		boxes.append([Vector3(-0.42 + float(i) * 0.26, 0.60, 0),
-			Vector3(0.20, 0.10, 0.40), col])
+		boxes.append([bench_bay(i) + Vector3(0, 0.05, 0),
+			Vector3(0.13, 0.08, 0.44), col])
 	if not out_item.is_empty():
 		var oc: Color = (out_item.get("mat", {}) as Dictionary).get("color",
 			Blocks.color_of(int(out_item["id"])))
-		# What it made, standing at the roller end.
-		for k in 2:
-			boxes.append([Vector3(0.92, 0.62 + float(k) * 0.12, -0.10 + float(k) * 0.20),
-				Vector3(0.34, 0.09, 0.09), oc])
+		# Finished pipe, stacked in the tray.
+		for k in 3:
+			boxes.append([Vector3(0.94, BENCH_TOP + 0.05 + float(k % 2) * 0.09,
+				-0.16 + float(k) * 0.16), Vector3(0.20, 0.08, 0.08), oc])
 	return mesh_from_boxes(boxes)
 
 
