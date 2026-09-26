@@ -18,7 +18,16 @@ signal menu_requested
 
 ## Minecraft walks at 4.3. At 7 the world felt small -- a house was two
 ## strides across -- and every jump carried nearly five blocks.
-const WALK_SPEED := 4.6
+## A walk is a walk. It was quick enough that there was nothing a run could be
+## faster THAN -- everywhere felt close, and no distance was worth a decision.
+const WALK_SPEED := 3.7
+## ...and a run, which you cannot keep up.
+const RUN_MULT := 1.62
+const RUN_SECONDS := 4.5        # a full tank of it, flat out
+const RUN_RECOVER := 3.0        # ...and how long standing still takes to refill
+const RUN_REST := 0.9           # you must let it breathe this long before going again
+## How long a gap between two taps of forward still counts as a double tap.
+const RUN_DOUBLETAP := 0.28
 ## How quickly you can change direction with your feet off the ground, per
 ## second. Low on purpose: a jump keeps the speed you left the ground with and
 ## can be nudged, not re-aimed. Steering at full walking speed in mid-air is
@@ -69,12 +78,12 @@ const DEFAULT_BINDS := {
 	"jump": KEY_SPACE, "crouch": KEY_SHIFT,
 	"inventory": KEY_E, "recipes": KEY_B, "stations": KEY_C,
 	"rotate": KEY_R, "pilot": KEY_F, "eva": KEY_T, "starmap": KEY_M,
-	"board": KEY_G, "advancements": KEY_L,
+	"board": KEY_G, "advancements": KEY_L, "run": KEY_CTRL,
 }
 ## What each one is called on the settings page, in the order they show there.
 const BIND_ORDER := ["forward", "back", "left", "right", "jump", "crouch",
 	"inventory", "recipes", "stations", "rotate", "pilot", "board", "eva",
-	"starmap", "advancements"]
+	"starmap", "advancements", "run"]
 const BIND_NAMES := {
 	"forward": "Walk forward", "back": "Walk back", "left": "Strafe left",
 	"right": "Strafe right", "jump": "Jump / ascend", "crouch": "Crouch / descend",
@@ -82,6 +91,7 @@ const BIND_NAMES := {
 	"stations": "Station ring (hold)", "rotate": "Rotate what you are placing",
 	"pilot": "Take the controls", "board": "Build a ship", "eva": "EVA suit",
 	"starmap": "Star map", "advancements": "Advancements",
+	"run": "Run (or double-tap forward)",
 }
 var binds := DEFAULT_BINDS.duplicate()
 
@@ -97,6 +107,19 @@ func key_is(event: InputEventKey, action: String) -> bool:
 ## Multiplies MOUSE_SENS. A setting, because what feels like a flick of the
 ## wrist to one person is a whole arm to another.
 var look_sensitivity := 1.0
+## Whether crouch and run are held down or switched on. Both are settings,
+## because which one is right is a question about hands, not about the game.
+var crouch_toggle := false
+var run_toggle := false
+var running := false
+var _run_left := RUN_SECONDS
+var _run_blocked := 0.0      # winded: no running until this runs out
+var _run_was_held := false
+var _crouch_was_held := false
+var _crouch_on := false      # the latch, when crouch is set to toggle
+var _run_on := false         # ...and the same for running
+var _fwd_tap := 0.0          # time left in which a second tap means "run"
+var _fwd_was := false
 ## Looking straight down and dragging up moves the view up, unless you grew up
 ## on a flight stick.
 var invert_look := false
@@ -3565,6 +3588,79 @@ func _align_up(up: Vector3, delta: float) -> void:
 ## part of the step that leaves you standing on something, drop the part that
 ## does not. Nothing can slip through, because the test is on where you really
 ## ended up.
+## Held or latched, whichever the setting says. Written once and asked by both
+## crouch and run, so the two can never behave differently for no reason.
+func _held_or_latched(action: String, toggle: bool, was_held: bool, latched: bool) -> Array:
+	var down: bool = not menu_open and not ui_typing and key_down(action)
+	if not toggle:
+		return [down, down, false]
+	var on := latched
+	if down and not was_held:
+		on = not latched
+	return [on, down, on]
+
+
+func _crouch_wanted() -> bool:
+	var r := _held_or_latched("crouch", crouch_toggle, _crouch_was_held, _crouch_on)
+	_crouch_was_held = bool(r[1])
+	_crouch_on = bool(r[2])
+	return bool(r[0])
+
+
+## Running: a key, or two taps of forward, and a tank that runs out.
+##
+## The tank is the whole point. A run that lasts forever is just a faster walk
+## with a button held down, and then the walk may as well have been that fast
+## to begin with. This one buys you a few seconds -- enough to cross a clearing
+## you do not like the look of -- and then makes you wait.
+func _tick_run(delta: float, input: Vector2) -> void:
+	# Two taps of forward is the other way in, and it has to be watched whether
+	# or not you are using it.
+	var fwd_down: bool = not menu_open and not ui_typing and key_down("forward")
+	var double_tapped := false
+	if fwd_down and not _fwd_was:
+		if _fwd_tap > 0.0:
+			double_tapped = true
+			_fwd_tap = 0.0
+		else:
+			_fwd_tap = RUN_DOUBLETAP
+	_fwd_was = fwd_down
+	_fwd_tap = maxf(_fwd_tap - delta, 0.0)
+
+	var r := _held_or_latched("run", run_toggle, _run_was_held, _run_on)
+	_run_was_held = bool(r[1])
+	_run_on = bool(r[2])
+	var asked: bool = bool(r[0]) or double_tapped
+	if double_tapped and run_toggle:
+		_run_on = true
+	if double_tapped and not run_toggle:
+		# A double tap latches even on hold-to-run: you cannot hold a tap.
+		_run_on = true
+	if not run_toggle and _run_on:
+		asked = true
+		# ...and it lets go the moment you stop asking for forward.
+		if not fwd_down:
+			_run_on = false
+			asked = bool(r[0])
+
+	_run_blocked = maxf(_run_blocked - delta, 0.0)
+	var moving: bool = input.length() > 0.1 and is_on_floor()
+	running = asked and moving and not crouching and _run_left > 0.0 and _run_blocked <= 0.0
+	if running:
+		_run_left = maxf(_run_left - delta, 0.0)
+		if _run_left <= 0.0:
+			_run_blocked = RUN_REST
+			_run_on = false
+			running = false
+	else:
+		_run_left = minf(_run_left + delta * (RUN_SECONDS / RUN_RECOVER), RUN_SECONDS)
+
+
+## How much run is left, 0 to 1 -- for whatever wants to draw it.
+func run_fraction() -> float:
+	return clampf(_run_left / RUN_SECONDS, 0.0, 1.0)
+
+
 func _keep_on_the_ledge(before: Vector3, up: Vector3) -> void:
 	if _floor_under(global_position, up):
 		return
@@ -3701,9 +3797,12 @@ func _walk(delta: float, up: Vector3, gmag: float) -> void:
 	# in for one -- if you are down a hole, the way out is to build your way out.
 
 	# Crouching: hold shift and you will not walk off what you are standing on.
-	crouching = not menu_open and not ui_typing and key_down("crouch") and is_on_floor()
+	crouching = _crouch_wanted() and is_on_floor()
+	_tick_run(delta, input)
 	if crouching:
 		horiz *= CROUCH_SPEED_MULT
+	elif running:
+		horiz *= RUN_MULT
 
 	if not is_on_floor():
 		var flat_now := velocity - up * velocity.dot(up)

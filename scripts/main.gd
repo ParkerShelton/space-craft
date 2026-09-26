@@ -997,6 +997,8 @@ func _apply_settings() -> void:
 			b[a] = int(setting("bind_" + a, int(Player.DEFAULT_BINDS[a])))
 		pl.binds = b
 		pl.show_look_names = bool(setting("show_names", true))
+		pl.crouch_toggle = not bool(setting("crouch_hold", true))
+		pl.run_toggle = not bool(setting("run_hold", true))
 
 
 # --- chat ---------------------------------------------------------------------
@@ -1415,6 +1417,10 @@ func _populate_game_settings_menu() -> void:
 	_game_menu_check(vb, "Invert mouse Y", "invert_y", false)
 	_game_menu_check(vb, "Placement preview", "placement_ghost", true)
 	_game_menu_check(vb, "Block names", "show_names", true)
+	# Whether these two are held down or switched on is a question about hands,
+	# not about the game, so it is asked rather than decided.
+	_game_menu_check(vb, "Hold to crouch", "crouch_hold", true)
+	_game_menu_check(vb, "Hold to run", "run_hold", true)
 	_game_menu_slider(vb, "Autosave", "autosave_min", 5.0, 0.0, 20.0, 1.0, "%d min")
 	var note := Label.new()
 	note.text = "autosave is single player only; 0 turns it off"
