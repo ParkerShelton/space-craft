@@ -916,6 +916,11 @@ const REACTOR := 217
 ## from the ingots, and a rod's worth of output is that ore's ENERGY -- the
 ## property that until now only ever decided how hard a thruster pushed.
 const FUEL_ROD := 218
+## A Solar Panel: glass over a conductive backing. Pressed from an ingot and
+## two glass, and it takes its MATERIAL from the ingot -- so the Reactivity of
+## the ore you chose is baked into the panel, and the array you build out of
+## four of them is exactly as good as they are.
+const SOLAR_PANEL := 219
 
 
 ## Does this station make power? Anything here feeds a base and charges a
@@ -1132,8 +1137,10 @@ const STATION_BUILDS := [
 	{"kind": POWER_BAY, "reqs": [{"id": PLATE, "n": 12}, {"id": BATTERY, "n": 1}]},
 	# Glass to catch the light, plate to stand it on, circuitry to get the
 	# current out of it. No fuel ever again -- but only while the sun is up.
-	{"kind": SOLAR_ARRAY, "reqs": [{"id": GLASS, "n": 10}, {"id": PLATE, "n": 8},
-		{"id": CIRCUIT, "n": 3}]},
+	# The panels decide what this array is worth, so they are its SIGNATURE:
+	# the station keeps their material and reads its Reactivity forever after.
+	{"kind": SOLAR_ARRAY, "reqs": [{"id": SOLAR_PANEL, "n": 4, "sig": true},
+		{"id": PLATE, "n": 8}, {"id": CIRCUIT, "n": 2}]},
 	# The last one you build. Alloy for the shielding, a machine core for the
 	# thing in the middle of it, and enough circuitry to keep it honest.
 	{"kind": REACTOR, "reqs": [{"id": PLATE, "n": 16}, {"id": ALLOY, "n": 8},
@@ -1415,6 +1422,10 @@ const PRESS_RECIPES := [
 	# Reactor fuel. The ingots go first so the rod takes THEIR material: how
 	# long it runs and how hard is the Energy of the ore it was made from.
 	{"label": "Fuel Rod", "out": FUEL_ROD, "n": 1, "parts": [["ingot", 2], [SHEET, 1]]},
+	# Glass over a conductive backing. The ingot goes first so the panel keeps
+	# its Reactivity, which is the whole of how good an array made from it is.
+	{"label": "Solar Panel x2", "out": SOLAR_PANEL, "n": 2,
+		"parts": [["ingot", 1], [GLASS, 2]]},
 	{"label": "Circuitry x2", "out": CIRCUIT, "n": 2, "parts": [[SHEET, 1], [WIRE, 2]]},
 	{"label": "Glow Lamp x2", "out": GLOW_LAMP, "n": 2, "parts": [[SHEET, 1], [CRYSTAL, 1]]},
 	{"label": "Bucket", "out": BUCKET, "n": 1, "parts": [[SHEET, 2]]},
@@ -1745,6 +1756,7 @@ const NAMES := {
 	SOLAR_ARRAY: "Solar Array",
 	REACTOR: "Reactor",
 	FUEL_ROD: "Fuel Rod",
+	SOLAR_PANEL: "Solar Panel",
 	CARGO_MODULE: "Cargo Module",
 	OXYGEN_PLANT: "Oxygen Plant",
 	HEATER: "Heater",
@@ -1931,6 +1943,7 @@ const COLORS := {
 	SOLAR_ARRAY: Color(0.22, 0.30, 0.46),
 	REACTOR: Color(0.34, 0.44, 0.40),
 	FUEL_ROD: Color(0.45, 0.78, 0.42),
+	SOLAR_PANEL: Color(0.19, 0.25, 0.42),
 	CARGO_MODULE: Color(0.42, 0.52, 0.58),
 	OXYGEN_PLANT: Color(0.42, 0.68, 0.78),
 	HEATER: Color(0.74, 0.40, 0.26),

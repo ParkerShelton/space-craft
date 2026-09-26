@@ -112,7 +112,10 @@ const DEFS := [
 	# --- getting off the ground ----------------------------------------------
 	{"id": "generator", "name": "Power of Your Own", "parent": "wire", "tab": "space",
 		"desc": "Build a Generator.", "icon": "GENERATOR"},
-	{"id": "solar", "name": "Free Power", "parent": "circuit", "tab": "space",
+	{"id": "panel", "name": "Glass and Current", "parent": "circuit", "tab": "space",
+		"desc": "Press a Solar Panel. Its Reactivity is the array's worth.",
+		"icon": "SOLAR_PANEL"},
+	{"id": "solar", "name": "Free Power", "parent": "panel", "tab": "space",
 		"desc": "Build a Solar Array. No fuel -- and nothing after dark.",
 		"icon": "SOLAR_ARRAY"},
 	{"id": "rod", "name": "Fuel Rod", "parent": "alloy", "tab": "space",
@@ -183,6 +186,7 @@ static func icon_id(d: Dictionary) -> int:
 		"SOLAR_ARRAY": return Blocks.SOLAR_ARRAY
 		"REACTOR": return Blocks.REACTOR
 		"FUEL_ROD": return Blocks.FUEL_ROD
+		"SOLAR_PANEL": return Blocks.SOLAR_PANEL
 		"BAR": return Blocks.BAR
 		"SHEET": return Blocks.SHEET
 		"SCRAP": return Blocks.SCRAP

@@ -1356,7 +1356,11 @@ func _can_afford(reqs: Array) -> bool:
 
 
 ## Take the cost out of your pockets. Only called once the placement is good.
-func _pay(reqs: Array) -> void:
+## Spend what a build costs, and hand back the material of whichever
+## ingredient the recipe marks as its SIGNATURE -- the one that decides how
+## good the thing you are building turns out. Empty when nothing is marked.
+func _pay(reqs: Array) -> Dictionary:
+	var sig := {}
 	for r in reqs:
 		var left := int(r["n"])
 		for sl in inv:
@@ -1368,12 +1372,15 @@ func _pay(reqs: Array) -> void:
 			var matches: bool = (id in (r["any"] as Array)) if r.has("any") else (id == int(r["id"]))
 			if not matches:
 				continue
+			if bool(r.get("sig", false)) and sig.is_empty():
+				sig = (sl.get("props", {}) as Dictionary).duplicate()
 			var take: int = mini(left, int(sl["count"]))
 			sl["count"] = int(sl["count"]) - take
 			left -= take
 			if int(sl["count"]) <= 0:
 				_clear_slot(sl)
 	_refresh_slots()
+	return sig
 
 
 ## Most of what it cost, back in your hands. Not all of it: taking a bench apart
@@ -1589,10 +1596,14 @@ func _do_place_station() -> void:
 		_toast("Not enough materials")
 		Audio.ui("ui_deny")
 		return
+	# A station carried in your bag already knows what it was built from; one
+	# built here and now learns it from what you paid with.
+	var mat := {}
 	if _place_from_item:
+		mat = (_active_item().get("props", {}) as Dictionary).duplicate()
 		_consume_active()
 	else:
-		_pay(reqs)
+		mat = _pay(reqs)
 	# On a ship it is mounted as a child of the hull, so it rides with her; on
 	# a planet it simply stands where it was put.
 	var st: Station = null
@@ -1603,6 +1614,7 @@ func _do_place_station() -> void:
 		st = world.spawn_station(_place_kind, (spot["pos"] as Vector3) - Vector3(0.5, 0.5, 0.5),
 			spot["up"] as Vector3, spot["fwd"] as Vector3)
 	if st != null:
+		st.build_mat = mat
 		_toast("%s built" % Blocks.name_of(_place_kind))
 		Audio.at("place_rock", spot["pos"] as Vector3)
 	# One station per pick. Staying in placing mode while you could still
@@ -2073,6 +2085,8 @@ func _check_advancements() -> void:
 			grant("coal")
 		elif sid == Blocks.FUEL_ROD:
 			grant("rod")
+		elif sid == Blocks.SOLAR_PANEL:
+			grant("panel")
 		elif sid == Blocks.WIRE:
 			grant("wire")
 		elif sid == Blocks.CIRCUIT:
@@ -5496,7 +5510,9 @@ func _update_swing(delta: float) -> void:
 func _pick_up_station(st: Station) -> void:
 	# The station itself comes back, not a pile of what it was made of, so it
 	# can simply be put down again somewhere better.
-	_add_item(st.kind, 1)
+	# Carried with its material, so moving an array built from good panels to a
+	# sunnier spot does not quietly turn it into a worse one.
+	_add_item(st.kind, 1, st.build_mat)
 	_break_burst(st.global_position, Blocks.color_of(st.kind))
 	Audio.at("break_wood", st.global_position)
 	# return whatever was inside to your inventory
@@ -8082,9 +8098,10 @@ func _solar_line(st: Station) -> String:
 	var sun := 0.0
 	if main != null and main.has_method("daylight"):
 		sun = float(main.call("daylight"))
+	var full := Blocks.solar_output(st._solar_props())
 	if sun > 0.05:
-		return "In the sun: +%.1f/s" % (Blocks.solar_output(st._solar_props()) * sun)
-	return "Dark. Spend what is banked and wait for morning."
+		return "In the sun: +%.1f/s  (panels rated %.1f/s)" % [full * sun, full]
+	return "Dark. Spend what is banked and wait for morning.  Panels rated %.1f/s" % full
 
 
 func _craft_preview_text(kind: int) -> String:

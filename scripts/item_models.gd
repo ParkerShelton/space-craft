@@ -103,6 +103,23 @@ static func boxes_for(id: int, tint: Color = Color(0, 0, 0, 0)) -> Array:
 				seeds.append([at + tip, Vector3(0.025, 0.05, 0.03) if along_x
 					else Vector3(0.03, 0.05, 0.025), GRAIN])
 			return seeds
+		Blocks.SOLAR_PANEL:
+			# A dark cell behind glass, with a bright bus bar down the middle
+			# and a tab at one corner -- small, flat, and obviously a part of
+			# something rather than a thing in itself.
+			const BACK := Color(0.22, 0.24, 0.28)
+			const GLASSY := Color(0.17, 0.23, 0.40)
+			const BUS := Color(0.62, 0.68, 0.78)
+			var panel: Array = [
+				[Vector3(0, -0.04, 0), Vector3(0.52, 0.05, 0.40), BACK],
+				[Vector3(0, 0.00, 0), Vector3(0.48, 0.04, 0.36), GLASSY],
+				[Vector3(0, 0.02, 0), Vector3(0.46, 0.01, 0.03), BUS],
+				[Vector3(0.28, -0.03, 0.16), Vector3(0.08, 0.03, 0.06), BUS],
+			]
+			for i in 3:
+				panel.append([Vector3(-0.15 + float(i) * 0.15, 0.021, 0),
+					Vector3(0.015, 0.01, 0.34), BUS])
+			return panel
 		Blocks.COAL:
 			# A baked lump: angular, matte, catching light only on its facets.
 			# Deliberately nothing like an ingot, because the whole point of it

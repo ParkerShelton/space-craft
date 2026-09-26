@@ -48,6 +48,11 @@ var active := true
 ## WHOLE -- a hole knocked in it stops it -- and this is whether you have asked
 ## it to run, which is a different question and wants a different answer.
 var switched_on := true
+## What this station was built OUT OF: the props of the one ingredient its
+## recipe marks as the signature (see Blocks.STATION_BUILDS). A Solar Array
+## keeps the Reactivity of its panels here, which is what makes a panel of
+## good stock worth pressing. Empty for everything that does not care.
+var build_mat := {}
 
 # --- power ---
 ## The old single ceiling. Kept because the base-status readout still totals
@@ -1301,14 +1306,10 @@ func _tick_solar(delta: float) -> void:
 	power = minf(power + Blocks.solar_output(_solar_props()) * sun * delta, power_cap())
 
 
-## What the panel was built from. Stations do not carry a material today, so it
-## takes one from whatever battery is seated in it and falls back to middling
-## stock -- which keeps the property meaningful without inventing a whole
-## material system for stations first.
+## What the panels were made of. Middling stock for an array from before
+## stations carried a material.
 func _solar_props() -> Dictionary:
-	var slot := gen_battery()
-	var pr: Dictionary = slot.get("props", {})
-	return pr if not pr.is_empty() else {"r": 40}
+	return build_mat if not build_mat.is_empty() else {"r": 40}
 
 
 ## The battery in a Generator's cradle soaks up its output. This is the only way
