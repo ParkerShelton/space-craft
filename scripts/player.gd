@@ -315,6 +315,10 @@ var suit_slot: Dictionary = {"id": Blocks.AIR, "count": 0, "props": {}, "src": "
 # mining (hold left-click to break; harder blocks take longer)
 var _mine_key := ""               # identifies the block currently being mined
 var _mine_time := 0.0             # seconds spent mining the current block
+## Set when this hold has already broken something. Cleared when you let go.
+## Stops one unbroken hold from eating through a block and then whatever was
+## standing behind it.
+var _hold_used := false
 ## Briefly non-zero after placing something. Placing is instant, so without a
 ## short tail there would be nothing for other players to see.
 var _place_flash := 0.0
@@ -429,8 +433,6 @@ var adv_open := false
 var _adv_panel: Panel
 var _adv_body: Control
 var _adv_sig := ""
-var _adv_tab := "survival"
-var _adv_tabs: Array = []
 var _adv_card: Panel
 var _adv_card_t := 0.0
 const ADV_GOLD := Color(1.0, 0.80, 0.32)
@@ -995,30 +997,14 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventKey and not event.pressed and key_is(event, "stations"):
 		_close_ring()
 	elif event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_ESCAPE:
-			if adv_open:
-				_toggle_advancements()
-			elif _journal_panel != null:
-				_close_journal()
-			elif _sys_panel != null:
-				_close_fitting_panel()
-			elif _ship_panel != null:
-				_close_ship_computer()
-			elif _place_kind != Blocks.AIR:
-				_cancel_placing()
-				_toast("Put it away")
-			elif in_bed:
-				_get_up()
-			elif _station_open != null:
-				_close_station()
-			elif book_open:
-				_toggle_book()
-			elif inv_open:
-				_toggle_inventory()
-			elif _starmap_panel != null and _starmap_panel.visible:
-				_close_starmap()
-			else:
-				menu_requested.emit()
+		if event.keycode == KEY_ESCAPE or event.keycode == KEY_BACKSPACE:
+			# Backspace is a way OUT of a screen, not out of a word: while the
+			# cursor is in a text field it belongs to the field.
+			if event.keycode == KEY_BACKSPACE and ui_typing:
+				return
+			if not close_open_menu():
+				if event.keycode == KEY_ESCAPE:
+					menu_requested.emit()
 		elif event.keycode == KEY_F5:
 			if world != null and world.save_game():
 				_toast("Saved")
@@ -1034,12 +1020,17 @@ func _unhandled_input(event: InputEvent) -> void:
 			else:
 				_toast("No save found")
 		elif key_is(event, "advancements"):
-			_toggle_advancements()
+			# Every screen key shuts whatever is up first, so a key can never
+			# stack one panel on top of another.
+			if not adv_open and close_open_menu():
+				pass
+			else:
+				_toggle_advancements()
 		elif key_is(event, "inventory"):
 			if piloting != null:
 				pass  # E rolls the ship while piloting -- not the inventory
-			elif _station_open != null:
-				_close_station()
+			elif close_open_menu():
+				pass  # E shuts whatever was open, whatever it was
 			else:
 				_toggle_inventory()
 		elif _station_open != null:
@@ -2506,25 +2497,6 @@ func _build_advancements_ui(layer: CanvasLayer) -> void:
 	sb.set_corner_radius_all(5)
 	_adv_panel.add_theme_stylebox_override("panel", sb)
 	layer.add_child(_adv_panel)
-	# One button per tree. The tutorial is a single line and the rest are trees
-	# of their own, so they do not belong on one canvas together.
-	var tx := 300.0
-	for t in Advancements.TABS:
-		var tb := Button.new()
-		tb.text = str(t["name"])
-		tb.toggle_mode = true
-		tb.add_theme_font_size_override("font_size", 12)
-		tb.position = Vector2(tx, 12)
-		tb.custom_minimum_size = Vector2(142, 30)
-		tb.size = tb.custom_minimum_size
-		tb.button_pressed = str(t["id"]) == _adv_tab
-		tb.pressed.connect(func():
-			_adv_tab = str(t["id"])
-			_adv_sig = ""
-			_rebuild_advancements())
-		_adv_panel.add_child(tb)
-		_adv_tabs.append({"id": str(t["id"]), "node": tb})
-		tx += 148.0
 	var title := Label.new()
 	title.position = Vector2(16, 10)
 	title.text = "Advancements"
@@ -2532,17 +2504,32 @@ func _build_advancements_ui(layer: CanvasLayer) -> void:
 	_adv_panel.add_child(title)
 	var hint := Label.new()
 	hint.position = Vector2(16, 34)
-	hint.text = "%s to close" % OS.get_keycode_string(binds.get("advancements", KEY_L))
+	hint.text = "drag to move around    %s, E or Esc to close" % OS.get_keycode_string(
+		binds.get("advancements", KEY_L))
 	hint.add_theme_font_size_override("font_size", 12)
 	hint.modulate = Color(1, 1, 1, 0.5)
 	_adv_panel.add_child(hint)
 
 
-const ADV_COL := 176.0    # across, per step of the chain
-const ADV_ROW := 62.0     # down, per entry sharing a column
-const ADV_CARD := Vector2(158, 52)
+const ADV_COL := 186.0    # across, per step of a chain
+const ADV_ROW := 66.0     # down, per entry sharing a column
+const ADV_CARD := Vector2(164, 54)
+const ADV_TREE_GAP := 1.4  # blank rows left between one tree and the next
 
 
+## Everything, on one sheet you drag around.
+##
+## The tabs are gone. Four screens you had to remember to look at hid most of
+## the game from you, and hid the SHAPE of it entirely -- that the metal chain
+## and the home chain come off the same bench, that power and flight are the
+## same thread. One sheet shows all of that at a glance, and you pan it with
+## the mouse like a map.
+##
+## Everything is drawn, done or not. What is NOT drawn is any explanation of a
+## step you cannot take yet: the only entries that say what to do are the ones
+## you could do next. Further out you get the name and the picture and nothing
+## more, which is a horizon rather than a checklist.
+## The tree a card belongs to, by name, for the popup card.
 func _adv_tab_name(id: String) -> String:
 	for t in Advancements.TABS:
 		if str(t["id"]) == id:
@@ -2553,118 +2540,163 @@ func _adv_tab_name(id: String) -> String:
 func _rebuild_advancements() -> void:
 	if _adv_panel == null:
 		return
-	var sig := "%s:%d" % [_adv_tab, earned.size()]
+	var sig := "%d" % earned.size()
 	if _adv_body != null and is_instance_valid(_adv_body) and sig == _adv_sig:
 		return
 	_adv_sig = sig
 	if _adv_body != null and is_instance_valid(_adv_body):
 		_adv_body.queue_free()
-	# Work out where every visible entry sits first, so the lines between them
-	# can be drawn before the cards go on top.
-	for t in _adv_tabs:
-		var tn := t["node"] as Button
-		if is_instance_valid(tn):
-			tn.button_pressed = str(t["id"]) == _adv_tab
-			var pr := Advancements.tab_progress(str(t["id"]), earned)
-			tn.text = "%s  %d/%d" % [_adv_tab_name(str(t["id"])), pr.x, pr.y]
-	var shown: Array = []
-	for d in Advancements.in_tab(_adv_tab):
-		if Advancements.visible_to(str(d["id"]), earned):
-			shown.append(d)
-	# Columns are counted from the world's first step, so a tree that only opens
-	# after the tutorial would start ten empty columns in. Slide the whole tab
-	# back so its own first step is against the left edge.
-	var base := 1 << 20
-	for d in shown:
-		base = mini(base, Advancements.depth_of(str(d["id"])))
-	if base == 1 << 20:
-		base = 0
-	var used := {}          # column -> how many rows are taken
-	var at := {}            # id -> position
-	for d in shown:
-		var col := Advancements.depth_of(str(d["id"])) - base
-		var row := int(used.get(col, 0))
-		used[col] = row + 1
-		at[str(d["id"])] = Vector2(col * ADV_COL, row * ADV_ROW)
-	var total := Vector2(float(used.size()) * ADV_COL, 0)
-	for c in used:
-		total.y = maxf(total.y, float(int(used[c])) * ADV_ROW)
 
-	var scroll := ScrollContainer.new()
-	scroll.position = Vector2(16, 62)
-	scroll.custom_minimum_size = Vector2(868, 520)
-	scroll.size = scroll.custom_minimum_size
-	_adv_body = scroll
-	_adv_panel.add_child(scroll)
+	# Lay every tree out on one sheet, each below the last, with columns
+	# counted from that tree's own first step.
+	var nxt := {}
+	for d in Advancements.next_steps(earned):
+		nxt[str(d["id"])] = true
+	var at := {}
+	var row_base := 0.0
+	var wide := 0.0
+	for t in Advancements.TABS:
+		var mine: Array = Advancements.in_tab(str(t["id"]))
+		if mine.is_empty():
+			continue
+		var base := 1 << 20
+		for d in mine:
+			base = mini(base, Advancements.depth_of(str(d["id"])))
+		var used := {}
+		var tallest := 0
+		for d in mine:
+			var col := Advancements.depth_of(str(d["id"])) - base
+			var row := int(used.get(col, 0))
+			used[col] = row + 1
+			tallest = maxi(tallest, row + 1)
+			at[str(d["id"])] = Vector2(float(col) * ADV_COL,
+				row_base + float(row) * ADV_ROW)
+			wide = maxf(wide, float(col + 1) * ADV_COL)
+		at["tab:" + str(t["id"])] = Vector2(0, row_base)
+		row_base += (float(tallest) + ADV_TREE_GAP) * ADV_ROW
+
+	var sheet := _AdvSheet.new()
+	sheet.position = Vector2(14, 58)
+	sheet.custom_minimum_size = Vector2(872, 524)
+	sheet.size = sheet.custom_minimum_size
+	sheet.clip_contents = true
+	sheet.content = Vector2(wide + ADV_CARD.x, row_base + ADV_ROW)
+	_adv_body = sheet
+	_adv_panel.add_child(sheet)
 	var field := Control.new()
-	field.custom_minimum_size = total + Vector2(24, 24)
-	scroll.add_child(field)
+	field.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	sheet.add_child(field)
+	sheet.field = field
 
-	# The joins, drawn under everything: an elbow from the right edge of a
-	# parent to the left edge of its child.
-	var wires := Control.new()
-	wires.custom_minimum_size = field.custom_minimum_size
-	wires.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	field.add_child(wires)
+	# The joins, under everything.
 	var links: Array = []
-	for d in shown:
+	for d in Advancements.DEFS:
 		for parent in Advancements.parents_of(d):
-			if not at.has(str(parent)):
+			if not at.has(str(parent)) or not at.has(str(d["id"])):
 				continue
 			links.append([at[str(parent)] as Vector2, at[str(d["id"])] as Vector2,
 				earned.has(str(d["id"]))])
+	var wires := Control.new()
+	wires.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	field.add_child(wires)
 	wires.draw.connect(func() -> void:
 		for l in links:
 			var a: Vector2 = (l[0] as Vector2) + Vector2(ADV_CARD.x, ADV_CARD.y * 0.5)
 			var b: Vector2 = (l[1] as Vector2) + Vector2(0, ADV_CARD.y * 0.5)
-			var col: Color = Color(0.55, 0.85, 1.0, 0.75) if bool(l[2]) 				else Color(1, 1, 1, 0.20)
+			var col: Color = Color(0.55, 0.85, 1.0, 0.7) if bool(l[2]) \
+				else Color(1, 1, 1, 0.16)
 			var mid := (a.x + b.x) * 0.5
 			wires.draw_line(a, Vector2(mid, a.y), col, 2.0)
 			wires.draw_line(Vector2(mid, a.y), Vector2(mid, b.y), col, 2.0)
 			wires.draw_line(Vector2(mid, b.y), b, col, 2.0)
 	)
 
-	for d in shown:
+	# A heading over each tree, so one sheet still reads as four threads.
+	for t in Advancements.TABS:
+		var key := "tab:" + str(t["id"])
+		if not at.has(key):
+			continue
+		var pr := Advancements.tab_progress(str(t["id"]), earned)
+		var h := Label.new()
+		h.position = (at[key] as Vector2) + Vector2(0, -34)
+		h.text = "%s   %d/%d" % [str(t["name"]), pr.x, pr.y]
+		h.add_theme_font_size_override("font_size", 15)
+		h.modulate = Color(0.55, 0.9, 1.0, 0.75)
+		h.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		field.add_child(h)
+
+	for d in Advancements.DEFS:
 		var id := str(d["id"])
+		if not at.has(id):
+			continue
 		var done: bool = earned.has(id)
+		var next: bool = nxt.has(id)
 		var card := Panel.new()
 		card.position = at[id]
 		card.custom_minimum_size = ADV_CARD
 		card.size = ADV_CARD
+		card.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var cs := StyleBoxFlat.new()
-		cs.bg_color = Color(0.10, 0.16, 0.20, 0.95) if done 			else Color(0.08, 0.08, 0.10, 0.85)
-		cs.border_color = Color(0.45, 0.85, 1.0, 0.9) if done 			else Color(1.0, 0.80, 0.45, 0.8)
-		cs.set_border_width_all(2 if done else 1)
+		if done:
+			cs.bg_color = Color(0.10, 0.17, 0.21, 0.95)
+			cs.border_color = Color(0.45, 0.85, 1.0, 0.9)
+			cs.set_border_width_all(2)
+		elif next:
+			cs.bg_color = Color(0.14, 0.12, 0.06, 0.95)
+			cs.border_color = ADV_GOLD
+			cs.set_border_width_all(2)
+		else:
+			# Far off: there, so you can see the shape of what is coming, but
+			# plainly not yours yet.
+			cs.bg_color = Color(0.07, 0.07, 0.09, 0.8)
+			cs.border_color = Color(1, 1, 1, 0.13)
+			cs.set_border_width_all(1)
 		cs.set_corner_radius_all(4)
 		card.add_theme_stylebox_override("panel", cs)
 		field.add_child(card)
 		var pic := TextureRect.new()
-		pic.position = Vector2(7, 9)
+		pic.position = Vector2(8, 10)
 		pic.custom_minimum_size = Vector2(34, 34)
 		pic.size = pic.custom_minimum_size
 		pic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		pic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		pic.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var iid := Advancements.icon_id(d)
 		pic.texture = ItemIcon.of(iid, Blocks.color_of(iid),
 			world.nearest_planet(global_position) if world != null else null)
-		pic.modulate = Color(1, 1, 1, 1) if done else Color(1, 1, 1, 0.38)
+		pic.modulate = Color(1, 1, 1, 1) if done else (
+			Color(1, 1, 1, 0.75) if next else Color(1, 1, 1, 0.28))
 		card.add_child(pic)
 		var nm := Label.new()
-		nm.position = Vector2(47, 6)
-		nm.custom_minimum_size = Vector2(ADV_CARD.x - 52, 0)
+		nm.position = Vector2(48, 6)
+		nm.custom_minimum_size = Vector2(ADV_CARD.x - 54, 0)
 		nm.text = str(d["name"])
 		nm.add_theme_font_size_override("font_size", 13)
-		nm.modulate = Color(0.75, 0.95, 1.0) if done else Color(1.0, 0.88, 0.70)
+		nm.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		nm.modulate = Color(0.75, 0.95, 1.0) if done else (
+			Color(1.0, 0.88, 0.62) if next else Color(1, 1, 1, 0.38))
 		card.add_child(nm)
-		var ds := Label.new()
-		ds.position = Vector2(47, 24)
-		ds.custom_minimum_size = Vector2(ADV_CARD.x - 52, 0)
-		ds.text = str(d["desc"])
-		ds.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		ds.add_theme_font_size_override("font_size", 10)
-		ds.modulate = Color(1, 1, 1, 0.55)
-		card.add_child(ds)
-		card.tooltip_text = "Done" if done else "Not yet: %s" % str(d["desc"])
+		# Only what you could do NEXT says how. Everything else is a name and a
+		# picture: enough to see it coming, not enough to plan around.
+		if next:
+			var ds := Label.new()
+			ds.position = Vector2(48, 24)
+			ds.custom_minimum_size = Vector2(ADV_CARD.x - 54, 0)
+			ds.text = str(d["desc"])
+			ds.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+			ds.add_theme_font_size_override("font_size", 10)
+			ds.modulate = Color(1, 1, 1, 0.62)
+			ds.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			card.add_child(ds)
+		elif done:
+			var tick := Label.new()
+			tick.position = Vector2(48, 26)
+			tick.text = "done"
+			tick.add_theme_font_size_override("font_size", 10)
+			tick.modulate = Color(0.55, 0.9, 1.0, 0.6)
+			tick.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			card.add_child(tick)
+	sheet.recentre_on_next(at, nxt)
 
 
 func _build_book_ui(layer: CanvasLayer) -> void:
@@ -2806,6 +2838,46 @@ func _rebuild_book() -> void:
 		_book_vbox.add_child(row)
 	_book_empty.text = "" if shown > 0 else "Nothing matches that."
 	_book_empty.visible = shown == 0
+
+
+## Shut whatever screen is up, and say whether there was one.
+##
+## One list, used by Escape, Backspace and E alike, so there is never a screen
+## that some keys close and others do not -- and never two of them open at
+## once, because opening one comes through here first.
+func close_open_menu() -> bool:
+	if adv_open:
+		_toggle_advancements()
+		return true
+	if _journal_panel != null:
+		_close_journal()
+		return true
+	if _sys_panel != null:
+		_close_fitting_panel()
+		return true
+	if _ship_panel != null:
+		_close_ship_computer()
+		return true
+	if _station_open != null:
+		_close_station()
+		return true
+	if book_open:
+		_toggle_book()
+		return true
+	if inv_open:
+		_toggle_inventory()
+		return true
+	if _starmap_panel != null and _starmap_panel.visible:
+		_close_starmap()
+		return true
+	if _place_kind != Blocks.AIR:
+		_cancel_placing()
+		_toast("Put it away")
+		return true
+	if in_bed:
+		_get_up()
+		return true
+	return false
 
 
 func _toggle_inventory() -> void:
@@ -5295,6 +5367,8 @@ func _process_mining(delta: float) -> void:
 	var lmb_pressed := lmb_down and not _lmb_was_down
 	var lmb_released := not lmb_down and _lmb_was_down
 	_lmb_was_down = lmb_down
+	if not lmb_down:
+		_hold_used = false
 	# A ranged weapon fires wherever you're looking, not just when a creature is
 	# under the crosshair (like a real gun) -- so it's dispatched before the
 	# raycast-target branches below, and consumes the click either way.
@@ -5401,6 +5475,9 @@ func _process_mining(delta: float) -> void:
 	Audio.mining(id, obj.to_global(Vector3(v) + Vector3(0.5, 0.5, 0.5)))
 	_update_crack(obj, v, id, _mine_time / maxf(_mine_total, 0.001))
 	if _mine_time >= _mine_total:
+		# This hold has now broken something. Whatever is revealed behind it
+		# waits for a fresh click (see _process_station_mining).
+		_hold_used = true
 		if planet != null and Blocks.bottom_of(id) == Blocks.PARTS:
 			# One eighth at a time: the cell only turns back to air when the
 			# last part in it is gone.
@@ -5525,6 +5602,15 @@ func _process_station_mining(delta: float, st: Station) -> void:
 		return
 	_look_name = st.title() + "  (hold to take apart)"
 	var holding := Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	# A station will not start coming apart on a hold that was already running
+	# when it came into view. Breaking the split plate over a buried supply
+	# cache put the chest under it straight into the crosshair, and the same
+	# unbroken hold took the chest apart inside a second -- so the cache handed
+	# over its contents before you ever saw there was a chest there.
+	if holding and _hold_used:
+		_look_name = st.title() + "  (let go, then hold to take apart)"
+		st.set_dismantle(0.0)
+		return
 	if not holding:
 		_mine_key = ""
 		_mine_time = 0.0
@@ -9264,6 +9350,7 @@ func _try_read_journal() -> bool:
 
 
 func _open_journal() -> void:
+	grant("read")
 	_close_journal()
 	_read_t = 0.0001   # the book in your hands starts to open (see _tick_held_anim)
 	_journal_panel = Panel.new()

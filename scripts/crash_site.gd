@@ -384,10 +384,10 @@ static func journal_text(planet: Planet) -> String:
 	var night_min: float = planet.day_length * (1.0 - planet.DAY_SHARE) / 60.0
 	lines.append("Light for about %d minutes, then dark for %d."
 		% [int(round(day_min)), int(round(night_min))])
-	lines.append("Do not be out in the dark without a light.")
-	lines.append("Things are awake in it.")
+	lines.append("Do not be out past dark even with a light.")
+	lines.append("I have no confirmation but things are awake in the night.")
 	if planet.water_style == planet.WATER_LIQUID:
-		lines.append("Liquid water. Wood floats here, which is worth knowing.")
+		lines.append("There's liquid water. Wood floats here too, which is worth knowing.")
 	else:
 		lines.append("No standing water anywhere I could see.")
 	lines.append("")
@@ -418,8 +418,8 @@ static func journal_text(planet: Planet) -> String:
 			lines.append("  out from across a cave.")
 		if burn == 0:
 			lines.append("  None of it burns well. Power will be the hard part.")
-		lines.append("Smelt ore into ingots, then beat an ingot flat on an")
-		lines.append("anvil: a bar, then a sheet, then plates. Not past it.")
+		lines.append("Smelt ore into ingots, then hammer an ingot flat on an")
+		lines.append("anvil to get different things. Too much hammering ruins the metal.")
 		lines.append("The ore that burns has no metal in it -- the same furnace")
 		lines.append("bakes that down to coal, which is worth far more in a")
 		lines.append("generator than the raw rock is.")
@@ -435,18 +435,13 @@ static func journal_text(planet: Planet) -> String:
 	lines.append("hull. Cut up the wings before you dig for ore -- that hull")
 	lines.append("is already lying on the ground.")
 	lines.append("")
-	lines.append("The battery in the rack is what powers the ship. A flat")
+	lines.append("The battery in the rack is what powers the ship. An empty")
 	lines.append("battery is not a broken one: charge it at a generator and")
-	lines.append("put it back. A generator takes ten plates and four")
-	lines.append("wire, and it burns the ore out of the black stone.")
+	lines.append("put it back.")
 	lines.append("")
-	lines.append("Bare hands will not get ore or metal out of anything. They")
-	lines.append("will get wood, and wood makes the bench, and the bench makes")
-	lines.append("the pick.")
-	lines.append("")
-	lines.append("There is a locker bolted down beside the console with enough")
-	lines.append("in it for the first day: something cooked, torches, and a")
-	lines.append("little wood and rock to start with.")
+	lines.append("There is a small chest bolted down beside the console with")
+	lines.append("enough in it for the first day: some food, torches, and a")
+	lines.append("little wood and rock to get me going.")
 	return "
 ".join(PackedStringArray(lines))
 

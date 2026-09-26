@@ -1541,6 +1541,12 @@ func _process(delta: float) -> void:
 	_tick_batteries(delta)
 	_tick_power_bay(delta)
 	_refresh_gen()
+	# ...and the cradle. This was only ever called while the bay was actually
+	# pumping charge into the ship, so a bay that was handed a battery at world
+	# gen -- which every wreck is -- drew itself empty until something happened
+	# to make it pump. Walk away, come back, and the battery had "appeared".
+	# Both refreshes early-out when nothing would look different.
+	_refresh_bay()
 	if _job == "":
 		return
 	_job_t += delta

@@ -261,10 +261,15 @@ const PAGE_T := 0.055
 ## One half of a book -- a cover with its block of pages -- reaching out from a
 ## hinge at the origin along +X. Two of these, one turned over onto the other,
 ## make a shut book; swung apart they make an open one.
-static func book_half_boxes() -> Array:
+## `flip` puts the pages UNDER the cover instead of on top of it, which is what
+## the front half needs: shut, its pages face down onto the back half; swung
+## open, the same half is upside down and its pages face up. One mirrored half
+## is the whole trick to a hinge that reads as a book.
+static func book_half_boxes(flip := false) -> Array:
+	var sgn: float = -1.0 if flip else 1.0
 	return [
 		[Vector3(BOOK_W * 0.5, 0, 0), Vector3(BOOK_W, COVER_T, BOOK_L), COVER],
-		[Vector3(BOOK_W * 0.52, COVER_T * 0.5 + PAGE_T * 0.5, 0),
+		[Vector3(BOOK_W * 0.52, sgn * (COVER_T * 0.5 + PAGE_T * 0.5), 0),
 			Vector3(BOOK_W * 0.92, PAGE_T, BOOK_L - 0.05), PAGES],
 	]
 
@@ -287,13 +292,23 @@ static func make_book() -> Node3D:
 		hinge.name = "half%d" % i
 		root.add_child(hinge)
 		var mi := MeshInstance3D.new()
-		mi.mesh = _mesh(book_half_boxes(), false)
+		mi.mesh = _mesh(book_half_boxes(i == 1), false)
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		hinge.add_child(mi)
 	return root
 
 
 ## 0 shut, 1 open flat.
+##
+## Both halves hang off the spine, which runs along Z, so the hinge is a turn
+## about Z and nothing else. The back half never moves: it lies out along +X
+## with its pages up, which is the page you are reading. The front half is the
+## mirrored one, and it swings the whole half-turn from lying on top of the
+## back (shut) round through straight up to lying out the other side (open).
+##
+## This used to run the other way -- PI at nothing open, 0 at fully open -- so
+## a shut book was drawn splayed out and opening it folded the covers together.
+## That is why it never looked anything like a book opening: it was closing.
 static func set_book_open(book: Node3D, open: float) -> void:
 	if book == null or not is_instance_valid(book):
 		return
@@ -302,16 +317,14 @@ static func set_book_open(book: Node3D, open: float) -> void:
 	var front := book.get_node_or_null("half1") as Node3D
 	if back == null or front == null:
 		return
-	# The back half never moves. The front one starts folded over onto it and
-	# swings a half turn about the spine until it lies out the other side.
 	back.rotation = Vector3.ZERO
 	back.position = Vector3.ZERO
-	front.rotation = Vector3(0, 0, lerpf(PI, 0.0, 0.0) * 0.0)
-	front.rotation.z = lerpf(PI, 0.0, 0.0)
-	# Rotation about the spine (Z here, since the spine runs along Z).
-	front.rotation = Vector3(0, 0, PI * (1.0 - k))
-	# Shut, the front cover sits a hair above the back one rather than through
-	# it; open, they are level.
+	# 0 shut (over the back half), PI open (out the far side). A little past
+	# halfway it is standing straight up, which is exactly where a real cover
+	# is when it is halfway open.
+	front.rotation = Vector3(0, 0, PI * k)
+	# Shut, it rests ON the back half rather than inside it; open, they are
+	# level and the book lies flat.
 	front.position = Vector3(0, (COVER_T + PAGE_T) * (1.0 - k), 0)
 
 
